@@ -22,10 +22,14 @@ Repository files
 ## Bootstrap status
 
 The repository currently defines module boundaries, semantic-worker protocol
-placeholders, a safe repo-local lifecycle, and a TS/JS file discovery
-substrate. It does not parse real code, call a TypeScript compiler, build an
-active index generation, align structures, anti-unify templates, cluster
-families, or persist results.
+placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, and
+file-manifest-only `index`/`sync` wiring. The current CLI can discover TS/JS
+files, store repo-relative file metadata in a generation-scoped SQLite database,
+validate that generation, and activate `.repogrammar/current-generation`.
+
+This slice does not parse real code, call a TypeScript compiler, extract code
+units, align structures, anti-unify templates, cluster families, persist family
+evidence, or answer query commands from stored evidence.
 
 ## File discovery and exclusions
 

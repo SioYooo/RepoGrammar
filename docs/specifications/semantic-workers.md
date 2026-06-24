@@ -123,4 +123,4 @@ Rust mappings for fact-kind and certainty tokens, and includes schemas plus
 JSON-parsed NDJSON fixture tests for a TypeScript semantic fact, progress, an
 unsupported-version fallback, and end-of-stream messages. It still does not
 launch a Node worker, run TypeScript compiler APIs, or parse worker JSON during
-real indexing.
+the current file-manifest-only `index`/`sync` slice.

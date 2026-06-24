@@ -39,6 +39,12 @@ allowed.
   previous active generation after failed validation, repository-relative
   indexed-file paths, and rejection of symlinked or malformed
   active-generation pointers.
+- File-manifest-only `index` and `sync` tests must cover initialized-state
+  requirements, human and JSON output, generation activation, `indexed_units =
+  0`, old-generation preservation after sync, status/doctor storage health,
+  corrupt manifests, missing state subdirectories without implicit repair,
+  broken active-generation pointers, product runtime wiring, and absence of
+  source snippets or absolute paths in CLI output and stored file metadata.
 - Protocol fixture tests must parse fixture lines as JSON before checking
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
@@ -56,5 +62,7 @@ worker fixture coverage, telemetry consent, transport-neutral MCP tool names,
 CLI command surface, missing-index fallback human/JSON output, repo-local
 lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
 discovery filtering/hash/path-safety behavior, SQLite storage migration and
-generation-activation safety behavior, installer dry-run parsing, and
+generation-activation safety behavior, file-manifest-only index/sync storage
+bridging, storage-aware status/doctor reporting, product runtime wiring,
+installer dry-run parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

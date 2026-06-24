@@ -34,4 +34,7 @@ state directory described in `docs/specifications/storage.md`.
 ## Current implementation status
 
 The bootstrap defines typed progress stages, known and unknown work units,
-plain rendering, and NDJSON rendering. It does not yet run indexing.
+plain rendering, and NDJSON rendering. `index` and `sync` now run the
+file-manifest-only storage slice and render the accepted `--progress` mode in
+their output, but they do not emit typed parser, semantic-worker, code-unit, or
+mining progress events yet.

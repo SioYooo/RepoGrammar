@@ -114,12 +114,12 @@ section and avoid duplicate entries. An incomplete RepoGrammar marker section
 must be refused rather than repaired silently.
 
 The bootstrap `init` implementation creates the lifecycle directories,
-`.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`, but it
-does not yet create SQLite databases, active generations, telemetry queues, or
-real index metadata through the CLI. A persistence adapter can create and
-validate generation-scoped SQLite databases behind a storage port; `status` and
-`doctor` must continue to report storage and indexing as `not_implemented` until
-those commands are explicitly wired to that adapter and tested.
+`.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`. The current
+`index` and `sync` implementation creates file-manifest-only SQLite generations
+from TS/JS discovery metadata and activates `.repogrammar/current-generation`
+after validation. It does not yet create a top-level `.repogrammar/repogrammar.sqlite`,
+telemetry queues, parser facts, code units, families, evidence, freshness
+manifests, or query read paths.
 
 ## File Discovery Exclusions
 
@@ -138,10 +138,10 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, and `.jsx` files only. It returns repo-relative metadata and skip
-reasons for future storage integration. The SQLite adapter can store
-repo-relative indexed-file records in a prepared generation, but `index` and
-`sync` do not yet connect discovery output to storage or activate a real index
-generation.
+reasons, and `index`/`sync` store the discovered file manifest in a
+generation-scoped SQLite database. This is metadata-only indexing: source
+snippets, absolute paths, parser output, code units, families, and evidence are
+not stored.
 
 ## Project Configuration
 
@@ -255,9 +255,10 @@ The production SQLite dependency is `rusqlite` with bundled SQLite enabled.
 Only `src/rust/adapters/persistence/` may depend on it directly; application and
 domain code must use RepoGrammar-owned storage port types.
 
-`repogrammar status` must show journal mode. `repogrammar doctor` must run
-SQLite integrity checks, verify schema version, verify active generation
-consistency, and report lock state.
+`repogrammar status` must show journal mode when an active generation exists.
+`repogrammar doctor` must run SQLite integrity checks, verify schema version,
+verify active generation consistency, report missing storage layout without
+recreating it, and report lock state.
 
 ## Index Generations
 

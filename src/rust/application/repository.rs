@@ -2,6 +2,7 @@
 
 use crate::application::progress::{initialization_stages, ProgressStage};
 use crate::error::RepoGrammarError;
+use crate::ports::index_store::{IndexStore, StorageInspection};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -108,6 +109,13 @@ impl RepositoryStatusRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryStateLocation {
+    pub root: PathBuf,
+    pub state_dir: PathBuf,
+    pub state_dir_relative: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryDoctorRequest {
     pub path: String,
     pub state_dir_override: Option<String>,
@@ -202,6 +210,9 @@ pub enum RepositoryManifestStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepositoryImplementationStatus {
     NotImplemented,
+    Available,
+    FileManifestOnly,
+    Unhealthy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +223,8 @@ pub struct RepositoryStatusReport {
     pub missing_subdirs: Vec<String>,
     pub storage: RepositoryImplementationStatus,
     pub indexing: RepositoryImplementationStatus,
+    pub storage_inspection: Option<StorageInspection>,
+    pub storage_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,7 +240,11 @@ pub enum RepositoryDoctorCode {
     CorruptedManifest,
     MissingSubdir,
     StorageNotImplemented,
+    StorageReady,
+    StorageInvalid,
+    StorageNoActiveGeneration,
     IndexingNotImplemented,
+    IndexingFileManifestOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,7 +345,26 @@ pub fn repository_status(
     request: RepositoryStatusRequest,
 ) -> Result<RepositoryStatusReport, RepoGrammarError> {
     let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
-    status_for_resolved_state(&resolved)
+    status_for_resolved_state(&resolved, None)
+}
+
+pub fn repository_state_location(
+    request: RepositoryStatusRequest,
+) -> Result<RepositoryStateLocation, RepoGrammarError> {
+    let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
+    Ok(RepositoryStateLocation {
+        root: resolved.root,
+        state_dir: resolved.absolute,
+        state_dir_relative: resolved.relative,
+    })
+}
+
+pub fn repository_status_with_storage(
+    request: RepositoryStatusRequest,
+    store: &impl IndexStore,
+) -> Result<RepositoryStatusReport, RepoGrammarError> {
+    let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
+    status_for_resolved_state(&resolved, Some(store))
 }
 
 pub fn repository_doctor(
@@ -338,6 +374,30 @@ pub fn repository_doctor(
         path: request.path,
         state_dir_override: request.state_dir_override,
     })?;
+    Ok(RepositoryDoctorReport {
+        findings: doctor_findings_for_status(&status),
+        status,
+    })
+}
+
+pub fn repository_doctor_with_storage(
+    request: RepositoryDoctorRequest,
+    store: &impl IndexStore,
+) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+    let status = repository_status_with_storage(
+        RepositoryStatusRequest {
+            path: request.path,
+            state_dir_override: request.state_dir_override,
+        },
+        store,
+    )?;
+    Ok(RepositoryDoctorReport {
+        findings: doctor_findings_for_status(&status),
+        status,
+    })
+}
+
+fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<RepositoryDoctorFinding> {
     let mut findings = Vec::new();
 
     match status.status {
@@ -363,18 +423,60 @@ pub fn repository_doctor(
         });
     }
 
-    findings.push(RepositoryDoctorFinding {
-        severity: RepositoryDoctorSeverity::Info,
-        code: RepositoryDoctorCode::StorageNotImplemented,
-        detail: "SQLite storage is not implemented in this application slice".to_string(),
-    });
-    findings.push(RepositoryDoctorFinding {
-        severity: RepositoryDoctorSeverity::Info,
-        code: RepositoryDoctorCode::IndexingNotImplemented,
-        detail: "repository indexing is not implemented in this application slice".to_string(),
-    });
+    match status.storage {
+        RepositoryImplementationStatus::Available => {
+            if status
+                .storage_inspection
+                .as_ref()
+                .and_then(|inspection| inspection.active_generation.as_ref())
+                .is_some()
+            {
+                findings.push(RepositoryDoctorFinding {
+                    severity: RepositoryDoctorSeverity::Info,
+                    code: RepositoryDoctorCode::StorageReady,
+                    detail: "SQLite storage is readable and has an active generation".to_string(),
+                });
+            } else {
+                findings.push(RepositoryDoctorFinding {
+                    severity: RepositoryDoctorSeverity::Warning,
+                    code: RepositoryDoctorCode::StorageNoActiveGeneration,
+                    detail: "SQLite storage is available but no generation is active".to_string(),
+                });
+            }
+        }
+        RepositoryImplementationStatus::Unhealthy => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Error,
+            code: RepositoryDoctorCode::StorageInvalid,
+            detail: format!(
+                "SQLite storage health check failed: {}",
+                status.storage_error.as_deref().unwrap_or("unknown")
+            ),
+        }),
+        RepositoryImplementationStatus::NotImplemented
+        | RepositoryImplementationStatus::FileManifestOnly => {
+            findings.push(RepositoryDoctorFinding {
+                severity: RepositoryDoctorSeverity::Info,
+                code: RepositoryDoctorCode::StorageNotImplemented,
+                detail: "SQLite storage is not wired for this command".to_string(),
+            });
+        }
+    }
 
-    Ok(RepositoryDoctorReport { status, findings })
+    match status.indexing {
+        RepositoryImplementationStatus::FileManifestOnly => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Info,
+            code: RepositoryDoctorCode::IndexingFileManifestOnly,
+            detail: "file discovery metadata is stored; parser, code-unit extraction, and mining remain deferred".to_string(),
+        }),
+        _ => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Info,
+            code: RepositoryDoctorCode::IndexingNotImplemented,
+            detail: "repository indexing has not produced code units or pattern families yet"
+                .to_string(),
+        }),
+    }
+
+    findings
 }
 
 pub fn uninit_repository(
@@ -407,7 +509,7 @@ pub fn unlock_repository(
     request: RepositoryUnlockRequest,
 ) -> Result<RepositoryUnlockReport, RepoGrammarError> {
     let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
-    let status = status_for_resolved_state(&resolved)?;
+    let status = status_for_resolved_state(&resolved, None)?;
     if matches!(status.status, RepositoryStatus::NotInitialized) {
         return Ok(RepositoryUnlockReport {
             state_dir: resolved.relative,
@@ -445,7 +547,7 @@ pub fn repository_logs(
 ) -> Result<RepositoryLogsReport, RepoGrammarError> {
     validate_log_component(request.component.as_deref())?;
     let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
-    let status = status_for_resolved_state(&resolved)?;
+    let status = status_for_resolved_state(&resolved, None)?;
     if matches!(status.status, RepositoryStatus::NotInitialized) {
         return Ok(RepositoryLogsReport {
             state_dir: resolved.relative,
@@ -483,6 +585,7 @@ struct ResolvedStateDir {
 
 fn status_for_resolved_state(
     resolved: &ResolvedStateDir,
+    store: Option<&dyn IndexStore>,
 ) -> Result<RepositoryStatusReport, RepoGrammarError> {
     if !resolved.absolute.exists() {
         return Ok(RepositoryStatusReport {
@@ -492,6 +595,8 @@ fn status_for_resolved_state(
             missing_subdirs: Vec::new(),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
+            storage_inspection: None,
+            storage_error: None,
         });
     }
     ensure_state_path_can_be_directory(&resolved.absolute)?;
@@ -505,6 +610,8 @@ fn status_for_resolved_state(
             missing_subdirs: missing_subdirs(&resolved.absolute),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
+            storage_inspection: None,
+            storage_error: None,
         });
     }
 
@@ -518,10 +625,12 @@ fn status_for_resolved_state(
             missing_subdirs: missing_subdirs(&resolved.absolute),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
+            storage_inspection: None,
+            storage_error: None,
         });
     }
 
-    Ok(RepositoryStatusReport {
+    let mut report = RepositoryStatusReport {
         state_dir: resolved.relative.clone(),
         status: RepositoryStatus::Initialized {
             active_generation: "not implemented".to_string(),
@@ -530,7 +639,44 @@ fn status_for_resolved_state(
         missing_subdirs: missing_subdirs(&resolved.absolute),
         storage: RepositoryImplementationStatus::NotImplemented,
         indexing: RepositoryImplementationStatus::NotImplemented,
-    })
+        storage_inspection: None,
+        storage_error: None,
+    };
+
+    if store.is_some() && !report.missing_subdirs.is_empty() {
+        report.status = RepositoryStatus::Initialized {
+            active_generation: "none".to_string(),
+        };
+        report.storage = RepositoryImplementationStatus::Unhealthy;
+        report.storage_error = Some(missing_state_subdirs_message(&report.missing_subdirs));
+        return Ok(report);
+    }
+
+    if let Some(store) = store {
+        match store.inspect() {
+            Ok(inspection) => {
+                let active_generation = inspection
+                    .active_generation
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string());
+                report.status = RepositoryStatus::Initialized { active_generation };
+                report.storage = RepositoryImplementationStatus::Available;
+                if inspection.active_generation.is_some() {
+                    report.indexing = RepositoryImplementationStatus::FileManifestOnly;
+                }
+                report.storage_inspection = Some(inspection);
+            }
+            Err(error) => {
+                report.status = RepositoryStatus::Initialized {
+                    active_generation: "none".to_string(),
+                };
+                report.storage = RepositoryImplementationStatus::Unhealthy;
+                report.storage_error = Some(index_store_error_message(error));
+            }
+        }
+    }
+
+    Ok(report)
 }
 
 fn resolve_state_dir(
@@ -909,6 +1055,21 @@ fn validate_log_component(component: Option<&str>) -> Result<(), RepoGrammarErro
     }
 }
 
+fn index_store_error_message(error: crate::ports::index_store::IndexStoreError) -> String {
+    match error {
+        crate::ports::index_store::IndexStoreError::Unavailable(message)
+        | crate::ports::index_store::IndexStoreError::InvalidState(message)
+        | crate::ports::index_store::IndexStoreError::InvalidRecord(message) => message,
+    }
+}
+
+fn missing_state_subdirs_message(missing_subdirs: &[String]) -> String {
+    format!(
+        "required repository-local state subdirectories are missing: {}",
+        missing_subdirs.join(", ")
+    )
+}
+
 fn invalid_input(message: &'static str) -> RepoGrammarError {
     RepoGrammarError::InvalidInput(message.to_string())
 }
@@ -916,6 +1077,7 @@ fn invalid_input(message: &'static str) -> RepoGrammarError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::test_support::TempWorkspace;
     use std::fs;
     use std::path::Path;
@@ -1124,6 +1286,30 @@ mod tests {
         );
         assert_eq!(status.manifest, RepositoryManifestStatus::Valid);
         assert!(status.missing_subdirs.is_empty());
+    }
+
+    #[test]
+    fn storage_status_reports_missing_subdirs_without_recreating_them() {
+        let workspace = TempWorkspace::new("repository-storage-missing-subdir");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        fs::remove_dir_all(state.join("generations")).expect("remove generations dir");
+        let store = SqliteIndexStore::new(&state);
+
+        let status = repository_status_with_storage(
+            RepositoryStatusRequest::new(root_string(workspace.path())),
+            &store,
+        )
+        .expect("status with storage");
+
+        assert_eq!(status.missing_subdirs, vec!["generations".to_string()]);
+        assert_eq!(status.storage, RepositoryImplementationStatus::Unhealthy);
+        assert!(status
+            .storage_error
+            .as_deref()
+            .expect("storage error")
+            .contains("generations"));
+        assert!(!state.join("generations").exists());
     }
 
     #[test]

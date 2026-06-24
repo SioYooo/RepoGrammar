@@ -17,22 +17,29 @@
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
   foreign-key enforcement, validation before activation, and rollback
   preservation for failed generations.
+- File-manifest-only `index`/`sync` wiring that stores TS/JS discovery metadata
+  in active SQLite generations without source snippets, absolute paths, parser
+  facts, code units, or family evidence.
+- Storage-aware `status`/`doctor` reporting for active generation health,
+  schema version, journal mode, integrity checks, and invalid active-generation
+  pointers.
 - Core domain type placeholders.
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
 
-## Next phase: indexing integration
+## Next phase: parser-backed code-unit extraction prerequisites
 
-- Connect the existing discovery substrate to SQLite generation validation
-  without storing source snippets or absolute paths.
-- Surface storage health through `status` and `doctor`.
-- Keep parser, semantic-worker execution, and mining deferred until lifecycle,
-  discovery, and storage are integrated behind the existing ports.
+- Keep the file-manifest-only generation contract stable while adding parser
+  dependencies and fixtures.
+- Introduce syntax parsing and code-unit extraction behind ports without using
+  Tree-sitter as semantic proof.
+- Keep semantic-worker execution, mining, query execution, and MCP transport
+  deferred until parser output and storage boundaries are validated together.
 
 ## Command implementation path
 
-- Wire SQLite-backed generations into `index`, `sync`, `status`, and `doctor`
-  after discovery is safe.
+- Add parser-backed code-unit persistence after metadata-only generations remain
+  stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`

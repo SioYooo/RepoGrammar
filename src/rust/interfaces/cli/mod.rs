@@ -1,5 +1,6 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
+use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{plan_install, AgentTarget, InstallRequest, InstallScope};
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -12,6 +13,61 @@ use crate::application::repository::{
 };
 use crate::error::RepoGrammarError;
 use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliIndexRequest {
+    pub repository_root: String,
+    pub state_dir_override: Option<String>,
+    pub max_file_bytes: u64,
+}
+
+pub trait CliRuntime {
+    fn index_repository(
+        &self,
+        command: &str,
+        request: CliIndexRequest,
+    ) -> Result<IndexingOutcome, RepoGrammarError>;
+
+    fn repository_status(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<RepositoryStatusReport, RepoGrammarError>;
+
+    fn repository_doctor(
+        &self,
+        request: RepositoryDoctorRequest,
+    ) -> Result<RepositoryDoctorReport, RepoGrammarError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeferredCliRuntime;
+
+impl CliRuntime for DeferredCliRuntime {
+    fn index_repository(
+        &self,
+        command: &str,
+        _request: CliIndexRequest,
+    ) -> Result<IndexingOutcome, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented(match command {
+            "sync" => "sync",
+            _ => "index",
+        }))
+    }
+
+    fn repository_status(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+        repository_status(request)
+    }
+
+    fn repository_doctor(
+        &self,
+        request: RepositoryDoctorRequest,
+    ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+        repository_doctor(request)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliOutput {
@@ -43,6 +99,14 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    run_with_runtime(args, &DeferredCliRuntime)
+}
+
+pub fn run_with_runtime<I, S>(args: I, runtime: &impl CliRuntime) -> CliOutput
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let current_dir = match std::env::current_dir() {
         Ok(current_dir) => current_dir,
         Err(error) => {
@@ -50,10 +114,25 @@ where
         }
     };
     let env_lookup = |key: &str| std::env::var(key).ok();
-    run_with_context(args, &current_dir, &env_lookup)
+    run_with_context_and_runtime(args, &current_dir, &env_lookup, runtime)
 }
 
+#[cfg(test)]
 fn run_with_context<I, S, F>(args: I, current_dir: &Path, env_lookup: &F) -> CliOutput
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+    F: Fn(&str) -> Option<String>,
+{
+    run_with_context_and_runtime(args, current_dir, env_lookup, &DeferredCliRuntime)
+}
+
+fn run_with_context_and_runtime<I, S, F>(
+    args: I,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -71,7 +150,7 @@ where
         }
         [command] if command == "help" => CliOutput::success(usage()),
         [command, rest @ ..] if is_project_lifecycle_command(command) => {
-            handle_project_lifecycle(command, rest, current_dir, env_lookup)
+            handle_project_lifecycle(command, rest, current_dir, env_lookup, runtime)
         }
         [command, rest @ ..] if is_query_command(command) => handle_query(command, rest),
         [command, rest @ ..] if is_installer_command(command) => handle_installer(command, rest),
@@ -131,6 +210,7 @@ fn handle_project_lifecycle<F>(
     rest: &[String],
     current_dir: &Path,
     env_lookup: &F,
+    runtime: &impl CliRuntime,
 ) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
@@ -150,10 +230,10 @@ where
     match command {
         "init" => handle_init(&options, current_dir, env_lookup),
         "uninit" => handle_uninit(&options, current_dir, env_lookup),
-        "status" => handle_status(&options, current_dir, env_lookup),
-        "doctor" => handle_doctor(&options, current_dir, env_lookup),
+        "status" => handle_status(&options, current_dir, env_lookup, runtime),
+        "doctor" => handle_doctor(&options, current_dir, env_lookup, runtime),
         "unlock" => handle_unlock(&options, current_dir, env_lookup),
-        "index" | "sync" => handle_deferred_long_running(command, &options),
+        "index" | "sync" => handle_index(command, &options, current_dir, env_lookup, runtime),
         _ => CliOutput::failure(2, format!("unknown project lifecycle command: {command}\n")),
     }
 }
@@ -281,7 +361,12 @@ where
     }
 }
 
-fn handle_status<F>(options: &LifecycleOptions, current_dir: &Path, env_lookup: &F) -> CliOutput
+fn handle_status<F>(
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -290,14 +375,19 @@ where
         state_dir_override: state_dir_override(env_lookup),
     };
 
-    match repository_status(request) {
+    match runtime.repository_status(request) {
         Ok(report) if options.json => CliOutput::success(status_json(&report)),
         Ok(report) => CliOutput::success(status_human(&report)),
         Err(error) => lifecycle_error("status", options.json, error),
     }
 }
 
-fn handle_doctor<F>(options: &LifecycleOptions, current_dir: &Path, env_lookup: &F) -> CliOutput
+fn handle_doctor<F>(
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -306,10 +396,36 @@ where
         state_dir_override: state_dir_override(env_lookup),
     };
 
-    match repository_doctor(request) {
+    match runtime.repository_doctor(request) {
         Ok(report) if options.json => CliOutput::success(doctor_json(&report)),
         Ok(report) => CliOutput::success(doctor_human(&report)),
         Err(error) => lifecycle_error("doctor", options.json, error),
+    }
+}
+
+fn handle_index<F>(
+    command: &str,
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let request = CliIndexRequest {
+        repository_root: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+        max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+    };
+
+    match runtime.index_repository(command, request) {
+        Ok(outcome) if options.json => {
+            CliOutput::success(index_outcome_json(command, &outcome, options))
+        }
+        Ok(outcome) => CliOutput::success(index_outcome_human(command, &outcome, options)),
+        Err(RepoGrammarError::NotImplemented(_)) => handle_deferred_long_running(command, options),
+        Err(error) => lifecycle_error(command, options.json, error),
     }
 }
 
@@ -775,6 +891,44 @@ fn uninit_outcome_json(outcome: &RepositoryUninitOutcome) -> String {
     )
 }
 
+fn index_outcome_human(
+    command: &str,
+    outcome: &IndexingOutcome,
+    options: &LifecycleOptions,
+) -> String {
+    let mut output = format!(
+        "{command}: file discovery metadata stored\nactive_generation: {}\ndiscovered_files: {}\nstored_files: {}\nskipped_paths: {}\nindexed_units: 0\nindexing: file_manifest_only\nparser: deferred\nmining: deferred\nprogress: {}\n",
+        outcome.active_generation.as_deref().unwrap_or("none"),
+        outcome.discovered_files,
+        outcome.discovered_files,
+        outcome.skipped_paths,
+        options.progress.as_str()
+    );
+    for warning in &outcome.warnings {
+        output.push_str("warning: ");
+        output.push_str(warning);
+        output.push('\n');
+    }
+    output
+}
+
+fn index_outcome_json(
+    command: &str,
+    outcome: &IndexingOutcome,
+    options: &LifecycleOptions,
+) -> String {
+    format!(
+        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":0,\"indexing\":\"file_manifest_only\",\"parser\":\"deferred\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
+        json_string(command),
+        optional_json_string(outcome.active_generation.as_deref()),
+        outcome.discovered_files,
+        outcome.discovered_files,
+        outcome.skipped_paths,
+        options.progress.as_str(),
+        json_array(&outcome.warnings)
+    )
+}
+
 fn status_human(report: &RepositoryStatusReport) -> String {
     let mut output = String::new();
     output.push_str(report.status.as_human_message());
@@ -783,13 +937,37 @@ fn status_human(report: &RepositoryStatusReport) -> String {
     output.push_str(&format!("manifest: {}\n", manifest_status(report.manifest)));
     output.push_str(&format!(
         "schema_version: {}\n",
-        if matches!(report.manifest, RepositoryManifestStatus::Valid) {
-            "1"
-        } else {
-            "none"
-        }
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.schema_version)
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| {
+                if report.storage != RepositoryImplementationStatus::Unhealthy
+                    && matches!(report.manifest, RepositoryManifestStatus::Valid)
+                {
+                    "1".to_string()
+                } else {
+                    "none".to_string()
+                }
+            })
     ));
-    output.push_str("journal_mode: not_implemented\n");
+    output.push_str(&format!(
+        "journal_mode: {}\n",
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.journal_mode.as_deref())
+            .unwrap_or("not_implemented")
+    ));
+    output.push_str(&format!(
+        "integrity_check: {}\n",
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.integrity_check.as_deref())
+            .unwrap_or("not_implemented")
+    ));
     output.push_str(&format!(
         "active_generation: {}\n",
         match &report.status {
@@ -797,8 +975,19 @@ fn status_human(report: &RepositoryStatusReport) -> String {
             _ => "none",
         }
     ));
-    output.push_str("storage: not_implemented\n");
-    output.push_str("indexing: not_implemented\n");
+    output.push_str(&format!(
+        "storage: {}\n",
+        implementation_status(report.storage)
+    ));
+    output.push_str(&format!(
+        "indexing: {}\n",
+        implementation_status(report.indexing)
+    ));
+    if let Some(error) = &report.storage_error {
+        output.push_str("storage_error: ");
+        output.push_str(error);
+        output.push('\n');
+    }
     for subdir in &report.missing_subdirs {
         output.push_str("missing_subdir: ");
         output.push_str(subdir);
@@ -809,23 +998,54 @@ fn status_human(report: &RepositoryStatusReport) -> String {
 
 fn status_json(report: &RepositoryStatusReport) -> String {
     format!(
-        "{{\"command\":\"status\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"manifest\":\"{}\",\"active_generation\":{},\"schema_version\":{},\"journal_mode\":\"not_implemented\",\"storage\":\"{}\",\"indexing\":\"{}\",\"missing_subdirs\":{}}}\n",
+        "{{\"command\":\"status\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"manifest\":\"{}\",\"active_generation\":{},\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{},\"foreign_keys_enabled\":{},\"storage\":\"{}\",\"indexing\":\"{}\",\"storage_error\":{},\"missing_subdirs\":{}}}\n",
         matches!(report.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.state_dir),
         repository_status_value(&report.status),
         manifest_status(report.manifest),
         match &report.status {
-            RepositoryStatus::Initialized { active_generation } =>
-                optional_json_string(Some(active_generation.as_str())),
+            RepositoryStatus::Initialized { active_generation }
+                if active_generation != "none" && active_generation != "not implemented" =>
+            {
+                optional_json_string(Some(active_generation.as_str()))
+            }
             _ => "null".to_string(),
         },
-        if matches!(report.manifest, RepositoryManifestStatus::Valid) {
-            "1"
-        } else {
-            "null"
-        },
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.schema_version)
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| {
+                if report.storage != RepositoryImplementationStatus::Unhealthy
+                    && matches!(report.manifest, RepositoryManifestStatus::Valid)
+                {
+                    "1".to_string()
+                } else {
+                    "null".to_string()
+                }
+            }),
+        optional_json_string(
+            report
+                .storage_inspection
+                .as_ref()
+                .and_then(|inspection| inspection.journal_mode.as_deref())
+        ),
+        optional_json_string(
+            report
+                .storage_inspection
+                .as_ref()
+                .and_then(|inspection| inspection.integrity_check.as_deref())
+        ),
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.foreign_keys_enabled)
+            .map(|enabled| enabled.to_string())
+            .unwrap_or_else(|| "null".to_string()),
         implementation_status(report.storage),
         implementation_status(report.indexing),
+        optional_json_string(report.storage_error.as_deref()),
         json_array(&report.missing_subdirs)
     )
 }
@@ -856,7 +1076,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"storage\":\"not_implemented\",\"indexing\":\"not_implemented\"}},\"findings\":[{}]}}\n",
+        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
         matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.status.state_dir),
         repository_status_value(&report.status.status),
@@ -868,6 +1088,29 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         } else {
             "fail"
         },
+        implementation_status(report.status.storage),
+        implementation_status(report.status.indexing),
+        report
+            .status
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.schema_version)
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        optional_json_string(
+            report
+                .status
+                .storage_inspection
+                .as_ref()
+                .and_then(|inspection| inspection.journal_mode.as_deref())
+        ),
+        optional_json_string(
+            report
+                .status
+                .storage_inspection
+                .as_ref()
+                .and_then(|inspection| inspection.integrity_check.as_deref())
+        ),
         findings
     )
 }
@@ -940,6 +1183,9 @@ fn manifest_status(status: RepositoryManifestStatus) -> &'static str {
 fn implementation_status(status: RepositoryImplementationStatus) -> &'static str {
     match status {
         RepositoryImplementationStatus::NotImplemented => "not_implemented",
+        RepositoryImplementationStatus::Available => "available",
+        RepositoryImplementationStatus::FileManifestOnly => "file_manifest_only",
+        RepositoryImplementationStatus::Unhealthy => "unhealthy",
     }
 }
 
@@ -957,7 +1203,11 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::CorruptedManifest => "CORRUPTED_MANIFEST",
         RepositoryDoctorCode::MissingSubdir => "MISSING_SUBDIR",
         RepositoryDoctorCode::StorageNotImplemented => "STORAGE_NOT_IMPLEMENTED",
+        RepositoryDoctorCode::StorageReady => "STORAGE_READY",
+        RepositoryDoctorCode::StorageInvalid => "STORAGE_INVALID",
+        RepositoryDoctorCode::StorageNoActiveGeneration => "STORAGE_NO_ACTIVE_GENERATION",
         RepositoryDoctorCode::IndexingNotImplemented => "INDEXING_NOT_IMPLEMENTED",
+        RepositoryDoctorCode::IndexingFileManifestOnly => "INDEXING_FILE_MANIFEST_ONLY",
     }
 }
 
@@ -1023,10 +1273,117 @@ fn json_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::filesystem::discovery::FilesystemFileDiscovery;
+    use crate::adapters::persistence::sqlite::SqliteIndexStore;
+    use crate::application::indexing::{
+        index_repository_with_discovery_and_store, IndexingRequest,
+    };
     use crate::application::repository::DEFAULT_STATE_DIR;
+    use crate::application::repository::{
+        repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
+    };
     use crate::test_support::TempWorkspace;
+    use rusqlite::Connection;
     use serde_json::Value;
     use std::fs;
+
+    struct TestRuntime;
+
+    impl TestRuntime {
+        fn store_for_status_request(
+            &self,
+            request: &RepositoryStatusRequest,
+        ) -> Result<SqliteIndexStore, RepoGrammarError> {
+            let location = repository_state_location(request.clone())?;
+            Ok(SqliteIndexStore::new(location.state_dir))
+        }
+    }
+
+    impl CliRuntime for TestRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            let status_request = RepositoryStatusRequest {
+                path: request.repository_root.clone(),
+                state_dir_override: request.state_dir_override.clone(),
+            };
+            let store = self.store_for_status_request(&status_request)?;
+            let status = repository_status_with_storage(status_request, &store)?;
+            match status.status {
+                RepositoryStatus::NotInitialized => {
+                    return Err(RepoGrammarError::InvalidInput(
+                        "repository is not initialized; run repogrammar init".to_string(),
+                    ));
+                }
+                RepositoryStatus::CorruptedManifest => {
+                    return Err(RepoGrammarError::InvalidInput(
+                        "repository manifest is corrupted; run repogrammar doctor".to_string(),
+                    ));
+                }
+                RepositoryStatus::Initialized { .. } => {}
+            }
+            if !status.missing_subdirs.is_empty() {
+                return Err(RepoGrammarError::InvalidInput(
+                    "repository-local state is missing required subdirectories; run repogrammar doctor"
+                        .to_string(),
+                ));
+            }
+            if status.storage == RepositoryImplementationStatus::Unhealthy {
+                return Err(RepoGrammarError::InvalidInput(
+                    "repository-local storage is unhealthy; run repogrammar doctor".to_string(),
+                ));
+            }
+
+            index_repository_with_discovery_and_store(
+                IndexingRequest {
+                    repository_root: request.repository_root,
+                    max_file_bytes: request.max_file_bytes,
+                },
+                &FilesystemFileDiscovery,
+                &store,
+            )
+        }
+
+        fn repository_status(
+            &self,
+            request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            let store = self.store_for_status_request(&request)?;
+            repository_status_with_storage(request, &store)
+        }
+
+        fn repository_doctor(
+            &self,
+            request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            let status_request = RepositoryStatusRequest {
+                path: request.path.clone(),
+                state_dir_override: request.state_dir_override.clone(),
+            };
+            let store = self.store_for_status_request(&status_request)?;
+            repository_doctor_with_storage(request, &store)
+        }
+    }
+
+    fn indexed_paths(workspace: &TempWorkspace, generation_id: &str) -> Vec<String> {
+        let database = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("generations")
+            .join(generation_id)
+            .join("repogrammar.sqlite");
+        let connection = Connection::open(database).expect("open generation database");
+        let paths = connection
+            .prepare("SELECT path FROM indexed_files ORDER BY path")
+            .expect("prepare indexed paths")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query indexed paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect indexed paths");
+        paths
+    }
 
     #[test]
     fn version_succeeds() {
@@ -1197,6 +1554,366 @@ mod tests {
             .expect("findings")
             .iter()
             .any(|finding| finding["code"] == "CORRUPTED_MANIFEST"));
+    }
+
+    #[test]
+    fn index_json_stores_file_manifest_without_claiming_code_units() {
+        let workspace = TempWorkspace::new("cli-index-real-runtime");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        fs::write(workspace.path().join("note.md"), "# ignored\n").expect("write ignored");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+
+        let output = run_with_context_and_runtime(
+            ["index", "--json", "--progress", "never"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["command"], "index");
+        assert_eq!(value["status"], "complete");
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 1);
+        assert_eq!(value["stored_files"], 1);
+        assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["mining"], "deferred");
+        assert!(workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .is_file());
+    }
+
+    #[test]
+    fn sync_json_rebuilds_a_new_file_manifest_generation() {
+        let workspace = TempWorkspace::new("cli-sync-real-runtime");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        fs::write(
+            workspace.path().join("b.tsx"),
+            "export function B(){ return null; }\n",
+        )
+        .expect("write b");
+
+        let output =
+            run_with_context_and_runtime(["sync", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
+        assert_eq!(value["command"], "sync");
+        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["stored_files"], 2);
+        assert_eq!(value["indexed_units"], 0);
+        assert_eq!(
+            fs::read_to_string(
+                workspace
+                    .path()
+                    .join(DEFAULT_STATE_DIR)
+                    .join("current-generation")
+            )
+            .expect("read current generation")
+            .trim(),
+            "gen-000002"
+        );
+        assert_eq!(indexed_paths(&workspace, "gen-000001"), vec!["a.ts"]);
+        assert_eq!(
+            indexed_paths(&workspace, "gen-000002"),
+            vec!["a.ts", "b.tsx"]
+        );
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000002");
+    }
+
+    #[test]
+    fn index_refuses_uninitialized_repository() {
+        let workspace = TempWorkspace::new("cli-index-uninitialized");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+
+        let output =
+            run_with_context_and_runtime(["index", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "index");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("not initialized"));
+    }
+
+    #[test]
+    fn index_refuses_corrupted_manifest_with_json() {
+        let workspace = TempWorkspace::new("cli-index-corrupt-manifest");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        fs::write(
+            workspace
+                .path()
+                .join(DEFAULT_STATE_DIR)
+                .join("manifest.json"),
+            "broken",
+        )
+        .expect("corrupt manifest");
+
+        let output =
+            run_with_context_and_runtime(["index", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "index");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("corrupted"));
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .exists());
+    }
+
+    #[test]
+    fn index_refuses_missing_state_subdirectories_without_recreating_them() {
+        let workspace = TempWorkspace::new("cli-index-missing-subdir");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let generations = workspace.path().join(DEFAULT_STATE_DIR).join("generations");
+        fs::remove_dir_all(&generations).expect("remove generations");
+
+        let output =
+            run_with_context_and_runtime(["index", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "index");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("missing required subdirectories"));
+        assert!(!generations.exists());
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .exists());
+    }
+
+    #[test]
+    fn status_and_doctor_report_no_active_generation_before_index() {
+        let workspace = TempWorkspace::new("cli-storage-no-active");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], Value::Null);
+        assert_eq!(value["storage"], "available");
+        assert_eq!(value["indexing"], "not_implemented");
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["storage"], "available");
+        assert_eq!(value["checks"]["indexing"], "not_implemented");
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_NO_ACTIVE_GENERATION"));
+    }
+
+    #[test]
+    fn doctor_json_reports_missing_subdir_and_storage_invalid() {
+        let workspace = TempWorkspace::new("cli-doctor-missing-subdir-storage");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let generations = workspace.path().join(DEFAULT_STATE_DIR).join("generations");
+        fs::remove_dir_all(&generations).expect("remove generations");
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], Value::Null);
+        assert_eq!(value["schema_version"], Value::Null);
+        assert_eq!(value["journal_mode"], Value::Null);
+        assert_eq!(value["integrity_check"], Value::Null);
+        assert_eq!(value["storage"], "unhealthy");
+        assert!(value["storage_error"]
+            .as_str()
+            .expect("storage error")
+            .contains("generations"));
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["required_subdirectories"], "fail");
+        assert_eq!(value["checks"]["storage"], "unhealthy");
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "MISSING_SUBDIR"));
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_INVALID"));
+        assert!(!generations.exists());
+    }
+
+    #[test]
+    fn index_human_reports_file_manifest_only_without_family_claims() {
+        let workspace = TempWorkspace::new("cli-index-human-real-runtime");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+
+        let output = run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(output.stdout.contains("file discovery metadata stored"));
+        assert!(output.stdout.contains("indexed_units: 0"));
+        assert!(output.stdout.contains("indexing: file_manifest_only"));
+        assert!(output.stdout.contains("parser: deferred"));
+        assert!(output.stdout.contains("mining: deferred"));
+        assert!(!output.stdout.contains("DOMINANT_PATTERN"));
+        assert!(!output.stdout.contains("CONFORMS"));
+        assert!(!output.stdout.contains("pattern family"));
+    }
+
+    #[test]
+    fn status_and_doctor_report_storage_health_after_index() {
+        let workspace = TempWorkspace::new("cli-storage-health");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.js"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(status.status, 0);
+        assert!(!status
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["journal_mode"], "wal");
+        assert_eq!(value["integrity_check"], "ok");
+        assert_eq!(value["storage"], "available");
+        assert_eq!(value["indexing"], "file_manifest_only");
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["storage"], "available");
+        assert_eq!(value["checks"]["indexing"], "file_manifest_only");
+        assert_eq!(value["checks"]["integrity_check"], "ok");
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "INDEXING_FILE_MANIFEST_ONLY"));
+    }
+
+    #[test]
+    fn doctor_reports_broken_active_generation_pointer_without_panic() {
+        let workspace = TempWorkspace::new("cli-storage-broken-pointer");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        fs::write(
+            workspace
+                .path()
+                .join(DEFAULT_STATE_DIR)
+                .join("current-generation"),
+            "gen-999999\n",
+        )
+        .expect("break pointer");
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(doctor.status, 0);
+        let doctor_value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(doctor_value["checks"]["storage"], "unhealthy");
+        assert!(doctor_value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_INVALID"));
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], Value::Null);
+        assert_eq!(value["schema_version"], Value::Null);
+        assert_eq!(value["storage"], "unhealthy");
+
+        let index =
+            run_with_context_and_runtime(["sync", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(index.status, 2);
+        let value: Value = serde_json::from_str(index.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "sync");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("storage is unhealthy"));
+        assert_eq!(
+            fs::read_to_string(
+                workspace
+                    .path()
+                    .join(DEFAULT_STATE_DIR)
+                    .join("current-generation")
+            )
+            .expect("read broken pointer")
+            .trim(),
+            "gen-999999"
+        );
     }
 
     #[test]
