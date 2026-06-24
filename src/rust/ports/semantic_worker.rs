@@ -37,6 +37,8 @@ pub struct SemanticWorkerRequest {
 pub enum SemanticWorkerError {
     Unavailable(String),
     UnsupportedVersion(String),
+    Timeout(String),
+    WorkerCrashed(String),
     ProtocolViolation(String),
 }
 

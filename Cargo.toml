@@ -21,8 +21,6 @@ path = "src/rust/lib.rs"
 # Production: the repository-local storage adapter owns SQLite migrations and
 # generation validation. `bundled` keeps behavior independent of host SQLite.
 rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
-
-[dev-dependencies]
-# Dev-only: protocol fixture tests must parse NDJSON as JSON without adding
-# runtime dependencies to the bootstrap core.
+# Production: semantic-worker adapters validate NDJSON v1 from isolated worker
+# processes before translating messages into RepoGrammar-owned facts.
 serde_json = "1"

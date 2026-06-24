@@ -96,9 +96,13 @@ or test fixture binding.
 
 Language-native frontends provide project models, module resolution, symbol
 resolution, type information, inheritance, and resolved calls where available.
-The TypeScript worker is the first planned semantic frontend. Other languages
-should use their own compiler, type-checker, or LSP where that is the most
-authoritative source.
+The TypeScript worker is the first planned semantic frontend. The Rust-side
+TypeScript process adapter can validate NDJSON worker output and translate facts
+into RepoGrammar-owned semantic facts, but the syntax-only `index` and `sync`
+path does not launch that worker, store semantic facts, or treat worker output
+as fresh until those facts can be matched against the indexed manifest and code
+units for the same generation. Other languages should use their own compiler,
+type-checker, or LSP where that is the most authoritative source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is

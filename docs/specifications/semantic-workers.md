@@ -61,8 +61,8 @@ v0.1 TS/JS support.
 
 ## Protocol
 
-Workers should communicate with the Rust core through a versioned process
-protocol. The first planned transport is NDJSON over stdio because it isolates
+Workers communicate with the Rust core through a versioned process protocol.
+The first transport is NDJSON over stdio because it isolates
 compiler crashes, supports multiple compiler versions, and avoids putting Node
 or other runtimes inside the Rust core.
 
@@ -93,9 +93,24 @@ must not treat non-SHA-256 strings as auditable provenance.
 Protocol fixture tests must parse each NDJSON fixture line as JSON before
 asserting message type, protocol version, evidence content hash, progress work
 payloads, unsupported-version fallback payloads, and end-of-stream messages.
-These tests validate the protocol contract only; they do not prove that a
-TypeScript worker process exists or that runtime worker JSON is being consumed
-by indexing.
+These tests validate the fixture contract only. The Rust-side TypeScript
+semantic-worker adapter also validates runtime worker stdout line by line before
+translating fact messages into RepoGrammar-owned `SemanticFact` values. It must
+reject malformed JSON, missing end-of-stream messages, blank targets, invalid
+hashes, absolute or URI evidence paths, impossible progress counts, oversized
+output, and unsupported source/snippet fields.
+
+Worker process failures must be sanitized. The adapter may classify unavailable
+workers, unsupported TypeScript versions, timeouts, crashes, and protocol
+violations, but it must not return raw stderr, source snippets, or absolute
+paths in errors.
+
+Worker execution must use an explicit absolute executable path plus argument
+vector, not shell interpolation. When a request provides changed file paths, the
+adapter must reject facts whose evidence path was not requested. Future indexing
+integration must additionally match worker evidence against the active
+generation manifest, content hashes, and code-unit ranges before storing facts
+or using them for claims.
 
 ## Certainty
 
@@ -128,8 +143,13 @@ semantic family membership.
 ## Implementation status
 
 The bootstrap now pins semantic worker protocol version `1`, defines stable
-Rust mappings for fact-kind and certainty tokens, and includes schemas plus
-JSON-parsed NDJSON fixture tests for a TypeScript semantic fact, progress, an
-unsupported-version fallback, and end-of-stream messages. It still does not
-launch a Node worker, run TypeScript compiler APIs, or parse worker JSON during
-the current syntax-only `index`/`sync` slice.
+Rust mappings for fact-kind and certainty tokens, includes schemas plus
+JSON-parsed NDJSON fixture tests, and has a Rust-side TypeScript process adapter
+that can send request JSON over stdin, enforce a timeout, validate NDJSON
+stdout, map sanitized worker errors, and translate fact messages into
+RepoGrammar-owned semantic facts.
+
+It still does not bundle a Node or TypeScript compiler worker, run TypeScript
+compiler APIs, store semantic facts, match worker facts against an active
+generation manifest, or parse worker JSON during the current syntax-only
+`index`/`sync` slice.

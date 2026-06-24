@@ -4,8 +4,9 @@
 
 - Repository governance and mirrored agent contract.
 - Rust package skeleton.
-- Semantic worker boundary plus v1 protocol tokens, schemas, and NDJSON
-  fixtures for a TypeScript fact and unsupported-version fallback.
+- Semantic worker boundary plus v1 protocol tokens, schemas, NDJSON fixtures,
+  and a Rust-side TypeScript process adapter that validates worker stdout into
+  owned semantic facts without wiring those facts into indexing yet.
 - Metadata-only algorithm paper archive under `algorithms/paper/`.
 - Pattern-family-first CLI command surface and safe command-contract parsing.
 - Repo-local lifecycle for `.repogrammar/`, including init/uninit,
@@ -48,11 +49,12 @@ The detailed coordination artifact is
 13. Phase 9: release fixtures and smoke gate.
 
 The current codebase has completed the repo-local lifecycle substrate,
-TS/JS discovery, generation-scoped SQLite storage, and syntax-only code-unit
-indexing. The next implementation slice should refine one boundary at a time:
-storage read paths and freshness, parser-to-IR, or semantic-worker execution.
-Keep syntax-only code units structural and non-semantic while validating the next
-boundary.
+TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
+indexing, and the Rust-side semantic-worker process/NDJSON validation boundary.
+The next implementation slice should refine one boundary at a time: generation
+freshness matching for semantic facts, storage read paths, parser-to-IR, or the
+actual TypeScript compiler worker. Keep syntax-only code units structural and
+non-semantic while validating the next boundary.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 storage read paths, freshness checks, and evidence contracts are validated
@@ -60,8 +62,9 @@ together.
 
 ## Command implementation path
 
-- Add semantic-worker execution or parser-to-IR storage after syntax-only
-  generations remain stable.
+- Match semantic-worker facts against indexed file/code-unit hashes before
+  storing or using them for claims.
+- Add parser-to-IR storage after syntax-only generations remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`
@@ -110,10 +113,11 @@ together.
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
 - Validate TypeScript worker tooling and package manager before adding
-  executable worker code.
+  executable TypeScript compiler worker code.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
   syntax-only extractor where the extra precision is justified.
-- Define the TypeScript semantic worker protocol tests and version policy.
+- Extend the TypeScript semantic worker version policy, generation matching, and
+  storage tests before consuming worker facts in indexing.
 - Verify archive metadata, licenses, and SHA-256 values before committing any
   downloaded paper or HTML artifact.
 - Convert parser AST into RepoGrammar-owned unified IR.

@@ -49,8 +49,10 @@ repository files -> discovery/exclusion policy -> parser adapter -> code units -
 
 The current product path implements discovery, a dependency-free syntax-only
 parser adapter, code-unit metadata storage, and SQLite generation activation.
-Tree-sitter, semantic-worker execution, IR storage, family mining, query
-execution, and MCP transport remain later boundaries.
+The Rust-side TypeScript semantic-worker process boundary can validate NDJSON
+worker output into owned facts, but it is not wired into indexing yet.
+Tree-sitter, TypeScript compiler worker code, semantic-fact storage, IR storage,
+family mining, query execution, and MCP transport remain later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output. The
@@ -67,8 +69,8 @@ machine-level agent integration rather than repository-local index state.
 `src/rust/bin/repogrammar.rs` is the product composition root. It currently
 wires the CLI boundary, repository-lifecycle surface, TS/JS discovery,
 syntax-only parser adapter, filesystem source reader, and SQLite generation
-store for `index` and `sync`. Querying, MCP serving, semantic-worker execution,
-and mining still return stable not-implemented or fallback outputs until those
+store for `index` and `sync`. Querying, MCP serving, semantic-fact indexing, and
+mining still return stable not-implemented or fallback outputs until those
 adapters are connected through application use cases. `src/rust/bin/repo_guard.rs`
 is a separate governance tool and must not be coupled to product runtime logic.
 

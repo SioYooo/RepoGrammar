@@ -11,6 +11,11 @@
   placeholder.
 - Semantic worker v1 protocol tokens, message schemas, and NDJSON fixtures for
   TypeScript semantic facts and unsupported-version fallback.
+- Rust-side TypeScript semantic-worker process adapter that writes request JSON
+  over stdin, enforces a timeout, validates bounded NDJSON v1 stdout, converts
+  fact messages into RepoGrammar-owned semantic facts, and sanitizes
+  unavailable, unsupported-version, crash, timeout, and protocol-violation
+  failures.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.
@@ -79,6 +84,8 @@
   evidence remain deferred.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.
+- Documented `serde_json` as a production dependency for runtime
+  semantic-worker NDJSON validation in adapter code.
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
   domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
   boundaries with the current syntax-only indexing baseline.

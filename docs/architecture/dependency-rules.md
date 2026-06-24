@@ -53,6 +53,9 @@ Language-native semantic workers belong under `src/workers/` or
 `src/rust/adapters/semantic_workers/`. They may use official compiler,
 type-checker, or LSP APIs for their language. All compiler-native facts must be
 translated into RepoGrammar-owned semantic facts before entering `core`.
+Rust-side semantic-worker adapters may depend on transport-neutral JSON parsing
+for versioned NDJSON validation, but parser/compiler SDK payloads must still be
+translated at the adapter boundary.
 
 When a semantic worker is unavailable, version-incompatible, conflicting with
 another analyzer, or unable to decide a dynamic behavior, the result must be

@@ -20,16 +20,19 @@ pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
 discovery, syntax-only code-unit extraction, SQLite generation-storage wiring,
 and repository guard checks.
 
-It does not yet implement pattern mining, semantic-worker execution, query
-execution, or a working MCP server. `init`, `uninit`, `unlock`, and `logs`
-operate only on safe repo-local lifecycle state. `index` and `sync` now create a
-SQLite generation from TS/JS discovery metadata plus syntax-only `code_units`
-records: repo-relative path, language, kind, byte range, and strict content hash.
-They do not store source snippets, absolute paths, semantic facts, families, or
-evidence. `status` and `doctor` can distinguish file-manifest-only generations
-from syntax-only code-unit generations. Commands that install agent configuration
-or serve MCP return explicit not-implemented errors until those contracts are
-implemented and tested.
+It does not yet implement pattern mining, TypeScript compiler analysis, query
+execution, or a working MCP server. The Rust-side TypeScript semantic-worker
+adapter can execute a configured process and validate NDJSON v1 facts, but
+`index` and `sync` do not launch that worker or store semantic facts yet.
+`init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
+state. `index` and `sync` now create a SQLite generation from TS/JS discovery
+metadata plus syntax-only `code_units` records: repo-relative path, language,
+kind, byte range, and strict content hash. They do not store source snippets,
+absolute paths, semantic facts, families, or evidence. `status` and `doctor` can
+distinguish file-manifest-only generations from syntax-only code-unit
+generations. Commands that install agent configuration or serve MCP return
+explicit not-implemented errors until those contracts are implemented and
+tested.
 
 ## Why RepoGrammar?
 
@@ -87,7 +90,7 @@ structured object with `implemented: false`.
 | Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
 | Python | Planned second official language; pre-v0.2 work is experimental dogfooding only | Experimental FastAPI, pytest, SQLAlchemy, and Pydantic validation until a focused v0.2 adapter is accepted |
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
-| Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
+| Semantics | Rust-side process adapter validates NDJSON v1 worker output; compiler worker execution is not wired into indexing | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic facts, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |

@@ -52,6 +52,12 @@ allowed.
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
   accepted `null` targets, and accepted non-blank targets.
+- Runtime semantic-worker adapter tests must cover valid fact/progress/EOS
+  output, malformed JSON, missing EOS, invalid hashes, blank targets,
+  impossible work counts, absolute or URI evidence paths, unsupported snippet
+  fields, sanitized worker-error mapping, worker crashes, timeouts, oversized
+  output, invalid request paths, unrequested fact paths, and relative executable
+  rejection.
 - Experimental Python dogfooding tests, once added, must be opt-in and must
   assert experimental support level plus typed `UNKNOWN` for dynamic imports,
   monkey patching, pytest fixture injection, runtime dependency injection,
@@ -71,7 +77,8 @@ Bootstrap tests cover core model validation, classification vocabulary,
 measurement taxonomy, semantic certainty behavior, protocol token mappings,
 strict content-hash validation, TypeScript worker version fallback, progress
 rendering and `WorkUnits` validation, schema coverage, JSON-parsed semantic
-worker fixture coverage, telemetry consent, transport-neutral MCP tool names,
+worker fixture coverage, Rust-side TypeScript semantic-worker process and
+NDJSON validation behavior, telemetry consent, transport-neutral MCP tool names,
 CLI command surface, missing-index fallback human/JSON output, repo-local
 lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
 discovery filtering/hash/path-safety behavior, SQLite storage migration and
