@@ -1,0 +1,71 @@
+# Architecture Overview
+
+RepoGrammar uses a Rust primary core with explicit room for language-native
+semantic workers. The architecture is layered with ports and adapters so parser,
+storage, telemetry, CLI, MCP, and worker-runtime concerns do not leak into the
+core domain model.
+
+## Layers
+
+```text
+core
+  ^
+ports
+  ^
+application
+  ^
+interfaces
+
+adapters --implements--> ports
+
+bin --wires together--> interfaces + application + adapters
+```
+
+## Responsibilities
+
+- `src/rust/core`: domain model, mining primitives, and policies. It has no dependency
+  on Tree-sitter, SQLite, MCP, CLI, filesystem, network, or process concerns.
+- `src/rust/ports`: traits for external capabilities. Ports can depend on `core` but
+  cannot expose third-party parser, database, or transport types.
+- `src/rust/application`: use-case orchestration for indexing, query, and conformance.
+  It depends on `core` and `ports`.
+- `src/rust/interfaces`: CLI and MCP input/output boundaries. It delegates to
+  application use cases and does not own pattern-family logic.
+- `src/rust/adapters`: concrete implementations for parser, language,
+  framework, semantic-worker, persistence, and telemetry ports.
+- `src/rust/bin`: composition roots and process exit behavior.
+- `src/workers`: future language-native semantic workers such as TypeScript.
+- `src/protocol`: versioned protocol notes and schemas shared across workers.
+
+## Data flow
+
+The intended indexing flow is:
+
+```text
+repository files -> Tree-sitter syntax adapter -> language-native semantic worker -> core IR -> application pipeline -> store port -> SQLite adapter
+```
+
+Query and conformance flows reverse that direction by reading stored family and
+source evidence through ports before returning interface-specific output.
+
+## Composition root
+
+`src/rust/bin/repogrammar.rs` is the product composition root. It currently only
+wires the CLI boundary and returns stable not-implemented errors for product
+commands. `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
+coupled to product runtime logic.
+
+## External dependency boundaries
+
+Tree-sitter belongs only in parsing and language adapters and is treated as
+syntax-first, not semantics-only. Language-native
+compiler, type-checker, or LSP types belong only in semantic-worker adapters and
+workers. SQLite and SQL migration logic belong only in persistence adapters. MCP
+schemas and transport errors belong only in `interfaces/mcp`.
+
+## Why ports and adapters
+
+Pattern-family conclusions must be auditable and conservative. Keeping
+third-party parser, compiler, storage, and transport types outside the core makes it
+possible to test domain behavior deterministically and mark uncertain facts as
+`UNKNOWN` rather than treating adapter quirks as domain truth.

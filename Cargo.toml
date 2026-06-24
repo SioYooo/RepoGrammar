@@ -1,0 +1,22 @@
+[package]
+name = "repogrammar"
+version = "0.1.0"
+edition = "2021"
+description = "Repository pattern-family analysis engine bootstrap"
+license = "UNLICENSED"
+publish = false
+
+[[bin]]
+name = "repogrammar"
+path = "src/rust/bin/repogrammar.rs"
+
+[[bin]]
+name = "repo-guard"
+path = "src/rust/bin/repo_guard.rs"
+
+[lib]
+path = "src/rust/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]

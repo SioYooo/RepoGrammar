@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repogrammar.local/schemas/semantic-worker.schema.json",
+  "title": "RepoGrammar semantic worker fact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "fact_kind",
+    "subject",
+    "origin",
+    "certainty",
+    "evidence",
+    "assumptions"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "fact_kind": { "type": "string", "minLength": 1 },
+    "subject": { "type": "string", "minLength": 1 },
+    "target": { "type": ["string", "null"] },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "engine_version", "method"],
+      "properties": {
+        "engine": { "type": "string", "minLength": 1 },
+        "engine_version": { "type": "string", "minLength": 1 },
+        "method": { "type": "string", "minLength": 1 }
+      }
+    },
+    "certainty": {
+      "type": "string",
+      "enum": [
+        "SEMANTIC",
+        "DATAFLOW_DERIVED",
+        "STRUCTURAL",
+        "FRAMEWORK_HEURISTIC",
+        "CONFLICTING",
+        "UNKNOWN"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "start_byte", "end_byte"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
