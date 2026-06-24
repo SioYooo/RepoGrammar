@@ -29,7 +29,12 @@
       ]
     },
     "subject": { "type": "string", "minLength": 1 },
-    "target": { "type": ["string", "null"] },
+    "target": {
+      "anyOf": [
+        { "type": "string", "minLength": 1, "pattern": "\\S" },
+        { "type": "null" }
+      ]
+    },
     "origin": {
       "type": "object",
       "additionalProperties": false,

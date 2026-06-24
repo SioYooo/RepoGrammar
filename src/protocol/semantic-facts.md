@@ -39,7 +39,9 @@ Required fields for fact messages:
 - `assumptions`
 
 `target` is optional and nullable because facts such as local symbols,
-framework roles, or unknown outcomes may not have a resolved target.
+framework roles, or unknown outcomes may not have a resolved target. When
+present as a string, `target` must contain at least one non-whitespace
+character.
 
 Fact kind values are:
 

@@ -36,6 +36,8 @@
   `sha256:<64 hex>` content hashes.
 - Documented JSON-parsed semantic-worker protocol fixture tests without
   claiming a running TypeScript worker or runtime indexing integration.
+- Aligned semantic-worker schemas with fixture validation by rejecting blank
+  string `target` values.
 - Documented `repo-guard` required-document coverage for ADR-0008.
 - Documented progress `WorkUnits` constructor validation and CLI missing-index
   fallback/deferred implementation status.

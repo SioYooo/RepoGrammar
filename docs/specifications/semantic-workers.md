@@ -77,6 +77,10 @@ errors must use typed error codes; unsupported TypeScript compiler API versions
 use `SEMANTIC_VERSION_UNSUPPORTED` with a syntax-only fallback instead of
 semantic certainty.
 
+Fact `target` values are optional. When present, a target must be either `null`
+or a non-blank string; empty and whitespace-only strings are not valid
+semantic-worker targets.
+
 Strict content hashes use the protocol form `sha256:<64 hex characters>`.
 Fixtures and tests must reject placeholder hashes such as `sha256:fixture` and
 must not treat non-SHA-256 strings as auditable provenance.

@@ -116,7 +116,12 @@
         "request_id": { "$ref": "#/$defs/request_id" },
         "fact_kind": { "$ref": "#/$defs/fact_kind" },
         "subject": { "type": "string", "minLength": 1 },
-        "target": { "type": ["string", "null"] },
+        "target": {
+          "anyOf": [
+            { "type": "string", "minLength": 1, "pattern": "\\S" },
+            { "type": "null" }
+          ]
+        },
         "origin": { "$ref": "#/$defs/origin" },
         "certainty": { "$ref": "#/$defs/certainty" },
         "evidence": { "$ref": "#/$defs/evidence" },

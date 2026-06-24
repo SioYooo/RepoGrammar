@@ -89,6 +89,22 @@ mod tests {
     }
 
     #[test]
+    fn schemas_reject_empty_fact_targets() {
+        let message_schema: Value = serde_json::from_str(include_str!(
+            "../../protocol/semantic-worker-message.schema.json"
+        ))
+        .expect("message schema must parse as JSON");
+        assert_target_schema_rejects_empty_string(
+            &message_schema["$defs"]["fact_message"]["properties"]["target"],
+        );
+
+        let fact_schema: Value =
+            serde_json::from_str(include_str!("../../protocol/semantic-worker.schema.json"))
+                .expect("fact schema must parse as JSON");
+        assert_target_schema_rejects_empty_string(&fact_schema["properties"]["target"]);
+    }
+
+    #[test]
     fn ndjson_fixtures_are_valid_protocol_messages() {
         let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol/fixtures");
         let mut checked_fixtures = 0;
@@ -347,6 +363,20 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    fn assert_target_schema_rejects_empty_string(target_schema: &Value) {
+        let alternatives = target_schema["anyOf"]
+            .as_array()
+            .expect("target schema must use anyOf");
+        assert!(alternatives.iter().any(|alternative| {
+            alternative["type"] == "string"
+                && alternative["minLength"].as_u64() == Some(1)
+                && alternative["pattern"] == "\\S"
+        }));
+        assert!(alternatives
+            .iter()
+            .any(|alternative| alternative["type"] == "null"));
     }
 
     fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
