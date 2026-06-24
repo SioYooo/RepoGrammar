@@ -25,6 +25,9 @@ analysis rules.
   adapters and Tree-sitter facts are not final semantic truth.
 - v0.1 official language scope is TypeScript/JavaScript only. Python is planned
   second and remains experimental until accepted for v0.2.
+- v0.1 CLI is pattern-family-first; CodeGraph-style graph navigation command
+  names are not top-level commands.
+- Anonymous telemetry and research trace collection are separate consent paths.
 - Static uncertainty must be represented as `UNKNOWN`.
 
 ## Implications

@@ -19,14 +19,14 @@ Documentation is part of the same change as implementation.
 | `src/rust/core/model/` | `docs/specifications/domain-model.md` |
 | `src/rust/core/mining/` | `docs/specifications/indexing-pipeline.md` |
 | `src/rust/core/policy/` | domain model, product spec, or related ADR |
-| `src/rust/application/` | architecture overview and module map |
+| `src/rust/application/` | architecture overview, module map, and relevant specification |
 | `src/rust/ports/` | dependency rules and related specification |
 | `src/rust/adapters/parsing/` | indexing pipeline and dependency rules |
 | `src/rust/adapters/languages/` | indexing pipeline and roadmap |
 | `src/rust/adapters/semantic_workers/` | semantic worker specification and ADR-0004 |
 | `src/rust/adapters/frameworks/` | indexing pipeline and roadmap |
 | `src/rust/adapters/persistence/` | storage specification and related ADR |
-| `src/rust/interfaces/cli/` | README and CLI documentation |
+| `src/rust/interfaces/cli/` | README and `docs/specifications/cli.md` |
 | `src/rust/interfaces/mcp/` | `docs/specifications/mcp-api.md` |
 | `src/rust/bin/repogrammar.rs` | README and CLI documentation |
 | `src/rust/bin/repo_guard.rs` | `docs/development/repository-guard.md` |

@@ -10,19 +10,35 @@ tool boundaries without claiming a stable API.
 Find source-backed implementations closest to a target and return conservative
 classification evidence.
 
+CLI equivalent: `repogrammar find`.
+
 ### show_family
 
 Show the canonical template, variation points, exceptions, representative
 implementations, and provenance for a known family.
+
+CLI equivalent: `repogrammar family`.
 
 ### explain_deviation
 
 Explain whether a target differs from a family as a legal variation, exception,
 incompatibility, or `UNKNOWN`.
 
+CLI equivalent: `repogrammar explain`.
+
 ### check_conformance
 
 Check whether a target conforms to a selected family or abstain with a reason.
+
+CLI equivalent: `repogrammar check`.
+
+## Serving mode
+
+`repogrammar serve` runs the MCP server once implemented. v0.1 serving behavior
+must default to read-only and must not modify business code from pattern-family
+results.
+
+MCP calls must not wait on telemetry network activity.
 
 ## Boundary rules
 

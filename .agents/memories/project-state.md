@@ -15,11 +15,14 @@ RepoGrammar is newly initialized as a Rust repository.
 ## Durable knowledge
 
 Implemented capabilities are limited to module boundaries, minimal domain
-types, stable CLI not-implemented behavior, transport-neutral MCP tool names,
-repository guard checks, documentation, skills, memories, and CI configuration.
+types, pattern-family-first CLI command parsing, safe installer dry-run planning,
+typed progress and telemetry policy types, stable not-implemented behavior,
+transport-neutral MCP tool names, repository guard checks, documentation,
+skills, memories, and CI configuration.
 
 Pattern mining, Tree-sitter parsing, TypeScript semantic worker execution,
-SQLite persistence, and MCP serving are not implemented.
+SQLite persistence, repository index generations, installer writes, telemetry
+network transport, and MCP serving are not implemented.
 
 ## Implications
 

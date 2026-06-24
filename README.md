@@ -57,15 +57,23 @@ See `docs/architecture/overview.md` and `docs/architecture/module-map.md`.
 ## Current commands
 
 ```text
-cargo run --quiet --bin repogrammar -- --version
-cargo run --quiet --bin repogrammar -- init
-cargo run --quiet --bin repogrammar -- index
-cargo run --quiet --bin repogrammar -- serve
+cargo run --quiet --bin repogrammar -- version
+cargo run --quiet --bin repogrammar -- help
+cargo run --quiet --bin repogrammar -- status
+cargo run --quiet --bin repogrammar -- doctor
+cargo run --quiet --bin repogrammar -- find --project . --token-budget 8000 <target>
+cargo run --quiet --bin repogrammar -- install --dry-run --target codex --scope project
 cargo run --quiet --bin repo-guard -- check
 ```
 
-`init`, `index`, and `serve` are command boundaries only and currently return a
-stable not-implemented error.
+The v0.1 command surface is pattern-family-first. `find`, `family`, `explain`,
+and `check` are the CLI equivalents of the first MCP pattern-family tools.
+Repository mutation, indexing, installer writes, and MCP serving still return
+explicit not-implemented errors until the corresponding storage and integration
+contracts are implemented.
+
+The following graph-navigation names are intentionally not top-level v0.1
+commands: `callers`, `callees`, `impact`, `affected`, `node`, and `explore`.
 
 ## Development requirements
 

@@ -14,3 +14,5 @@ Current accepted ADRs:
 - ADR-0003: Pattern-family repository representation.
 - ADR-0004: Rust core with language-native semantic workers.
 - ADR-0005: TypeScript/JavaScript-first MVP with Python as second language.
+- ADR-0006: Pattern-family-first CLI.
+- ADR-0007: Safe installation, progress, metrics, and telemetry contracts.

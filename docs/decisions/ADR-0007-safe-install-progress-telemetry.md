@@ -1,0 +1,49 @@
+# ADR-0007: Safe installation, progress, metrics, and telemetry contracts
+
+- Status: Accepted
+- Date: 2026-06-24
+
+## Context
+
+RepoGrammar needs both machine-level agent integration and repository-level
+indexing. These have different safety boundaries. Installation modifies agent
+configuration, while initialization and indexing modify repository-local index
+state.
+
+## Decision
+
+Separate agent integration commands from repository indexing commands. Installer
+commands must support dry runs, scoped targets, reversible receipts, native
+agent configuration where available, backups before repair, atomic writes,
+self-tests, and marker-fenced optional instruction edits.
+
+Initialization and indexing must emit typed progress and atomically activate new
+index generations only after validation.
+
+Telemetry and research trace consent are separate. Anonymous telemetry uses a
+versioned allowlist and must not contain code, paths, repository names, prompts,
+symbols, query text, evidence text, credentials, environment variables, or raw
+error messages.
+
+Metrics must be classified as `MEASURED`, `DERIVED`, `ESTIMATED`, or
+`CAUSAL_EXPERIMENT`.
+
+## Alternatives considered
+
+- Single `init` command for both installation and repository indexing: simpler
+  but conflates machine and repository safety boundaries.
+- Raw progress percentages and ETAs: familiar but likely fabricated before a
+  reliable denominator exists.
+- Telemetry opt-in combined with research traces: simpler UX but weaker consent
+  separation.
+
+## Consequences
+
+The CLI has explicit `install` and repository lifecycle commands. The bootstrap
+implements typed contracts and safe dry-run behavior first, while write paths
+remain deferred until storage and agent integration are implemented.
+
+## Follow-up work
+
+Implement native agent detection, MCP self-tests, receipts, index generations,
+and local telemetry storage with tests before enabling write behavior.

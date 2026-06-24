@@ -24,5 +24,7 @@ allowed.
 ## Current coverage
 
 Bootstrap tests cover core model validation, classification vocabulary,
-semantic certainty behavior, transport-neutral MCP tool names, CLI version and
-not-implemented behavior, and `repo-guard` sync/path/diff logic.
+measurement taxonomy, semantic certainty behavior, progress rendering,
+telemetry consent, transport-neutral MCP tool names, CLI command surface and
+not-implemented behavior, installer dry-run parsing, and `repo-guard`
+sync/path/diff logic.
