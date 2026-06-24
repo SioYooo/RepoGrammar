@@ -195,14 +195,20 @@ pub fn assess_semantic_fact_readiness(
         .map_err(index_store_error)?;
     let mut facts = Vec::with_capacity(snapshot.facts.len());
     for fact in snapshot.facts {
+        let fact_path = fact.path;
         let source = source_store.read_source(SourceReadRequest {
             repository_root: request.repository_root.clone(),
-            path: fact.path,
+            path: fact_path.clone(),
             expected_content_hash: fact.content_hash.clone(),
             max_file_bytes: request.max_file_bytes,
         });
         let current_hash = match source {
-            Ok(source) => Some(source.content_hash),
+            Ok(source) if source.path == fact_path => Some(source.content_hash),
+            Ok(_) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "source freshness response is invalid".to_string(),
+                ));
+            }
             Err(SourceStoreError::InvalidRequest(_)) => {
                 return Err(RepoGrammarError::InvalidInput(
                     "source freshness request is invalid".to_string(),
@@ -705,6 +711,32 @@ mod tests {
         let debug = format!("{error:?}");
         assert!(!debug.contains("/repo"));
         assert!(!debug.contains("secret detail"));
+    }
+
+    #[test]
+    fn source_freshness_response_path_must_match_fact_path() {
+        let fact = semantic_fact();
+        let content_hash = fact.content_hash.clone();
+        let error = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact]),
+            &StaticSourceStore {
+                result: Ok(SourceText {
+                    path: "src/other.ts".to_string(),
+                    content_hash,
+                    text: "source mismatch detail must not leak".to_string(),
+                }),
+            },
+        )
+        .expect_err("mismatched source path must be an application error");
+
+        assert_eq!(
+            error,
+            RepoGrammarError::InvalidInput("source freshness response is invalid".to_string())
+        );
+        let debug = format!("{error:?}");
+        assert!(!debug.contains("src/other.ts"));
+        assert!(!debug.contains("source mismatch detail"));
     }
 
     #[test]
