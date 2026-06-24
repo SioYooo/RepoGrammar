@@ -1,9 +1,34 @@
 # MCP API Specification
 
 The MCP interface is not implemented yet. This file records the first planned
-tool boundaries without claiming a stable API.
+tool boundary without claiming a stable API.
 
-## Tool intent
+## Default tool surface
+
+The default v0.1 MCP surface should expose one primary tool:
+
+```text
+repogrammar_context
+```
+
+The tool carries an `operation` field. Supported v0.1 operations are:
+
+- `find_analogues`
+- `show_family`
+- `explain_deviation`
+- `check_conformance`
+
+This keeps agent tool selection stable while preserving explicit internal
+operation semantics. The CLI remains multi-command for human discoverability.
+
+Advanced MCP tools may exist later, but they must be hidden by default and
+enabled only by configuration or environment variable, for example:
+
+```text
+REPOGRAMMAR_MCP_TOOLS=context,find,family,check
+```
+
+## Operation intent
 
 ### find_analogues
 
@@ -32,13 +57,37 @@ Check whether a target conforms to a selected family or abstain with a reason.
 
 CLI equivalent: `repogrammar check`.
 
+## Missing and stale indexes
+
+MCP serving must not implicitly initialize a repository. If no project state
+directory is found, the response must be a clean fallback recommendation rather
+than a panic or noisy transport failure:
+
+```text
+FALLBACK_TO_CODE_SEARCH
+reason: repository is not initialized
+guidance: run repogrammar init
+```
+
+If an index is stale, MCP responses must include a stale warning or refuse
+family claims whose evidence changed. Freshness checks must compare the active
+index generation and repository state described in
+`docs/specifications/storage.md`.
+
 ## Serving mode
 
 `repogrammar serve` runs the MCP server once implemented. v0.1 serving behavior
 must default to read-only and must not modify business code from pattern-family
-results.
+results. MCP serving should open the active repository database read-only where
+possible; indexing remains the only writer.
 
 MCP calls must not wait on telemetry network activity.
+
+## Agent guidance
+
+The MCP initialize response is the canonical runtime guidance for agents.
+Installer-written instruction-file content is optional, short, marker-fenced,
+and owned by the installation workflow.
 
 ## Boundary rules
 

@@ -11,8 +11,10 @@ depend on cloud services, vector databases, or embedding models.
 
 ## Decision
 
-Use SQLite with FTS5 for the local index once persistence is implemented.
-Storage code and SQL migration logic must stay in the persistence adapter.
+Use SQLite with FTS5 for the local index once persistence is implemented. The
+database is repository-local: one SQLite database per project state directory,
+not one global database for all repositories. Storage code and SQL migration
+logic must stay in the persistence adapter.
 
 ## Alternatives considered
 
@@ -23,8 +25,10 @@ Storage code and SQL migration logic must stay in the persistence adapter.
 
 ## Consequences
 
-Index metadata, provenance, and searchable source evidence can live in one local
-database file. Schema migration design remains future work.
+Index metadata, provenance, and searchable source evidence can live in one
+repository-local database file. ADR-0008 defines the `.repogrammar/` state
+boundary, global-state limits, and generation/freshness requirements. Schema
+migration design remains future work.
 
 ## Follow-up work
 

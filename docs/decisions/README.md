@@ -16,3 +16,4 @@ Current accepted ADRs:
 - ADR-0005: TypeScript/JavaScript-first MVP with Python as second language.
 - ADR-0006: Pattern-family-first CLI.
 - ADR-0007: Safe installation, progress, metrics, and telemetry contracts.
+- ADR-0008: Repo-local state boundary.

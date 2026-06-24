@@ -36,6 +36,8 @@ configuration writes, installation receipts, or agent instruction-file edits.
 7. Store a reversible receipt.
 8. Validate MCP integration with a self-test.
 9. Only modify instruction files with marker fences and explicit consent.
+10. Never create or delete repository-local `.repogrammar/` indexes from
+    `install` or `uninstall`; project state belongs to `init` and `uninit`.
 
 # Required verification
 

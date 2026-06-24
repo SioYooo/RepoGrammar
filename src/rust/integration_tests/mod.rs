@@ -1,12 +1,16 @@
 use crate::{
-    interfaces::{cli, mcp::McpToolName},
+    interfaces::{
+        cli,
+        mcp::{McpOperation, McpToolName},
+    },
     test_support::TempWorkspace,
 };
 
 #[test]
 fn bootstrap_interfaces_are_reachable() {
     assert_eq!(cli::run(["--version"]).status, 0);
-    assert_eq!(McpToolName::FindAnalogues.as_str(), "find_analogues");
+    assert_eq!(McpToolName::Context.as_str(), "repogrammar_context");
+    assert_eq!(McpOperation::FindAnalogues.as_str(), "find_analogues");
 }
 
 #[test]

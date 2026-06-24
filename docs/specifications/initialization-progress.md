@@ -28,7 +28,8 @@ Progress must:
 
 Initialization and indexing must preserve the previous valid index on
 cancellation or failure. They must build a new index generation and atomically
-activate it only after validation.
+activate it only after validation. Generations live under the repository-local
+state directory described in `docs/specifications/storage.md`.
 
 ## Current implementation status
 

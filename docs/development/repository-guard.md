@@ -25,6 +25,8 @@ The check command verifies:
 - lowercase `agents.md` or `claude.md` duplicates do not exist.
 - source files with guarded extensions do not exist outside `src/`, regardless
   of implementation language.
+- generated local state directories such as `.repogrammar/`,
+  `.repogrammar-*`, `.codegraph/`, `target/`, and `.git/` are ignored.
 
 Check mode reports concrete paths and rules and does not modify the repository.
 

@@ -20,6 +20,11 @@ The CodeGraph-style command names `callers`, `callees`, `impact`, `affected`,
 is later needed, it must live under a secondary namespace such as
 `repogrammar graph callers`.
 
+The CLI remains multi-command for human discoverability. The default MCP
+surface is narrower: one `repogrammar_context` tool with an explicit operation
+field for `find_analogues`, `show_family`, `explain_deviation`, and
+`check_conformance`.
+
 ## Alternatives considered
 
 - Call-graph-first CLI: familiar to static-analysis users but weakens
@@ -30,8 +35,9 @@ is later needed, it must live under a secondary namespace such as
 ## Consequences
 
 `find` must return family-oriented evidence, not only similar files. `family`,
-`explain`, and `check` map directly to MCP pattern-family tools. Documentation,
-tests, and future command additions must preserve this identity.
+`explain`, and `check` map to MCP operations rather than separate default MCP
+tools. Documentation, tests, and future command additions must preserve this
+identity.
 
 ## Follow-up work
 

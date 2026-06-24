@@ -47,6 +47,8 @@ language-adapter abstraction.
 
 - No cloud service dependency.
 - No local LLM, embedding model, vector database, or remote API.
+- No global database for repository-derived family facts, evidence, source
+  hashes, freshness metadata, or repository paths.
 - No automatic modification of user business code from pattern-family results.
 - No top-level v0.1 `callers`, `callees`, `impact`, `affected`, `node`, or
   `explore` commands.
@@ -68,6 +70,12 @@ framework heuristics and syntax-only fingerprints.
 Machine-level `install` and `uninstall` are separate from repository-level
 `init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
 dry-run friendly.
+
+Repository-derived analysis state belongs in the current repository's
+`.repogrammar/` state directory, or the directory named by `REPOGRAMMAR_DIR`.
+Global user state may contain installation receipts, binary/cache metadata,
+anonymous telemetry preference, anonymous machine id, and non-repository-derived
+runtime artifacts only.
 
 Anonymous telemetry and research trace collection are separate consent
 decisions. Context compression metrics are not actual token savings unless a

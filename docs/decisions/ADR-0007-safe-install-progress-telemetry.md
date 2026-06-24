@@ -15,10 +15,13 @@ state.
 Separate agent integration commands from repository indexing commands. Installer
 commands must support dry runs, scoped targets, reversible receipts, native
 agent configuration where available, backups before repair, atomic writes,
-self-tests, and marker-fenced optional instruction edits.
+self-tests, and marker-fenced optional instruction edits. `install` and
+`uninstall` must not create, delete, or rewrite repository-local `.repogrammar/`
+indexes.
 
 Initialization and indexing must emit typed progress and atomically activate new
-index generations only after validation.
+index generations only after validation. `init` creates repository-local state;
+`uninit` is responsible for removing it.
 
 Telemetry and research trace consent are separate. Anonymous telemetry uses a
 versioned allowlist and must not contain code, paths, repository names, prompts,
@@ -46,4 +49,5 @@ remain deferred until storage and agent integration are implemented.
 ## Follow-up work
 
 Implement native agent detection, MCP self-tests, receipts, index generations,
-and local telemetry storage with tests before enabling write behavior.
+local telemetry storage, repo-local state creation, and uninit behavior with
+tests before enabling write behavior.
