@@ -30,7 +30,9 @@ units in a generation-scoped SQLite database, validate that generation, and
 activate `.repogrammar/current-generation`.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index` and `sync` can also ask that worker for facts about the discovered
-repo-relative TS/JS file set and record only facts that match the same building
+repo-relative TS/JS file set. Optional worker arguments come from
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of strings, not a shell
+command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
 This slice does not use Tree-sitter, call a TypeScript compiler, build unified
@@ -109,9 +111,10 @@ The TypeScript worker is the first planned semantic frontend. The Rust-side
 TypeScript process adapter can validate NDJSON worker output and translate facts
 into RepoGrammar-owned semantic facts. The syntax-only `index` and `sync` path
 does not launch that worker by default. With
-`REPOGRAMMAR_TYPESCRIPT_WORKER`, it may launch an explicit worker executable and
-store accepted facts only after evidence matches an indexed manifest entry,
-code-unit id, content hash, and byte range in the same building generation.
+`REPOGRAMMAR_TYPESCRIPT_WORKER`, it may launch an explicit worker executable
+with optional argv from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store
+accepted facts only after evidence matches an indexed manifest entry, code-unit
+id, content hash, and byte range in the same building generation.
 Worker fallback statuses keep the generation syntax-only, while storage-gate
 conflicts abort the new generation. No semantic fact may influence claims until
 freshness and family-evidence claim builders exist. Other languages should use

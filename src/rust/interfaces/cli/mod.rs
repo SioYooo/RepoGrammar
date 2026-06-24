@@ -21,6 +21,7 @@ pub struct CliIndexRequest {
     pub state_dir_override: Option<String>,
     pub max_file_bytes: u64,
     pub semantic_worker_executable: Option<String>,
+    pub semantic_worker_args: Vec<String>,
 }
 
 pub trait CliRuntime {
@@ -634,12 +635,30 @@ fn handle_index<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
+    let semantic_worker_executable =
+        env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
+    let semantic_worker_args = match semantic_worker_args(env_lookup) {
+        Ok(args) => args,
+        Err(error) => {
+            return lifecycle_error(command, options.json, RepoGrammarError::InvalidInput(error));
+        }
+    };
+    if semantic_worker_executable.is_none() && !semantic_worker_args.is_empty() {
+        return lifecycle_error(
+            command,
+            options.json,
+            RepoGrammarError::InvalidInput(
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON requires REPOGRAMMAR_TYPESCRIPT_WORKER"
+                    .to_string(),
+            ),
+        );
+    }
     let request = CliIndexRequest {
         repository_root: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
         max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
-        semantic_worker_executable: env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER")
-            .filter(|value| !value.trim().is_empty()),
+        semantic_worker_executable,
+        semantic_worker_args,
     };
 
     match runtime.index_repository(command, request) {
@@ -650,6 +669,39 @@ where
         Err(RepoGrammarError::NotImplemented(_)) => handle_deferred_long_running(command, options),
         Err(error) => lifecycle_error(command, options.json, error),
     }
+}
+
+fn semantic_worker_args<F>(env_lookup: &F) -> Result<Vec<String>, String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(raw_args) = env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON") else {
+        return Ok(Vec::new());
+    };
+    if raw_args.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let args: Vec<String> = serde_json::from_str(&raw_args).map_err(|_| {
+        "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON must be a JSON array of strings".to_string()
+    })?;
+    if args.len() > 64 {
+        return Err(
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON must contain at most 64 arguments".to_string(),
+        );
+    }
+    for arg in &args {
+        if arg.trim().is_empty()
+            || arg.len() > 4096
+            || arg.contains('\0')
+            || arg.contains('\n')
+            || arg.contains('\r')
+        {
+            return Err(
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON contains an invalid argument".to_string(),
+            );
+        }
+    }
+    Ok(args)
 }
 
 fn handle_unlock<F>(options: &LifecycleOptions, current_dir: &Path, env_lookup: &F) -> CliOutput
@@ -1551,6 +1603,10 @@ mod tests {
                 request.semantic_worker_executable.as_deref(),
                 Some("/opt/repogrammar/typescript-worker")
             );
+            assert_eq!(
+                request.semantic_worker_args,
+                vec!["src/workers/typescript/worker.js".to_string()]
+            );
             Ok(IndexingOutcome {
                 indexed_units: 1,
                 semantic_facts: 2,
@@ -1586,6 +1642,7 @@ mod tests {
             request: CliIndexRequest,
         ) -> Result<IndexingOutcome, RepoGrammarError> {
             assert_eq!(request.semantic_worker_executable, None);
+            assert_eq!(request.semantic_worker_args, Vec::<String>::new());
             Ok(IndexingOutcome {
                 indexed_units: 1,
                 semantic_facts: 0,
@@ -1754,9 +1811,14 @@ mod tests {
     #[test]
     fn index_request_passes_optional_semantic_worker_env_to_runtime() {
         let workspace = TempWorkspace::new("cli-semantic-worker-env");
-        let env = |key: &str| {
-            (key == "REPOGRAMMAR_TYPESCRIPT_WORKER")
-                .then(|| "/opt/repogrammar/typescript-worker".to_string())
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                Some("/opt/repogrammar/typescript-worker".to_string())
+            }
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => {
+                Some(r#"["src/workers/typescript/worker.js"]"#.to_string())
+            }
+            _ => None,
         };
         let output = run_with_context_and_runtime(
             ["index", "--json"],
@@ -1776,9 +1838,14 @@ mod tests {
     #[test]
     fn sync_request_passes_optional_semantic_worker_env_to_runtime() {
         let workspace = TempWorkspace::new("cli-sync-semantic-worker-env");
-        let env = |key: &str| {
-            (key == "REPOGRAMMAR_TYPESCRIPT_WORKER")
-                .then(|| "/opt/repogrammar/typescript-worker".to_string())
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                Some("/opt/repogrammar/typescript-worker".to_string())
+            }
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => {
+                Some(r#"["src/workers/typescript/worker.js"]"#.to_string())
+            }
+            _ => None,
         };
         let output = run_with_context_and_runtime(
             ["sync", "--json"],
@@ -1798,7 +1865,11 @@ mod tests {
     #[test]
     fn blank_semantic_worker_env_is_not_configured() {
         let workspace = TempWorkspace::new("cli-blank-semantic-worker-env");
-        let env = |key: &str| (key == "REPOGRAMMAR_TYPESCRIPT_WORKER").then(String::new);
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => Some(String::new()),
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => Some(String::new()),
+            _ => None,
+        };
         let output = run_with_context_and_runtime(
             ["index", "--json"],
             workspace.path(),
@@ -1811,6 +1882,127 @@ mod tests {
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
         assert_eq!(value["semantic_worker"], "deferred");
         assert_eq!(value["semantic_facts"], 0);
+    }
+
+    #[test]
+    fn invalid_semantic_worker_args_json_is_rejected_without_echoing_value() {
+        let workspace = TempWorkspace::new("cli-bad-worker-args-env");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                Some("/opt/repogrammar/typescript-worker".to_string())
+            }
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => Some("[\"ok\", 1]".to_string()),
+            _ => None,
+        };
+        let output = run_with_context_and_runtime(
+            ["index", "--json"],
+            workspace.path(),
+            &env,
+            &SemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "index");
+        assert_eq!(value["status"], "error");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason string")
+            .contains("REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON"));
+        assert!(!output.stderr.contains("[\"ok\", 1]"));
+    }
+
+    #[test]
+    fn invalid_semantic_worker_arg_value_is_rejected_without_echoing_value() {
+        let workspace = TempWorkspace::new("cli-bad-worker-arg-value-env");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                Some("/opt/repogrammar/typescript-worker".to_string())
+            }
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => {
+                Some("[\"ok\", \"bad\\narg\"]".to_string())
+            }
+            _ => None,
+        };
+        let output = run_with_context_and_runtime(
+            ["index", "--json"],
+            workspace.path(),
+            &env,
+            &SemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "index");
+        assert_eq!(value["status"], "error");
+        assert_eq!(
+            value["reason"],
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON contains an invalid argument"
+        );
+        assert!(!output.stderr.contains("bad"));
+    }
+
+    #[test]
+    fn semantic_worker_arg_limits_are_rejected_without_echoing_values() {
+        let workspace = TempWorkspace::new("cli-worker-arg-limits-env");
+        let cases = [
+            (
+                format!("[{}]", vec![r#""arg""#; 65].join(",")),
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON must contain at most 64 arguments",
+            ),
+            (
+                format!("[\"{}\"]", "x".repeat(4097)),
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON contains an invalid argument",
+            ),
+        ];
+
+        for (raw_args, expected_reason) in cases {
+            let env = |key: &str| match key {
+                "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                    Some("/opt/repogrammar/typescript-worker".to_string())
+                }
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => Some(raw_args.clone()),
+                _ => None,
+            };
+            let output = run_with_context_and_runtime(
+                ["index", "--json"],
+                workspace.path(),
+                &env,
+                &SemanticWorkerEnvRuntime,
+            );
+
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+            assert_eq!(value["command"], "index");
+            assert_eq!(value["status"], "error");
+            assert_eq!(value["reason"], expected_reason);
+            assert!(!output.stderr.contains(&raw_args));
+        }
+    }
+
+    #[test]
+    fn semantic_worker_args_without_executable_are_rejected() {
+        let workspace = TempWorkspace::new("cli-worker-args-no-exec");
+        let env = |key: &str| {
+            (key == "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON")
+                .then(|| r#"["src/workers/typescript/worker.js"]"#.to_string())
+        };
+        let output = run_with_context_and_runtime(
+            ["index"],
+            workspace.path(),
+            &env,
+            &BlankSemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert!(output
+            .stderr
+            .contains("requires REPOGRAMMAR_TYPESCRIPT_WORKER"));
+        assert!(!output.stderr.contains("src/workers/typescript/worker.js"));
     }
 
     #[test]

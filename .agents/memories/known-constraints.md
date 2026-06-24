@@ -32,10 +32,12 @@ analysis rules.
 - `index` and `sync` currently store repo-relative file metadata and
   syntax-only code units in generation-scoped SQLite. By default they do not
   launch a semantic worker. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-  explicit worker executable, accepted worker facts may be stored only through
-  same-generation path/hash/range evidence validation. Source snippets, absolute
-  paths, families, pattern-family evidence, and query read-path state must not
-  be assumed present.
+  explicit worker executable, optional
+  `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies a JSON argv vector.
+  Accepted worker facts may be stored only through same-generation
+  path/hash/range evidence validation. Source snippets, absolute paths,
+  families, pattern-family evidence, and query read-path state must not be
+  assumed present.
 - Tree-sitter is the intended syntax technology, but AST types must stay in
   adapters and Tree-sitter facts are not final semantic truth.
 - v0.1 official language scope is TypeScript/JavaScript only. Python is planned

@@ -41,10 +41,11 @@ and SQLite adapter can persist already-validated semantic facts and
 repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default
 `index` and `sync` still report `semantic_worker: deferred`; when
-`REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, they may
-record accepted worker facts before generation validation and activation. Worker
-fallback keeps indexing syntax-only, while mismatched semantic evidence aborts
-the new generation.
+`REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, optional
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies its argv vector, and accepted
+worker facts may be recorded before generation validation and activation.
+Worker fallback keeps indexing syntax-only, while mismatched semantic evidence
+aborts the new generation.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
 semantic-fact freshness/claim gates, unified IR population, semantic/framework

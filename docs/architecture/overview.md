@@ -51,8 +51,10 @@ The current product path implements discovery, a dependency-free syntax-only
 parser adapter, code-unit metadata storage, and SQLite generation activation.
 The Rust-side TypeScript semantic-worker process boundary can validate NDJSON
 worker output into owned facts. `index` and `sync` can optionally run an
-explicit worker executable through `REPOGRAMMAR_TYPESCRIPT_WORKER` and record
-only facts that match the building generation's indexed code-unit evidence.
+explicit worker executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON
+configured argv vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and
+record only facts that match the building generation's indexed code-unit
+evidence.
 Tree-sitter, TypeScript compiler worker code, freshness-validated semantic
 claims, IR storage, family mining, query execution, and MCP transport remain
 later boundaries.
@@ -73,9 +75,10 @@ machine-level agent integration rather than repository-local index state.
 wires the CLI boundary, repository-lifecycle surface, TS/JS discovery,
 syntax-only parser adapter, filesystem source reader, and SQLite generation
 store for `index` and `sync`, with optional semantic-worker ingestion when an
-explicit worker executable is configured. Querying, MCP serving, family-evidence
-claims, and mining still return stable not-implemented or fallback outputs until
-those adapters are connected through application use cases.
+explicit worker executable and optional argv vector are configured. Querying,
+MCP serving, family-evidence claims, and mining still return stable
+not-implemented or fallback outputs until those adapters are connected through
+application use cases.
 `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
 coupled to product runtime logic.
 

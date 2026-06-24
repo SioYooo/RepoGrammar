@@ -81,7 +81,8 @@ impl CliRuntime for ProductCliRuntime {
             max_file_bytes: request.max_file_bytes,
         };
         if let Some(executable) = request.semantic_worker_executable {
-            let worker = TypeScriptSemanticWorkerBoundary::new(executable);
+            let worker = TypeScriptSemanticWorkerBoundary::new(executable)
+                .with_args(request.semantic_worker_args);
             index_repository_with_discovery_parser_semantic_worker_and_store(
                 indexing_request,
                 &FilesystemFileDiscovery,
@@ -263,6 +264,7 @@ mod tests {
                     state_dir_override: None,
                     max_file_bytes: repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
                     semantic_worker_executable: Some(missing_worker.display().to_string()),
+                    semantic_worker_args: Vec::new(),
                 },
             )
             .expect("missing worker should fall back to syntax-only indexing");
@@ -282,5 +284,56 @@ mod tests {
             warning.contains(workspace.path().to_string_lossy().as_ref())
                 || warning.contains("missing-worker")
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_runtime_forwards_semantic_worker_args() {
+        let workspace = TempWorkspace::new("product-runtime-worker-args");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let worker_script = workspace.path().join("worker-fallback.sh");
+        fs::write(
+            &worker_script,
+            r#"#!/bin/sh
+/bin/cat >/dev/null
+/bin/cat <<'EOF'
+{"protocol_version":1,"message_type":"worker_error","request_id":"repogrammar-typescript-semantic-worker","error_code":"SEMANTIC_WORKER_UNAVAILABLE","message":"stub unavailable","fallback":{"mode":"syntax_only","certainty":"UNKNOWN"}}
+{"protocol_version":1,"message_type":"end_of_stream","request_id":"repogrammar-typescript-semantic-worker"}
+EOF
+"#,
+        )
+        .expect("write worker script");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let outcome = runtime
+            .index_repository(
+                "index",
+                CliIndexRequest {
+                    repository_root: workspace.path().display().to_string(),
+                    state_dir_override: None,
+                    max_file_bytes: repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    semantic_worker_executable: Some("/bin/sh".to_string()),
+                    semantic_worker_args: vec![worker_script.display().to_string()],
+                },
+            )
+            .expect("worker fallback should keep syntax-only indexing");
+
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(outcome.semantic_facts, 0);
+        assert_eq!(
+            outcome.semantic_worker,
+            repogrammar::application::indexing::SemanticWorkerRunStatus::FallbackUnavailable
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["semantic worker fallback: unavailable".to_string()]
+        );
+        assert!(!outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains(worker_script.to_string_lossy().as_ref())));
     }
 }

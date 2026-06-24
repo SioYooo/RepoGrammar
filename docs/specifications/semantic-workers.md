@@ -39,9 +39,9 @@ Version policy:
 - TypeScript 7.1 or later should be evaluated when stable programmatic APIs are
   available.
 
-The bootstrap includes a dependency-free executable TypeScript worker stub under
-`src/workers/typescript/`. That stub validates the Rust-to-worker v1 request
-shape and returns typed `SEMANTIC_WORKER_UNAVAILABLE` or
+The bootstrap includes a dependency-free TypeScript worker stub under
+`src/workers/typescript/`. That Node script validates the Rust-to-worker v1
+request shape and returns typed `SEMANTIC_WORKER_UNAVAILABLE` or
 `SEMANTIC_PROTOCOL_VIOLATION` NDJSON fallback messages. It does not run the
 TypeScript compiler, inspect source files, or emit semantic facts. Compiler API
 integration remains deferred until local TypeScript tooling and package-manager
@@ -138,10 +138,16 @@ until source-retention policy is defined.
 `index` and `sync` do not launch a semantic worker by default. If
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, the current
 indexing path sends the discovered repo-relative TS/JS file set to that worker
-after syntax-only code units are recorded for the building generation. Returned
-facts are sorted deterministically, translated into RepoGrammar-owned storage
-records, and written only through the storage gate that matches evidence against
-the building generation manifest, content hashes, and code-unit ranges.
+after syntax-only code units are recorded for the building generation.
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply the executable argument
+vector as a JSON array of non-blank strings. For the checked-in Node stub, use
+an absolute Node executable as `REPOGRAMMAR_TYPESCRIPT_WORKER` and the worker
+script path as an argument in `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. The
+launcher must not parse shell strings, inherit PATH to satisfy shebang lookup,
+or accept worker arguments without an executable. Returned facts are sorted
+deterministically, translated into RepoGrammar-owned storage records, and
+written only through the storage gate that matches evidence against the
+building generation manifest, content hashes, and code-unit ranges.
 Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and
 protocol violations produce syntax-only fallback statuses and sanitized
 warnings. A worker fact that passes protocol parsing but does not match the
@@ -190,7 +196,8 @@ timeout, validate NDJSON stdout, map sanitized worker errors, and translate fact
 messages into RepoGrammar-owned semantic facts, and includes a no-dependency
 Node worker stub that reports semantic analysis as unavailable without echoing
 source paths. `index` and `sync` can optionally execute a configured worker via
-`REPOGRAMMAR_TYPESCRIPT_WORKER`; default indexing still reports
+`REPOGRAMMAR_TYPESCRIPT_WORKER` plus
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
 `semantic_worker: deferred`.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript

@@ -131,11 +131,12 @@ repo-relative evidence rows for a building generation, but only when the fact is
 already validated against an indexed code unit, matching content hash, and byte
 range in that same generation. The current `index` and `sync` commands still
 run syntax-only by default, but when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-explicit worker executable they may record worker-produced facts through this
-same-generation gate. Worker unavailable, unsupported-version, timeout, crash,
-or protocol-violation results fall back to syntax-only indexing with sanitized
-warnings; evidence that conflicts with the building generation's indexed
-path/hash/range aborts the new generation.
+explicit worker executable and optional
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` argv vector, they may record
+worker-produced facts through this same-generation gate. Worker unavailable,
+unsupported-version, timeout, crash, or protocol-violation results fall back to
+syntax-only indexing with sanitized warnings; evidence that conflicts with the
+building generation's indexed path/hash/range aborts the new generation.
 
 ## File Discovery Exclusions
 

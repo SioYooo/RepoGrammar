@@ -26,8 +26,9 @@
   structural code units in active SQLite generations without source snippets,
   absolute paths, or family evidence.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
-  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable. Accepted facts
-  must match the building generation's indexed code-unit path, hash, and range;
+  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
+  argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
+  match the building generation's indexed code-unit path, hash, and range;
   worker fallback keeps syntax-only indexing, and mismatched evidence aborts the
   new generation.
 - Active `files`/`units` inventory reads for repo-relative indexed-file metadata

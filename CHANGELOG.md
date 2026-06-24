@@ -52,7 +52,8 @@
   it, and atomically activates `.repogrammar/current-generation` without claiming
   semantic-worker-derived facts, mining, query, or family evidence.
 - Opt-in semantic-worker fact ingestion for `index` and `sync` when
-  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable. Accepted
+  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, with
+  optional argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted
   facts are recorded only through the same-generation code-unit path/hash/range
   storage gate; worker fallback remains syntax-only, and stale or mismatched
   semantic evidence aborts the new generation.
@@ -114,6 +115,9 @@
   evidence remain deferred.
 - Documented default `semantic_worker: deferred` index/sync behavior plus
   explicit-worker fallback statuses and `semantic_facts` reporting.
+- Documented and tested optional semantic-worker argv configuration through
+  `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, keeping worker startup free of
+  shell parsing and PATH-dependent shebang assumptions.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.
 - Documented `serde_json` as a production dependency for runtime

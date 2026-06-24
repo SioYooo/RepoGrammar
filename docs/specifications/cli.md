@@ -125,15 +125,19 @@ the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
 and `mining: deferred`. By default, `semantic_worker` is `deferred`.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
-for the building generation. Worker facts must pass the same-generation storage
-gate before they are recorded. Worker unavailable, unsupported-version, timeout,
-crash, or protocol-violation failures must fall back to syntax-only indexing
-with a typed `semantic_worker: fallback_*` status and sanitized warnings. A
-worker fact that conflicts with the indexed code-unit path, content hash, or
-range must abort the new generation rather than silently dropping or accepting
-stale evidence. If storage health is already unhealthy, index and sync must
-refuse and direct the user to `repogrammar doctor` rather than masking the
-corruption with a new generation.
+for the building generation.
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply an optional JSON array of
+non-blank string arguments. This is an argv contract, not shell parsing; worker
+arguments without `REPOGRAMMAR_TYPESCRIPT_WORKER` are invalid. Worker facts must
+pass the same-generation storage gate before they are recorded. Worker
+unavailable, unsupported-version, timeout, crash, or protocol-violation
+failures must fall back to syntax-only indexing with a typed
+`semantic_worker: fallback_*` status and sanitized warnings. A worker fact that
+conflicts with the indexed code-unit path, content hash, or range must abort the
+new generation rather than silently dropping or accepting stale evidence. If
+storage health is already unhealthy, index and sync must refuse and direct the
+user to `repogrammar doctor` rather than masking the corruption with a new
+generation.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
@@ -269,9 +273,11 @@ includes `generation_id`, `discovered_files`, `stored_files`, the actual
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
 deferred`. By default they do not launch a semantic worker and report
 `semantic_worker: deferred`. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-explicit executable, they pass the discovered repo-relative TS/JS file set to
-that worker, record only worker facts that match the active building-generation
-code-unit path/hash/range gate, and still make no family or query claims.
+explicit executable, optional
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies the worker argv vector. The
+commands pass the discovered repo-relative TS/JS file set to that worker, record
+only worker facts that match the active building-generation code-unit
+path/hash/range gate, and still make no family or query claims.
 They do not store source snippets, absolute paths, families, or pattern-family
 evidence.
 `files` and `units` now read only active syntax-only index metadata and code-unit
