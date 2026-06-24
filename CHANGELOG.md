@@ -11,6 +11,8 @@
   placeholder.
 - Semantic worker v1 protocol tokens, message schemas, and NDJSON fixtures for
   TypeScript semantic facts and unsupported-version fallback.
+- Semantic worker v1 request schema and TypeScript request fixture for the
+  Rust-to-worker stdin contract.
 - Rust-side TypeScript semantic-worker process adapter that writes request JSON
   over stdin, enforces a timeout, validates bounded NDJSON v1 stdout, converts
   fact messages into RepoGrammar-owned semantic facts, and sanitizes
@@ -83,6 +85,8 @@
   `sha256:<64 hex>` content hashes.
 - Documented JSON-parsed semantic-worker protocol fixture tests without
   claiming a running TypeScript worker or runtime indexing integration.
+- Documented request-side semantic-worker fixture validation without claiming a
+  bundled Node or TypeScript compiler worker.
 - Aligned semantic-worker schemas with fixture validation by rejecting blank
   string `target` values.
 - Documented `repo-guard` required-document coverage for ADR-0008.

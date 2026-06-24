@@ -56,6 +56,10 @@ allowed.
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
   accepted `null` targets, and accepted non-blank targets.
+- Semantic-worker request fixture tests must parse the stdin request as JSON and
+  reject wrong protocol versions, missing required fields, non-object payloads,
+  non-absolute project roots, duplicate changed files, absolute paths,
+  traversal, Windows absolute paths, URI-like paths, and backslash paths.
 - Runtime semantic-worker adapter tests must cover valid fact/progress/EOS
   output, malformed JSON, missing EOS, invalid hashes, blank targets,
   impossible work counts, absolute or URI evidence paths, unsupported snippet
@@ -84,14 +88,14 @@ Bootstrap tests cover core model validation, classification vocabulary,
 measurement taxonomy, semantic certainty behavior, protocol token mappings,
 strict content-hash validation, TypeScript worker version fallback, progress
 rendering and `WorkUnits` validation, schema coverage, JSON-parsed semantic
-worker fixture coverage, Rust-side TypeScript semantic-worker process and
-NDJSON validation behavior, telemetry consent, transport-neutral MCP tool names,
-CLI command surface, missing-index fallback human/JSON output, repo-local
-lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
-discovery filtering/hash/path-safety behavior, SQLite storage migration and
-generation-activation safety behavior, validated semantic-fact/evidence storage
-substrate behavior, syntax-only code-unit extraction and storage bridging,
-source-read hash/path safety, storage-aware status/doctor reporting, active
-syntax-only `files`/`units` read paths, product runtime wiring, installer dry-run
-parsing, and
+worker request and NDJSON fixture coverage, Rust-side TypeScript semantic-worker
+process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
+tool names, CLI command surface, missing-index fallback human/JSON output,
+repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
+TS/JS file discovery filtering/hash/path-safety behavior, SQLite storage
+migration and generation-activation safety behavior, validated
+semantic-fact/evidence storage substrate behavior, syntax-only code-unit
+extraction and storage bridging, source-read hash/path safety, storage-aware
+status/doctor reporting, active syntax-only `files`/`units` read paths, product
+runtime wiring, installer dry-run parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

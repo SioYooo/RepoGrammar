@@ -147,25 +147,7 @@ impl TypeScriptSemanticWorkerBoundary {
             ));
         }
 
-        let mut changed_files = request.changed_files;
-        changed_files.sort();
-        changed_files.dedup();
-        let payload = json!({
-            "protocol_version": SEMANTIC_WORKER_PROTOCOL_VERSION,
-            "request_id": REQUEST_ID,
-            "project_root": request.project_root,
-            "changed_files": changed_files,
-        });
-        let request_bytes = serde_json::to_vec(&payload).map_err(|_| {
-            SemanticWorkerError::ProtocolViolation(
-                "semantic worker request could not be serialized".to_string(),
-            )
-        })?;
-        if request_bytes.len() > MAX_WORKER_REQUEST_BYTES {
-            return Err(SemanticWorkerError::ProtocolViolation(
-                "semantic worker request exceeded size limit".to_string(),
-            ));
-        }
+        let request_bytes = worker_request_bytes(request)?;
 
         let mut command = Command::new(&self.executable);
         command
@@ -243,6 +225,30 @@ impl TypeScriptSemanticWorkerBoundary {
             thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+fn worker_request_bytes(
+    mut request: SemanticWorkerRequest,
+) -> Result<Vec<u8>, SemanticWorkerError> {
+    request.changed_files.sort();
+    request.changed_files.dedup();
+    let payload = json!({
+        "protocol_version": SEMANTIC_WORKER_PROTOCOL_VERSION,
+        "request_id": REQUEST_ID,
+        "project_root": request.project_root,
+        "changed_files": request.changed_files,
+    });
+    let request_bytes = serde_json::to_vec(&payload).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker request could not be serialized".to_string(),
+        )
+    })?;
+    if request_bytes.len() > MAX_WORKER_REQUEST_BYTES {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker request exceeded size limit".to_string(),
+        ));
+    }
+    Ok(request_bytes)
 }
 
 fn read_pipe(mut pipe: impl Read) -> Result<Vec<u8>, SemanticWorkerError> {
@@ -1027,6 +1033,26 @@ mod tests {
             SemanticWorkerError::UnsupportedVersion(_)
         ));
         assert!(!format!("{unsupported:?}").contains("/tmp/secret"));
+    }
+
+    #[test]
+    fn request_fixture_matches_worker_stdin_payload_and_sorts_files() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../protocol/fixtures/typescript-worker-request.json"
+        ))
+        .expect("request fixture must parse as JSON");
+        let payload = worker_request_bytes(SemanticWorkerRequest {
+            project_root: "/repo".to_string(),
+            changed_files: vec![
+                "src/b.tsx".to_string(),
+                "src/a.ts".to_string(),
+                "src/b.tsx".to_string(),
+            ],
+        })
+        .expect("request payload must serialize");
+        let payload: Value = serde_json::from_slice(&payload).expect("payload must parse");
+
+        assert_eq!(payload, fixture);
     }
 
     #[cfg(unix)]

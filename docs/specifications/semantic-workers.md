@@ -68,6 +68,13 @@ or other runtimes inside the Rust core.
 
 Protocol notes, schemas, and fixtures live under `src/protocol/`.
 
+Rust sends one v1 JSON request object to worker stdin before reading worker
+stdout. The request contains `protocol_version`, `request_id`, an absolute
+canonical `project_root`, and sorted unique repository-relative `changed_files`.
+Request fixtures must reject malformed JSON shape, missing required fields,
+wrong protocol versions, duplicate changed files, absolute paths, traversal,
+Windows absolute paths, URI-like paths, and backslash paths.
+
 The v1 NDJSON envelope supports these message types:
 
 - `fact`
@@ -153,11 +160,11 @@ semantic family membership.
 ## Implementation status
 
 The bootstrap now pins semantic worker protocol version `1`, defines stable
-Rust mappings for fact-kind and certainty tokens, includes schemas plus
-JSON-parsed NDJSON fixture tests, and has a Rust-side TypeScript process adapter
-that can send request JSON over stdin, enforce a timeout, validate NDJSON
-stdout, map sanitized worker errors, and translate fact messages into
-RepoGrammar-owned semantic facts.
+Rust mappings for fact-kind and certainty tokens, includes request and output
+schemas plus JSON-parsed request/NDJSON fixture tests, and has a Rust-side
+TypeScript process adapter that can send request JSON over stdin, enforce a
+timeout, validate NDJSON stdout, map sanitized worker errors, and translate fact
+messages into RepoGrammar-owned semantic facts.
 
 It still does not bundle a Node or TypeScript compiler worker, run TypeScript
 compiler APIs, store semantic facts, match worker facts against an active

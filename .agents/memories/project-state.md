@@ -16,8 +16,9 @@
 RepoGrammar is still pre-alpha, but it is past pure skeleton bootstrap. The
 current branch has repository-local lifecycle, TypeScript/JavaScript discovery,
 generation-scoped SQLite storage, syntax-only code-unit indexing, Rust-side
-TypeScript semantic-worker process validation, and a validated semantic-fact
-storage writer that is not yet wired into indexing.
+TypeScript semantic-worker request/output protocol validation and process
+validation, and a validated semantic-fact storage writer that is not yet wired
+into indexing.
 
 ## Durable knowledge
 

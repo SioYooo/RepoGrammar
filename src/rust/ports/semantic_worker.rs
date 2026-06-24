@@ -54,7 +54,11 @@ mod tests {
     use super::*;
     use crate::core::model::{ContentHash, FactCertainty, SemanticFactKind};
     use serde_json::{json, Map, Value};
-    use std::{fs, path::Path};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::{Component, Path},
+    };
 
     #[test]
     fn protocol_version_is_pinned_to_v1() {
@@ -91,6 +95,44 @@ mod tests {
     }
 
     #[test]
+    fn request_schema_documents_rust_stdin_contract() {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../protocol/semantic-worker-request.schema.json"
+        ))
+        .expect("request schema must parse as JSON");
+        let required = schema["required"]
+            .as_array()
+            .expect("request schema must list required fields");
+
+        assert_eq!(schema["additionalProperties"], false);
+        for field in [
+            "protocol_version",
+            "request_id",
+            "project_root",
+            "changed_files",
+        ] {
+            assert!(
+                required.iter().any(|candidate| candidate == field),
+                "request schema must require {field}"
+            );
+        }
+        assert_eq!(
+            schema["properties"]["protocol_version"]["const"],
+            SEMANTIC_WORKER_PROTOCOL_VERSION
+        );
+        assert_eq!(schema["properties"]["changed_files"]["uniqueItems"], true);
+        let changed_file_pattern = schema["properties"]["changed_files"]["items"]["pattern"]
+            .as_str()
+            .expect("changed file item must define a path-safety pattern");
+        for fragment in ["(?!/)", "(?![A-Za-z]:)", "\\.\\.", ".*\\\\", "://"] {
+            assert!(
+                changed_file_pattern.contains(fragment),
+                "changed file pattern should constrain {fragment}"
+            );
+        }
+    }
+
+    #[test]
     fn schemas_reject_empty_fact_targets() {
         let message_schema: Value = serde_json::from_str(include_str!(
             "../../protocol/semantic-worker-message.schema.json"
@@ -104,6 +146,146 @@ mod tests {
             serde_json::from_str(include_str!("../../protocol/semantic-worker.schema.json"))
                 .expect("fact schema must parse as JSON");
         assert_target_schema_rejects_empty_string(&fact_schema["properties"]["target"]);
+    }
+
+    #[test]
+    fn semantic_worker_request_fixture_matches_rust_stdin_contract() {
+        let request: Value = serde_json::from_str(include_str!(
+            "../../protocol/fixtures/typescript-worker-request.json"
+        ))
+        .expect("request fixture must parse as JSON");
+
+        validate_worker_request(&request).expect("request fixture must match Rust stdin contract");
+        assert_eq!(
+            request["request_id"],
+            "repogrammar-typescript-semantic-worker"
+        );
+        assert_eq!(request["changed_files"], json!(["src/a.ts", "src/b.tsx"]));
+    }
+
+    #[test]
+    fn worker_request_validation_rejects_invalid_payloads() {
+        let invalid_payloads = [
+            Value::Null,
+            json!({}),
+            {
+                let mut request = valid_worker_request();
+                request["protocol_version"] = json!(2);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["protocol_version"] = json!("1");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["extra"] = json!(true);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request
+                    .as_object_mut()
+                    .expect("request object")
+                    .remove("project_root");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["project_root"] = json!("relative/root");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["project_root"] = json!("");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["project_root"] = json!(null);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["project_root"] = json!("/repo\u{0000}bad");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["request_id"] = json!(" ");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["request_id"] = json!(null);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = Value::Null;
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!([""]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!([null]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["src/a.ts", "src/a.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["/tmp/source.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["../secret.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["src/../secret.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["./src/a.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["src\\a.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["C:/tmp/source.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["C:\\tmp\\source.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["changed_files"] = json!(["file:///tmp/source.ts"]);
+                request
+            },
+        ];
+
+        for payload in invalid_payloads {
+            validate_worker_request(&payload).expect_err("invalid request payload must fail");
+        }
     }
 
     #[test]
@@ -229,6 +411,105 @@ mod tests {
         } else {
             Err("fixture must include an end_of_stream message".to_string())
         }
+    }
+
+    fn validate_worker_request(value: &Value) -> Result<(), String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "request must be a JSON object".to_string())?;
+        validate_allowed_fields(
+            object,
+            &[
+                "protocol_version",
+                "request_id",
+                "project_root",
+                "changed_files",
+            ],
+        )?;
+        validate_required_fields(
+            object,
+            &[
+                "protocol_version",
+                "request_id",
+                "project_root",
+                "changed_files",
+            ],
+        )?;
+
+        let protocol_version = object
+            .get("protocol_version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "protocol_version must be an integer".to_string())?;
+        if protocol_version != u64::from(SEMANTIC_WORKER_PROTOCOL_VERSION) {
+            return Err(format!(
+                "protocol_version must be {}",
+                SEMANTIC_WORKER_PROTOCOL_VERSION
+            ));
+        }
+
+        required_string(object, "request_id")?;
+        let project_root = required_string(object, "project_root")?;
+        if project_root.contains('\0') || !Path::new(project_root).is_absolute() {
+            return Err("project_root must be an absolute path string".to_string());
+        }
+
+        let changed_files = object
+            .get("changed_files")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "changed_files must be an array".to_string())?;
+        let mut seen = BTreeSet::new();
+        for changed_file in changed_files {
+            let changed_file = changed_file
+                .as_str()
+                .ok_or_else(|| "changed_files entries must be strings".to_string())?;
+            validate_request_changed_file(changed_file)?;
+            if !seen.insert(changed_file) {
+                return Err("changed_files entries must be unique".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_allowed_fields(
+        object: &Map<String, Value>,
+        allowed_fields: &[&str],
+    ) -> Result<(), String> {
+        for field in object.keys() {
+            if !allowed_fields.contains(&field.as_str()) {
+                return Err("request contains unsupported field".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_request_changed_file(path: &str) -> Result<(), String> {
+        if path.trim().is_empty()
+            || Path::new(path).is_absolute()
+            || path.contains('\\')
+            || path.contains("://")
+            || path.contains('\0')
+            || looks_like_windows_absolute_path(path)
+        {
+            return Err("changed file must be repository-relative".to_string());
+        }
+        for component in Path::new(path).components() {
+            match component {
+                Component::Normal(_) => {}
+                Component::CurDir
+                | Component::ParentDir
+                | Component::Prefix(_)
+                | Component::RootDir => {
+                    return Err("changed file must not traverse outside repository".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn looks_like_windows_absolute_path(path: &str) -> bool {
+        let bytes = path.as_bytes();
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
     }
 
     fn validate_fact_message(object: &Map<String, Value>) -> Result<(), String> {
@@ -465,6 +746,15 @@ mod tests {
             "protocol_version": 1,
             "message_type": "end_of_stream",
             "request_id": "fixture-test"
+        })
+    }
+
+    fn valid_worker_request() -> Value {
+        json!({
+            "protocol_version": 1,
+            "request_id": "repogrammar-typescript-semantic-worker",
+            "project_root": "/repo",
+            "changed_files": ["src/a.ts", "src/b.tsx"]
         })
     }
 }
