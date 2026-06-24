@@ -192,8 +192,9 @@ During the bootstrap, pattern-family query commands use this fallback shape and
 append explicit deferred-status text that query execution still requires stored
 pattern-family evidence. `status` and `doctor` may report a clean
 not-initialized state without opening storage. Stored syntax-only code units are
-not query support; query commands must not imply that semantic-worker execution,
-mining, query execution, or MCP serving has run.
+not query support; query commands must not imply that TypeScript compiler worker
+execution, semantic-fact indexing, mining, query execution, or MCP serving has
+run.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:

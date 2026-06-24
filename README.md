@@ -183,9 +183,9 @@ The next implementation phase should refine one boundary at a time from the
 v0.1 parallel development plan:
 
 - keep syntax-only code units structural and non-semantic;
-- keep semantic-worker execution, mining, query execution, and MCP transport
-  deferred until parser output, storage, and semantic-worker boundaries are
-  validated together.
+- keep TypeScript compiler worker source, semantic-fact indexing, mining, query
+  execution, and MCP transport deferred until parser output, storage, and
+  semantic-worker boundaries are validated together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 
