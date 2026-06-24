@@ -134,6 +134,11 @@ exclusions. At minimum, RepoGrammar must skip:
 Explicit project configuration may opt in additional files, but ignored
 third-party and generated artifacts must not enter family evidence by accident.
 
+The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
+`.js`, and `.jsx` files only. It returns repo-relative metadata and skip
+reasons for future storage but does not write SQLite rows or activate an index
+generation.
+
 ## Project Configuration
 
 Optional shared project configuration lives at the repository root:

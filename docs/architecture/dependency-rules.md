@@ -25,6 +25,14 @@
 - `interfaces` must not implement pattern-family mining rules.
 - `repo_guard` must not call product runtime code.
 
+## Filesystem and Git discovery boundary
+
+Repository traversal, filesystem metadata, symlink inspection, content-hash
+calculation, and Git ignore probing belong in filesystem adapters. The
+application layer may orchestrate discovery through ports and may classify
+deferred indexing outcomes, but it must not expose absolute paths, source text,
+or concrete process payloads across the port boundary.
+
 ## Tree-sitter boundary
 
 Tree-sitter is the intended universal syntax technology, but parser AST nodes stay in

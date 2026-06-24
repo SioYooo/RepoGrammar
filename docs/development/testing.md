@@ -27,6 +27,12 @@ allowed.
   marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
   human and JSON status/doctor output, corrupted manifests, missing subdirs,
   `uninit --yes`, conservative unlock behavior, and redacted logs metadata.
+- File discovery tests must use temporary workspaces and cover TS/JS inclusion,
+  unsupported module extensions, default dependency/build/generated/state-dir
+  exclusions, Git-ignored files when Git is available, safe Git-unavailable
+  warnings, the inclusive 1 MB size boundary, oversized skips, strict SHA-256
+  hash generation, deterministic ordering, symlink escape skips, invalid roots,
+  and absence of source snippets or absolute paths in reports.
 - Protocol fixture tests must parse fixture lines as JSON before checking
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
@@ -42,6 +48,6 @@ strict content-hash validation, TypeScript worker version fallback, progress
 rendering and `WorkUnits` validation, schema coverage, JSON-parsed semantic
 worker fixture coverage, telemetry consent, transport-neutral MCP tool names,
 CLI command surface, missing-index fallback human/JSON output, repo-local
-lifecycle init/status/doctor/uninit/unlock/logs safety behavior, installer
-dry-run parsing, and `repo-guard` sync/path/diff/ADR-0008 required document
-logic.
+lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
+discovery filtering/hash/path-safety behavior, installer dry-run parsing, and
+`repo-guard` sync/path/diff/ADR-0008 required document logic.

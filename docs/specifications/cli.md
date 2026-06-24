@@ -200,9 +200,11 @@ lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
 repo-local lifecycle information without claiming real indexing or SQLite
-storage. Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
+storage. A TS/JS file discovery substrate exists for future indexing, but
+`index` and `sync` still do not create an active generation or store facts.
+Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
 not-implemented guidance when no validated index is available, and return a
 structured fallback object when `--json` is present. Commands that install agent
-configuration, run real indexing, sync indexes, or serve MCP return explicit
-not-implemented or deferred-write errors until those implementations are
-designed and tested.
+configuration, run real index generation, sync indexes, or serve MCP return
+explicit not-implemented or deferred-write errors until those implementations
+are designed and tested.

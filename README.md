@@ -16,15 +16,16 @@ claim.
 
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
-pattern-family-first CLI boundary, repo-local lifecycle commands, and
-repository guard checks.
+pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
+discovery substrate, and repository guard checks.
 
 It does not yet implement real pattern mining, indexing, SQLite storage
-migrations, or a working MCP server. `init`, `uninit`, `status`, `doctor`,
-`unlock`, and `logs` operate only on safe repo-local lifecycle state. Commands
-that install agent configuration, run indexing, sync indexes, or serve MCP
-return explicit not-implemented errors until those contracts are implemented
-and tested.
+migrations, parser-backed code-unit extraction, or a working MCP server.
+`init`, `uninit`, `status`, `doctor`, `unlock`, and `logs` operate only on safe
+repo-local lifecycle state. The discovery layer can enumerate TS/JS source
+metadata for future indexing, but commands that install agent configuration,
+run real index generation, sync indexes, or serve MCP return explicit
+not-implemented errors until those contracts are implemented and tested.
 
 ## Why RepoGrammar?
 
@@ -83,6 +84,7 @@ structured object with `implemented: false`.
 | Python | Planned second official language | Experimental only until a focused v0.2 adapter is accepted |
 | Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
+| Discovery | TS/JS file discovery substrate is implemented | Git-aware source inventory feeding parser and storage |
 | Storage | SQLite and FTS5 are specified | Local evidence index with migrations and provenance |
 | State directory | Safe `.repogrammar/` lifecycle is implemented without indexing | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
@@ -169,14 +171,12 @@ The dependency direction and module ownership are documented in:
 
 ## Roadmap
 
-The next implementation phase is file discovery and repository-local storage
-substrate:
+The next implementation phase is repository-local storage substrate:
 
-- implement Git-aware TS/JS file discovery and skip reasons;
-- enforce `.repogrammar/` and `.repogrammar-*` discovery exclusions;
-- add content hashes and size-limit handling;
 - design SQLite migrations and generation activation before storing indexed
   facts;
+- connect discovery reports to generation validation without storing source
+  snippets or absolute paths;
 - keep parser, semantic-worker execution, and mining deferred until lifecycle,
   discovery, and storage boundaries are validated.
 

@@ -9,6 +9,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/core/policy/` | Compatibility, abstention, and freshness policy | `docs/specifications/domain-model.md`, `docs/specifications/product.md` |
 | `src/rust/ports/` | Traits for parser, semantic worker, family store, source store, and telemetry | `docs/architecture/dependency-rules.md`, related specifications |
 | `src/rust/application/` | Indexing, query, conformance, install planning, progress, repository lifecycle, telemetry, and metrics use-case boundaries | `docs/architecture/overview.md`, this file, relevant specifications |
+| `src/rust/adapters/filesystem/` | Filesystem and Git-backed discovery boundaries | `docs/specifications/indexing-pipeline.md`, `docs/specifications/storage.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/parsing/` | Tree-sitter parser boundary | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/semantic_workers/` | Rust-side process boundary for language-native semantic workers | `docs/specifications/semantic-workers.md`, `docs/decisions/ADR-0004-rust-core-language-native-workers.md` |

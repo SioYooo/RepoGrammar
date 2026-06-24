@@ -22,9 +22,10 @@ Repository files
 ## Bootstrap status
 
 The repository currently defines module boundaries, semantic-worker protocol
-placeholders, and minimal types only. It does not parse real code, call a
-TypeScript compiler, build an index, align structures, anti-unify templates,
-cluster families, or persist results.
+placeholders, a safe repo-local lifecycle, and a TS/JS file discovery
+substrate. It does not parse real code, call a TypeScript compiler, build an
+active index generation, align structures, anti-unify templates, cluster
+families, or persist results.
 
 ## File discovery and exclusions
 
@@ -33,10 +34,24 @@ boundaries before parsing begins. RepoGrammar must skip `.repogrammar/` and
 `.repogrammar-*` unconditionally, even when `REPOGRAMMAR_DIR` changes the active
 state directory.
 
-Discovery must honor `.gitignore` rules and default exclusions for dependency,
-build, cache, coverage, virtual environment, and generated output directories.
-Files larger than the configured size limit are skipped, with 1 MB as the
-default limit.
+Discovery must honor `.gitignore` rules when Git is available and use a safe
+warning fallback when Git checks are unavailable. It must apply default
+exclusions for dependency, build, cache, coverage, virtual environment, and
+generated output directories. Files larger than the configured size limit are
+skipped, with 1 MB as the default inclusive limit.
+
+The current discovery substrate supports `.ts`, `.tsx`, `.js`, and `.jsx`.
+Module-specific extensions such as `.mjs`, `.cjs`, `.mts`, and `.cts` remain
+deferred until language-mode policy is defined. Discovery reports contain
+repository-relative paths, language classification, strict
+`sha256:<64 hex>` content hashes, file sizes, skip reasons, Git ignore status,
+and warnings. They must not contain source snippets or absolute paths.
+
+Skip reasons include RepoGrammar state directories, default excluded
+directories, unsupported extensions, Git-ignored files, oversized files,
+symlinks that are not followed, symlink escapes, paths outside the repository,
+non-UTF-8 paths, and unreadable entries. Output ordering must be deterministic
+by repository-relative path.
 
 Optional `repogrammar.json` may configure language enablement, custom file
 extensions, include/exclude patterns, framework adapters, and family thresholds.

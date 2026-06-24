@@ -11,22 +11,20 @@
 - Repo-local lifecycle for `.repogrammar/`, including init/uninit,
   status/doctor, conservative unlock, redacted log metadata, and Git ignore
   hygiene.
+- Git-aware TypeScript and JavaScript file discovery substrate with strict
+  hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
+  and deterministic ordering.
 - Core domain type placeholders.
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
 
-## Next phase: file discovery and storage substrate
+## Next phase: storage substrate
 
-- Implement Git-aware TypeScript and JavaScript file discovery.
-- Skip `.repogrammar/`, `.repogrammar-*`, dependency, build, coverage, cache,
-  virtual environment, and generated-output directories.
-- Respect Git ignore rules where Git is available and report a safe warning
-  when it is not.
-- Enforce the default 1 MB file-size limit and strict SHA-256 content hashes.
-- Canonicalize paths, reject symlink escapes, record skip reasons, and return
-  deterministic ordering.
 - Design SQLite migrations and generation activation before storing indexed
   facts.
+- Connect the existing discovery substrate to generation validation.
+- Keep parser, semantic-worker execution, and mining deferred until storage can
+  preserve a previous valid generation on failure.
 
 ## Command implementation path
 

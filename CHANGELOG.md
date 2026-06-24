@@ -24,6 +24,10 @@
   telemetry consent.
 - Repo-local lifecycle implementation for `init`, `uninit`, `status`,
   `doctor`, `unlock`, and `logs` without real indexing or SQLite storage.
+- TS/JS file discovery substrate with repo-relative metadata, strict SHA-256
+  content hashes, default generated-directory skips, Git ignore checks,
+  symlink-escape rejection, size-limit handling, and deterministic skip
+  reasons.
 - Mirrored `AGENTS.md` and `CLAUDE.md` governance contract.
 - Documentation system covering architecture, specifications, development
   workflow, ADRs, roadmap, skills, and memories.
@@ -47,3 +51,5 @@
 - Documented safe repo-local lifecycle behavior, including state directory
   override validation, Git ignore hygiene, bootstrap manifest status, and
   conservative lock/log handling.
+- Documented that discovery is implemented as a substrate while parser,
+  storage, generation activation, and query execution remain deferred.
