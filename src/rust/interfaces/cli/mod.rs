@@ -523,11 +523,41 @@ fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
 }
 
 fn handle_stats(rest: &[String]) -> CliOutput {
-    if let Err(error) = reject_unknown_options(rest, &["--json", "--quiet", "--verbose"]) {
-        return CliOutput::failure(2, format!("{error}\n"));
+    let options = match parse_stats_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+
+    if options.json {
+        return CliOutput::success(stats_json());
     }
+
     CliOutput::success(
-        "stats: no initialized index; token metrics must be classified as MEASURED, DERIVED, ESTIMATED, or CAUSAL_EXPERIMENT, and derived context compression is not actual token savings\n",
+        "stats: metrics unavailable; token metrics must be classified as MEASURED, DERIVED, ESTIMATED, or CAUSAL_EXPERIMENT, and derived context compression is not actual token savings\n",
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct StatsOptions {
+    json: bool,
+}
+
+fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
+    let mut options = StatsOptions::default();
+    for option in rest {
+        match option.as_str() {
+            "--json" => options.json = true,
+            "--quiet" | "--verbose" => {}
+            other => return Err(format!("unknown stats option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn stats_json() -> String {
+    format!(
+        "{{\"command\":\"stats\",\"status\":\"deferred\",\"implemented\":false,\"metrics\":[],\"metric_kinds\":[\"MEASURED\",\"DERIVED\",\"ESTIMATED\",\"CAUSAL_EXPERIMENT\"],\"token_savings\":null,\"context_compression_ratio\":null,\"guidance\":\"{}\"}}\n",
+        json_string("run repogrammar index after metrics collection is implemented")
     )
 }
 
@@ -1056,15 +1086,6 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
         }
     }
     Ok(request)
-}
-
-fn reject_unknown_options(rest: &[String], allowed: &[&str]) -> Result<(), String> {
-    for option in rest {
-        if !allowed.contains(&option.as_str()) {
-            return Err(format!("unknown option: {option}"));
-        }
-    }
-    Ok(())
 }
 
 fn option_value<'a>(
@@ -2915,8 +2936,52 @@ mod tests {
     fn status_doctor_stats_and_telemetry_status_are_safe() {
         assert_eq!(run(["status"]).status, 0);
         assert_eq!(run(["doctor"]).status, 0);
-        assert_eq!(run(["stats"]).status, 0);
+        let stats = run(["stats"]);
+        assert_eq!(stats.status, 0);
+        assert!(stats.stdout.contains("metrics unavailable"));
+        assert!(stats.stdout.contains("CAUSAL_EXPERIMENT"));
         assert_eq!(run(["telemetry", "status"]).status, 0);
+    }
+
+    #[test]
+    fn stats_json_is_parseable_deferred_metrics_contract() {
+        let output = run(["stats", "--json"]);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
+        assert_eq!(value["command"], "stats");
+        assert_eq!(value["status"], "deferred");
+        assert_eq!(value["implemented"], false);
+        assert_eq!(value["metrics"].as_array().expect("metrics").len(), 0);
+        assert_eq!(value["token_savings"], Value::Null);
+        assert_eq!(value["context_compression_ratio"], Value::Null);
+        assert_eq!(
+            value["metric_kinds"]
+                .as_array()
+                .expect("metric kinds")
+                .iter()
+                .map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                Some("MEASURED"),
+                Some("DERIVED"),
+                Some("ESTIMATED"),
+                Some("CAUSAL_EXPERIMENT")
+            ]
+        );
+        let serialized = output.stdout;
+        assert!(!serialized.contains("token savings\":"));
+        assert!(!serialized.contains("/Users/"));
+        assert!(!serialized.contains("src/"));
+    }
+
+    #[test]
+    fn stats_rejects_unknown_options() {
+        let output = run(["stats", "--mystery"]);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stderr.contains("unknown stats option: --mystery"));
     }
 
     fn create_git_dir(root: &Path) {

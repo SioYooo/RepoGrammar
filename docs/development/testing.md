@@ -92,6 +92,9 @@ allowed.
 - UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
   irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
   metrics code.
+- Stats CLI tests must cover the human deferred message, parseable `--json`
+  output, allowed metric-kind vocabulary, null token-savings fields, unknown
+  option rejection, and absence of source/path leakage.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
   constructor rather than constructing impossible progress states directly.
 
@@ -113,5 +116,6 @@ status/doctor reporting, active syntax-only `files`/`units` read paths, product
 runtime wiring, optional semantic-worker fact ingestion through the
 same-generation storage gate, sanitized worker fallback during indexing,
 dependency-free TypeScript worker unavailable-stub behavior,
-installer dry-run parsing, and
+installer dry-run parsing, deferred `stats --json` metrics contract behavior,
+and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

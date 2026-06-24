@@ -170,6 +170,17 @@ snippets or absolute paths.
 Installer commands configure agents and machine-level integration only. They do
 not create, delete, or rewrite `.repogrammar/`.
 
+## Metrics commands
+
+`repogrammar stats` reports metric availability and measurement taxonomy. During
+bootstrap it does not read repository metrics, token counts, or family evidence.
+With `--json`, it must return a parseable deferred object with
+`implemented: false`, an empty `metrics` array, the allowed metric kinds
+`MEASURED`, `DERIVED`, `ESTIMATED`, and `CAUSAL_EXPERIMENT`, and `null` values
+for token savings and context compression ratio. It must not include paths,
+source snippets, query text, repository names, or any inferred token-savings
+claim.
+
 ## Disallowed top-level graph commands
 
 The following CodeGraph-style names must not be added as top-level v0.1

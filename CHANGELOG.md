@@ -31,6 +31,8 @@
   focused second-language phase.
 - Pattern-family-first CLI command surface, with CodeGraph-style graph commands
   rejected as top-level v0.1 commands.
+- Stable deferred `stats --json` output that exposes metric-kind vocabulary
+  without reporting token savings or repository-derived metrics.
 - Safe contracts for agent installation, initialization progress, metrics, and
   telemetry consent.
 - Repo-local lifecycle implementation for `init`, `uninit`, `status`,
