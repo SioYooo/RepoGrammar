@@ -156,7 +156,10 @@ syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
 families, and semantic-worker-produced facts are not stored by `index`/`sync`.
 The active indexed-file and code-unit rows are exposed only through the limited
-`files`/`units` read path and must not be treated as family evidence.
+`files`/`units` read path and must not be treated as family evidence. Active
+`units` reads must revalidate stored code-unit ids against their repo-relative
+paths before rendering output so tampered generation databases cannot smuggle
+absolute paths through unit ids.
 
 Experimental Python discovery, once accepted, must record its support level and
 must not be stored or reported as official v0.1 production support. Optional

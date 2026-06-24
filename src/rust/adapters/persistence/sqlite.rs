@@ -501,8 +501,8 @@ impl IndexStore for SqliteIndexStore {
                 file_hash,
                 file_size,
             ) = row.map_err(sql_unavailable)?;
-            validate_stored_non_empty_text(&id, "stored code unit id")?;
             validate_stored_repo_relative_path(&path, "stored code unit path")?;
+            validate_stored_code_unit_id(&id, &path)?;
             validate_stored_non_empty_text(&language, "stored code unit language")?;
             validate_stored_non_empty_text(&kind, "stored code unit kind")?;
             if content_hash != file_hash {
@@ -1061,6 +1061,22 @@ fn validate_stored_non_empty_text(value: &str, label: &'static str) -> Result<()
     } else {
         Ok(())
     }
+}
+
+fn validate_stored_code_unit_id(id: &str, path: &str) -> Result<(), IndexStoreError> {
+    validate_stored_non_empty_text(id, "stored code unit id")?;
+    if id.contains('\\') || id.contains("://") || looks_like_windows_absolute_path(id) {
+        return Err(IndexStoreError::InvalidState(
+            "stored code unit id is invalid".to_string(),
+        ));
+    }
+    let expected_prefix = format!("unit:{path}#");
+    if !id.starts_with(&expected_prefix) {
+        return Err(IndexStoreError::InvalidState(
+            "stored code unit id does not match code unit path".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn looks_like_windows_absolute_path(path: &str) -> bool {
@@ -1691,6 +1707,37 @@ mod tests {
         let error = store
             .list_active_code_units()
             .expect_err("tampered unit hash/range must fail reads");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_reads_reject_code_unit_ids_that_do_not_match_paths() {
+        let workspace = TempWorkspace::new("sqlite-list-invalid-code-unit-id");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record unit");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        connection
+            .execute(
+                "UPDATE code_units SET code_unit_id = 'unit:/Users/example/repo/src/a.ts#module:0-10'",
+                [],
+            )
+            .expect("tamper unit id");
+
+        let error = store
+            .list_active_code_units()
+            .expect_err("tampered unit id must fail reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
