@@ -40,4 +40,5 @@
   string `target` values.
 - Documented `repo-guard` required-document coverage for ADR-0008.
 - Documented progress `WorkUnits` constructor validation and CLI missing-index
-  fallback/deferred implementation status.
+  fallback/deferred implementation status, including structured `--json`
+  fallback output for query commands.

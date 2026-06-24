@@ -140,8 +140,18 @@ fn handle_project_lifecycle(command: &str, rest: &[String]) -> CliOutput {
 }
 
 fn handle_query(command: &str, rest: &[String]) -> CliOutput {
-    if let Err(error) = parse_query_options(rest) {
-        return CliOutput::failure(2, format!("{error}\n"));
+    let options = match parse_query_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+
+    if options.json {
+        return CliOutput::failure(
+            2,
+            format!(
+                "{{\"status\":\"FALLBACK_TO_CODE_SEARCH\",\"reason\":\"repository is not initialized\",\"guidance\":\"run repogrammar init\",\"command\":\"{command}\",\"implemented\":false}}\n"
+            ),
+        );
     }
 
     CliOutput::failure(
@@ -150,6 +160,11 @@ fn handle_query(command: &str, rest: &[String]) -> CliOutput {
             "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\ncommand: repogrammar {command} is not implemented yet; query execution requires a validated pattern-family index\n"
         ),
     )
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct QueryOptions {
+    json: bool,
 }
 
 fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
@@ -264,7 +279,8 @@ fn parse_log_options(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_query_options(rest: &[String]) -> Result<(), String> {
+fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
+    let mut options = QueryOptions::default();
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
@@ -274,12 +290,16 @@ fn parse_query_options(rest: &[String]) -> Result<(), String> {
                 }
                 index += 2;
             }
-            "--json" | "--include-variations" | "--include-exceptions" => index += 1,
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--include-variations" | "--include-exceptions" => index += 1,
             value if !value.starts_with('-') => index += 1,
             other => return Err(format!("unknown query option: {other}")),
         }
     }
-    Ok(())
+    Ok(options)
 }
 
 fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
@@ -339,6 +359,7 @@ fn reject_unknown_options(rest: &[String], allowed: &[&str]) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn version_succeeds() {
@@ -380,12 +401,14 @@ mod tests {
         ]);
 
         assert_eq!(output.status, 2);
-        assert!(output.stderr.starts_with(
-            "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
-        ));
-        assert!(output
-            .stderr
-            .contains("query execution requires a validated pattern-family index"));
+        assert!(output.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(fallback["reason"], "repository is not initialized");
+        assert_eq!(fallback["guidance"], "run repogrammar init");
+        assert_eq!(fallback["command"], "find");
+        assert_eq!(fallback["implemented"], false);
     }
 
     #[test]

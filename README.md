@@ -67,6 +67,8 @@ cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <ta
 
 The command surface is intentionally present before the full engine exists so
 contracts, tests, and documentation can stabilize around pattern-family results.
+Query commands currently return explicit missing-index fallback guidance; with
+`--json`, that fallback is a structured object with `implemented: false`.
 
 ## Product Shape
 

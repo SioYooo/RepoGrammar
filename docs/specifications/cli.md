@@ -164,6 +164,19 @@ validated pattern-family index. `status` and `doctor` may report a clean
 not-initialized state without opening storage. They must not imply that real
 indexing, storage activation, or MCP serving has run.
 
+With `--json`, query fallback output must use exit status `2` and write a
+stable JSON object to `stderr` rather than the human text block:
+
+```json
+{
+  "status": "FALLBACK_TO_CODE_SEARCH",
+  "reason": "repository is not initialized",
+  "guidance": "run repogrammar init",
+  "command": "find",
+  "implemented": false
+}
+```
+
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
 
@@ -172,7 +185,8 @@ changed.
 The bootstrap recognizes the command surface and required options. `status` and
 `doctor` expose safe missing-index status without initializing storage.
 Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
-not-implemented guidance when no validated index is available. Commands that
-would mutate repository state, install agent configuration, run real indexing,
-or serve MCP return explicit not-implemented or deferred-write errors until
-those implementations are designed and tested.
+not-implemented guidance when no validated index is available, and return a
+structured fallback object when `--json` is present. Commands that would mutate
+repository state, install agent configuration, run real indexing, or serve MCP
+return explicit not-implemented or deferred-write errors until those
+implementations are designed and tested.
