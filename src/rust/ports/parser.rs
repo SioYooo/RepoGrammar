@@ -1,7 +1,9 @@
 //! Parser port. Implementations must convert third-party parser values to core
 //! RepoGrammar types before returning.
 
-use crate::core::model::{CodeUnit, ContentHash, Language, RepositoryRevision, SourceRange};
+use crate::core::model::{
+    CodeUnit, ContentHash, IrEdge, IrNode, Language, RepositoryRevision, SourceRange,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDocument<'a> {
@@ -15,6 +17,8 @@ pub struct SourceDocument<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseReport {
     pub units: Vec<CodeUnit>,
+    pub ir_nodes: Vec<IrNode>,
+    pub ir_edges: Vec<IrEdge>,
     pub diagnostics: Vec<ParseDiagnostic>,
 }
 

@@ -1,10 +1,10 @@
 //! Storage use-case boundary.
 
-use crate::core::model::{FactCertainty, SemanticFactKind};
+use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedSemanticFactRecord, StorageInspection,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
 };
 use std::path::{Component, Path};
 
@@ -33,6 +33,28 @@ pub fn record_code_unit(
     validate_code_unit(unit)?;
     store
         .record_code_unit(generation, unit)
+        .map_err(index_store_error)
+}
+
+pub fn record_ir_node(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    node: &IndexedIrNodeRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_ir_node(node)?;
+    store
+        .record_ir_node(generation, node)
+        .map_err(index_store_error)
+}
+
+pub fn record_ir_edge(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    edge: &IndexedIrEdgeRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_ir_edge(edge)?;
+    store
+        .record_ir_edge(generation, edge)
         .map_err(index_store_error)
 }
 
@@ -116,6 +138,58 @@ fn validate_code_unit(unit: &IndexedCodeUnitRecord) -> Result<(), RepoGrammarErr
     Ok(())
 }
 
+fn validate_ir_node(node: &IndexedIrNodeRecord) -> Result<(), RepoGrammarError> {
+    for (field_name, value) in [
+        ("IR node id", node.id.as_str()),
+        ("IR node code unit id", node.code_unit_id.as_str()),
+        ("IR node kind", node.kind.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "{field_name} must not be empty"
+            )));
+        }
+        validate_semantic_text_field(field_name, value)?;
+    }
+    if node.id != format!("ir:{}", node.code_unit_id) {
+        return Err(RepoGrammarError::InvalidInput(
+            "IR node id must be derived from code unit id".to_string(),
+        ));
+    }
+    if node.payload_json.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "IR node payload must not be empty".to_string(),
+        ));
+    }
+    IrNodeKind::parse_protocol_str(&node.kind)
+        .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))?;
+    validate_empty_object_payload("IR node payload", &node.payload_json)?;
+    Ok(())
+}
+
+fn validate_ir_edge(edge: &IndexedIrEdgeRecord) -> Result<(), RepoGrammarError> {
+    for (field_name, value) in [
+        ("IR edge from node id", edge.from_node_id.as_str()),
+        ("IR edge to node id", edge.to_node_id.as_str()),
+        ("IR edge label", edge.label.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "{field_name} must not be empty"
+            )));
+        }
+        validate_semantic_text_field(field_name, value)?;
+    }
+    if edge.from_node_id == edge.to_node_id {
+        return Err(RepoGrammarError::InvalidInput(
+            "IR edge must not point to itself".to_string(),
+        ));
+    }
+    IrEdgeLabel::parse_protocol_str(&edge.label)
+        .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))?;
+    Ok(())
+}
+
 fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGrammarError> {
     for (field_name, value) in [
         ("semantic fact id", fact.fact_id.as_str()),
@@ -185,6 +259,21 @@ fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGr
         ));
     }
     Ok(())
+}
+
+fn validate_empty_object_payload(
+    field_name: &str,
+    payload_json: &str,
+) -> Result<(), RepoGrammarError> {
+    let value: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|_| RepoGrammarError::InvalidInput(format!("{field_name} must be valid JSON")))?;
+    if value == serde_json::json!({}) {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(format!(
+            "{field_name} must be an empty JSON object until typed IR attributes are implemented"
+        )))
+    }
 }
 
 fn validate_semantic_text_field(field_name: &str, value: &str) -> Result<(), RepoGrammarError> {
@@ -260,7 +349,10 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
-    use crate::ports::index_store::{ActiveCodeUnits, ActiveIndexedFiles, STORAGE_SCHEMA_VERSION};
+    use crate::ports::index_store::{
+        ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts,
+        STORAGE_SCHEMA_VERSION,
+    };
 
     struct FakeStore;
 
@@ -287,6 +379,22 @@ mod tests {
             Ok(())
         }
 
+        fn record_ir_node(
+            &self,
+            _generation: &GenerationHandle,
+            _node: &IndexedIrNodeRecord,
+        ) -> Result<(), IndexStoreError> {
+            Ok(())
+        }
+
+        fn record_ir_edge(
+            &self,
+            _generation: &GenerationHandle,
+            _edge: &IndexedIrEdgeRecord,
+        ) -> Result<(), IndexStoreError> {
+            Ok(())
+        }
+
         fn record_semantic_fact(
             &self,
             _generation: &GenerationHandle,
@@ -306,6 +414,21 @@ mod tests {
             Ok(ActiveCodeUnits {
                 generation_id: "gen-000001".to_string(),
                 units: Vec::new(),
+            })
+        }
+
+        fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
+            Ok(ActiveSemanticFacts {
+                generation_id: "gen-000001".to_string(),
+                facts: Vec::new(),
+            })
+        }
+
+        fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
+            Ok(ActiveIrGraph {
+                generation_id: "gen-000001".to_string(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
             })
         }
 
@@ -370,6 +493,23 @@ mod tests {
         }
     }
 
+    fn ir_node() -> IndexedIrNodeRecord {
+        IndexedIrNodeRecord {
+            id: "ir:unit:src/a.ts#module:0-1".to_string(),
+            code_unit_id: "unit:src/a.ts#module:0-1".to_string(),
+            kind: "module".to_string(),
+            payload_json: "{}".to_string(),
+        }
+    }
+
+    fn ir_edge() -> IndexedIrEdgeRecord {
+        IndexedIrEdgeRecord {
+            from_node_id: "ir:unit:src/a.ts#module:0-10".to_string(),
+            to_node_id: "ir:unit:src/a.ts#function:1-9".to_string(),
+            label: "contains".to_string(),
+        }
+    }
+
     #[test]
     fn generation_use_cases_delegate_through_storage_port() {
         let store = FakeStore;
@@ -389,6 +529,8 @@ mod tests {
             },
         )
         .expect("record unit");
+        record_ir_node(&store, &generation, &ir_node()).expect("record IR node");
+        record_ir_edge(&store, &generation, &ir_edge()).expect("record IR edge");
         record_semantic_fact(&store, &generation, &semantic_fact()).expect("record semantic fact");
         validate_index_generation(&store, &generation).expect("validate generation");
         activate_index_generation(&store, &generation).expect("activate generation");
@@ -477,6 +619,56 @@ mod tests {
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
+    }
+
+    #[test]
+    fn ir_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let node = ir_node();
+
+        let mut missing_id = node.clone();
+        missing_id.id = " ".to_string();
+        assert!(record_ir_node(&store, &generation, &missing_id)
+            .expect_err("missing node id")
+            .to_string()
+            .contains("id"));
+
+        let mut mismatched_id = node.clone();
+        mismatched_id.id = "ir:unit:src/other.ts#module:0-1".to_string();
+        assert!(record_ir_node(&store, &generation, &mismatched_id)
+            .expect_err("mismatched node id")
+            .to_string()
+            .contains("derived"));
+
+        let mut invalid_kind = node.clone();
+        invalid_kind.kind = "tree_sitter_node".to_string();
+        assert!(record_ir_node(&store, &generation, &invalid_kind)
+            .expect_err("invalid kind")
+            .to_string()
+            .contains("unsupported IR node kind"));
+
+        let mut non_empty_payload = node;
+        non_empty_payload.payload_json = r#"{"snippet":"const x = 1;"}"#.to_string();
+        assert!(record_ir_node(&store, &generation, &non_empty_payload)
+            .expect_err("non-empty payload")
+            .to_string()
+            .contains("empty JSON object"));
+
+        let edge = ir_edge();
+        let mut self_edge = edge.clone();
+        self_edge.to_node_id = self_edge.from_node_id.clone();
+        assert!(record_ir_edge(&store, &generation, &self_edge)
+            .expect_err("self edge")
+            .to_string()
+            .contains("itself"));
+
+        let mut invalid_label = edge;
+        invalid_label.label = "calls".to_string();
+        assert!(record_ir_edge(&store, &generation, &invalid_label)
+            .expect_err("invalid edge label")
+            .to_string()
+            .contains("unsupported IR edge label"));
     }
 
     #[test]

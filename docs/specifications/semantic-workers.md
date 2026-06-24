@@ -155,8 +155,8 @@ building generation's indexed path, hash, or code-unit range aborts the new
 generation instead of becoming stale or partial semantic evidence.
 
 Recorded semantic facts are not pattern-family evidence by themselves. Query,
-MCP, conformance, and family membership claims remain deferred until freshness,
-family-evidence read paths, and claim builders are implemented.
+MCP, conformance, and family membership claims remain deferred until freshness
+gates and family-evidence claim builders are implemented.
 
 ## Certainty
 
@@ -198,7 +198,10 @@ Node worker stub that reports semantic analysis as unavailable without echoing
 source paths. `index` and `sync` can optionally execute a configured worker via
 `REPOGRAMMAR_TYPESCRIPT_WORKER` plus
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
-`semantic_worker: deferred`.
+`semantic_worker: deferred`. The storage/query boundary can read active
+generation semantic facts and evidence back after validating stored fact tokens,
+assumptions JSON, repo-relative evidence paths, strict content hashes, and byte
+ranges, but this is an internal substrate for future claim builders.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
 compiler APIs, use worker facts for family claims, expose semantic facts through

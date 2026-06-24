@@ -17,9 +17,9 @@ claim.
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
-discovery, syntax-only code-unit extraction, SQLite generation-storage wiring,
-a dependency-free TypeScript worker unavailable stub, and repository guard
-checks.
+discovery, syntax-only code-unit extraction, CodeUnit-derived structural IR
+storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
+unavailable stub, and repository guard checks.
 
 It does not yet implement pattern mining, TypeScript compiler analysis, query
 execution, or a working MCP server. The Rust-side TypeScript semantic-worker
@@ -34,14 +34,15 @@ not yet
 freshness-validated family evidence and do not enable query or MCP claims.
 `init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
-metadata plus syntax-only `code_units` records: repo-relative path, language,
-kind, byte range, and strict content hash. They do not store source snippets,
-absolute paths, families, or pattern-family evidence. `files` and `units` can
-read the active syntax-only generation for inventory/debugging, but they do not
-return pattern-family evidence. `status` and `doctor` can distinguish
-file-manifest-only generations from syntax-only code-unit generations. Commands
-that install agent configuration or serve MCP return explicit not-implemented
-errors until those contracts are implemented and tested.
+metadata plus syntax-only `code_units` records and structural IR records:
+repo-relative path, language, kind, byte range, strict content hash, one IR node
+per code unit, and conservative containment edges. They do not store source
+snippets, absolute paths, families, or pattern-family evidence. `files` and
+`units` can read the active syntax-only generation for inventory/debugging, but
+they do not return pattern-family evidence. `status` and `doctor` can distinguish
+file-manifest-only generations from syntax-only code-unit/IR generations.
+Commands that install agent configuration or serve MCP return explicit
+not-implemented errors until those contracts are implemented and tested.
 
 ## Why RepoGrammar?
 

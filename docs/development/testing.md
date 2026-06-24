@@ -38,10 +38,13 @@ allowed.
   foreign-key enforcement, activation pointer validation, preservation of the
   previous active generation after failed validation, repository-relative
   indexed-file paths, semantic-fact/evidence storage with same-generation
-  code-unit path/hash/range validation, malformed semantic evidence rejection
-  before activation, atomic rollback of failed fact writes, building-generation
-  write gates, read-only active `files`/`units` listing order and tamper
-  rejection, and rejection of symlinked or malformed active-generation pointers.
+  code-unit path/hash/range validation, IR node/edge storage with
+  same-generation code-unit/node validation, malformed semantic evidence and IR
+  graph rejection before activation, atomic rollback of failed fact writes,
+  building-generation write gates, read-only active `files`/`units` listing
+  order and tamper rejection, read-only active IR and semantic-fact listing with
+  validation and tamper rejection, and rejection of symlinked or malformed
+  active-generation pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
@@ -115,6 +118,8 @@ extraction and storage bridging, source-read hash/path safety, storage-aware
 status/doctor reporting, active syntax-only `files`/`units` read paths, product
 runtime wiring, optional semantic-worker fact ingestion through the
 same-generation storage gate, sanitized worker fallback during indexing,
+structural IR node/containment-edge storage for syntax-only code units,
+active semantic-fact/evidence read-path validation for future claim builders,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 and

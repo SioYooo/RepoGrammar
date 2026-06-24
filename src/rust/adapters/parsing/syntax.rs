@@ -3,10 +3,14 @@
 //! This adapter is a bootstrap parser boundary. It emits structural code-unit
 //! candidates and diagnostics only; it does not provide semantic certainty.
 
-use crate::core::model::{CodeUnit, CodeUnitId, CodeUnitKind, Language, Provenance, SourceRange};
+use crate::core::model::{
+    CodeUnit, CodeUnitId, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId, Language,
+    Provenance, SourceRange,
+};
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, SourceDocument, SourceParser,
 };
+use std::collections::BTreeSet;
 
 #[derive(Debug, Default)]
 pub struct SyntaxCodeUnitParser;
@@ -21,7 +25,7 @@ impl SourceParser for SyntaxCodeUnitParser {
         }
         let mut scanner = SyntaxScanner::new(document);
         scanner.scan()?;
-        Ok(scanner.finish())
+        scanner.finish()
     }
 }
 
@@ -52,7 +56,7 @@ impl<'a> SyntaxScanner<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> ParseReport {
+    fn finish(mut self) -> Result<ParseReport, ParseError> {
         self.units.sort_by(|left, right| {
             (
                 left.range.start_byte,
@@ -67,10 +71,14 @@ impl<'a> SyntaxScanner<'a> {
                     right.id.as_str(),
                 ))
         });
-        ParseReport {
+        let ir_nodes = ir_nodes_for_units(&self.units).map_err(ParseError::Internal)?;
+        let ir_edges = ir_edges_for_units(&self.units).map_err(ParseError::Internal)?;
+        Ok(ParseReport {
             units: self.units,
+            ir_nodes,
+            ir_edges,
             diagnostics: self.diagnostics,
-        }
+        })
     }
 
     fn scan_classes(&mut self, lines: &[(usize, &str)]) -> Result<Vec<(usize, usize)>, ParseError> {
@@ -203,6 +211,75 @@ impl<'a> SyntaxScanner<'a> {
         });
         Ok(())
     }
+}
+
+fn ir_nodes_for_units(units: &[CodeUnit]) -> Result<Vec<IrNode>, String> {
+    let mut nodes = units
+        .iter()
+        .map(IrNode::from_code_unit)
+        .collect::<Result<Vec<_>, _>>()?;
+    nodes.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    Ok(nodes)
+}
+
+fn ir_edges_for_units(units: &[CodeUnit]) -> Result<Vec<IrEdge>, String> {
+    let mut edge_keys = BTreeSet::new();
+    let module_units = units
+        .iter()
+        .filter(|unit| unit.kind == CodeUnitKind::Module)
+        .collect::<Vec<_>>();
+    let class_units = units
+        .iter()
+        .filter(|unit| unit.kind == CodeUnitKind::Class)
+        .collect::<Vec<_>>();
+
+    for unit in units {
+        if unit.kind == CodeUnitKind::Module {
+            continue;
+        }
+        for module in &module_units {
+            if same_file(module, unit) && range_contains(module, unit) {
+                edge_keys.insert((
+                    IrNodeId::for_code_unit(&module.id)?.as_str().to_string(),
+                    IrNodeId::for_code_unit(&unit.id)?.as_str().to_string(),
+                    IrEdgeLabel::Contains.as_str().to_string(),
+                ));
+            }
+        }
+        if unit.kind == CodeUnitKind::Method {
+            for class_unit in &class_units {
+                if same_file(class_unit, unit) && range_contains(class_unit, unit) {
+                    edge_keys.insert((
+                        IrNodeId::for_code_unit(&class_unit.id)?
+                            .as_str()
+                            .to_string(),
+                        IrNodeId::for_code_unit(&unit.id)?.as_str().to_string(),
+                        IrEdgeLabel::Contains.as_str().to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    edge_keys
+        .into_iter()
+        .map(|(from, to, _label)| {
+            IrEdge::new(
+                IrNodeId::new(from)?,
+                IrNodeId::new(to)?,
+                IrEdgeLabel::Contains,
+            )
+        })
+        .collect()
+}
+
+fn same_file(left: &CodeUnit, right: &CodeUnit) -> bool {
+    left.provenance.path == right.provenance.path
+}
+
+fn range_contains(parent: &CodeUnit, child: &CodeUnit) -> bool {
+    parent.range.start_byte <= child.range.start_byte
+        && child.range.end_byte <= parent.range.end_byte
 }
 
 fn lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
@@ -525,6 +602,19 @@ describe("users", () => {
                 .map(|unit| unit.id.as_str().to_string())
                 .collect::<Vec<_>>()
         );
+        assert_eq!(first.ir_nodes.len(), first.units.len());
+        assert_eq!(
+            first
+                .ir_nodes
+                .iter()
+                .map(|node| node.id.as_str().to_string())
+                .collect::<Vec<_>>(),
+            second
+                .ir_nodes
+                .iter()
+                .map(|node| node.id.as_str().to_string())
+                .collect::<Vec<_>>()
+        );
         let route = first
             .units
             .iter()
@@ -536,6 +626,35 @@ describe("users", () => {
         );
         assert!(route.range.end_byte <= text.len());
         assert_eq!(route.provenance.path, "src/users.tsx");
+        let module = first
+            .units
+            .iter()
+            .find(|unit| unit.kind == CodeUnitKind::Module)
+            .expect("module unit");
+        let class = first
+            .units
+            .iter()
+            .find(|unit| unit.kind == CodeUnitKind::Class)
+            .expect("class unit");
+        let method = first
+            .units
+            .iter()
+            .find(|unit| unit.kind == CodeUnitKind::Method)
+            .expect("method unit");
+        let module_id = IrNodeId::for_code_unit(&module.id).expect("module IR id");
+        let route_id = IrNodeId::for_code_unit(&route.id).expect("route IR id");
+        let class_id = IrNodeId::for_code_unit(&class.id).expect("class IR id");
+        let method_id = IrNodeId::for_code_unit(&method.id).expect("method IR id");
+        assert!(first.ir_edges.iter().any(|edge| {
+            edge.from_node_id == module_id
+                && edge.to_node_id == route_id
+                && edge.label == IrEdgeLabel::Contains
+        }));
+        assert!(first.ir_edges.iter().any(|edge| {
+            edge.from_node_id == class_id
+                && edge.to_node_id == method_id
+                && edge.label == IrEdgeLabel::Contains
+        }));
     }
 
     #[test]
@@ -554,6 +673,7 @@ describe("users", () => {
             .units
             .iter()
             .any(|unit| unit.kind == CodeUnitKind::Function));
+        assert_eq!(report.ir_nodes.len(), report.units.len());
         assert_eq!(report.diagnostics.len(), 1);
         assert_eq!(report.diagnostics[0].path, "src/broken.ts");
         assert!(report.diagnostics[0].message.contains("unbalanced"));

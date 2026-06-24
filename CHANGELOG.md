@@ -53,6 +53,9 @@
   metadata and structural code-unit records in a new SQLite generation, validates
   it, and atomically activates `.repogrammar/current-generation` without claiming
   semantic-worker-derived facts, mining, query, or family evidence.
+- CodeUnit-derived structural IR storage for syntax-only indexing, with one IR
+  node per code unit, conservative containment edges, empty IR payloads, and
+  same-generation SQLite validation without introducing family claims.
 - Opt-in semantic-worker fact ingestion for `index` and `sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, with
   optional argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted
@@ -65,6 +68,12 @@
   family evidence claims; the read path opens the active generation read-only
   and revalidates stored paths, hashes, languages, unit ids, and byte ranges
   before returning records.
+- Active semantic-fact/evidence read path for future claim builders, with
+  read-only active-generation access and validation of stored fact
+  kind/certainty tokens, assumptions JSON, repo-relative evidence paths,
+  content hashes, code-unit ids, and byte ranges. This remains internal and does
+  not expose semantic facts through CLI/MCP query commands or make them
+  freshness-validated family evidence.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.
@@ -133,9 +142,10 @@
   forms, fixture validation rejects unsafe evidence paths and source-like text,
   and the worker stub rejects Windows drive-prefix changed-file paths without
   echoing request data.
-- Bumped the pre-release storage schema to version 2 for semantic-fact/evidence
-  constraints; stale schema 1 generation databases must be rebuilt rather than
-  silently treated as compatible.
+- Bumped the pre-release storage schema to version 3 for IR node code-unit
+  linkage and semantic-fact/evidence constraints; stale schema 1 and 2
+  generation databases must be rebuilt rather than silently treated as
+  compatible.
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
   domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
   boundaries with the current syntax-only indexing baseline.

@@ -62,13 +62,15 @@ The detailed coordination artifact is
 
 The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
-indexing, active syntax-only files/units inventory reads, semantic-fact/evidence
-storage substrate, the Rust-side semantic-worker process/NDJSON validation
-boundary, and opt-in command-level semantic-fact ingestion through the storage
-gate. The next implementation slice should refine one boundary at a time:
-family-query contracts, parser-to-IR, framework role facts, or the actual
-TypeScript compiler integration. Keep syntax-only code units and stored
-semantic facts out of family claims until freshness and claim builders exist.
+indexing, CodeUnit-derived IR node/containment-edge storage, active syntax-only
+files/units inventory reads, internal active semantic-fact/evidence reads,
+semantic-fact/evidence storage substrate, the Rust-side semantic-worker
+process/NDJSON validation boundary, and opt-in command-level semantic-fact
+ingestion through the storage gate. The next implementation slice should refine
+one boundary at a time: family-query contracts, framework role facts, semantic
+fact freshness gates, or the actual TypeScript compiler integration. Keep
+syntax-only code units, structural IR, and stored semantic facts out of family
+claims until freshness and claim builders exist.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 family-evidence read paths, freshness checks, and evidence contracts are
@@ -78,7 +80,8 @@ validated together.
 
 - Add freshness metadata and claim gates for stored semantic-worker facts before
   they can influence pattern-family evidence.
-- Add parser-to-IR storage after syntax-only generations remain stable.
+- Add typed IR attributes only after CodeUnit-derived IR nodes and containment
+  edges remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`

@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 2;
+pub const STORAGE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -52,6 +52,21 @@ pub struct IndexedSemanticFactRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedIrNodeRecord {
+    pub id: String,
+    pub code_unit_id: String,
+    pub kind: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedIrEdgeRecord {
+    pub from_node_id: String,
+    pub to_node_id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveIndexedFiles {
     pub generation_id: String,
     pub files: Vec<IndexedFileRecord>,
@@ -61,6 +76,19 @@ pub struct ActiveIndexedFiles {
 pub struct ActiveCodeUnits {
     pub generation_id: String,
     pub units: Vec<IndexedCodeUnitRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveSemanticFacts {
+    pub generation_id: String,
+    pub facts: Vec<IndexedSemanticFactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveIrGraph {
+    pub generation_id: String,
+    pub nodes: Vec<IndexedIrNodeRecord>,
+    pub edges: Vec<IndexedIrEdgeRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +125,18 @@ pub trait IndexStore {
         unit: &IndexedCodeUnitRecord,
     ) -> Result<(), IndexStoreError>;
 
+    fn record_ir_node(
+        &self,
+        generation: &GenerationHandle,
+        node: &IndexedIrNodeRecord,
+    ) -> Result<(), IndexStoreError>;
+
+    fn record_ir_edge(
+        &self,
+        generation: &GenerationHandle,
+        edge: &IndexedIrEdgeRecord,
+    ) -> Result<(), IndexStoreError>;
+
     fn record_semantic_fact(
         &self,
         generation: &GenerationHandle,
@@ -106,6 +146,10 @@ pub trait IndexStore {
     fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError>;
 
     fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError>;
+
+    fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError>;
+
+    fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError>;
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;
 

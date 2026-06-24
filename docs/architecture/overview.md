@@ -48,16 +48,16 @@ repository files -> discovery/exclusion policy -> parser adapter -> code units -
 ```
 
 The current product path implements discovery, a dependency-free syntax-only
-parser adapter, code-unit metadata storage, and SQLite generation activation.
-The Rust-side TypeScript semantic-worker process boundary can validate NDJSON
-worker output into owned facts. `index` and `sync` can optionally run an
-explicit worker executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON
-configured argv vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and
-record only facts that match the building generation's indexed code-unit
-evidence.
+parser adapter, code-unit metadata storage, CodeUnit-derived IR node and
+containment-edge storage, and SQLite generation activation. The Rust-side
+TypeScript semantic-worker process boundary can validate NDJSON worker output
+into owned facts. `index` and `sync` can optionally run an explicit worker
+executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON configured argv
+vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and record only facts
+that match the building generation's indexed code-unit evidence.
 Tree-sitter, TypeScript compiler worker code, freshness-validated semantic
-claims, IR storage, family mining, query execution, and MCP transport remain
-later boundaries.
+claims, typed IR attributes beyond the structural bootstrap graph, family
+mining, query execution, and MCP transport remain later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output. The

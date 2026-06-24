@@ -22,6 +22,12 @@ The unified IR is a lightweight RepoGrammar representation derived from parser
 and semantic-worker output. It supports structural comparison while hiding
 parser-specific AST, compiler, LSP, and SDK details from the core domain.
 
+Current syntax-only indexing persists only the bootstrap IR subset: one IR node
+per code unit and conservative `contains` edges from modules to contained units
+and from classes to methods. IR node payloads remain `{}` until typed IR
+attributes are designed. This structural IR is not semantic certainty or
+pattern-family membership evidence.
+
 ## SemanticFact
 
 A `SemanticFact` records language-native or derived information such as resolved

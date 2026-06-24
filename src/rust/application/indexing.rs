@@ -1,18 +1,21 @@
 //! Indexing use-case boundary.
 
-use crate::core::model::{CodeUnit, Language, RepositoryRevision, SemanticFact, SymbolId};
+use crate::core::model::{
+    CodeUnit, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact, SymbolId,
+};
 use crate::error::RepoGrammarError;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
 };
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedSemanticFactRecord,
+    GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParser};
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingRequest {
@@ -296,9 +299,21 @@ fn record_parse_report(
                 right.id.as_str(),
             ))
     });
-    let mut count = 0usize;
     for unit in &parse_report.units {
         validate_parser_unit(file, text, unit)?;
+    }
+    sort_ir_nodes(&mut parse_report.ir_nodes);
+    sort_ir_edges(&mut parse_report.ir_edges);
+    validate_parser_ir_coverage(&parse_report.units, &parse_report.ir_nodes)?;
+    for node in &parse_report.ir_nodes {
+        validate_parser_ir_node(file, text, &parse_report.units, node)?;
+    }
+    for edge in &parse_report.ir_edges {
+        validate_parser_ir_edge(&parse_report.ir_nodes, edge)?;
+    }
+
+    let mut count = 0usize;
+    for unit in &parse_report.units {
         crate::application::storage::record_code_unit(
             store,
             generation,
@@ -313,6 +328,29 @@ fn record_parse_report(
             },
         )?;
         count += 1;
+    }
+    for node in &parse_report.ir_nodes {
+        crate::application::storage::record_ir_node(
+            store,
+            generation,
+            &IndexedIrNodeRecord {
+                id: node.id.as_str().to_string(),
+                code_unit_id: node.code_unit_id.as_str().to_string(),
+                kind: node.kind.as_str().to_string(),
+                payload_json: "{}".to_string(),
+            },
+        )?;
+    }
+    for edge in &parse_report.ir_edges {
+        crate::application::storage::record_ir_edge(
+            store,
+            generation,
+            &IndexedIrEdgeRecord {
+                from_node_id: edge.from_node_id.as_str().to_string(),
+                to_node_id: edge.to_node_id.as_str().to_string(),
+                label: edge.label.as_str().to_string(),
+            },
+        )?;
     }
     Ok(count)
 }
@@ -455,6 +493,123 @@ fn validate_parser_unit(
     Ok(())
 }
 
+fn validate_parser_ir_node(
+    file: &DiscoveredFile,
+    text: &str,
+    units: &[CodeUnit],
+    node: &IrNode,
+) -> Result<(), RepoGrammarError> {
+    if node.provenance.path != file.path {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node for a different path".to_string(),
+        ));
+    }
+    if node.provenance.content_hash != file.content_hash {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node with mismatched content hash".to_string(),
+        ));
+    }
+    if node.range.end_byte > text.len() {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node range outside source bounds".to_string(),
+        ));
+    }
+    let Some(unit) = units
+        .iter()
+        .find(|unit| unit.id.as_str() == node.code_unit_id.as_str())
+    else {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node for an unknown code unit".to_string(),
+        ));
+    };
+    if node.range != unit.range || node.provenance != unit.provenance {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node that does not match its code unit evidence".to_string(),
+        ));
+    }
+    if node.id.as_str() != format!("ir:{}", unit.id.as_str()) {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR node id that does not match its code unit".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_parser_ir_coverage(
+    units: &[CodeUnit],
+    nodes: &[IrNode],
+) -> Result<(), RepoGrammarError> {
+    let mut node_code_unit_ids = BTreeSet::new();
+    for node in nodes {
+        if !node_code_unit_ids.insert(node.code_unit_id.as_str()) {
+            return Err(RepoGrammarError::InvalidInput(
+                "parser returned duplicate IR nodes for a code unit".to_string(),
+            ));
+        }
+    }
+    for unit in units {
+        if !node_code_unit_ids.contains(unit.id.as_str()) {
+            return Err(RepoGrammarError::InvalidInput(
+                "parser did not return IR for every code unit".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_parser_ir_edge(nodes: &[IrNode], edge: &IrEdge) -> Result<(), RepoGrammarError> {
+    if edge.from_node_id == edge.to_node_id {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned an IR self-edge".to_string(),
+        ));
+    }
+    for (label, node_id) in [
+        ("from", edge.from_node_id.as_str()),
+        ("to", edge.to_node_id.as_str()),
+    ] {
+        if !nodes.iter().any(|node| node.id.as_str() == node_id) {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "parser returned an IR edge with unknown {label} node"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sort_ir_nodes(nodes: &mut [IrNode]) {
+    nodes.sort_by(|left, right| {
+        (
+            left.provenance.path.as_str(),
+            left.range.start_byte,
+            left.range.end_byte,
+            left.kind.as_str(),
+            left.id.as_str(),
+        )
+            .cmp(&(
+                right.provenance.path.as_str(),
+                right.range.start_byte,
+                right.range.end_byte,
+                right.kind.as_str(),
+                right.id.as_str(),
+            ))
+    });
+}
+
+fn sort_ir_edges(edges: &mut [IrEdge]) {
+    edges.sort_by(|left, right| {
+        (
+            left.from_node_id.as_str(),
+            left.to_node_id.as_str(),
+            left.label.as_str(),
+        )
+            .cmp(&(
+                right.from_node_id.as_str(),
+                right.to_node_id.as_str(),
+                right.label.as_str(),
+            ))
+    });
+}
+
 fn language_from_discovered(language: DiscoveredLanguage) -> Language {
     match language {
         DiscoveredLanguage::TypeScript | DiscoveredLanguage::TypeScriptReact => {
@@ -494,14 +649,14 @@ mod tests {
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::core::model::{
-        CodeUnitId, CodeUnitKind, ContentHash, Evidence, FactCertainty, FactOrigin, Provenance,
-        RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
+        CodeUnitId, CodeUnitKind, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdgeLabel,
+        IrNodeId, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
     };
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
-        ActiveCodeUnits, ActiveIndexedFiles, GenerationHandle, IndexStore, IndexStoreError,
-        IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
-        STORAGE_SCHEMA_VERSION,
+        ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
+        IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+        IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
     use crate::ports::semantic_worker::{
@@ -539,15 +694,19 @@ mod tests {
 
     impl SourceParser for SingleUnitParser {
         fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let unit = parser_unit(
+                &document,
+                "unit:a.ts#module:0-all",
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
             Ok(ParseReport {
-                units: vec![parser_unit(
-                    &document,
-                    "unit:a.ts#module:0-all",
-                    document.path,
-                    document.content_hash.clone(),
-                    0,
-                    document.text.len(),
-                )],
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
                 diagnostics: Vec::new(),
             })
         }
@@ -800,6 +959,56 @@ mod tests {
                 && hash.starts_with("sha256:")
                 && start <= end
         }));
+        let ir_nodes = connection
+            .prepare(
+                "SELECT node_id, code_unit_id, kind, payload_json \
+                 FROM ir_nodes ORDER BY node_id",
+            )
+            .expect("prepare IR node query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .expect("query IR nodes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect IR nodes");
+        assert_eq!(ir_nodes.len(), rows.len());
+        assert!(ir_nodes
+            .iter()
+            .all(|(node_id, code_unit_id, kind, payload)| {
+                node_id == &format!("ir:{code_unit_id}")
+                    && !node_id.contains(workspace.path().to_string_lossy().as_ref())
+                    && !node_id.contains(sentinel)
+                    && !kind.trim().is_empty()
+                    && payload == "{}"
+            }));
+        let ir_edges = connection
+            .prepare(
+                "SELECT from_node_id, to_node_id, label \
+                 FROM ir_edges ORDER BY from_node_id, to_node_id, label",
+            )
+            .expect("prepare IR edge query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("query IR edges")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect IR edges");
+        assert!(!ir_edges.is_empty());
+        assert!(ir_edges.iter().all(|(from, to, label)| {
+            from != to
+                && from.starts_with("ir:unit:")
+                && to.starts_with("ir:unit:")
+                && label == "contains"
+        }));
     }
 
     #[test]
@@ -998,15 +1207,19 @@ mod tests {
 
         impl SourceParser for LeakyDiagnosticParser {
             fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                let unit = parser_unit(
+                    &document,
+                    "unit:src/a.ts#module:0-1",
+                    document.path,
+                    document.content_hash.clone(),
+                    0,
+                    1,
+                );
+                let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
                 Ok(ParseReport {
-                    units: vec![parser_unit(
-                        &document,
-                        "unit:src/a.ts#module:0-1",
-                        document.path,
-                        document.content_hash.clone(),
-                        0,
-                        1,
-                    )],
+                    units: vec![unit],
+                    ir_nodes: vec![ir_node],
+                    ir_edges: Vec::new(),
                     diagnostics: vec![ParseDiagnostic {
                         path: "/tmp/absolute/source.ts".to_string(),
                         range: None,
@@ -1123,6 +1336,8 @@ mod tests {
                         0,
                         end_byte,
                     )],
+                    ir_nodes: Vec::new(),
+                    ir_edges: Vec::new(),
                     diagnostics: Vec::new(),
                 })
             }
@@ -1166,6 +1381,103 @@ mod tests {
     }
 
     #[test]
+    fn malformed_parser_ir_aborts_without_activating_new_generation() {
+        #[derive(Clone, Copy)]
+        enum BadIrMode {
+            MissingNode,
+            DifferentPath,
+            UnknownEdgeTarget,
+        }
+
+        struct BadIrParser(BadIrMode);
+
+        impl SourceParser for BadIrParser {
+            fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                let unit = parser_unit(
+                    &document,
+                    "unit:src/a.ts#module:0-1",
+                    document.path,
+                    document.content_hash.clone(),
+                    0,
+                    1,
+                );
+                let mut ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+                match self.0 {
+                    BadIrMode::MissingNode => Ok(ParseReport {
+                        units: vec![unit],
+                        ir_nodes: Vec::new(),
+                        ir_edges: Vec::new(),
+                        diagnostics: Vec::new(),
+                    }),
+                    BadIrMode::DifferentPath => {
+                        ir_node.provenance = Provenance::new(
+                            "src/other.ts",
+                            document.content_hash.clone(),
+                            document.repository_revision.clone(),
+                        )
+                        .map_err(ParseError::Internal)?;
+                        Ok(ParseReport {
+                            units: vec![unit],
+                            ir_nodes: vec![ir_node],
+                            ir_edges: Vec::new(),
+                            diagnostics: Vec::new(),
+                        })
+                    }
+                    BadIrMode::UnknownEdgeTarget => {
+                        let edge = IrEdge {
+                            from_node_id: ir_node.id.clone(),
+                            to_node_id: IrNodeId::new("ir:unit:src/a.ts#missing")
+                                .map_err(ParseError::Internal)?,
+                            label: IrEdgeLabel::Contains,
+                        };
+                        Ok(ParseReport {
+                            units: vec![unit],
+                            ir_nodes: vec![ir_node],
+                            ir_edges: vec![edge],
+                            diagnostics: Vec::new(),
+                        })
+                    }
+                }
+            }
+        }
+
+        for mode in [
+            BadIrMode::MissingNode,
+            BadIrMode::DifferentPath,
+            BadIrMode::UnknownEdgeTarget,
+        ] {
+            let workspace = TempWorkspace::new("indexing-bad-parser-ir");
+            fs::write(workspace.path().join("a.ts"), "x").expect("write source");
+            let state = workspace.path().join(".repogrammar");
+            fs::create_dir_all(state.join("generations")).expect("create generations");
+            fs::create_dir_all(state.join("tmp")).expect("create tmp");
+            let store = SqliteIndexStore::new(&state);
+            let first = store.prepare_next_generation().expect("prepare first");
+            store.activate_generation(&first).expect("activate first");
+
+            let error = index_repository_with_discovery_parser_and_store(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &BadIrParser(mode),
+                &store,
+            )
+            .expect_err("bad parser IR must abort new generation");
+
+            assert!(
+                error.to_string().contains("parser"),
+                "unexpected error: {error}"
+            );
+            assert_eq!(
+                fs::read_to_string(state.join("current-generation"))
+                    .expect("read active generation")
+                    .trim(),
+                "gen-000001"
+            );
+        }
+    }
+
+    #[test]
     fn code_unit_record_failure_preserves_previous_active_generation() {
         struct DuplicateIdParser;
 
@@ -1190,6 +1502,8 @@ mod tests {
                             2,
                         ),
                     ],
+                    ir_nodes: Vec::new(),
+                    ir_edges: Vec::new(),
                     diagnostics: Vec::new(),
                 })
             }
@@ -1250,6 +1564,22 @@ mod tests {
                 panic!("code unit recording must not run after file record failure")
             }
 
+            fn record_ir_node(
+                &self,
+                _generation: &GenerationHandle,
+                _node: &IndexedIrNodeRecord,
+            ) -> Result<(), IndexStoreError> {
+                panic!("IR node recording must not run after file record failure")
+            }
+
+            fn record_ir_edge(
+                &self,
+                _generation: &GenerationHandle,
+                _edge: &IndexedIrEdgeRecord,
+            ) -> Result<(), IndexStoreError> {
+                panic!("IR edge recording must not run after file record failure")
+            }
+
             fn record_semantic_fact(
                 &self,
                 _generation: &GenerationHandle,
@@ -1264,6 +1594,14 @@ mod tests {
 
             fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
                 panic!("active code-unit reads must not run during indexing")
+            }
+
+            fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
+                panic!("active semantic-fact reads must not run during indexing")
+            }
+
+            fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
+                panic!("active IR graph reads must not run during indexing")
             }
 
             fn validate_generation(
@@ -1336,6 +1674,28 @@ mod tests {
                 Ok(())
             }
 
+            fn record_ir_node(
+                &self,
+                generation: &GenerationHandle,
+                _node: &IndexedIrNodeRecord,
+            ) -> Result<(), IndexStoreError> {
+                self.recorded_generations
+                    .borrow_mut()
+                    .push(generation.generation_id.clone());
+                Ok(())
+            }
+
+            fn record_ir_edge(
+                &self,
+                generation: &GenerationHandle,
+                _edge: &IndexedIrEdgeRecord,
+            ) -> Result<(), IndexStoreError> {
+                self.recorded_generations
+                    .borrow_mut()
+                    .push(generation.generation_id.clone());
+                Ok(())
+            }
+
             fn record_semantic_fact(
                 &self,
                 _generation: &GenerationHandle,
@@ -1350,6 +1710,14 @@ mod tests {
 
             fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
                 panic!("active code-unit reads must not run during indexing")
+            }
+
+            fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
+                panic!("active semantic-fact reads must not run during indexing")
+            }
+
+            fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
+                panic!("active IR graph reads must not run during indexing")
             }
 
             fn validate_generation(

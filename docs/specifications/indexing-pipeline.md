@@ -35,15 +35,23 @@ repo-relative TS/JS file set. Optional worker arguments come from
 command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
-This slice does not use Tree-sitter, call a TypeScript compiler, build unified
-IR, align structures, anti-unify templates, cluster families, persist family
-evidence, or answer pattern-family query commands from stored evidence. Stored
-semantic-worker facts, when explicitly configured and accepted by the storage
-gate, are not freshness-validated family evidence and do not enable query or
-MCP claims. Syntax-only code units are structural candidates, not semantic or
-family claims. The `files` and `units` commands may read active syntax-only
-index metadata for inventory/debugging, but that read path is not family-query
-execution.
+This slice does not use Tree-sitter, call a TypeScript compiler, align
+structures, anti-unify templates, cluster families, persist family evidence, or
+answer pattern-family query commands from stored evidence. The current
+syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
+node per code unit and conservative `contains` edges from modules to contained
+units and classes to methods. That IR is structural only: it has empty payloads,
+does not infer calls or dataflow, and cannot prove semantic or family claims.
+Stored semantic-worker facts, when explicitly configured and accepted by the
+storage gate, are not freshness-validated family evidence and do not enable
+query or MCP claims. Syntax-only code units are structural candidates, not
+semantic or family claims. The `files` and `units` commands may read active
+syntax-only index metadata for inventory/debugging, but that read path is not
+family-query execution. The application layer can also read active semantic
+facts and their evidence for future claim builders after revalidating fact
+tokens, assumptions, repo-relative evidence, hashes, and byte ranges; that
+internal read path still does not classify families or expose semantic facts
+through CLI/MCP query commands.
 
 ## File discovery and exclusions
 
@@ -90,8 +98,9 @@ bootstrap parser adapter. It recognizes modules, functions, assigned arrow
 functions, classes, methods, React function components, custom hooks, Express
 route calls, and Jest/Vitest `describe`/`it`/`test` blocks by structural syntax
 only. It preserves byte ranges, returns partial units with diagnostics for
-unbalanced syntax, and stores only RepoGrammar-owned `CodeUnit` metadata.
-Tree-sitter integration remains planned.
+unbalanced syntax, and stores RepoGrammar-owned `CodeUnit` metadata plus
+CodeUnit-derived IR nodes and conservative containment edges. Tree-sitter
+integration remains planned.
 
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
@@ -116,10 +125,11 @@ with optional argv from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store
 accepted facts only after evidence matches an indexed manifest entry, code-unit
 id, content hash, and byte range in the same building generation.
 Worker fallback statuses keep the generation syntax-only, while storage-gate
-conflicts abort the new generation. No semantic fact may influence claims until
-freshness and family-evidence claim builders exist. Other languages should use
-their own compiler, type-checker, or LSP where that is the most authoritative
-source.
+conflicts abort the new generation. Active-generation semantic facts can be read
+back only through the storage/query boundary for future claim construction. No
+semantic fact may influence claims until freshness gates and family-evidence
+claim builders exist. Other languages should use their own compiler,
+type-checker, or LSP where that is the most authoritative source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is

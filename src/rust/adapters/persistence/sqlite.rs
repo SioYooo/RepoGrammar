@@ -3,11 +3,11 @@
 //! SQL, migrations, PRAGMAs, and generation filesystem layout stay in this
 //! adapter. Application code talks to it through `ports::index_store`.
 
-use crate::core::model::ContentHash;
+use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
 use crate::ports::index_store::{
-    ActiveCodeUnits, ActiveIndexedFiles, GenerationHandle, IndexStore, IndexStoreError,
-    IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
-    STORAGE_SCHEMA_VERSION,
+    ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
+    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -295,6 +295,127 @@ impl IndexStore for SqliteIndexStore {
         Ok(())
     }
 
+    fn record_ir_node(
+        &self,
+        generation: &GenerationHandle,
+        node: &IndexedIrNodeRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&node.id, "IR node id")?;
+        validate_index_text_field(&node.code_unit_id, "IR node code unit id")?;
+        IrNodeKind::parse_protocol_str(&node.kind).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR node kind is unsupported".to_string())
+        })?;
+        validate_empty_object_payload(&node.payload_json, "IR node payload")?;
+        if node.id != format!("ir:{}", node.code_unit_id) {
+            return Err(invalid_record(
+                "IR node id must be derived from code unit id",
+            ));
+        }
+        let connection = self.open_existing_generation(&generation.generation_id)?;
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {}
+            Some(_) => {
+                return Err(IndexStoreError::InvalidState(
+                    "IR nodes may only be recorded for building generations".to_string(),
+                ));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
+        let code_unit_exists = connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND code_unit_id = ?2",
+                params![generation.generation_id, node.code_unit_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(sql_unavailable)?;
+        if code_unit_exists != 1 {
+            return Err(invalid_record(
+                "IR node must reference an indexed code unit in the same generation",
+            ));
+        }
+        connection
+            .execute(
+                "INSERT INTO ir_nodes \
+                 (generation_id, node_id, code_unit_id, kind, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    generation.generation_id,
+                    node.id,
+                    node.code_unit_id,
+                    node.kind,
+                    node.payload_json,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        Ok(())
+    }
+
+    fn record_ir_edge(
+        &self,
+        generation: &GenerationHandle,
+        edge: &IndexedIrEdgeRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&edge.from_node_id, "IR edge from node id")?;
+        validate_index_text_field(&edge.to_node_id, "IR edge to node id")?;
+        IrEdgeLabel::parse_protocol_str(&edge.label).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR edge label is unsupported".to_string())
+        })?;
+        if edge.from_node_id == edge.to_node_id {
+            return Err(invalid_record("IR edge must not point to itself"));
+        }
+        let connection = self.open_existing_generation(&generation.generation_id)?;
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {}
+            Some(_) => {
+                return Err(IndexStoreError::InvalidState(
+                    "IR edges may only be recorded for building generations".to_string(),
+                ));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
+        for (node_id, label) in [
+            (edge.from_node_id.as_str(), "from"),
+            (edge.to_node_id.as_str(), "to"),
+        ] {
+            let node_exists = connection
+                .query_row(
+                    "SELECT count(*) FROM ir_nodes \
+                     WHERE generation_id = ?1 AND node_id = ?2",
+                    params![generation.generation_id, node_id],
+                    |row| row.get::<_, u32>(0),
+                )
+                .map_err(sql_unavailable)?;
+            if node_exists != 1 {
+                return Err(IndexStoreError::InvalidRecord(format!(
+                    "IR edge must reference an indexed {label} node in the same generation"
+                )));
+            }
+        }
+        connection
+            .execute(
+                "INSERT INTO ir_edges \
+                 (generation_id, from_node_id, to_node_id, label) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    generation.generation_id,
+                    edge.from_node_id,
+                    edge.to_node_id,
+                    edge.label,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        Ok(())
+    }
+
     fn record_semantic_fact(
         &self,
         generation: &GenerationHandle,
@@ -544,6 +665,281 @@ impl IndexStore for SqliteIndexStore {
         })
     }
 
+    fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT semantic_facts.fact_id, semantic_facts.kind, semantic_facts.subject, \
+                        semantic_facts.target, semantic_facts.certainty, \
+                        semantic_facts.origin_engine, semantic_facts.origin_engine_version, \
+                        semantic_facts.origin_method, semantic_facts.assumptions_json, \
+                        semantic_facts.evidence_id, evidence.code_unit_id, evidence.path, \
+                        evidence.content_hash, evidence.start_byte, evidence.end_byte, \
+                        evidence.note, code_units.path, code_units.content_hash, \
+                        code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
+                        indexed_files.size_bytes \
+                 FROM semantic_facts \
+                 JOIN evidence \
+                   ON evidence.generation_id = semantic_facts.generation_id \
+                  AND evidence.evidence_id = semantic_facts.evidence_id \
+                 JOIN code_units \
+                   ON code_units.generation_id = evidence.generation_id \
+                  AND code_units.code_unit_id = evidence.code_unit_id \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = evidence.generation_id \
+                  AND indexed_files.path = evidence.path \
+                 WHERE semantic_facts.generation_id = ?1 \
+                 ORDER BY evidence.path COLLATE BINARY, evidence.start_byte, \
+                          evidence.end_byte, evidence.code_unit_id COLLATE BINARY, \
+                          semantic_facts.kind COLLATE BINARY, semantic_facts.subject COLLATE BINARY, \
+                          semantic_facts.fact_id COLLATE BINARY",
+            )
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map(params![generation_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, String>(15)?,
+                    row.get::<_, String>(16)?,
+                    row.get::<_, String>(17)?,
+                    row.get::<_, i64>(18)?,
+                    row.get::<_, i64>(19)?,
+                    row.get::<_, String>(20)?,
+                    row.get::<_, i64>(21)?,
+                ))
+            })
+            .map_err(sql_unavailable)?;
+        let mut facts = Vec::new();
+        for row in rows {
+            let (
+                fact_id,
+                kind,
+                subject,
+                target,
+                certainty,
+                origin_engine,
+                origin_engine_version,
+                origin_method,
+                assumptions_json,
+                evidence_id,
+                code_unit_id,
+                path,
+                content_hash,
+                start_byte,
+                end_byte,
+                note,
+                unit_path,
+                unit_hash,
+                unit_start_byte,
+                unit_end_byte,
+                file_hash,
+                file_size,
+            ) = row.map_err(sql_unavailable)?;
+            validate_stored_semantic_text_field("stored semantic fact id", &fact_id)?;
+            validate_stored_semantic_text_field("stored semantic fact subject", &subject)?;
+            validate_stored_semantic_text_field(
+                "stored semantic fact origin engine",
+                &origin_engine,
+            )?;
+            validate_stored_semantic_text_field(
+                "stored semantic fact origin engine version",
+                &origin_engine_version,
+            )?;
+            validate_stored_semantic_text_field(
+                "stored semantic fact origin method",
+                &origin_method,
+            )?;
+            validate_stored_semantic_text_field("stored semantic fact evidence id", &evidence_id)?;
+            validate_stored_semantic_text_field("stored semantic fact note", &note)?;
+            if let Some(target) = &target {
+                validate_stored_semantic_text_field("stored semantic fact target", target)?;
+            }
+            SemanticFactKind::parse_protocol_str(&kind).map_err(|_| {
+                IndexStoreError::InvalidState("stored semantic fact kind is invalid".to_string())
+            })?;
+            FactCertainty::parse_protocol_str(&certainty).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored semantic fact certainty is invalid".to_string(),
+                )
+            })?;
+            let assumptions: Vec<String> =
+                serde_json::from_str(&assumptions_json).map_err(|_| {
+                    IndexStoreError::InvalidState(
+                        "stored semantic fact assumptions JSON is invalid".to_string(),
+                    )
+                })?;
+            for assumption in &assumptions {
+                validate_stored_semantic_text_field("stored semantic fact assumption", assumption)?;
+            }
+            validate_stored_repo_relative_path(&path, "stored semantic fact evidence path")?;
+            if path != unit_path {
+                return Err(IndexStoreError::InvalidState(
+                    "stored semantic fact evidence path does not match code unit".to_string(),
+                ));
+            }
+            validate_stored_code_unit_id(&code_unit_id, &path)?;
+            if content_hash != unit_hash || content_hash != file_hash {
+                return Err(IndexStoreError::InvalidState(
+                    "stored semantic fact content hash does not match indexed evidence".to_string(),
+                ));
+            }
+            let start_byte = usize::try_from(start_byte).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored semantic fact start byte is invalid".to_string(),
+                )
+            })?;
+            let end_byte = usize::try_from(end_byte).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored semantic fact end byte is invalid".to_string(),
+                )
+            })?;
+            let unit_start_byte = usize::try_from(unit_start_byte).map_err(|_| {
+                IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
+            })?;
+            let unit_end_byte = usize::try_from(unit_end_byte).map_err(|_| {
+                IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
+            })?;
+            let file_size = usize::try_from(file_size).map_err(|_| {
+                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+            })?;
+            if start_byte > end_byte
+                || start_byte < unit_start_byte
+                || end_byte > unit_end_byte
+                || end_byte > file_size
+            {
+                return Err(IndexStoreError::InvalidState(
+                    "stored semantic fact range is invalid".to_string(),
+                ));
+            }
+            facts.push(IndexedSemanticFactRecord {
+                fact_id,
+                kind,
+                subject,
+                target,
+                certainty,
+                origin_engine,
+                origin_engine_version,
+                origin_method,
+                assumptions,
+                evidence_id,
+                code_unit_id,
+                path,
+                content_hash: ContentHash::new(content_hash).map_err(|_| {
+                    IndexStoreError::InvalidState(
+                        "stored semantic fact content hash is invalid".to_string(),
+                    )
+                })?,
+                start_byte,
+                end_byte,
+                note,
+            });
+        }
+        Ok(ActiveSemanticFacts {
+            generation_id,
+            facts,
+        })
+    }
+
+    fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let mut node_statement = connection
+            .prepare(
+                "SELECT ir_nodes.node_id, ir_nodes.code_unit_id, ir_nodes.kind, \
+                        ir_nodes.payload_json, code_units.path \
+                 FROM ir_nodes \
+                 JOIN code_units \
+                   ON code_units.generation_id = ir_nodes.generation_id \
+                  AND code_units.code_unit_id = ir_nodes.code_unit_id \
+                 WHERE ir_nodes.generation_id = ?1 \
+                 ORDER BY ir_nodes.node_id COLLATE BINARY",
+            )
+            .map_err(sql_unavailable)?;
+        let node_rows = node_statement
+            .query_map(params![generation_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(sql_unavailable)?;
+        let mut nodes = Vec::new();
+        for row in node_rows {
+            let (id, code_unit_id, kind, payload_json, path) = row.map_err(sql_unavailable)?;
+            validate_stored_code_unit_id(&code_unit_id, &path)?;
+            validate_stored_ir_node_id(&id, &code_unit_id)?;
+            IrNodeKind::parse_protocol_str(&kind).map_err(|_| {
+                IndexStoreError::InvalidState("stored IR node kind is invalid".to_string())
+            })?;
+            validate_stored_empty_object_payload(&payload_json, "stored IR node payload")?;
+            nodes.push(IndexedIrNodeRecord {
+                id,
+                code_unit_id,
+                kind,
+                payload_json,
+            });
+        }
+
+        let mut edge_statement = connection
+            .prepare(
+                "SELECT from_node_id, to_node_id, label \
+                 FROM ir_edges \
+                 WHERE generation_id = ?1 \
+                 ORDER BY from_node_id COLLATE BINARY, to_node_id COLLATE BINARY, \
+                          label COLLATE BINARY",
+            )
+            .map_err(sql_unavailable)?;
+        let edge_rows = edge_statement
+            .query_map(params![generation_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(sql_unavailable)?;
+        let mut edges = Vec::new();
+        for row in edge_rows {
+            let (from_node_id, to_node_id, label) = row.map_err(sql_unavailable)?;
+            validate_stored_non_empty_text(&from_node_id, "stored IR edge from node id")?;
+            validate_stored_non_empty_text(&to_node_id, "stored IR edge to node id")?;
+            if from_node_id == to_node_id {
+                return Err(IndexStoreError::InvalidState(
+                    "stored IR edge points to itself".to_string(),
+                ));
+            }
+            IrEdgeLabel::parse_protocol_str(&label).map_err(|_| {
+                IndexStoreError::InvalidState("stored IR edge label is invalid".to_string())
+            })?;
+            edges.push(IndexedIrEdgeRecord {
+                from_node_id,
+                to_node_id,
+                label,
+            });
+        }
+        Ok(ActiveIrGraph {
+            generation_id,
+            nodes,
+            edges,
+        })
+    }
+
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
         let connection = self.open_existing_generation(&generation.generation_id)?;
         let inspection = inspect_connection(&connection, Some(generation.generation_id.as_str()))?;
@@ -565,6 +961,11 @@ impl IndexStore for SqliteIndexStore {
         if semantic_evidence_violation_count(&connection, &generation.generation_id)? != 0 {
             return Err(IndexStoreError::InvalidState(
                 "semantic fact evidence is inconsistent with indexed code units".to_string(),
+            ));
+        }
+        if ir_graph_violation_count(&connection, &generation.generation_id)? != 0 {
+            return Err(IndexStoreError::InvalidState(
+                "IR graph is inconsistent with indexed code units".to_string(),
             ));
         }
         if generation_status(&connection, &generation.generation_id)?.as_deref() == Some("failed") {
@@ -722,6 +1123,11 @@ fn validate_generation_for_read(
     if semantic_evidence_violation_count(connection, generation_id)? != 0 {
         return Err(IndexStoreError::InvalidState(
             "semantic fact evidence is inconsistent with indexed code units".to_string(),
+        ));
+    }
+    if ir_graph_violation_count(connection, generation_id)? != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "IR graph is inconsistent with indexed code units".to_string(),
         ));
     }
     Ok(())
@@ -933,6 +1339,57 @@ fn semantic_evidence_violation_count(
     })
 }
 
+fn ir_graph_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let node_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM ir_nodes \
+             LEFT JOIN code_units \
+               ON code_units.generation_id = ir_nodes.generation_id \
+              AND code_units.code_unit_id = ir_nodes.code_unit_id \
+             WHERE ir_nodes.generation_id = ?1 \
+               AND (code_units.code_unit_id IS NULL \
+                    OR ir_nodes.node_id <> ('ir:' || ir_nodes.code_unit_id) \
+                    OR ir_nodes.kind NOT IN (\
+                        'module', 'function', 'arrow_function', 'class', 'method', \
+                        'react_component', 'react_hook', 'express_route', \
+                        'test_suite', 'test_case', 'unknown'\
+                    ) \
+                    OR ir_nodes.payload_json <> '{}')",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let edge_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM ir_edges \
+             LEFT JOIN ir_nodes AS from_nodes \
+               ON from_nodes.generation_id = ir_edges.generation_id \
+              AND from_nodes.node_id = ir_edges.from_node_id \
+             LEFT JOIN ir_nodes AS to_nodes \
+               ON to_nodes.generation_id = ir_edges.generation_id \
+              AND to_nodes.node_id = ir_edges.to_node_id \
+             WHERE ir_edges.generation_id = ?1 \
+               AND (from_nodes.node_id IS NULL \
+                    OR to_nodes.node_id IS NULL \
+                    OR ir_edges.from_node_id = ir_edges.to_node_id \
+                    OR ir_edges.label <> 'contains')",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let total = node_count
+        .checked_add(edge_count)
+        .ok_or_else(|| IndexStoreError::InvalidState("IR violation count overflow".to_string()))?;
+    usize::try_from(total).map_err(|_| {
+        IndexStoreError::InvalidState("IR violation count is outside valid range".to_string())
+    })
+}
+
 fn generation_status(
     connection: &Connection,
     generation_id: &str,
@@ -1079,6 +1536,93 @@ fn validate_stored_code_unit_id(id: &str, path: &str) -> Result<(), IndexStoreEr
     Ok(())
 }
 
+fn validate_index_text_field(value: &str, label: &'static str) -> Result<(), IndexStoreError> {
+    if value.trim().is_empty()
+        || value.chars().any(char::is_control)
+        || value.contains('\\')
+        || value.contains("://")
+        || looks_like_embedded_absolute_path(value)
+        || looks_like_source_snippet(value)
+    {
+        Err(IndexStoreError::InvalidRecord(format!(
+            "{label} is invalid"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_stored_ir_node_id(id: &str, code_unit_id: &str) -> Result<(), IndexStoreError> {
+    validate_stored_non_empty_text(id, "stored IR node id")?;
+    if id.contains('\\') || id.contains("://") || looks_like_windows_absolute_path(id) {
+        return Err(IndexStoreError::InvalidState(
+            "stored IR node id is invalid".to_string(),
+        ));
+    }
+    if id != format!("ir:{code_unit_id}") {
+        return Err(IndexStoreError::InvalidState(
+            "stored IR node id does not match code unit id".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_empty_object_payload(
+    payload_json: &str,
+    label: &'static str,
+) -> Result<(), IndexStoreError> {
+    let value: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|_| IndexStoreError::InvalidRecord(format!("{label} is invalid")))?;
+    if value == serde_json::json!({}) {
+        Ok(())
+    } else {
+        Err(IndexStoreError::InvalidRecord(format!(
+            "{label} is invalid"
+        )))
+    }
+}
+
+fn validate_stored_empty_object_payload(
+    payload_json: &str,
+    label: &'static str,
+) -> Result<(), IndexStoreError> {
+    let value: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|_| IndexStoreError::InvalidState(format!("{label} is invalid")))?;
+    if value == serde_json::json!({}) {
+        Ok(())
+    } else {
+        Err(IndexStoreError::InvalidState(format!("{label} is invalid")))
+    }
+}
+
+fn validate_stored_semantic_text_field(
+    label: &'static str,
+    value: &str,
+) -> Result<(), IndexStoreError> {
+    validate_stored_non_empty_text(value, label)?;
+    if value.contains("://")
+        || looks_like_embedded_absolute_path(value)
+        || looks_like_source_snippet(value)
+    {
+        Err(IndexStoreError::InvalidState(format!("{label} is invalid")))
+    } else {
+        Ok(())
+    }
+}
+
+fn looks_like_embedded_absolute_path(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .any(|token| Path::new(token).is_absolute() || looks_like_windows_absolute_path(token))
+}
+
+fn looks_like_source_snippet(value: &str) -> bool {
+    value.contains("=>")
+        || (value.contains('=') && value.contains(';'))
+        || value.contains('{')
+        || value.contains('}')
+}
+
 fn looks_like_windows_absolute_path(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
@@ -1163,9 +1707,15 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
     },
     RequiredTableSchema {
         name: "ir_nodes",
-        columns: &["generation_id", "node_id", "kind", "payload_json"],
+        columns: &[
+            "generation_id",
+            "node_id",
+            "code_unit_id",
+            "kind",
+            "payload_json",
+        ],
         primary_key_columns: &["generation_id", "node_id"],
-        minimum_foreign_key_rows: 1,
+        minimum_foreign_key_rows: 3,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY"],
     },
     RequiredTableSchema {
@@ -1277,10 +1827,12 @@ CREATE TABLE IF NOT EXISTS code_units (
 CREATE TABLE IF NOT EXISTS ir_nodes (
     generation_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
+    code_unit_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (generation_id, node_id),
-    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, code_unit_id) REFERENCES code_units(generation_id, code_unit_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS ir_edges (
@@ -1390,6 +1942,23 @@ mod tests {
         }
     }
 
+    fn ir_node(unit: &IndexedCodeUnitRecord) -> IndexedIrNodeRecord {
+        IndexedIrNodeRecord {
+            id: format!("ir:{}", unit.id),
+            code_unit_id: unit.id.clone(),
+            kind: unit.kind.clone(),
+            payload_json: "{}".to_string(),
+        }
+    }
+
+    fn ir_edge(from: &IndexedIrNodeRecord, to: &IndexedIrNodeRecord) -> IndexedIrEdgeRecord {
+        IndexedIrEdgeRecord {
+            from_node_id: from.id.clone(),
+            to_node_id: to.id.clone(),
+            label: "contains".to_string(),
+        }
+    }
+
     fn semantic_fact(path: &str) -> IndexedSemanticFactRecord {
         IndexedSemanticFactRecord {
             fact_id: format!("fact:{path}#import:express"),
@@ -1409,6 +1978,27 @@ mod tests {
             end_byte: 10,
             note: "compiler resolved import target".to_string(),
         }
+    }
+
+    fn store_with_active_semantic_fact(
+        name: &str,
+    ) -> (TempWorkspace, SqliteIndexStore, GenerationHandle) {
+        let workspace = TempWorkspace::new(name);
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        (workspace, store, generation)
     }
 
     #[test]
@@ -1609,6 +2199,86 @@ mod tests {
     }
 
     #[test]
+    fn list_active_semantic_facts_returns_sorted_active_facts_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-list-semantic-facts");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut a_file = file("src/a.ts");
+        a_file.size_bytes = 100;
+        let mut b_file = file("src/b.ts");
+        b_file.size_bytes = 100;
+        store
+            .record_indexed_file(&generation, &b_file)
+            .expect("record b file");
+        store
+            .record_indexed_file(&generation, &a_file)
+            .expect("record a file");
+        store
+            .record_code_unit(&generation, &code_unit("src/b.ts"))
+            .expect("record b unit");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record a unit");
+        let mut b_fact = semantic_fact("src/b.ts");
+        b_fact.fact_id = "fact:src/b.ts#import:zod".to_string();
+        b_fact.subject = "src/b.ts#import:zod".to_string();
+        b_fact.target = Some("node_modules/zod/index.d.ts#z".to_string());
+        b_fact.assumptions = vec!["path alias resolved from tsconfig".to_string()];
+        store
+            .record_semantic_fact(&generation, &b_fact)
+            .expect("record b fact");
+        let mut a_fact = semantic_fact("src/a.ts");
+        a_fact.target = None;
+        store
+            .record_semantic_fact(&generation, &a_fact)
+            .expect("record a fact");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .list_active_semantic_facts()
+            .expect("list semantic facts");
+
+        assert_eq!(report.generation_id, "gen-000001");
+        assert_eq!(
+            report
+                .facts
+                .iter()
+                .map(|fact| fact.fact_id.as_str())
+                .collect::<Vec<_>>(),
+            ["fact:src/a.ts#import:express", "fact:src/b.ts#import:zod"]
+        );
+        assert_eq!(report.facts[0].target, None);
+        assert_eq!(
+            report.facts[1].assumptions,
+            vec!["path alias resolved from tsconfig"]
+        );
+        let workspace_path = workspace.path().to_string_lossy();
+        for fact in report.facts {
+            for value in [
+                fact.fact_id,
+                fact.subject,
+                fact.target.unwrap_or_default(),
+                fact.origin_engine,
+                fact.origin_engine_version,
+                fact.origin_method,
+                fact.evidence_id,
+                fact.code_unit_id,
+                fact.path,
+                fact.note,
+            ] {
+                assert!(!value.contains(workspace_path.as_ref()));
+                assert!(!value.contains("UNIQUE_SOURCE_SENTINEL"));
+            }
+            for assumption in fact.assumptions {
+                assert!(!assumption.contains(workspace_path.as_ref()));
+                assert!(!assumption.contains("UNIQUE_SOURCE_SENTINEL"));
+            }
+        }
+    }
+
+    #[test]
     fn list_active_reads_reject_missing_active_generation() {
         let workspace = TempWorkspace::new("sqlite-list-no-active");
         let store = store(&workspace);
@@ -1620,9 +2290,13 @@ mod tests {
         let units_error = store
             .list_active_code_units()
             .expect_err("missing active generation must fail unit reads");
+        let facts_error = store
+            .list_active_semantic_facts()
+            .expect_err("missing active generation must fail semantic-fact reads");
 
         assert!(matches!(files_error, IndexStoreError::InvalidState(_)));
         assert!(matches!(units_error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(facts_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -1648,6 +2322,66 @@ mod tests {
             .expect_err("malformed active schema must fail reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_semantic_facts_rejects_tampered_rows() {
+        fn assert_rejected(name: &str, tamper: impl FnOnce(&Connection, &GenerationHandle)) {
+            let (_workspace, store, generation) = store_with_active_semantic_fact(name);
+            let connection = store
+                .open_existing_generation(&generation.generation_id)
+                .expect("open active generation");
+            tamper(&connection, &generation);
+
+            let error = store
+                .list_active_semantic_facts()
+                .expect_err("tampered semantic fact must fail reads");
+
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        }
+
+        assert_rejected("sqlite-list-semantic-fact-bad-kind", |connection, _| {
+            connection
+                .execute("UPDATE semantic_facts SET kind = 'CALL'", [])
+                .expect("tamper fact kind");
+        });
+        assert_rejected(
+            "sqlite-list-semantic-fact-bad-certainty",
+            |connection, _| {
+                connection
+                    .execute("UPDATE semantic_facts SET certainty = 'LOW_CONFIDENCE'", [])
+                    .expect("tamper fact certainty");
+            },
+        );
+        assert_rejected(
+            "sqlite-list-semantic-fact-bad-assumptions",
+            |connection, _| {
+                connection
+                    .execute("UPDATE semantic_facts SET assumptions_json = '{}'", [])
+                    .expect("tamper assumptions JSON");
+            },
+        );
+        assert_rejected(
+            "sqlite-list-semantic-fact-hash-mismatch",
+            |connection, _| {
+                connection
+                    .execute(
+                        "UPDATE evidence SET content_hash = ?1",
+                        params![
+                        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                    ],
+                    )
+                    .expect("tamper evidence hash");
+            },
+        );
+        assert_rejected(
+            "sqlite-list-semantic-fact-range-mismatch",
+            |connection, _| {
+                connection
+                    .execute("UPDATE evidence SET end_byte = 11", [])
+                    .expect("tamper evidence range");
+            },
+        );
     }
 
     #[test]
@@ -1834,6 +2568,201 @@ mod tests {
             .record_code_unit(&generation, &absolute)
             .expect_err("absolute path");
         assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn ir_graph_records_round_trip_from_active_generation_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-ir-graph");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut file = file("src/a.ts");
+        file.size_bytes = 100;
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        let mut module = code_unit("src/a.ts");
+        module.id = "unit:src/a.ts#module:0-100".to_string();
+        module.end_byte = 100;
+        let mut function = code_unit("src/a.ts");
+        function.id = "unit:src/a.ts#function:10-40".to_string();
+        function.kind = "function".to_string();
+        function.start_byte = 10;
+        function.end_byte = 40;
+        store
+            .record_code_unit(&generation, &function)
+            .expect("record function");
+        store
+            .record_code_unit(&generation, &module)
+            .expect("record module");
+        let module_node = ir_node(&module);
+        let function_node = ir_node(&function);
+        store
+            .record_ir_node(&generation, &function_node)
+            .expect("record function node");
+        store
+            .record_ir_node(&generation, &module_node)
+            .expect("record module node");
+        store
+            .record_ir_edge(&generation, &ir_edge(&module_node, &function_node))
+            .expect("record contains edge");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let graph = store.list_active_ir_graph().expect("list IR graph");
+
+        assert_eq!(graph.generation_id, "gen-000001");
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ir:unit:src/a.ts#function:10-40",
+                "ir:unit:src/a.ts#module:0-100"
+            ]
+        );
+        assert_eq!(graph.edges, vec![ir_edge(&module_node, &function_node)]);
+        let workspace_path = workspace.path().to_string_lossy();
+        for node in graph.nodes {
+            assert_eq!(node.payload_json, "{}");
+            assert!(!node.id.contains(workspace_path.as_ref()));
+            assert!(!node.code_unit_id.contains(workspace_path.as_ref()));
+            assert!(!node.id.contains("UNIQUE_SOURCE_SENTINEL"));
+        }
+    }
+
+    #[test]
+    fn ir_graph_records_must_reference_same_generation_nodes_and_units() {
+        let workspace = TempWorkspace::new("sqlite-ir-graph-rejects");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut file = file("src/a.ts");
+        file.size_bytes = 100;
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        let mut module = code_unit("src/a.ts");
+        module.id = "unit:src/a.ts#module:0-100".to_string();
+        module.end_byte = 100;
+        store
+            .record_code_unit(&generation, &module)
+            .expect("record module");
+        let module_node = ir_node(&module);
+
+        let mut missing_unit = module_node.clone();
+        missing_unit.code_unit_id = "unit:src/a.ts#function:10-20".to_string();
+        missing_unit.id = format!("ir:{}", missing_unit.code_unit_id);
+        let error = store
+            .record_ir_node(&generation, &missing_unit)
+            .expect_err("missing code unit");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut mismatched_id = module_node.clone();
+        mismatched_id.id = "ir:unit:src/a.ts#other:0-100".to_string();
+        let error = store
+            .record_ir_node(&generation, &mismatched_id)
+            .expect_err("mismatched node id");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut non_empty_payload = module_node.clone();
+        non_empty_payload.payload_json = r#"{"snippet":"const secret = true;"}"#.to_string();
+        let error = store
+            .record_ir_node(&generation, &non_empty_payload)
+            .expect_err("non-empty payload");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        store
+            .record_ir_node(&generation, &module_node)
+            .expect("record module node");
+        let missing_target = IndexedIrEdgeRecord {
+            from_node_id: module_node.id.clone(),
+            to_node_id: "ir:unit:src/a.ts#function:10-20".to_string(),
+            label: "contains".to_string(),
+        };
+        let error = store
+            .record_ir_edge(&generation, &missing_target)
+            .expect_err("missing target node");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let self_edge = IndexedIrEdgeRecord {
+            from_node_id: module_node.id.clone(),
+            to_node_id: module_node.id,
+            label: "contains".to_string(),
+        };
+        let error = store
+            .record_ir_edge(&generation, &self_edge)
+            .expect_err("self edge");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn generation_validation_rejects_malformed_ir_graph_rows() {
+        let workspace = TempWorkspace::new("sqlite-ir-graph-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let file = file("src/a.ts");
+        let unit = code_unit("src/a.ts");
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &unit)
+            .expect("record code unit");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute(
+                "INSERT INTO ir_nodes \
+                 (generation_id, node_id, code_unit_id, kind, payload_json) \
+                 VALUES (?1, 'ir:unit:src/a.ts#wrong', ?2, 'module', '{}')",
+                params![generation.generation_id, unit.id],
+            )
+            .expect("insert malformed IR node");
+
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("malformed IR graph must block activation");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_ir_graph_rejects_tampered_payloads() {
+        let workspace = TempWorkspace::new("sqlite-ir-graph-tamper");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        let unit = code_unit("src/a.ts");
+        let node = ir_node(&unit);
+        store
+            .record_code_unit(&generation, &unit)
+            .expect("record code unit");
+        store
+            .record_ir_node(&generation, &node)
+            .expect("record IR node");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        connection
+            .execute(
+                "UPDATE ir_nodes SET payload_json = ?1 WHERE node_id = ?2",
+                params![r#"{"snippet":"const secret = true;"}"#, node.id],
+            )
+            .expect("tamper IR payload");
+
+        let error = store
+            .list_active_ir_graph()
+            .expect_err("tampered IR payload must fail reads");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2251,12 +3180,12 @@ mod tests {
             .execute_batch(
                 r#"
                 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
-                INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'weak', 'now');
+                INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'weak', 'now');
                 CREATE TABLE index_generations (generation_id TEXT PRIMARY KEY, status TEXT, created_at TEXT, activated_at TEXT, repogrammar_version TEXT, repository_revision TEXT, worktree_hash TEXT);
                 INSERT INTO index_generations (generation_id, status, created_at, repogrammar_version) VALUES ('gen-000001', 'building', 'now', '0.1.0');
                 CREATE TABLE indexed_files (generation_id TEXT, path TEXT, content_hash TEXT, size_bytes INTEGER, language TEXT);
                 CREATE TABLE code_units (generation_id TEXT, code_unit_id TEXT, path TEXT, language TEXT, kind TEXT, start_byte INTEGER, end_byte INTEGER, content_hash TEXT);
-                CREATE TABLE ir_nodes (generation_id TEXT, node_id TEXT, kind TEXT, payload_json TEXT);
+                CREATE TABLE ir_nodes (generation_id TEXT, node_id TEXT, code_unit_id TEXT, kind TEXT, payload_json TEXT);
                 CREATE TABLE ir_edges (generation_id TEXT, from_node_id TEXT, to_node_id TEXT, label TEXT);
                 CREATE TABLE semantic_facts (generation_id TEXT, fact_id TEXT, kind TEXT, subject TEXT, target TEXT, certainty TEXT);
                 CREATE TABLE families (generation_id TEXT, family_id TEXT, classification TEXT);
