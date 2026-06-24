@@ -29,3 +29,13 @@
   skill front matter, required-document, and diff-documentation checks.
 - CI workflow for formatting, clippy, tests, repository guard checks, and pull
   request diff documentation gating.
+
+### Changed
+
+- Tightened provenance and semantic-worker evidence docs around strict
+  `sha256:<64 hex>` content hashes.
+- Documented JSON-parsed semantic-worker protocol fixture tests without
+  claiming a running TypeScript worker or runtime indexing integration.
+- Documented `repo-guard` required-document coverage for ADR-0008.
+- Documented progress `WorkUnits` constructor validation and CLI missing-index
+  fallback/deferred implementation status.

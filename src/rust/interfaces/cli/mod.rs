@@ -144,17 +144,11 @@ fn handle_query(command: &str, rest: &[String]) -> CliOutput {
         return CliOutput::failure(2, format!("{error}\n"));
     }
 
-    let contract = match command {
-        "find" => "find returns candidate families, target compatibility, dominant patterns, variation points, exceptions, unknowns, and minimal contrastive evidence; it must not return only top-k similar files",
-        "family" => "family is the CLI equivalent of the repogrammar_context show_family operation",
-        "explain" => "explain is the CLI equivalent of the repogrammar_context explain_deviation operation",
-        "check" => "check is the CLI equivalent of the repogrammar_context check_conformance operation",
-        _ => "query command requires an initialized pattern-family index",
-    };
-
     CliOutput::failure(
         2,
-        format!("repogrammar {command} is not implemented yet; {contract}\n"),
+        format!(
+            "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\ncommand: repogrammar {command} is not implemented yet; query execution requires a validated pattern-family index\n"
+        ),
     )
 }
 
@@ -363,6 +357,9 @@ mod tests {
             let output = run([command]);
 
             assert_eq!(output.status, 2);
+            assert!(output.stderr.starts_with(
+                "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
+            ));
             assert!(output.stderr.contains("not implemented yet"));
             assert!(output.stdout.is_empty());
         }
@@ -383,8 +380,12 @@ mod tests {
         ]);
 
         assert_eq!(output.status, 2);
-        assert!(output.stderr.contains("candidate families"));
-        assert!(!output.stderr.contains("top-k similar files only"));
+        assert!(output.stderr.starts_with(
+            "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
+        ));
+        assert!(output
+            .stderr
+            .contains("query execution requires a validated pattern-family index"));
     }
 
     #[test]

@@ -158,12 +158,21 @@ reason: repository is not initialized
 guidance: run repogrammar init
 ```
 
+During the bootstrap, pattern-family query commands use this fallback shape and
+append explicit deferred-status text that query execution still requires a
+validated pattern-family index. `status` and `doctor` may report a clean
+not-initialized state without opening storage. They must not imply that real
+indexing, storage activation, or MCP serving has run.
+
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
 
 ## Current implementation status
 
-The bootstrap recognizes the command surface and required options. Commands that
-would mutate repository state, install agent configuration, run indexing, or
-serve MCP return explicit not-implemented errors until those implementations are
-designed and tested.
+The bootstrap recognizes the command surface and required options. `status` and
+`doctor` expose safe missing-index status without initializing storage.
+Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
+not-implemented guidance when no validated index is available. Commands that
+would mutate repository state, install agent configuration, run real indexing,
+or serve MCP return explicit not-implemented or deferred-write errors until
+those implementations are designed and tested.
