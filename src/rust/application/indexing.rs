@@ -288,8 +288,9 @@ mod tests {
     use crate::core::model::{CodeUnitId, CodeUnitKind, ContentHash, Provenance, SourceRange};
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
-        GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-        IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
+        ActiveCodeUnits, ActiveIndexedFiles, GenerationHandle, IndexStore, IndexStoreError,
+        IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
+        STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
     use crate::ports::source_store::{SourceStore, SourceText};
@@ -803,6 +804,14 @@ mod tests {
                 panic!("semantic fact recording must not run during syntax-only indexing")
             }
 
+            fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
+                panic!("active indexed file reads must not run during indexing")
+            }
+
+            fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
+                panic!("active code-unit reads must not run during indexing")
+            }
+
             fn validate_generation(
                 &self,
                 _generation: &GenerationHandle,
@@ -879,6 +888,14 @@ mod tests {
                 _fact: &IndexedSemanticFactRecord,
             ) -> Result<(), IndexStoreError> {
                 panic!("semantic fact recording must not run during syntax-only indexing")
+            }
+
+            fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
+                panic!("active indexed file reads must not run during indexing")
+            }
+
+            fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
+                panic!("active code-unit reads must not run during indexing")
             }
 
             fn validate_generation(

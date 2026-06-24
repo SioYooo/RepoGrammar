@@ -119,7 +119,12 @@ The bootstrap `init` implementation creates the lifecycle directories,
 metadata plus syntax-only code-unit records and activates
 `.repogrammar/current-generation` after validation. It does not yet create a
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, families,
-freshness manifests, or query read paths.
+freshness manifests, or family-evidence query read paths. The CLI can read the
+active generation for `files` and `units` inventory/debugging output only. That
+read path opens the active generation read-only, requires a regular
+`current-generation` pointer, validates the generation schema and health, and
+rechecks stored repo-relative paths, strict content hashes, languages, unit ids,
+and byte ranges before returning records.
 
 The storage port and SQLite adapter can persist semantic facts together with
 repo-relative evidence rows for a building generation, but only when the fact is
@@ -149,8 +154,9 @@ reasons, and `index`/`sync` store the discovered file manifest in a
 generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
-families, query read-path state, and semantic-worker-produced facts are not
-stored by `index`/`sync`.
+families, and semantic-worker-produced facts are not stored by `index`/`sync`.
+The active indexed-file and code-unit rows are exposed only through the limited
+`files`/`units` read path and must not be treated as family evidence.
 
 Experimental Python discovery, once accepted, must record its support level and
 must not be stored or reported as official v0.1 production support. Optional
@@ -233,8 +239,10 @@ logic belong only in persistence adapters. The current substrate creates one
 database per generation under `.repogrammar/generations/<generation>/` and
 records the active generation in `.repogrammar/current-generation`. The
 top-level `.repogrammar/repogrammar.sqlite` active database path remains the
-target read path for later query integration; it must not be exposed by CLI
-commands until activation and read-path semantics are designed and tested.
+target read path for later family-evidence query integration. Current CLI
+`files` and `units` reads open the active generation database directly after
+validating the active pointer and schema, and expose only repo-relative metadata
+and code-unit rows.
 
 Required PRAGMAs:
 

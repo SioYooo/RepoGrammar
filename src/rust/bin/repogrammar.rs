@@ -5,6 +5,9 @@ use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::application::indexing::{
     index_repository_with_discovery_parser_and_store, IndexingOutcome, IndexingRequest,
 };
+use repogrammar::application::query::{
+    list_code_units, list_indexed_files, IndexedCodeUnitsReport, IndexedFilesReport,
+};
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
     RepositoryDoctorReport, RepositoryDoctorRequest, RepositoryImplementationStatus,
@@ -101,6 +104,22 @@ impl CliRuntime for ProductCliRuntime {
         let store = self.store_for_status_request(&status_request)?;
         repository_doctor_with_storage(request, &store)
     }
+
+    fn indexed_files(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<IndexedFilesReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        list_indexed_files(&store)
+    }
+
+    fn indexed_units(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<IndexedCodeUnitsReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        list_code_units(&store)
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +200,32 @@ mod tests {
         assert_eq!(value["storage"], "available");
         assert_eq!(value["indexing"], "syntax_only_code_units");
         assert!(!status
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(files.status, 0);
+        assert!(files.stderr.is_empty());
+        let value: Value = serde_json::from_str(files.stdout.trim()).expect("files JSON");
+        assert_eq!(value["command"], "files");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["files"][0]["path"], "a.ts");
+        assert!(!files
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(units.status, 0);
+        assert!(units.stderr.is_empty());
+        let value: Value = serde_json::from_str(units.stdout.trim()).expect("units JSON");
+        assert_eq!(value["command"], "units");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["semantic_worker"], "deferred");
+        assert_eq!(value["mining"], "deferred");
+        assert_eq!(value["units"][0]["path"], "a.ts");
+        assert!(!units
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
     }

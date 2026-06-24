@@ -192,9 +192,11 @@ During the bootstrap, pattern-family query commands use this fallback shape and
 append explicit deferred-status text that query execution still requires stored
 pattern-family evidence. `status` and `doctor` may report a clean
 not-initialized state without opening storage. Stored syntax-only code units are
-not query support; query commands must not imply that TypeScript compiler worker
-execution, semantic-fact indexing, mining, query execution, or MCP serving has
-run.
+not family evidence; query commands must not imply that TypeScript compiler
+worker execution, semantic-fact indexing, mining, family-query execution, or MCP
+serving has run. The `files` and `units` commands are a limited exception: when
+an active syntax-only generation exists, they may read and return repo-relative
+indexed-file metadata and code-unit records for inventory/debugging only.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -208,6 +210,11 @@ stable JSON object to `stderr` rather than the human text block:
   "implemented": false
 }
 ```
+
+For `files` and `units`, the command itself is implemented even when its active
+index precondition is not met. Their missing/unreadable-index JSON fallback must
+therefore set `implemented: true`; pattern-family query commands that still lack
+family evidence must set `implemented: false`.
 
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
@@ -224,6 +231,17 @@ requires pattern-family evidence`, not `repository is not initialized`.
 If repository status cannot be read safely, the fallback must direct the user to
 `repogrammar doctor` instead of masking corrupted state as an uninitialized
 repository.
+For `files` and `units`, initialized state with no active generation must keep
+the fallback marker but use `reason: no active index generation`, guidance to
+run `repogrammar index`, and `implemented: true` in JSON. Corrupt or unreadable
+state must direct users to `repogrammar doctor`. Once an active syntax-only
+generation exists, `files --json` must return `status: ok`, `implemented: true`,
+`indexing: syntax_only_code_units`, the active generation, and a `files` array
+of repo-relative paths, languages, sizes, and strict content hashes. `units
+--json` must return the active generation, `semantic_worker: deferred`, `mining:
+deferred`, and a `units` array of repo-relative unit ids, paths, languages,
+kinds, byte ranges, and strict content hashes. Neither command may include
+source snippets or absolute paths.
 
 ## Current implementation status
 
@@ -239,10 +257,9 @@ includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, `indexing: syntax_only_code_units`, `parser:
 syntax_only`, `semantic_worker: deferred`, and `mining: deferred`; they do not
 store source snippets, absolute paths, semantic facts, families, or evidence.
-`files` and `units` still use the stable query fallback until a read path and
-query contract are implemented.
-Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
-not-implemented guidance when no validated index is available, and return a
+`files` and `units` now read only active syntax-only index metadata and code-unit
+records. Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
+not-implemented guidance when no family evidence is available, and return a
 structured fallback object when `--json` is present. Commands that install agent
 configuration or serve MCP return explicit not-implemented or deferred-write
 errors until those implementations are designed and tested.

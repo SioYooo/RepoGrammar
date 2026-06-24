@@ -3,9 +3,11 @@
 //! SQL, migrations, PRAGMAs, and generation filesystem layout stay in this
 //! adapter. Application code talks to it through `ports::index_store`.
 
+use crate::core::model::ContentHash;
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
+    ActiveCodeUnits, ActiveIndexedFiles, GenerationHandle, IndexStore, IndexStoreError,
+    IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
+    STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -100,6 +102,55 @@ impl SqliteIndexStore {
         let connection = open_connection(path, MissingDatabase::Rejected)?;
         apply_pragmas(&connection).map_err(sql_unavailable)?;
         Ok(connection)
+    }
+
+    fn open_existing_generation_read_only(
+        &self,
+        generation_id: &str,
+    ) -> Result<Connection, IndexStoreError> {
+        let path = self.generation_database_path_for(generation_id, MissingDatabase::Rejected)?;
+        let connection = open_read_only_connection(path)?;
+        apply_read_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(connection)
+    }
+
+    fn open_active_generation_read_only(&self) -> Result<(String, Connection), IndexStoreError> {
+        self.require_existing_layout()?;
+        let current = self.current_generation_path();
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(IndexStoreError::InvalidState(
+                    "active generation is missing".to_string(),
+                ));
+            }
+            Err(_) => return Err(unavailable("failed to inspect current-generation pointer")),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(IndexStoreError::InvalidState(
+                "current-generation must be a regular file".to_string(),
+            ));
+        }
+        let generation_id = fs::read_to_string(&current)
+            .map_err(|_| unavailable("failed to read current-generation pointer"))?
+            .trim()
+            .to_string();
+        validate_generation_id(&generation_id)?;
+        let connection = self.open_existing_generation_read_only(&generation_id)?;
+        if generation_status(&connection, &generation_id)?.as_deref() != Some("active") {
+            return Err(IndexStoreError::InvalidState(
+                "current-generation does not point at an active generation".to_string(),
+            ));
+        }
+        validate_generation_for_read(&connection, &generation_id)?;
+        Ok((generation_id, connection))
+    }
+
+    fn require_existing_layout(&self) -> Result<(), IndexStoreError> {
+        ensure_existing_real_dir(&self.state_dir, "state directory")?;
+        ensure_existing_real_dir(&self.generations_dir(), "generations directory")?;
+        ensure_existing_real_dir(&self.tmp_dir(), "tmp directory")?;
+        Ok(())
     }
 
     fn generation_database_path_for(
@@ -358,6 +409,141 @@ impl IndexStore for SqliteIndexStore {
         Ok(())
     }
 
+    fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT path, content_hash, size_bytes, language \
+                 FROM indexed_files \
+                 WHERE generation_id = ?1 \
+                 ORDER BY path COLLATE BINARY",
+            )
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map(params![generation_id.as_str()], |row| {
+                let content_hash = row.get::<_, String>(1)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    content_hash,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(sql_unavailable)?;
+        let mut files = Vec::new();
+        for row in rows {
+            let (path, content_hash, size_bytes, language) = row.map_err(sql_unavailable)?;
+            validate_stored_repo_relative_path(&path, "stored indexed file path")?;
+            validate_stored_non_empty_text(&language, "stored indexed file language")?;
+            files.push(IndexedFileRecord {
+                path,
+                content_hash: ContentHash::new(content_hash).map_err(|_| {
+                    IndexStoreError::InvalidState(
+                        "stored indexed file content hash is invalid".to_string(),
+                    )
+                })?,
+                size_bytes: u64::try_from(size_bytes).map_err(|_| {
+                    IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+                })?,
+                language,
+            });
+        }
+        Ok(ActiveIndexedFiles {
+            generation_id,
+            files,
+        })
+    }
+
+    fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT code_units.code_unit_id, code_units.path, code_units.language, \
+                        code_units.kind, code_units.start_byte, code_units.end_byte, \
+                        code_units.content_hash, indexed_files.content_hash, indexed_files.size_bytes \
+                 FROM code_units \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = code_units.generation_id \
+                  AND indexed_files.path = code_units.path \
+                 WHERE code_units.generation_id = ?1 \
+                 ORDER BY code_units.path COLLATE BINARY, code_units.start_byte, \
+                          code_units.end_byte, code_units.kind COLLATE BINARY, \
+                          code_units.code_unit_id COLLATE BINARY",
+            )
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map(params![generation_id.as_str()], |row| {
+                let content_hash = row.get::<_, String>(6)?;
+                let file_hash = row.get::<_, String>(7)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    content_hash,
+                    file_hash,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .map_err(sql_unavailable)?;
+        let mut units = Vec::new();
+        for row in rows {
+            let (
+                id,
+                path,
+                language,
+                kind,
+                start_byte,
+                end_byte,
+                content_hash,
+                file_hash,
+                file_size,
+            ) = row.map_err(sql_unavailable)?;
+            validate_stored_non_empty_text(&id, "stored code unit id")?;
+            validate_stored_repo_relative_path(&path, "stored code unit path")?;
+            validate_stored_non_empty_text(&language, "stored code unit language")?;
+            validate_stored_non_empty_text(&kind, "stored code unit kind")?;
+            if content_hash != file_hash {
+                return Err(IndexStoreError::InvalidState(
+                    "stored code unit content hash does not match indexed file".to_string(),
+                ));
+            }
+            let start_byte = usize::try_from(start_byte).map_err(|_| {
+                IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
+            })?;
+            let end_byte = usize::try_from(end_byte).map_err(|_| {
+                IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
+            })?;
+            let file_size = usize::try_from(file_size).map_err(|_| {
+                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+            })?;
+            if end_byte < start_byte || end_byte > file_size {
+                return Err(IndexStoreError::InvalidState(
+                    "stored code unit range is invalid".to_string(),
+                ));
+            }
+            units.push(IndexedCodeUnitRecord {
+                id,
+                path,
+                language,
+                kind,
+                start_byte,
+                end_byte,
+                content_hash: ContentHash::new(content_hash).map_err(|_| {
+                    IndexStoreError::InvalidState(
+                        "stored code unit content hash is invalid".to_string(),
+                    )
+                })?,
+            });
+        }
+        Ok(ActiveCodeUnits {
+            generation_id,
+            units,
+        })
+    }
+
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
         let connection = self.open_existing_generation(&generation.generation_id)?;
         let inspection = inspect_connection(&connection, Some(generation.generation_id.as_str()))?;
@@ -474,6 +660,15 @@ fn apply_pragmas(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+fn apply_read_pragmas(connection: &Connection) -> rusqlite::Result<()> {
+    connection.busy_timeout(Duration::from_millis(5_000))?;
+    connection.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         PRAGMA busy_timeout=5000;
+         PRAGMA temp_store=MEMORY;",
+    )
+}
+
 fn open_connection(
     path: PathBuf,
     missing_database: MissingDatabase,
@@ -482,6 +677,11 @@ fn open_connection(
     if missing_database == MissingDatabase::Allowed {
         flags |= OpenFlags::SQLITE_OPEN_CREATE;
     }
+    Connection::open_with_flags(path, flags).map_err(sql_unavailable)
+}
+
+fn open_read_only_connection(path: PathBuf) -> Result<Connection, IndexStoreError> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW;
     Connection::open_with_flags(path, flags).map_err(sql_unavailable)
 }
 
@@ -496,6 +696,34 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn validate_generation_for_read(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<(), IndexStoreError> {
+    let inspection = inspect_connection(connection, Some(generation_id))?;
+    if inspection.schema_version != Some(STORAGE_SCHEMA_VERSION) {
+        return Err(IndexStoreError::InvalidState(
+            "storage schema version is missing or unsupported".to_string(),
+        ));
+    }
+    if inspection.integrity_check.as_deref() != Some("ok") {
+        return Err(IndexStoreError::InvalidState(
+            "SQLite integrity check failed".to_string(),
+        ));
+    }
+    if !required_schema_is_present(connection)? {
+        return Err(IndexStoreError::InvalidState(
+            "required storage schema is missing or malformed".to_string(),
+        ));
+    }
+    if semantic_evidence_violation_count(connection, generation_id)? != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "semantic fact evidence is inconsistent with indexed code units".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -817,6 +1045,22 @@ fn validate_repo_relative_path(path: &str) -> Result<(), IndexStoreError> {
         }
     }
     Ok(())
+}
+
+fn validate_stored_repo_relative_path(
+    path: &str,
+    label: &'static str,
+) -> Result<(), IndexStoreError> {
+    validate_repo_relative_path(path)
+        .map_err(|_| IndexStoreError::InvalidState(format!("{label} is invalid")))
+}
+
+fn validate_stored_non_empty_text(value: &str, label: &'static str) -> Result<(), IndexStoreError> {
+    if value.trim().is_empty() || value.chars().any(char::is_control) {
+        Err(IndexStoreError::InvalidState(format!("{label} is invalid")))
+    } else {
+        Ok(())
+    }
 }
 
 fn looks_like_windows_absolute_path(path: &str) -> bool {
@@ -1247,6 +1491,208 @@ mod tests {
             .query_row("SELECT count(*) FROM indexed_files", [], |row| row.get(0))
             .expect("file count");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn list_active_indexed_files_returns_sorted_active_metadata_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-list-files");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/b.ts"))
+            .expect("record b");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record a");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .list_active_indexed_files()
+            .expect("list indexed files");
+
+        assert_eq!(report.generation_id, "gen-000001");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["src/a.ts", "src/b.ts"]
+        );
+        for file in report.files {
+            assert!(!file
+                .path
+                .contains(workspace.path().to_string_lossy().as_ref()));
+            assert!(!file.path.contains("UNIQUE_SOURCE_SENTINEL"));
+            assert!(file.content_hash.as_str().starts_with("sha256:"));
+        }
+    }
+
+    #[test]
+    fn list_active_code_units_returns_sorted_active_units_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-list-units");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut a_file = file("src/a.ts");
+        a_file.size_bytes = 100;
+        let mut b_file = file("src/b.ts");
+        b_file.size_bytes = 100;
+        store
+            .record_indexed_file(&generation, &b_file)
+            .expect("record b");
+        store
+            .record_indexed_file(&generation, &a_file)
+            .expect("record a");
+
+        let mut b_unit = code_unit("src/b.ts");
+        b_unit.id = "unit:src/b.ts#module:0-10".to_string();
+        b_unit.start_byte = 0;
+        b_unit.end_byte = 10;
+        let mut later_a_unit = code_unit("src/a.ts");
+        later_a_unit.id = "unit:src/a.ts#function:10-20".to_string();
+        later_a_unit.kind = "function".to_string();
+        later_a_unit.start_byte = 10;
+        later_a_unit.end_byte = 20;
+        let mut first_a_unit = code_unit("src/a.ts");
+        first_a_unit.id = "unit:src/a.ts#module:0-10".to_string();
+        first_a_unit.start_byte = 0;
+        first_a_unit.end_byte = 10;
+        for unit in [&b_unit, &later_a_unit, &first_a_unit] {
+            store
+                .record_code_unit(&generation, unit)
+                .expect("record unit");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store.list_active_code_units().expect("list code units");
+
+        assert_eq!(report.generation_id, "gen-000001");
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .map(|unit| unit.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "unit:src/a.ts#module:0-10",
+                "unit:src/a.ts#function:10-20",
+                "unit:src/b.ts#module:0-10"
+            ]
+        );
+        for unit in report.units {
+            let workspace_path = workspace.path().to_string_lossy();
+            assert!(!unit.id.contains(workspace_path.as_ref()));
+            assert!(!unit.path.contains(workspace_path.as_ref()));
+            assert!(!unit.id.contains("UNIQUE_SOURCE_SENTINEL"));
+            assert!(unit.content_hash.as_str().starts_with("sha256:"));
+        }
+    }
+
+    #[test]
+    fn list_active_reads_reject_missing_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-list-no-active");
+        let store = store(&workspace);
+        store.prepare_next_generation().expect("prepare generation");
+
+        let files_error = store
+            .list_active_indexed_files()
+            .expect_err("missing active generation must fail file reads");
+        let units_error = store
+            .list_active_code_units()
+            .expect_err("missing active generation must fail unit reads");
+
+        assert!(matches!(files_error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(units_error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_reads_validate_schema_before_returning_records() {
+        let workspace = TempWorkspace::new("sqlite-list-invalid-schema");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        connection
+            .execute("DROP TABLE evidence", [])
+            .expect("drop required table");
+
+        let error = store
+            .list_active_indexed_files()
+            .expect_err("malformed active schema must fail reads");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_reads_reject_tampered_file_records() {
+        let workspace = TempWorkspace::new("sqlite-list-invalid-file-record");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        connection
+            .execute(
+                "UPDATE indexed_files SET content_hash = 'sha256:test' WHERE path = 'src/a.ts'",
+                [],
+            )
+            .expect("tamper file hash");
+
+        let error = store
+            .list_active_indexed_files()
+            .expect_err("tampered file hash must fail reads");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn list_active_reads_reject_tampered_code_unit_records() {
+        let workspace = TempWorkspace::new("sqlite-list-invalid-code-unit-record");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut file = file("src/a.ts");
+        file.size_bytes = 20;
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record unit");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        connection
+            .execute(
+                "UPDATE code_units SET content_hash = ?1, end_byte = 21",
+                params!["sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"],
+            )
+            .expect("tamper unit");
+
+        let error = store
+            .list_active_code_units()
+            .expect_err("tampered unit hash/range must fail reads");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]

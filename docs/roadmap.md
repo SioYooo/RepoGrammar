@@ -22,6 +22,8 @@
 - Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
   structural code units in active SQLite generations without source snippets,
   absolute paths, semantic facts, or family evidence.
+- Active `files`/`units` inventory reads for repo-relative indexed-file metadata
+  and syntax-only code units from the validated active generation.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -51,16 +53,16 @@ The detailed coordination artifact is
 
 The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
-indexing, semantic-fact/evidence storage substrate, and the Rust-side
-semantic-worker process/NDJSON validation boundary. The next implementation
-slice should refine one boundary at a time: command-level semantic-fact
-indexing, storage read paths, parser-to-IR, or the actual TypeScript compiler
-worker. Keep syntax-only code units structural and non-semantic while validating
-the next boundary.
+indexing, active syntax-only files/units inventory reads, semantic-fact/evidence
+storage substrate, and the Rust-side semantic-worker process/NDJSON validation
+boundary. The next implementation slice should refine one boundary at a time:
+command-level semantic-fact indexing, family-query contracts, parser-to-IR, or
+the actual TypeScript compiler worker. Keep syntax-only code units structural and
+non-semantic while validating the next boundary.
 
 Do not advance mining, query execution, or MCP serving until parser output,
-storage read paths, freshness checks, and evidence contracts are validated
-together.
+family-evidence read paths, freshness checks, and evidence contracts are
+validated together.
 
 ## Command implementation path
 

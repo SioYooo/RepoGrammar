@@ -260,7 +260,7 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
-    use crate::ports::index_store::STORAGE_SCHEMA_VERSION;
+    use crate::ports::index_store::{ActiveCodeUnits, ActiveIndexedFiles, STORAGE_SCHEMA_VERSION};
 
     struct FakeStore;
 
@@ -293,6 +293,20 @@ mod tests {
             _fact: &IndexedSemanticFactRecord,
         ) -> Result<(), IndexStoreError> {
             Ok(())
+        }
+
+        fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
+            Ok(ActiveIndexedFiles {
+                generation_id: "gen-000001".to_string(),
+                files: Vec::new(),
+            })
+        }
+
+        fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
+            Ok(ActiveCodeUnits {
+                generation_id: "gen-000001".to_string(),
+                units: Vec::new(),
+            })
         }
 
         fn validate_generation(

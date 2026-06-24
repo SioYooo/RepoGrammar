@@ -29,18 +29,22 @@ documentation, skills, memories, CI configuration, repo-local
 `init`/`uninit`/`status`/`doctor`/`unlock`/`logs`, TS/JS file discovery,
 hash-checked source reads, dependency-free syntax-only code-unit extraction,
 generation-scoped SQLite migrations/storage/validation/activation, and product
-runtime wiring for `index` and `sync`. The storage port and SQLite adapter can
+runtime wiring for `index` and `sync`, plus limited `files`/`units` reads from
+the active syntax-only generation. Those reads revalidate active-generation
+health plus stored paths, hashes, languages, unit ids, and byte ranges before
+returning repo-relative metadata. The storage port and SQLite adapter can
 persist already-validated semantic facts and repo-relative evidence for building
 generations when they match an indexed same-generation code unit's path, content
 hash, and byte range, but no current command produces those rows.
 
 Tree-sitter integration, executable TypeScript compiler worker source,
 command-level semantic-fact indexing, unified IR population,
-semantic/framework facts, family mining, query-ready family evidence, query read
-paths, MCP serving, installer writes, and telemetry network transport are not
-implemented.
+semantic/framework facts, family mining, query-ready family evidence,
+pattern-family query execution, MCP serving, installer writes, and telemetry
+network transport are not implemented.
 
-Current query commands still use stable fallback behavior. Stored syntax-only
+Pattern-family query commands still use stable fallback behavior. `files` and
+`units` can return active syntax-only index metadata, but stored syntax-only
 units must not be described as query-ready family evidence.
 
 ## Implications
@@ -55,5 +59,5 @@ boundary substrates through the canonical specs.
 ## Revalidation conditions
 
 Update this memory after Tree-sitter integration, TypeScript compiler worker
-source, command-level semantic-fact indexing, query read paths, MCP serving,
-installer writes, or production family evidence lands.
+source, command-level semantic-fact indexing, family-query read paths, MCP
+serving, installer writes, or production family evidence lands.

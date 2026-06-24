@@ -31,8 +31,11 @@ activate `.repogrammar/current-generation`.
 
 This slice does not use Tree-sitter, call a TypeScript compiler, build unified
 IR, align structures, anti-unify templates, cluster families, persist family
-evidence, or answer query commands from stored evidence. Syntax-only code units
-are structural candidates, not semantic or family claims.
+evidence, or answer pattern-family query commands from stored evidence.
+Syntax-only code units are structural candidates, not semantic or family
+claims. The `files` and `units` commands may read active syntax-only index
+metadata for inventory/debugging, but that read path is not family-query
+execution.
 
 ## File discovery and exclusions
 

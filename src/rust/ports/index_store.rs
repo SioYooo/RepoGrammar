@@ -52,6 +52,18 @@ pub struct IndexedSemanticFactRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveIndexedFiles {
+    pub generation_id: String,
+    pub files: Vec<IndexedFileRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveCodeUnits {
+    pub generation_id: String,
+    pub units: Vec<IndexedCodeUnitRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageInspection {
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
@@ -90,6 +102,10 @@ pub trait IndexStore {
         generation: &GenerationHandle,
         fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError>;
+
+    fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError>;
+
+    fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError>;
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;
 

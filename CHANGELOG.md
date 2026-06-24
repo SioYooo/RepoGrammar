@@ -45,6 +45,12 @@
   metadata and structural code-unit records in a new SQLite generation, validates
   it, and atomically activates `.repogrammar/current-generation` without claiming
   semantic-worker-derived facts, mining, query, or family evidence.
+- Active `files` and `units` read paths that return repo-relative syntax-only
+  indexed-file metadata and code-unit records from the validated active
+  generation without source snippets, absolute paths, semantic facts, mining, or
+  family evidence claims; the read path opens the active generation read-only
+  and revalidates stored paths, hashes, languages, unit ids, and byte ranges
+  before returning records.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.
@@ -88,8 +94,8 @@
   conservative lock/log handling.
 - Documented that discovery-to-storage syntax-only code-unit generations and
   Rust-side semantic-worker process validation are implemented while TypeScript
-  compiler worker execution, semantic-fact indexing, query execution, and family
-  evidence remain deferred.
+  compiler worker execution, semantic-fact indexing, pattern-family query
+  execution, and family evidence remain deferred.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.
 - Documented `serde_json` as a production dependency for runtime

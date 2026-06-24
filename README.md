@@ -30,11 +30,12 @@ evidence for a building generation, but no current command produces those rows.
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
 metadata plus syntax-only `code_units` records: repo-relative path, language,
 kind, byte range, and strict content hash. They do not store source snippets,
-absolute paths, semantic facts, families, or evidence. `status` and `doctor` can
-distinguish file-manifest-only generations from syntax-only code-unit
-generations. Commands that install agent configuration or serve MCP return
-explicit not-implemented errors until those contracts are implemented and
-tested.
+absolute paths, semantic facts, families, or evidence. `files` and `units` can
+read the active syntax-only generation for inventory/debugging, but they do not
+return pattern-family evidence. `status` and `doctor` can distinguish
+file-manifest-only generations from syntax-only code-unit generations. Commands
+that install agent configuration or serve MCP return explicit not-implemented
+errors until those contracts are implemented and tested.
 
 ## Why RepoGrammar?
 
@@ -66,6 +67,9 @@ Use Cargo from the repository root:
 cargo run --quiet --bin repogrammar -- version
 cargo run --quiet --bin repogrammar -- help
 cargo run --quiet --bin repogrammar -- init
+cargo run --quiet --bin repogrammar -- index
+cargo run --quiet --bin repogrammar -- files --json
+cargo run --quiet --bin repogrammar -- units --json
 cargo run --quiet --bin repogrammar -- status
 cargo run --quiet --bin repogrammar -- doctor --json
 ```
@@ -81,9 +85,10 @@ cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <ta
 
 The lifecycle surface is intentionally present before the full engine exists so
 repo-local state boundaries, command contracts, tests, and documentation can
-stabilize before indexing and mining begin. Query commands currently return
-explicit missing-index fallback guidance; with `--json`, that fallback is a
-structured object with `implemented: false`.
+stabilize before mining begins. Pattern-family query commands currently return
+explicit missing-index or missing-family-evidence fallback guidance; with
+`--json`, that fallback is a structured object. `files` and `units` are limited
+to active syntax-only index metadata.
 
 ## Product Shape
 
@@ -94,7 +99,7 @@ structured object with `implemented: false`.
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter validates NDJSON v1 worker output; compiler worker execution is not wired into indexing | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, validated semantic-fact/evidence write substrate, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic workers, read paths, migrations, and provenance |
+| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, active files/units read path, validated semantic-fact/evidence write substrate, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic workers, family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
@@ -186,8 +191,8 @@ v0.1 parallel development plan:
 
 - keep syntax-only code units structural and non-semantic;
 - keep TypeScript compiler worker source, semantic-fact indexing from commands,
-  mining, query execution, and MCP transport deferred until parser output,
-  storage, and semantic-worker boundaries are validated together.
+  mining, pattern-family query execution, and MCP transport deferred until
+  parser output, storage, and semantic-worker boundaries are validated together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 

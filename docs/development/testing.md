@@ -40,15 +40,16 @@ allowed.
   indexed-file paths, semantic-fact/evidence storage with same-generation
   code-unit path/hash/range validation, malformed semantic evidence rejection
   before activation, atomic rollback of failed fact writes, building-generation
-  write gates, and rejection of symlinked or malformed active-generation
-  pointers.
+  write gates, read-only active `files`/`units` listing order and tamper
+  rejection, and rejection of symlinked or malformed active-generation pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
   malformed syntax returning partial units plus diagnostics, unsupported or
   invalid source behavior, generation preservation after source/parser/storage
   failure, status/doctor storage health, corrupt manifests, missing state
-  subdirectories without implicit repair, broken active-generation pointers,
+  subdirectories without implicit repair, active `files`/`units` human and JSON
+  output, no-active-generation fallback, broken active-generation pointers,
   product runtime wiring, and absence of source snippets or absolute paths in CLI
   output and stored metadata.
 - Protocol fixture tests must parse fixture lines as JSON before checking
@@ -90,6 +91,7 @@ lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
 discovery filtering/hash/path-safety behavior, SQLite storage migration and
 generation-activation safety behavior, validated semantic-fact/evidence storage
 substrate behavior, syntax-only code-unit extraction and storage bridging,
-source-read hash/path safety, storage-aware status/doctor reporting, product
-runtime wiring, installer dry-run parsing, and
+source-read hash/path safety, storage-aware status/doctor reporting, active
+syntax-only `files`/`units` read paths, product runtime wiring, installer dry-run
+parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
