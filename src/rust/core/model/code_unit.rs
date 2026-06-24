@@ -88,7 +88,10 @@ mod tests {
             range: SourceRange::new(0, 42).expect("valid range"),
             provenance: Provenance::new(
                 "src/handler.ts",
-                ContentHash::new("sha256:test").expect("valid hash"),
+                ContentHash::new(
+                    "sha256:7c6e428e33561b59254d2efa13efac30fc391e9dc5d42f6c58132aaa8b2c8a03",
+                )
+                .expect("valid hash"),
                 RepositoryRevision::new("rev-1").expect("valid revision"),
             )
             .expect("valid provenance"),

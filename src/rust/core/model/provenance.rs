@@ -6,8 +6,11 @@ pub struct ContentHash(String);
 impl ContentHash {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         let value = value.into();
-        if value.trim().is_empty() {
-            Err("content hash must not be empty".to_string())
+        let hash = value
+            .strip_prefix("sha256:")
+            .ok_or_else(|| "content hash must match sha256:<64 hex chars>".to_string())?;
+        if hash.len() != 64 || !hash.chars().all(|character| character.is_ascii_hexdigit()) {
+            Err("content hash must match sha256:<64 hex chars>".to_string())
         } else {
             Ok(Self(value))
         }
@@ -15,6 +18,44 @@ impl ContentHash {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_SHA256: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const VALID_UPPERCASE_SHA256: &str =
+        "sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+
+    #[test]
+    fn accepts_sha256_content_hashes_with_sixty_four_hex_chars() {
+        let hash = ContentHash::new(VALID_SHA256).expect("valid sha256 content hash");
+
+        assert_eq!(hash.as_str(), VALID_SHA256);
+
+        let hash =
+            ContentHash::new(VALID_UPPERCASE_SHA256).expect("valid uppercase sha256 content hash");
+        assert_eq!(hash.as_str(), VALID_UPPERCASE_SHA256);
+    }
+
+    #[test]
+    fn rejects_invalid_content_hashes() {
+        for value in [
+            "",
+            "   ",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sha256:0123456789abcdef",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg",
+            "sha256:test",
+        ] {
+            assert!(
+                ContentHash::new(value).is_err(),
+                "expected invalid content hash: {value}"
+            );
+        }
     }
 }
 

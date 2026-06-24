@@ -48,7 +48,9 @@ note. Every future family conclusion must carry auditable source evidence.
 ## Provenance
 
 Provenance contains the source path, content hash, and repository revision used
-for a conclusion. Stale provenance must not be treated as fresh evidence.
+for a conclusion. Content hashes use the exact `sha256:<64 hex chars>` form;
+empty, placeholder, or non-SHA-256 values are not auditable evidence. Stale
+provenance must not be treated as fresh evidence.
 
 ## Counterexample
 
