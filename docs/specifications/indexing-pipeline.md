@@ -28,13 +28,19 @@ current CLI can discover TS/JS files, read source through a hash-checked
 repo-relative boundary, store repo-relative file metadata and structural code
 units in a generation-scoped SQLite database, validate that generation, and
 activate `.repogrammar/current-generation`.
+When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
+`index` and `sync` can also ask that worker for facts about the discovered
+repo-relative TS/JS file set and record only facts that match the same building
+generation's indexed file, code-unit id, content hash, and byte range.
 
 This slice does not use Tree-sitter, call a TypeScript compiler, build unified
 IR, align structures, anti-unify templates, cluster families, persist family
-evidence, or answer pattern-family query commands from stored evidence.
-Syntax-only code units are structural candidates, not semantic or family
-claims. The `files` and `units` commands may read active syntax-only index
-metadata for inventory/debugging, but that read path is not family-query
+evidence, or answer pattern-family query commands from stored evidence. Stored
+semantic-worker facts, when explicitly configured and accepted by the storage
+gate, are not freshness-validated family evidence and do not enable query or
+MCP claims. Syntax-only code units are structural candidates, not semantic or
+family claims. The `files` and `units` commands may read active syntax-only
+index metadata for inventory/debugging, but that read path is not family-query
 execution.
 
 ## File discovery and exclusions
@@ -101,13 +107,16 @@ Language-native frontends provide project models, module resolution, symbol
 resolution, type information, inheritance, and resolved calls where available.
 The TypeScript worker is the first planned semantic frontend. The Rust-side
 TypeScript process adapter can validate NDJSON worker output and translate facts
-into RepoGrammar-owned semantic facts, but the syntax-only `index` and `sync`
-path does not launch that worker, store semantic facts, or treat worker output
-as fresh. The storage adapter can persist already-validated semantic facts only
-after evidence matches an indexed manifest entry and code-unit hash/range in the
-same building generation; indexing integration must use that gate before any
-semantic fact can influence claims. Other languages should use their own
-compiler, type-checker, or LSP where that is the most authoritative source.
+into RepoGrammar-owned semantic facts. The syntax-only `index` and `sync` path
+does not launch that worker by default. With
+`REPOGRAMMAR_TYPESCRIPT_WORKER`, it may launch an explicit worker executable and
+store accepted facts only after evidence matches an indexed manifest entry,
+code-unit id, content hash, and byte range in the same building generation.
+Worker fallback statuses keep the generation syntax-only, while storage-gate
+conflicts abort the new generation. No semantic fact may influence claims until
+freshness and family-evidence claim builders exist. Other languages should use
+their own compiler, type-checker, or LSP where that is the most authoritative
+source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is

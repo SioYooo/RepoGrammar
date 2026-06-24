@@ -30,8 +30,11 @@ analysis rules.
 - `install` and `uninstall` must not create or remove `.repogrammar/`; `init`
   and `uninit` own project state lifecycle.
 - `index` and `sync` currently store repo-relative file metadata and
-  syntax-only code units in generation-scoped SQLite. Source snippets, absolute
-  paths, semantic facts, families, evidence, and query read-path state must not
+  syntax-only code units in generation-scoped SQLite. By default they do not
+  launch a semantic worker. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
+  explicit worker executable, accepted worker facts may be stored only through
+  same-generation path/hash/range evidence validation. Source snippets, absolute
+  paths, families, pattern-family evidence, and query read-path state must not
   be assumed present.
 - Tree-sitter is the intended syntax technology, but AST types must stay in
   adapters and Tree-sitter facts are not final semantic truth.

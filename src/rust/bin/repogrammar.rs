@@ -2,8 +2,11 @@ use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
+use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::indexing::{
-    index_repository_with_discovery_parser_and_store, IndexingOutcome, IndexingRequest,
+    index_repository_with_discovery_parser_and_store,
+    index_repository_with_discovery_parser_semantic_worker_and_store, IndexingOutcome,
+    IndexingRequest,
 };
 use repogrammar::application::query::{
     list_code_units, list_indexed_files, IndexedCodeUnitsReport, IndexedFilesReport,
@@ -73,16 +76,29 @@ impl CliRuntime for ProductCliRuntime {
             ));
         }
 
-        index_repository_with_discovery_parser_and_store(
-            IndexingRequest {
-                repository_root: request.repository_root,
-                max_file_bytes: request.max_file_bytes,
-            },
-            &FilesystemFileDiscovery,
-            &FilesystemSourceStore,
-            &SyntaxCodeUnitParser,
-            &store,
-        )
+        let indexing_request = IndexingRequest {
+            repository_root: request.repository_root,
+            max_file_bytes: request.max_file_bytes,
+        };
+        if let Some(executable) = request.semantic_worker_executable {
+            let worker = TypeScriptSemanticWorkerBoundary::new(executable);
+            index_repository_with_discovery_parser_semantic_worker_and_store(
+                indexing_request,
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &worker,
+                &store,
+            )
+        } else {
+            index_repository_with_discovery_parser_and_store(
+                indexing_request,
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &store,
+            )
+        }
     }
 
     fn repository_status(
@@ -228,5 +244,43 @@ mod tests {
         assert!(!units
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn product_runtime_missing_semantic_worker_falls_back_to_syntax_only() {
+        let workspace = TempWorkspace::new("product-runtime-worker-missing");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let runtime = ProductCliRuntime;
+        let missing_worker = workspace.path().join("missing-worker");
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let outcome = runtime
+            .index_repository(
+                "index",
+                CliIndexRequest {
+                    repository_root: workspace.path().display().to_string(),
+                    state_dir_override: None,
+                    max_file_bytes: repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    semantic_worker_executable: Some(missing_worker.display().to_string()),
+                },
+            )
+            .expect("missing worker should fall back to syntax-only indexing");
+
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(outcome.semantic_facts, 0);
+        assert_eq!(
+            outcome.semantic_worker,
+            repogrammar::application::indexing::SemanticWorkerRunStatus::FallbackUnavailable
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["semantic worker fallback: unavailable".to_string()]
+        );
+        assert!(!outcome.warnings.iter().any(|warning| {
+            warning.contains(workspace.path().to_string_lossy().as_ref())
+                || warning.contains("missing-worker")
+        }));
     }
 }

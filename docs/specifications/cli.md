@@ -121,9 +121,19 @@ syntax-only code-unit records in a new generation-scoped SQLite database,
 validate the generation, and atomically activate
 `.repogrammar/current-generation`. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
-`parser: syntax_only`, `semantic_worker: deferred`, and `mining: deferred`. If
-storage health is already unhealthy, they must refuse and direct the user to
-`repogrammar doctor` rather than masking the corruption with a new generation.
+the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
+and `mining: deferred`. By default, `semantic_worker` is `deferred`.
+When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
+`index` and `sync` may run that worker after syntax-only code units are stored
+for the building generation. Worker facts must pass the same-generation storage
+gate before they are recorded. Worker unavailable, unsupported-version, timeout,
+crash, or protocol-violation failures must fall back to syntax-only indexing
+with a typed `semantic_worker: fallback_*` status and sanitized warnings. A
+worker fact that conflicts with the indexed code-unit path, content hash, or
+range must abort the new generation rather than silently dropping or accepting
+stale evidence. If storage health is already unhealthy, index and sync must
+refuse and direct the user to `repogrammar doctor` rather than masking the
+corruption with a new generation.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
@@ -192,11 +202,12 @@ During the bootstrap, pattern-family query commands use this fallback shape and
 append explicit deferred-status text that query execution still requires stored
 pattern-family evidence. `status` and `doctor` may report a clean
 not-initialized state without opening storage. Stored syntax-only code units are
-not family evidence; query commands must not imply that TypeScript compiler
-worker execution, semantic-fact indexing, mining, family-query execution, or MCP
-serving has run. The `files` and `units` commands are a limited exception: when
-an active syntax-only generation exists, they may read and return repo-relative
-indexed-file metadata and code-unit records for inventory/debugging only.
+not family evidence; stored semantic facts are not family evidence until
+freshness and claim gates exist. Query commands must not imply that TypeScript
+compiler analysis, mining, family-query execution, or MCP serving has run. The
+`files` and `units` commands are a limited exception: when an active syntax-only
+generation exists, they may read and return repo-relative indexed-file metadata
+and code-unit records for inventory/debugging only.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -254,9 +265,15 @@ repo-local lifecycle information without claiming parser/mining support.
 `index` and `sync` create syntax-only SQLite generations from the TS/JS file
 discovery substrate and dependency-free structural extractor. Their JSON output
 includes `generation_id`, `discovered_files`, `stored_files`, the actual
-`indexed_units` count, `indexing: syntax_only_code_units`, `parser:
-syntax_only`, `semantic_worker: deferred`, and `mining: deferred`; they do not
-store source snippets, absolute paths, semantic facts, families, or evidence.
+`indexed_units` count, the actual `semantic_facts` count, `indexing:
+syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
+deferred`. By default they do not launch a semantic worker and report
+`semantic_worker: deferred`. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
+explicit executable, they pass the discovered repo-relative TS/JS file set to
+that worker, record only worker facts that match the active building-generation
+code-unit path/hash/range gate, and still make no family or query claims.
+They do not store source snippets, absolute paths, families, or pattern-family
+evidence.
 `files` and `units` now read only active syntax-only index metadata and code-unit
 records. Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
 not-implemented guidance when no family evidence is available, and return a

@@ -1,13 +1,17 @@
 //! Indexing use-case boundary.
 
-use crate::core::model::{CodeUnit, Language, RepositoryRevision};
+use crate::core::model::{CodeUnit, Language, RepositoryRevision, SemanticFact, SymbolId};
 use crate::error::RepoGrammarError;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
 };
-use crate::ports::index_store::{IndexStore, IndexedCodeUnitRecord, IndexedFileRecord};
+use crate::ports::index_store::{
+    GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedSemanticFactRecord,
+};
 use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParser};
+use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,10 +32,48 @@ impl IndexingRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingOutcome {
     pub indexed_units: usize,
+    pub semantic_facts: usize,
     pub discovered_files: usize,
     pub skipped_paths: usize,
     pub active_generation: Option<String>,
+    pub semantic_worker: SemanticWorkerRunStatus,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticWorkerRunStatus {
+    Deferred,
+    Complete,
+    FallbackUnavailable,
+    FallbackUnsupportedVersion,
+    FallbackTimeout,
+    FallbackWorkerCrashed,
+    FallbackProtocolViolation,
+}
+
+impl SemanticWorkerRunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deferred => "deferred",
+            Self::Complete => "complete",
+            Self::FallbackUnavailable => "fallback_unavailable",
+            Self::FallbackUnsupportedVersion => "fallback_unsupported_version",
+            Self::FallbackTimeout => "fallback_timeout",
+            Self::FallbackWorkerCrashed => "fallback_worker_crashed",
+            Self::FallbackProtocolViolation => "fallback_protocol_violation",
+        }
+    }
+
+    fn warning_token(self) -> Option<&'static str> {
+        match self {
+            Self::Deferred | Self::Complete => None,
+            Self::FallbackUnavailable => Some("unavailable"),
+            Self::FallbackUnsupportedVersion => Some("unsupported_version"),
+            Self::FallbackTimeout => Some("timeout"),
+            Self::FallbackWorkerCrashed => Some("worker_crashed"),
+            Self::FallbackProtocolViolation => Some("protocol_violation"),
+        }
+    }
 }
 
 pub fn index_repository(_request: IndexingRequest) -> Result<IndexingOutcome, RepoGrammarError> {
@@ -57,9 +99,11 @@ pub fn index_repository_with_discovery(
     let report = discover_repository_files(request, discovery)?;
     Ok(IndexingOutcome {
         indexed_units: 0,
+        semantic_facts: 0,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: None,
+        semantic_worker: SemanticWorkerRunStatus::Deferred,
         warnings: report.warnings,
     })
 }
@@ -88,9 +132,11 @@ pub fn index_repository_with_discovery_and_store(
 
     Ok(IndexingOutcome {
         indexed_units: 0,
+        semantic_facts: 0,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
+        semantic_worker: SemanticWorkerRunStatus::Deferred,
         warnings: report.warnings,
     })
 }
@@ -100,6 +146,42 @@ pub fn index_repository_with_discovery_parser_and_store(
     discovery: &impl FileDiscovery,
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
+    store: &impl IndexStore,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        None,
+        store,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    semantic_worker: &dyn SemanticWorker,
+    store: &impl IndexStore,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        Some(semantic_worker),
+        store,
+    )
+}
+
+fn index_repository_with_optional_semantic_worker(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    semantic_worker: Option<&dyn SemanticWorker>,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let report = discover_repository_files(request.clone(), discovery)?;
@@ -118,7 +200,7 @@ pub fn index_repository_with_discovery_parser_and_store(
     }
 
     let mut indexed_units = 0usize;
-    let mut warnings = report.warnings;
+    let mut warnings = report.warnings.clone();
     for file in &report.files {
         let source = source_store
             .read_source(SourceReadRequest {
@@ -161,14 +243,25 @@ pub fn index_repository_with_discovery_parser_and_store(
         )?;
     }
 
+    let (semantic_worker, semantic_facts) = record_semantic_worker_facts(
+        &request,
+        &report,
+        &generation,
+        semantic_worker,
+        store,
+        &mut warnings,
+    )?;
+
     crate::application::storage::validate_index_generation(store, &generation)?;
     crate::application::storage::activate_index_generation(store, &generation)?;
 
     Ok(IndexingOutcome {
         indexed_units,
+        semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
+        semantic_worker,
         warnings,
     })
 }
@@ -222,6 +315,121 @@ fn record_parse_report(
         count += 1;
     }
     Ok(count)
+}
+
+fn record_semantic_worker_facts(
+    request: &IndexingRequest,
+    discovery_report: &FileDiscoveryReport,
+    generation: &GenerationHandle,
+    semantic_worker: Option<&dyn SemanticWorker>,
+    store: &impl IndexStore,
+    warnings: &mut Vec<String>,
+) -> Result<(SemanticWorkerRunStatus, usize), RepoGrammarError> {
+    let Some(semantic_worker) = semantic_worker else {
+        return Ok((SemanticWorkerRunStatus::Deferred, 0));
+    };
+
+    if discovery_report.files.is_empty() {
+        return Ok((SemanticWorkerRunStatus::Deferred, 0));
+    }
+
+    let changed_files = discovery_report
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let mut facts = match semantic_worker.analyze_project(SemanticWorkerRequest {
+        project_root: request.repository_root.clone(),
+        changed_files,
+    }) {
+        Ok(facts) => facts,
+        Err(error) => {
+            let status = semantic_worker_error_status(error);
+            if let Some(token) = status.warning_token() {
+                warnings.push(format!("semantic worker fallback: {token}"));
+            }
+            return Ok((status, 0));
+        }
+    };
+
+    sort_semantic_facts(&mut facts);
+    for (index, fact) in facts.iter().enumerate() {
+        crate::application::storage::record_semantic_fact(
+            store,
+            generation,
+            &indexed_semantic_fact_record(index, fact),
+        )?;
+    }
+    Ok((SemanticWorkerRunStatus::Complete, facts.len()))
+}
+
+fn semantic_worker_error_status(error: SemanticWorkerError) -> SemanticWorkerRunStatus {
+    match error {
+        SemanticWorkerError::Unavailable(_) => SemanticWorkerRunStatus::FallbackUnavailable,
+        SemanticWorkerError::UnsupportedVersion(_) => {
+            SemanticWorkerRunStatus::FallbackUnsupportedVersion
+        }
+        SemanticWorkerError::Timeout(_) => SemanticWorkerRunStatus::FallbackTimeout,
+        SemanticWorkerError::WorkerCrashed(_) => SemanticWorkerRunStatus::FallbackWorkerCrashed,
+        SemanticWorkerError::ProtocolViolation(_) => {
+            SemanticWorkerRunStatus::FallbackProtocolViolation
+        }
+    }
+}
+
+fn sort_semantic_facts(facts: &mut [SemanticFact]) {
+    facts.sort_by(|left, right| {
+        (
+            left.evidence.provenance.path.as_str(),
+            left.evidence.range.start_byte,
+            left.evidence.range.end_byte,
+            left.evidence.code_unit_id.as_str(),
+            left.kind.as_protocol_str(),
+            left.subject.as_str(),
+            left.target.as_ref().map(SymbolId::as_str),
+            left.certainty.as_protocol_str(),
+            left.origin.engine.as_str(),
+            left.origin.engine_version.as_str(),
+            left.origin.method.as_str(),
+        )
+            .cmp(&(
+                right.evidence.provenance.path.as_str(),
+                right.evidence.range.start_byte,
+                right.evidence.range.end_byte,
+                right.evidence.code_unit_id.as_str(),
+                right.kind.as_protocol_str(),
+                right.subject.as_str(),
+                right.target.as_ref().map(SymbolId::as_str),
+                right.certainty.as_protocol_str(),
+                right.origin.engine.as_str(),
+                right.origin.engine_version.as_str(),
+                right.origin.method.as_str(),
+            ))
+    });
+}
+
+fn indexed_semantic_fact_record(index: usize, fact: &SemanticFact) -> IndexedSemanticFactRecord {
+    IndexedSemanticFactRecord {
+        fact_id: format!("semantic-fact:{index:06}"),
+        kind: fact.kind.as_protocol_str().to_string(),
+        subject: fact.subject.clone(),
+        target: fact
+            .target
+            .as_ref()
+            .map(|target| target.as_str().to_string()),
+        certainty: fact.certainty.as_protocol_str().to_string(),
+        origin_engine: fact.origin.engine.clone(),
+        origin_engine_version: fact.origin.engine_version.clone(),
+        origin_method: fact.origin.method.clone(),
+        assumptions: fact.assumptions.clone(),
+        evidence_id: format!("semantic-evidence:{index:06}"),
+        code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
+        path: fact.evidence.provenance.path.clone(),
+        content_hash: fact.evidence.provenance.content_hash.clone(),
+        start_byte: fact.evidence.range.start_byte,
+        end_byte: fact.evidence.range.end_byte,
+        note: fact.evidence.note.clone(),
+    }
 }
 
 fn validate_parser_unit(
@@ -285,7 +493,10 @@ mod tests {
     use crate::adapters::filesystem::source_store::FilesystemSourceStore;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
-    use crate::core::model::{CodeUnitId, CodeUnitKind, ContentHash, Provenance, SourceRange};
+    use crate::core::model::{
+        CodeUnitId, CodeUnitKind, ContentHash, Evidence, FactCertainty, FactOrigin, Provenance,
+        RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
+    };
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
         ActiveCodeUnits, ActiveIndexedFiles, GenerationHandle, IndexStore, IndexStoreError,
@@ -293,10 +504,14 @@ mod tests {
         STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
+    use crate::ports::semantic_worker::{
+        SemanticWorker, SemanticWorkerError, SemanticWorkerRequest,
+    };
     use crate::ports::source_store::{SourceStore, SourceText};
     use crate::test_support::TempWorkspace;
     use rusqlite::Connection;
     use std::fs;
+    use std::path::Path;
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
@@ -318,6 +533,89 @@ mod tests {
             provenance: Provenance::new(path, content_hash, document.repository_revision.clone())
                 .expect("valid provenance"),
         }
+    }
+
+    struct SingleUnitParser;
+
+    impl SourceParser for SingleUnitParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            Ok(ParseReport {
+                units: vec![parser_unit(
+                    &document,
+                    "unit:a.ts#module:0-all",
+                    document.path,
+                    document.content_hash.clone(),
+                    0,
+                    document.text.len(),
+                )],
+                diagnostics: Vec::new(),
+            })
+        }
+    }
+
+    struct StaticSemanticWorker {
+        expected_files: Vec<String>,
+        result: Result<Vec<SemanticFact>, SemanticWorkerError>,
+    }
+
+    impl SemanticWorker for StaticSemanticWorker {
+        fn analyze_project(
+            &self,
+            request: SemanticWorkerRequest,
+        ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
+            assert!(Path::new(&request.project_root).is_absolute());
+            assert_eq!(request.changed_files, self.expected_files);
+            self.result.clone()
+        }
+    }
+
+    struct PanickingSemanticWorker;
+
+    impl SemanticWorker for PanickingSemanticWorker {
+        fn analyze_project(
+            &self,
+            _request: SemanticWorkerRequest,
+        ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
+            panic!("semantic worker must not run when no files are discovered")
+        }
+    }
+
+    fn semantic_fact_for_a_ts(content_hash: ContentHash) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::ResolvedImport,
+            subject: "a.ts#import:express".to_string(),
+            target: None,
+            origin: FactOrigin {
+                engine: "typescript".to_string(),
+                engine_version: "6.0.0".to_string(),
+                method: "compiler_api".to_string(),
+            },
+            certainty: FactCertainty::Semantic,
+            evidence: Evidence::new(
+                CodeUnitId::new("unit:a.ts#module:0-all").expect("valid code unit id"),
+                SourceRange::new(0, "import express from 'express';\n".len()).expect("valid range"),
+                Provenance::new(
+                    "a.ts",
+                    content_hash,
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "compiler resolved import target",
+            )
+            .expect("valid evidence"),
+            assumptions: Vec::new(),
+        }
+    }
+
+    fn semantic_fact_count(state: &Path, generation_id: &str) -> u32 {
+        let database = state
+            .join("generations")
+            .join(generation_id)
+            .join("repogrammar.sqlite");
+        let connection = Connection::open(database).expect("open generation database");
+        connection
+            .query_row("SELECT count(*) FROM semantic_facts", [], |row| row.get(0))
+            .expect("count semantic facts")
     }
 
     #[test]
@@ -502,6 +800,162 @@ mod tests {
                 && hash.starts_with("sha256:")
                 && start <= end
         }));
+    }
+
+    #[test]
+    fn optional_semantic_worker_records_valid_same_generation_facts() {
+        let workspace = TempWorkspace::new("indexing-semantic-worker");
+        let source = "import express from 'express';\n";
+        fs::write(workspace.path().join("a.ts"), source).expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        fs::create_dir_all(state.join("generations")).expect("create generations");
+        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        let store = SqliteIndexStore::new(&state);
+        let discovered = discover_repository_files(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+        )
+        .expect("discover files");
+        let fact = semantic_fact_for_a_ts(discovered.files[0].content_hash.clone());
+        let worker = StaticSemanticWorker {
+            expected_files: vec!["a.ts".to_string()],
+            result: Ok(vec![fact]),
+        };
+
+        let outcome = index_repository_with_discovery_parser_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SingleUnitParser,
+            &worker,
+            &store,
+        )
+        .expect("index semantic worker facts");
+
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(outcome.semantic_facts, 1);
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(outcome.warnings, Vec::<String>::new());
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(semantic_fact_count(&state, "gen-000001"), 1);
+    }
+
+    #[test]
+    fn optional_semantic_worker_fallback_keeps_syntax_only_generation_sanitized() {
+        let workspace = TempWorkspace::new("indexing-semantic-worker-fallback");
+        fs::write(
+            workspace.path().join("a.ts"),
+            "import express from 'express';\n",
+        )
+        .expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        fs::create_dir_all(state.join("generations")).expect("create generations");
+        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        let store = SqliteIndexStore::new(&state);
+        let worker = StaticSemanticWorker {
+            expected_files: vec!["a.ts".to_string()],
+            result: Err(SemanticWorkerError::Unavailable(
+                "raw worker path /tmp/secret.ts must not leak".to_string(),
+            )),
+        };
+
+        let outcome = index_repository_with_discovery_parser_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SingleUnitParser,
+            &worker,
+            &store,
+        )
+        .expect("fallback should still activate syntax-only generation");
+
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(outcome.semantic_facts, 0);
+        assert_eq!(
+            outcome.semantic_worker,
+            SemanticWorkerRunStatus::FallbackUnavailable
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["semantic worker fallback: unavailable".to_string()]
+        );
+        assert!(!outcome.warnings.iter().any(|warning| {
+            warning.contains("/tmp/secret")
+                || warning.contains(workspace.path().to_string_lossy().as_ref())
+        }));
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(semantic_fact_count(&state, "gen-000001"), 0);
+    }
+
+    #[test]
+    fn optional_semantic_worker_stale_hash_fact_preserves_previous_active_generation() {
+        let workspace = TempWorkspace::new("indexing-semantic-worker-stale-hash");
+        fs::write(
+            workspace.path().join("a.ts"),
+            "import express from 'express';\n",
+        )
+        .expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        fs::create_dir_all(state.join("generations")).expect("create generations");
+        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        let store = SqliteIndexStore::new(&state);
+        let first = store.prepare_next_generation().expect("prepare first");
+        store.activate_generation(&first).expect("activate first");
+        let worker = StaticSemanticWorker {
+            expected_files: vec!["a.ts".to_string()],
+            result: Ok(vec![semantic_fact_for_a_ts(
+                ContentHash::new(
+                    "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                )
+                .expect("valid stale hash"),
+            )]),
+        };
+
+        let error = index_repository_with_discovery_parser_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SingleUnitParser,
+            &worker,
+            &store,
+        )
+        .expect_err("stale semantic evidence must abort indexing");
+
+        assert!(error.to_string().contains("semantic fact content hash"));
+        assert_eq!(
+            fs::read_to_string(state.join("current-generation"))
+                .expect("read active generation")
+                .trim(),
+            "gen-000001"
+        );
+        assert_eq!(semantic_fact_count(&state, "gen-000002"), 0);
+    }
+
+    #[test]
+    fn optional_semantic_worker_is_deferred_when_no_files_are_discovered() {
+        let workspace = TempWorkspace::new("indexing-semantic-worker-empty");
+        fs::write(workspace.path().join("README.md"), "not a TS/JS source\n")
+            .expect("write ignored source");
+        let state = workspace.path().join(".repogrammar");
+        fs::create_dir_all(state.join("generations")).expect("create generations");
+        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SingleUnitParser,
+            &PanickingSemanticWorker,
+            &store,
+        )
+        .expect("empty discovery still activates syntax-only generation");
+
+        assert_eq!(outcome.discovered_files, 0);
+        assert_eq!(outcome.indexed_units, 0);
+        assert_eq!(outcome.semantic_facts, 0);
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Deferred);
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
     }
 
     #[test]

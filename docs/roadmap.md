@@ -7,6 +7,9 @@
 - Semantic worker boundary plus v1 protocol tokens, schemas, NDJSON fixtures,
   and a Rust-side TypeScript process adapter that validates worker stdout into
   owned semantic facts without wiring those facts into indexing yet.
+- Dependency-free TypeScript worker executable stub that validates stdin and
+  reports compiler-backed semantic analysis as unavailable without inspecting
+  source files.
 - Metadata-only algorithm paper archive under `algorithms/paper/`.
 - Pattern-family-first CLI command surface and safe command-contract parsing.
 - Repo-local lifecycle for `.repogrammar/`, including init/uninit,
@@ -21,7 +24,12 @@
   failed generations.
 - Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
   structural code units in active SQLite generations without source snippets,
-  absolute paths, semantic facts, or family evidence.
+  absolute paths, or family evidence.
+- Optional command-level semantic-worker ingestion for `index`/`sync` when
+  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable. Accepted facts
+  must match the building generation's indexed code-unit path, hash, and range;
+  worker fallback keeps syntax-only indexing, and mismatched evidence aborts the
+  new generation.
 - Active `files`/`units` inventory reads for repo-relative indexed-file metadata
   and syntax-only code units from the validated active generation.
 - Storage-aware `status`/`doctor` reporting for active generation health,
@@ -54,11 +62,12 @@ The detailed coordination artifact is
 The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
 indexing, active syntax-only files/units inventory reads, semantic-fact/evidence
-storage substrate, and the Rust-side semantic-worker process/NDJSON validation
-boundary. The next implementation slice should refine one boundary at a time:
-command-level semantic-fact indexing, family-query contracts, parser-to-IR, or
-the actual TypeScript compiler worker. Keep syntax-only code units structural and
-non-semantic while validating the next boundary.
+storage substrate, the Rust-side semantic-worker process/NDJSON validation
+boundary, and opt-in command-level semantic-fact ingestion through the storage
+gate. The next implementation slice should refine one boundary at a time:
+family-query contracts, parser-to-IR, framework role facts, or the actual
+TypeScript compiler integration. Keep syntax-only code units and stored
+semantic facts out of family claims until freshness and claim builders exist.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 family-evidence read paths, freshness checks, and evidence contracts are
@@ -66,8 +75,8 @@ validated together.
 
 ## Command implementation path
 
-- Wire semantic-worker facts into `index`/`sync` only after matching them against
-  indexed file/code-unit hashes and generation freshness.
+- Add freshness metadata and claim gates for stored semantic-worker facts before
+  they can influence pattern-family evidence.
 - Add parser-to-IR storage after syntax-only generations remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
@@ -117,7 +126,7 @@ validated together.
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
 - Validate TypeScript worker tooling and package manager before adding
-  executable TypeScript compiler worker code.
+  TypeScript compiler API dependencies or semantic fact emission.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
   syntax-only extractor where the extra precision is justified.
 - Extend the TypeScript semantic worker version policy, generation matching, and

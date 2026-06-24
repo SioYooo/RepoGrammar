@@ -299,6 +299,7 @@ fn parse_worker_output(
 ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
     let mut facts = Vec::new();
     let mut saw_end_of_stream = false;
+    let mut worker_error = None;
 
     for (line_index, line) in output.lines().enumerate() {
         let line_number = line_index + 1;
@@ -327,15 +328,23 @@ fn parse_worker_output(
             .as_object()
             .ok_or_else(|| protocol_error(line_number, "message must be a JSON object"))?;
         validate_envelope(object, line_number, expected_request_id)?;
+        let message_type = required_string(object, "message_type", line_number)?;
 
-        match required_string(object, "message_type", line_number)? {
+        if worker_error.is_some() && message_type != "end_of_stream" {
+            return Err(protocol_error(
+                line_number,
+                "only end_of_stream may follow worker_error",
+            ));
+        }
+
+        match message_type {
             "fact" => {
                 let fact = parse_fact_message(object, line_number)?;
                 validate_fact_scope(&fact, allowed_paths, line_number)?;
                 facts.push(fact);
             }
             "progress" => validate_progress_message(object, line_number)?,
-            "worker_error" => return Err(parse_worker_error(object, line_number)),
+            "worker_error" => worker_error = Some(parse_worker_error(object, line_number)),
             "end_of_stream" => {
                 validate_allowed_keys(
                     object,
@@ -355,7 +364,10 @@ fn parse_worker_output(
     }
 
     if saw_end_of_stream {
-        Ok(facts)
+        match worker_error {
+            Some(error) => Err(error),
+            None => Ok(facts),
+        }
     } else {
         Err(SemanticWorkerError::ProtocolViolation(
             "semantic worker output did not include end_of_stream".to_string(),
@@ -768,10 +780,16 @@ fn looks_like_embedded_absolute_path(value: &str) -> bool {
 }
 
 fn looks_like_source_snippet(value: &str) -> bool {
+    let trimmed = value.trim_start();
     value.contains("=>")
         || (value.contains('=') && value.contains(';'))
         || value.contains('{')
         || value.contains('}')
+        || trimmed.starts_with("const ")
+        || trimmed.starts_with("let ")
+        || trimmed.starts_with("var ")
+        || trimmed.starts_with("import ")
+        || trimmed.starts_with("export ")
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), ()> {
@@ -950,6 +968,30 @@ mod tests {
             ndjson(vec![
                 {
                     let mut fact = valid_fact_message();
+                    fact["evidence"]["note"] = json!("const secret = true");
+                    fact
+                },
+                valid_end_of_stream_message(),
+            ]),
+            ndjson(vec![
+                {
+                    let mut fact = valid_fact_message();
+                    fact["evidence"]["note"] = json!("import secret from 'secret'");
+                    fact
+                },
+                valid_end_of_stream_message(),
+            ]),
+            ndjson(vec![
+                {
+                    let mut fact = valid_fact_message();
+                    fact["target"] = json!("/tmp/secret/source.ts#Symbol");
+                    fact
+                },
+                valid_end_of_stream_message(),
+            ]),
+            ndjson(vec![
+                {
+                    let mut fact = valid_fact_message();
                     fact["assumptions"] = json!(["read /tmp/secret"]);
                     fact
                 },
@@ -971,6 +1013,25 @@ mod tests {
                 .expect_err("malformed worker output must be rejected");
             assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
         }
+    }
+
+    #[test]
+    fn worker_output_parser_accepts_normalized_symbol_text() {
+        let mut fact = valid_fact_message();
+        fact["target"] = json!("symbol:src/handlers/user.ts#export:UserService");
+        fact["evidence"]["note"] = json!("compiler resolved normalized symbol id");
+
+        let facts = parse_worker_output(
+            &ndjson(vec![fact, valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect("normalized symbol text should parse");
+
+        assert_eq!(
+            facts[0].target.as_ref().map(SymbolId::as_str),
+            Some("symbol:src/handlers/user.ts#export:UserService")
+        );
     }
 
     #[test]
@@ -1033,6 +1094,51 @@ mod tests {
             SemanticWorkerError::UnsupportedVersion(_)
         ));
         assert!(!format!("{unsupported:?}").contains("/tmp/secret"));
+    }
+
+    #[test]
+    fn worker_error_must_still_close_with_end_of_stream() {
+        let error = parse_worker_output(
+            &ndjson(vec![json!({
+                "protocol_version": 1,
+                "message_type": "worker_error",
+                "request_id": REQUEST_ID,
+                "error_code": "SEMANTIC_WORKER_UNAVAILABLE",
+                "message": "semantic worker unavailable",
+                "fallback": {
+                    "mode": "syntax_only",
+                    "certainty": "UNKNOWN"
+                }
+            })]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect_err("worker_error without EOS must fail");
+
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+
+        let error = parse_worker_output(
+            &ndjson(vec![
+                json!({
+                    "protocol_version": 1,
+                    "message_type": "worker_error",
+                    "request_id": REQUEST_ID,
+                    "error_code": "SEMANTIC_WORKER_UNAVAILABLE",
+                    "message": "semantic worker unavailable",
+                    "fallback": {
+                        "mode": "syntax_only",
+                        "certainty": "UNKNOWN"
+                    }
+                }),
+                valid_progress_message(),
+                valid_end_of_stream_message(),
+            ]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect_err("only EOS may follow worker_error");
+
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
     }
 
     #[test]

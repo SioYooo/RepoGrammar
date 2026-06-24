@@ -51,6 +51,7 @@ shell interpolation.
 
 ## Follow-up work
 
-Design and validate the TypeScript worker toolchain, version policy, package
-lockfile, generation/freshness matching, and semantic-fact storage before adding
-executable TypeScript compiler worker code or wiring worker facts into indexing.
+Design and validate the TypeScript worker toolchain, package lockfile, richer
+version policy, freshness metadata, and claim gates before adding executable
+TypeScript compiler worker code or allowing stored worker facts to support
+pattern-family claims.

@@ -50,9 +50,12 @@ repository files -> discovery/exclusion policy -> parser adapter -> code units -
 The current product path implements discovery, a dependency-free syntax-only
 parser adapter, code-unit metadata storage, and SQLite generation activation.
 The Rust-side TypeScript semantic-worker process boundary can validate NDJSON
-worker output into owned facts, but it is not wired into indexing yet.
-Tree-sitter, TypeScript compiler worker code, semantic-fact storage, IR storage,
-family mining, query execution, and MCP transport remain later boundaries.
+worker output into owned facts. `index` and `sync` can optionally run an
+explicit worker executable through `REPOGRAMMAR_TYPESCRIPT_WORKER` and record
+only facts that match the building generation's indexed code-unit evidence.
+Tree-sitter, TypeScript compiler worker code, freshness-validated semantic
+claims, IR storage, family mining, query execution, and MCP transport remain
+later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output. The
@@ -69,10 +72,12 @@ machine-level agent integration rather than repository-local index state.
 `src/rust/bin/repogrammar.rs` is the product composition root. It currently
 wires the CLI boundary, repository-lifecycle surface, TS/JS discovery,
 syntax-only parser adapter, filesystem source reader, and SQLite generation
-store for `index` and `sync`. Querying, MCP serving, semantic-fact indexing, and
-mining still return stable not-implemented or fallback outputs until those
-adapters are connected through application use cases. `src/rust/bin/repo_guard.rs`
-is a separate governance tool and must not be coupled to product runtime logic.
+store for `index` and `sync`, with optional semantic-worker ingestion when an
+explicit worker executable is configured. Querying, MCP serving, family-evidence
+claims, and mining still return stable not-implemented or fallback outputs until
+those adapters are connected through application use cases.
+`src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
+coupled to product runtime logic.
 
 ## External dependency boundaries
 

@@ -52,10 +52,18 @@ allowed.
   output, no-active-generation fallback, broken active-generation pointers,
   product runtime wiring, and absence of source snippets or absolute paths in CLI
   output and stored metadata.
+- Optional semantic-worker indexing tests must cover explicit opt-in wiring,
+  non-empty discovered-file request scope, deterministic fact recording through
+  the same-generation storage gate, syntax-only fallback for unavailable,
+  unsupported-version, timeout, crash, and protocol-violation worker results,
+  sanitized fallback warnings, and preservation of the previous active
+  generation when accepted worker output conflicts with indexed
+  path/hash/range evidence.
 - Protocol fixture tests must parse fixture lines as JSON before checking
-  message types, fallback payloads, evidence fields, and strict content-hash
-  formats. Semantic fact target tests must cover invalid blank targets,
-  accepted `null` targets, and accepted non-blank targets.
+  message types, fallback payloads, repository-relative evidence paths,
+  sanitized target/note text, evidence fields, and strict content-hash formats.
+  Semantic fact target tests must cover invalid blank targets, accepted `null`
+  targets, and accepted non-blank targets.
 - Semantic-worker request fixture tests must parse the stdin request as JSON and
   reject wrong protocol versions, missing required fields, non-object payloads,
   non-absolute project roots, duplicate changed files, absolute paths,
@@ -67,8 +75,13 @@ allowed.
   output, invalid request paths, unrequested fact paths, and relative executable
   rejection. They must also cover inherited-pipe timeout handling, unsupported
   field-name redaction, invalid/symlink project roots, oversized request guards,
-  unsupported TypeScript versions with semantic certainty, sorted/deduplicated
-  request files, and rejected absolute-path or source-like free text.
+  worker-error output that omits `end_of_stream`, unsupported TypeScript
+  versions with semantic certainty, sorted/deduplicated request files, and
+  rejected absolute-path or source-like free text.
+- TypeScript worker executable tests must run the dependency-free worker stub
+  through Node, validate parseable NDJSON `worker_error` plus `end_of_stream`
+  output for valid requests, reject malformed requests, and prove request paths
+  are not echoed in errors.
 - Experimental Python dogfooding tests, once added, must be opt-in and must
   assert experimental support level plus typed `UNKNOWN` for dynamic imports,
   monkey patching, pytest fixture injection, runtime dependency injection,
@@ -97,5 +110,8 @@ migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
 status/doctor reporting, active syntax-only `files`/`units` read paths, product
-runtime wiring, installer dry-run parsing, and
+runtime wiring, optional semantic-worker fact ingestion through the
+same-generation storage gate, sanitized worker fallback during indexing,
+dependency-free TypeScript worker unavailable-stub behavior,
+installer dry-run parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

@@ -18,6 +18,10 @@
   fact messages into RepoGrammar-owned semantic facts, and sanitizes
   unavailable, unsupported-version, crash, timeout, and protocol-violation
   failures.
+- Dependency-free TypeScript worker executable stub that validates the v1 stdin
+  request contract and emits sanitized NDJSON `worker_error` plus
+  `end_of_stream` fallback output when compiler-backed semantic analysis is
+  unavailable.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.
@@ -47,6 +51,11 @@
   metadata and structural code-unit records in a new SQLite generation, validates
   it, and atomically activates `.repogrammar/current-generation` without claiming
   semantic-worker-derived facts, mining, query, or family evidence.
+- Opt-in semantic-worker fact ingestion for `index` and `sync` when
+  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable. Accepted
+  facts are recorded only through the same-generation code-unit path/hash/range
+  storage gate; worker fallback remains syntax-only, and stale or mismatched
+  semantic evidence aborts the new generation.
 - Active `files` and `units` read paths that return repo-relative syntax-only
   indexed-file metadata and code-unit records from the validated active
   generation without source snippets, absolute paths, semantic facts, mining, or
@@ -87,6 +96,9 @@
   claiming a running TypeScript worker or runtime indexing integration.
 - Documented request-side semantic-worker fixture validation without claiming a
   bundled Node or TypeScript compiler worker.
+- Documented that the checked-in TypeScript worker is an unavailable fallback
+  stub, not compiler-backed TypeScript analysis, and added its Node smoke test
+  to CI.
 - Aligned semantic-worker schemas with fixture validation by rejecting blank
   string `target` values.
 - Documented `repo-guard` required-document coverage for ADR-0008.
@@ -98,8 +110,10 @@
   conservative lock/log handling.
 - Documented that discovery-to-storage syntax-only code-unit generations and
   Rust-side semantic-worker process validation are implemented while TypeScript
-  compiler worker execution, semantic-fact indexing, pattern-family query
-  execution, and family evidence remain deferred.
+  compiler worker execution, pattern-family query execution, and family
+  evidence remain deferred.
+- Documented default `semantic_worker: deferred` index/sync behavior plus
+  explicit-worker fallback statuses and `semantic_facts` reporting.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.
 - Documented `serde_json` as a production dependency for runtime
@@ -108,6 +122,11 @@
   canonical project roots, request size limits, inherited-pipe timeout handling,
   unsupported semantic TypeScript versions, sorted/deduplicated changed-file
   requests, field-name redaction, and source/path-like text rejection.
+- Hardened semantic-worker protocol validation so worker errors must still close
+  with `end_of_stream`, evidence paths are schema-constrained to repo-relative
+  forms, fixture validation rejects unsafe evidence paths and source-like text,
+  and the worker stub rejects Windows drive-prefix changed-file paths without
+  echoing request data.
 - Bumped the pre-release storage schema to version 2 for semantic-fact/evidence
   constraints; stale schema 1 generation databases must be rebuilt rather than
   silently treated as compatible.

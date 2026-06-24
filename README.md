@@ -18,20 +18,23 @@ This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
 discovery, syntax-only code-unit extraction, SQLite generation-storage wiring,
-and repository guard checks.
+a dependency-free TypeScript worker unavailable stub, and repository guard
+checks.
 
 It does not yet implement pattern mining, TypeScript compiler analysis, query
 execution, or a working MCP server. The Rust-side TypeScript semantic-worker
 adapter can execute a configured process, send the v1 request payload, and
-validate NDJSON v1 facts, but `index` and `sync` do not launch that worker or
-store semantic facts yet. The storage layer can persist already-validated
-semantic facts with repo-relative evidence for a building generation, but no
-current command produces those rows.
+validate NDJSON v1 facts. A checked-in worker stub can validate stdin and report
+semantic analysis as unavailable. `index` and `sync` do not launch a worker by
+default; when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, they
+may run that worker and store only facts that pass the building generation's
+path/hash/range evidence gate. Stored semantic facts are not yet
+freshness-validated family evidence and do not enable query or MCP claims.
 `init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
 metadata plus syntax-only `code_units` records: repo-relative path, language,
 kind, byte range, and strict content hash. They do not store source snippets,
-absolute paths, semantic facts, families, or evidence. `files` and `units` can
+absolute paths, families, or pattern-family evidence. `files` and `units` can
 read the active syntax-only generation for inventory/debugging, but they do not
 return pattern-family evidence. `status` and `doctor` can distinguish
 file-manifest-only generations from syntax-only code-unit generations. Commands
@@ -98,7 +101,7 @@ to active syntax-only index metadata.
 | Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
 | Python | Planned second official language; pre-v0.2 work is experimental dogfooding only | Experimental FastAPI, pytest, SQLAlchemy, and Pydantic validation until a focused v0.2 adapter is accepted |
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
-| Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; compiler worker execution is not wired into indexing | Language-native semantic workers provide compiler/API facts |
+| Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable and store only same-generation validated facts; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, active files/units read path, validated semantic-fact/evidence write substrate, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic workers, family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
@@ -169,7 +172,7 @@ workers under `src/`:
 
 ```text
 src/rust: Rust core, analysis engine, CLI, MCP, storage, repository guard
-src/workers: future language-native semantic workers
+src/workers: language-native semantic worker entries and future compiler integrations
 src/protocol: versioned worker protocol documents and schemas
 ```
 
@@ -191,9 +194,10 @@ The next implementation phase should refine one boundary at a time from the
 v0.1 parallel development plan:
 
 - keep syntax-only code units structural and non-semantic;
-- keep TypeScript compiler worker source, semantic-fact indexing from commands,
-  mining, pattern-family query execution, and MCP transport deferred until
-  parser output, storage, and semantic-worker boundaries are validated together.
+- keep TypeScript compiler API integration, freshness-validated semantic
+  claims, mining, pattern-family query execution, and MCP transport deferred
+  until parser output, storage, and semantic-worker boundaries are validated
+  together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 
@@ -207,6 +211,7 @@ Requirements:
 
 - Rust stable toolchain from [rust-toolchain.toml](rust-toolchain.toml)
 - Cargo with rustfmt and clippy components
+- Node.js for the dependency-free TypeScript worker stub smoke test
 - Git for diff-based repository guard checks
 
 Required verification:
@@ -215,6 +220,7 @@ Required verification:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+node src/workers/typescript/worker.test.js
 cargo run --quiet --bin repo-guard -- check
 ```
 

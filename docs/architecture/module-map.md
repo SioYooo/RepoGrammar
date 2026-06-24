@@ -22,7 +22,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/bin/repo_guard.rs` | Repository governance CLI | `docs/development/repository-guard.md` |
 | `src/rust/test_support/` | Shared deterministic Rust test helpers | `docs/development/testing.md` |
 | `src/rust/integration_tests/` | Crate-level Rust integration-style tests | `docs/development/testing.md` |
-| `src/workers/typescript/` | Future TypeScript semantic worker | `docs/specifications/semantic-workers.md` |
+| `src/workers/typescript/` | TypeScript semantic worker executable stub and future compiler-backed worker | `docs/specifications/semantic-workers.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
 | `src/fixtures/typescript/` | TypeScript source fixtures | `docs/development/testing.md` |
 

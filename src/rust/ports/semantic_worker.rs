@@ -149,6 +149,24 @@ mod tests {
     }
 
     #[test]
+    fn schemas_require_repo_relative_evidence_paths() {
+        let message_schema: Value = serde_json::from_str(include_str!(
+            "../../protocol/semantic-worker-message.schema.json"
+        ))
+        .expect("message schema must parse as JSON");
+        assert_evidence_path_schema_is_repo_relative(
+            &message_schema["$defs"]["evidence"]["properties"]["path"],
+        );
+
+        let fact_schema: Value =
+            serde_json::from_str(include_str!("../../protocol/semantic-worker.schema.json"))
+                .expect("fact schema must parse as JSON");
+        assert_evidence_path_schema_is_repo_relative(
+            &fact_schema["properties"]["evidence"]["properties"]["path"],
+        );
+    }
+
+    #[test]
     fn semantic_worker_request_fixture_matches_rust_stdin_contract() {
         let request: Value = serde_json::from_str(include_str!(
             "../../protocol/fixtures/typescript-worker-request.json"
@@ -268,6 +286,11 @@ mod tests {
             },
             {
                 let mut request = valid_worker_request();
+                request["changed_files"] = json!(["C:tmp/source.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
                 request["changed_files"] = json!(["C:/tmp/source.ts"]);
                 request
             },
@@ -327,6 +350,60 @@ mod tests {
         let error = validate_protocol_fixture(&fixture).expect_err("content hash must be rejected");
 
         assert!(error.contains("content_hash"));
+    }
+
+    #[test]
+    fn protocol_fixture_validation_rejects_unsafe_paths_and_text() {
+        for bad_path in [
+            "/tmp/source.ts",
+            "file:///tmp/source.ts",
+            "src\\source.ts",
+            "../source.ts",
+            "src/../source.ts",
+            "C:tmp/source.ts",
+        ] {
+            let mut fact = valid_fact_message();
+            fact["evidence"]["path"] = json!(bad_path);
+            let fixture = fixture_content(vec![fact, valid_end_of_stream_message()]);
+
+            let error = validate_protocol_fixture(&fixture)
+                .expect_err("unsafe evidence path must be rejected");
+
+            assert!(error.contains("path"), "unexpected error: {error}");
+        }
+
+        for target in [
+            "/tmp/source.ts#Symbol",
+            "file:///tmp/source.ts#Symbol",
+            "const secret = true;",
+            "const secret = true",
+        ] {
+            let mut fact = valid_fact_message();
+            fact["target"] = json!(target);
+            let fixture = fixture_content(vec![fact, valid_end_of_stream_message()]);
+
+            let error =
+                validate_protocol_fixture(&fixture).expect_err("unsafe target must be rejected");
+
+            assert!(error.contains("target"), "unexpected error: {error}");
+        }
+
+        for note in [
+            "/tmp/source.ts",
+            "file:///tmp/source.ts",
+            "const secret = true;",
+            "const secret = true",
+            "import secret from 'secret'",
+        ] {
+            let mut fact = valid_fact_message();
+            fact["evidence"]["note"] = json!(note);
+            let fixture = fixture_content(vec![fact, valid_end_of_stream_message()]);
+
+            let error =
+                validate_protocol_fixture(&fixture).expect_err("unsafe note must be rejected");
+
+            assert!(error.contains("note"), "unexpected error: {error}");
+        }
     }
 
     #[test]
@@ -512,6 +589,35 @@ mod tests {
         bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
     }
 
+    fn validate_protocol_text(value: &str, field: &str) -> Result<(), String> {
+        if value.contains('\0')
+            || value.contains('\n')
+            || value.contains('\r')
+            || value.contains("://")
+            || value.split_whitespace().any(|token| {
+                Path::new(token).is_absolute() || looks_like_windows_absolute_path(token)
+            })
+            || looks_like_source_snippet(value)
+        {
+            Err(format!("{field} contains unsupported content"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn looks_like_source_snippet(value: &str) -> bool {
+        let trimmed = value.trim_start();
+        value.contains("=>")
+            || (value.contains('=') && value.contains(';'))
+            || value.contains('{')
+            || value.contains('}')
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("let ")
+            || trimmed.starts_with("var ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("export ")
+    }
+
     fn validate_fact_message(object: &Map<String, Value>) -> Result<(), String> {
         validate_required_fields(
             object,
@@ -534,7 +640,9 @@ mod tests {
         if let Some(target) = object.get("target") {
             match target {
                 Value::Null => {}
-                Value::String(value) if !value.trim().is_empty() => {}
+                Value::String(value) if !value.trim().is_empty() => {
+                    validate_protocol_text(value, "target")?
+                }
                 Value::String(_) => return Err("target must not be empty".to_string()),
                 _ => return Err("target must be a string or null when present".to_string()),
             }
@@ -636,11 +744,12 @@ mod tests {
         )?;
 
         required_string(evidence, "code_unit_id")?;
-        required_string(evidence, "path")?;
+        validate_request_changed_file(required_string(evidence, "path")?)
+            .map_err(|error| format!("path {error}"))?;
         ContentHash::new(required_string(evidence, "content_hash")?)
             .map_err(|error| format!("invalid content_hash: {error}"))?;
         required_string(evidence, "repository_revision")?;
-        required_string(evidence, "note")?;
+        validate_protocol_text(required_string(evidence, "note")?, "note")?;
 
         let start_byte = required_u64(evidence, "start_byte")?;
         let end_byte = required_u64(evidence, "end_byte")?;
@@ -677,6 +786,18 @@ mod tests {
         assert!(alternatives
             .iter()
             .any(|alternative| alternative["type"] == "null"));
+    }
+
+    fn assert_evidence_path_schema_is_repo_relative(path_schema: &Value) {
+        let pattern = path_schema["pattern"]
+            .as_str()
+            .expect("path schema must define a path-safety pattern");
+        for fragment in ["(?!/)", "(?![A-Za-z]:)", "\\.\\.", ".*\\\\", "://"] {
+            assert!(
+                pattern.contains(fragment),
+                "evidence path pattern should constrain {fragment}"
+            );
+        }
     }
 
     fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {

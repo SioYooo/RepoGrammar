@@ -20,6 +20,7 @@ pub struct CliIndexRequest {
     pub repository_root: String,
     pub state_dir_override: Option<String>,
     pub max_file_bytes: u64,
+    pub semantic_worker_executable: Option<String>,
 }
 
 pub trait CliRuntime {
@@ -637,6 +638,8 @@ where
         repository_root: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
         max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+        semantic_worker_executable: env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER")
+            .filter(|value| !value.trim().is_empty()),
     };
 
     match runtime.index_repository(command, request) {
@@ -1121,12 +1124,14 @@ fn index_outcome_human(
     options: &LifecycleOptions,
 ) -> String {
     let mut output = format!(
-        "{command}: syntax-only code units stored\nactive_generation: {}\ndiscovered_files: {}\nstored_files: {}\nskipped_paths: {}\nindexed_units: {}\nindexing: syntax_only_code_units\nparser: syntax_only\nsemantic_worker: deferred\nmining: deferred\nprogress: {}\n",
+        "{command}: syntax-only code units stored\nactive_generation: {}\ndiscovered_files: {}\nstored_files: {}\nskipped_paths: {}\nindexed_units: {}\nsemantic_facts: {}\nindexing: syntax_only_code_units\nparser: syntax_only\nsemantic_worker: {}\nmining: deferred\nprogress: {}\n",
         outcome.active_generation.as_deref().unwrap_or("none"),
         outcome.discovered_files,
         outcome.discovered_files,
         outcome.skipped_paths,
         outcome.indexed_units,
+        outcome.semantic_facts,
+        outcome.semantic_worker.as_str(),
         options.progress.as_str()
     );
     for warning in &outcome.warnings {
@@ -1143,13 +1148,15 @@ fn index_outcome_json(
     options: &LifecycleOptions,
 ) -> String {
     format!(
-        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":{},\"indexing\":\"syntax_only_code_units\",\"parser\":\"syntax_only\",\"semantic_worker\":\"deferred\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
+        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":{},\"semantic_facts\":{},\"indexing\":\"syntax_only_code_units\",\"parser\":\"syntax_only\",\"semantic_worker\":\"{}\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
         json_string(command),
         optional_json_string(outcome.active_generation.as_deref()),
         outcome.discovered_files,
         outcome.discovered_files,
         outcome.skipped_paths,
         outcome.indexed_units,
+        outcome.semantic_facts,
+        outcome.semantic_worker.as_str(),
         options.progress.as_str(),
         json_array(&outcome.warnings)
     )
@@ -1531,6 +1538,80 @@ mod tests {
         }
     }
 
+    struct SemanticWorkerEnvRuntime;
+
+    impl CliRuntime for SemanticWorkerEnvRuntime {
+        fn index_repository(
+            &self,
+            command: &str,
+            request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            assert!(matches!(command, "index" | "sync"));
+            assert_eq!(
+                request.semantic_worker_executable.as_deref(),
+                Some("/opt/repogrammar/typescript-worker")
+            );
+            Ok(IndexingOutcome {
+                indexed_units: 1,
+                semantic_facts: 2,
+                discovered_files: 1,
+                skipped_paths: 0,
+                active_generation: Some("gen-000001".to_string()),
+                semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Complete,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("index command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("index command should not request doctor through CLI test runtime")
+        }
+    }
+
+    struct BlankSemanticWorkerEnvRuntime;
+
+    impl CliRuntime for BlankSemanticWorkerEnvRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            assert_eq!(request.semantic_worker_executable, None);
+            Ok(IndexingOutcome {
+                indexed_units: 1,
+                semantic_facts: 0,
+                discovered_files: 1,
+                skipped_paths: 0,
+                active_generation: Some("gen-000001".to_string()),
+                semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("index command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("index command should not request doctor through CLI test runtime")
+        }
+    }
+
     impl CliRuntime for TestRuntime {
         fn index_repository(
             &self,
@@ -1668,6 +1749,68 @@ mod tests {
             assert!(output.stderr.contains("not implemented yet"));
             assert!(output.stdout.is_empty());
         }
+    }
+
+    #[test]
+    fn index_request_passes_optional_semantic_worker_env_to_runtime() {
+        let workspace = TempWorkspace::new("cli-semantic-worker-env");
+        let env = |key: &str| {
+            (key == "REPOGRAMMAR_TYPESCRIPT_WORKER")
+                .then(|| "/opt/repogrammar/typescript-worker".to_string())
+        };
+        let output = run_with_context_and_runtime(
+            ["index", "--json"],
+            workspace.path(),
+            &env,
+            &SemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["semantic_worker"], "complete");
+        assert_eq!(value["semantic_facts"], 2);
+        assert_eq!(value["mining"], "deferred");
+    }
+
+    #[test]
+    fn sync_request_passes_optional_semantic_worker_env_to_runtime() {
+        let workspace = TempWorkspace::new("cli-sync-semantic-worker-env");
+        let env = |key: &str| {
+            (key == "REPOGRAMMAR_TYPESCRIPT_WORKER")
+                .then(|| "/opt/repogrammar/typescript-worker".to_string())
+        };
+        let output = run_with_context_and_runtime(
+            ["sync", "--json"],
+            workspace.path(),
+            &env,
+            &SemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
+        assert_eq!(value["command"], "sync");
+        assert_eq!(value["semantic_worker"], "complete");
+        assert_eq!(value["semantic_facts"], 2);
+    }
+
+    #[test]
+    fn blank_semantic_worker_env_is_not_configured() {
+        let workspace = TempWorkspace::new("cli-blank-semantic-worker-env");
+        let env = |key: &str| (key == "REPOGRAMMAR_TYPESCRIPT_WORKER").then(String::new);
+        let output = run_with_context_and_runtime(
+            ["index", "--json"],
+            workspace.path(),
+            &env,
+            &BlankSemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["semantic_worker"], "deferred");
+        assert_eq!(value["semantic_facts"], 0);
     }
 
     #[test]

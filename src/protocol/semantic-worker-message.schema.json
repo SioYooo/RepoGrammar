@@ -63,7 +63,11 @@
       ],
       "properties": {
         "code_unit_id": { "type": "string", "minLength": 1 },
-        "path": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*\\\\)(?!.*://).+$"
+        },
         "content_hash": {
           "type": "string",
           "pattern": "^sha256:[A-Fa-f0-9]{64}$"

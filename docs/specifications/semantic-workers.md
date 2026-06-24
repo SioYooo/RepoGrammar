@@ -39,8 +39,13 @@ Version policy:
 - TypeScript 7.1 or later should be evaluated when stable programmatic APIs are
   available.
 
-The bootstrap does not include executable TypeScript worker code because local
-TypeScript tooling is not yet validated.
+The bootstrap includes a dependency-free executable TypeScript worker stub under
+`src/workers/typescript/`. That stub validates the Rust-to-worker v1 request
+shape and returns typed `SEMANTIC_WORKER_UNAVAILABLE` or
+`SEMANTIC_PROTOCOL_VIOLATION` NDJSON fallback messages. It does not run the
+TypeScript compiler, inspect source files, or emit semantic facts. Compiler API
+integration remains deferred until local TypeScript tooling and package-manager
+lockfiles are validated.
 
 ## Python worker strategy
 
@@ -82,6 +87,10 @@ The v1 NDJSON envelope supports these message types:
 - `worker_error`
 - `end_of_stream`
 
+`worker_error` is terminal for semantic analysis but not exempt from stream
+validation: it must still be followed by `end_of_stream`, and no `fact` or
+`progress` message may appear after it.
+
 Fact messages use stable protocol tokens for fact kinds and certainty values.
 Evidence must carry a core-mappable code unit id, repository-relative path,
 strict SHA-256 content hash, repository revision, byte range, and note. Worker
@@ -98,8 +107,9 @@ Fixtures and tests must reject placeholder hashes such as `sha256:fixture` and
 must not treat non-SHA-256 strings as auditable provenance.
 
 Protocol fixture tests must parse each NDJSON fixture line as JSON before
-asserting message type, protocol version, evidence content hash, progress work
-payloads, unsupported-version fallback payloads, and end-of-stream messages.
+asserting message type, protocol version, repository-relative evidence paths,
+evidence content hash, sanitized target/note text, progress work payloads,
+unsupported-version fallback payloads, and end-of-stream messages.
 These tests validate the fixture contract only. The Rust-side TypeScript
 semantic-worker adapter also validates runtime worker stdout line by line before
 translating fact messages into RepoGrammar-owned `SemanticFact` values. It must
@@ -123,11 +133,24 @@ or unknown fallback.
 When a request provides changed file paths, the adapter must reject facts whose
 evidence path was not requested. Runtime fact text fields must reject obvious
 absolute paths, URI schemes, NUL/newline payloads, and source-like snippets
-until source-retention policy is defined. Future indexing integration must
-pass worker facts through the storage gate that matches evidence against the
-building generation manifest, content hashes, and code-unit ranges before using
-those facts for claims. Current `index` and `sync` commands still do not launch
-the worker or store worker-produced facts.
+until source-retention policy is defined.
+
+`index` and `sync` do not launch a semantic worker by default. If
+`REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, the current
+indexing path sends the discovered repo-relative TS/JS file set to that worker
+after syntax-only code units are recorded for the building generation. Returned
+facts are sorted deterministically, translated into RepoGrammar-owned storage
+records, and written only through the storage gate that matches evidence against
+the building generation manifest, content hashes, and code-unit ranges.
+Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and
+protocol violations produce syntax-only fallback statuses and sanitized
+warnings. A worker fact that passes protocol parsing but does not match the
+building generation's indexed path, hash, or code-unit range aborts the new
+generation instead of becoming stale or partial semantic evidence.
+
+Recorded semantic facts are not pattern-family evidence by themselves. Query,
+MCP, conformance, and family membership claims remain deferred until freshness,
+family-evidence read paths, and claim builders are implemented.
 
 ## Certainty
 
@@ -161,12 +184,16 @@ semantic family membership.
 
 The bootstrap now pins semantic worker protocol version `1`, defines stable
 Rust mappings for fact-kind and certainty tokens, includes request and output
-schemas plus JSON-parsed request/NDJSON fixture tests, and has a Rust-side
+schemas plus JSON-parsed request/NDJSON fixture tests, has a Rust-side
 TypeScript process adapter that can send request JSON over stdin, enforce a
 timeout, validate NDJSON stdout, map sanitized worker errors, and translate fact
-messages into RepoGrammar-owned semantic facts.
+messages into RepoGrammar-owned semantic facts, and includes a no-dependency
+Node worker stub that reports semantic analysis as unavailable without echoing
+source paths. `index` and `sync` can optionally execute a configured worker via
+`REPOGRAMMAR_TYPESCRIPT_WORKER`; default indexing still reports
+`semantic_worker: deferred`.
 
-It still does not bundle a Node or TypeScript compiler worker, run TypeScript
-compiler APIs, store semantic facts, match worker facts against an active
-generation manifest, or parse worker JSON during the current syntax-only
-`index`/`sync` slice.
+It still does not bundle a TypeScript compiler dependency, run TypeScript
+compiler APIs, use worker facts for family claims, expose semantic facts through
+query/MCP commands, or treat stored semantic facts as freshness-validated
+pattern-family evidence.

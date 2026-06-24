@@ -129,9 +129,13 @@ and byte ranges before returning records.
 The storage port and SQLite adapter can persist semantic facts together with
 repo-relative evidence rows for a building generation, but only when the fact is
 already validated against an indexed code unit, matching content hash, and byte
-range in that same generation. This is a storage substrate for future semantic
-worker integration; the current `index` and `sync` commands do not launch a
-worker or record semantic facts.
+range in that same generation. The current `index` and `sync` commands still
+run syntax-only by default, but when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
+explicit worker executable they may record worker-produced facts through this
+same-generation gate. Worker unavailable, unsupported-version, timeout, crash,
+or protocol-violation results fall back to syntax-only indexing with sanitized
+warnings; evidence that conflicts with the building generation's indexed
+path/hash/range aborts the new generation.
 
 ## File Discovery Exclusions
 
@@ -154,7 +158,9 @@ reasons, and `index`/`sync` store the discovered file manifest in a
 generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
-families, and semantic-worker-produced facts are not stored by `index`/`sync`.
+families, and pattern-family evidence are not stored by `index`/`sync`.
+Semantic-worker-produced facts are stored only when an explicit worker is
+configured and the facts pass same-generation evidence validation.
 The active indexed-file and code-unit rows are exposed only through the limited
 `files`/`units` read path and must not be treated as family evidence. Active
 `units` reads must revalidate stored code-unit ids against their repo-relative
