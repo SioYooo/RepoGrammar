@@ -8,14 +8,14 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/core/mining/` | Normalization, fingerprinting, candidate discovery, alignment, anti-unification, clustering, representative selection boundaries | `docs/specifications/indexing-pipeline.md` |
 | `src/rust/core/policy/` | Compatibility, abstention, and freshness policy | `docs/specifications/domain-model.md`, `docs/specifications/product.md` |
 | `src/rust/ports/` | Traits for parser, semantic worker, family store, source store, and telemetry | `docs/architecture/dependency-rules.md`, related specifications |
-| `src/rust/application/` | Indexing, query, and conformance use-case boundaries | `docs/architecture/overview.md`, this file |
+| `src/rust/application/` | Indexing, query, conformance, install planning, progress, repository lifecycle, telemetry, and metrics use-case boundaries | `docs/architecture/overview.md`, this file, relevant specifications |
 | `src/rust/adapters/parsing/` | Tree-sitter parser boundary | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/semantic_workers/` | Rust-side process boundary for language-native semantic workers | `docs/specifications/semantic-workers.md`, `docs/decisions/ADR-0004-rust-core-language-native-workers.md` |
 | `src/rust/adapters/frameworks/` | Express, NestJS, React, Jest, and Vitest recognition boundaries | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/persistence/` | SQLite storage boundary | `docs/specifications/storage.md`, `docs/decisions/ADR-0002-local-sqlite-index.md` |
 | `src/rust/adapters/telemetry/` | Local diagnostic event sink boundary | `docs/architecture/overview.md` |
-| `src/rust/interfaces/cli/` | CLI argument and output boundary | `README.md`, `docs/development/agent-workflow.md` |
+| `src/rust/interfaces/cli/` | Pattern-family-first CLI argument and output boundary | `README.md`, `docs/specifications/cli.md` |
 | `src/rust/interfaces/mcp/` | Transport-neutral MCP tool boundary | `docs/specifications/mcp-api.md` |
 | `src/rust/bin/repogrammar.rs` | Product composition root | `README.md`, CLI documentation |
 | `src/rust/bin/repo_guard.rs` | Repository governance CLI | `docs/development/repository-guard.md` |

@@ -17,6 +17,10 @@ or similarity search results. A result should be able to describe:
 - source evidence for every conclusion;
 - `UNKNOWN` when static analysis cannot support a claim.
 
+The CLI and MCP surfaces must preserve this identity. Human-facing commands are
+organized around implementation-pattern families, not generic symbol graph
+navigation.
+
 ## Intended users
 
 - Local coding agents preparing implementation changes.
@@ -44,6 +48,8 @@ language-adapter abstraction.
 - No cloud service dependency.
 - No local LLM, embedding model, vector database, or remote API.
 - No automatic modification of user business code from pattern-family results.
+- No top-level v0.1 `callers`, `callees`, `impact`, `affected`, `node`, or
+  `explore` commands.
 - No production-readiness or token-savings claims until measured evidence
   exists.
 
@@ -56,3 +62,13 @@ runtime behavior must lead to abstention rather than certainty.
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Compiler-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints.
+
+## Installation and telemetry boundaries
+
+Machine-level `install` and `uninstall` are separate from repository-level
+`init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
+dry-run friendly.
+
+Anonymous telemetry and research trace collection are separate consent
+decisions. Context compression metrics are not actual token savings unless a
+comparable baseline and treatment token measurement exist.

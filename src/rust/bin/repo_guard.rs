@@ -7,12 +7,15 @@ use std::process::Command;
 
 const ROOT_GUIDES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 const REQUIRED_SKILLS: &[&str] = &[
+    "agent-integration",
     "implement-change",
     "documentation-sync",
     "rust-quality",
     "major-feature-workflow",
     "repogrammar-domain",
+    "repogrammar-cli",
     "mcp-contract-change",
+    "telemetry-and-metrics",
 ];
 const REQUIRED_DOCUMENTS: &[&str] = &[
     "AGENTS.md",
@@ -23,10 +26,15 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/architecture/overview.md",
     "docs/architecture/dependency-rules.md",
     "docs/architecture/module-map.md",
+    "docs/specifications/cli.md",
+    "docs/specifications/installation.md",
+    "docs/specifications/initialization-progress.md",
     "docs/specifications/product.md",
     "docs/specifications/domain-model.md",
     "docs/specifications/indexing-pipeline.md",
+    "docs/specifications/metrics.md",
     "docs/specifications/storage.md",
+    "docs/specifications/telemetry.md",
     "docs/specifications/mcp-api.md",
     "docs/development/agent-workflow.md",
     "docs/development/branching-and-commits.md",
@@ -39,6 +47,8 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/decisions/ADR-0003-pattern-family-model.md",
     "docs/decisions/ADR-0004-rust-core-language-native-workers.md",
     "docs/decisions/ADR-0005-ts-js-first-mvp.md",
+    "docs/decisions/ADR-0006-pattern-family-cli.md",
+    "docs/decisions/ADR-0007-safe-install-progress-telemetry.md",
     "docs/roadmap.md",
     ".agents/memories/README.md",
     ".agents/memories/project-state.md",

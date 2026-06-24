@@ -29,6 +29,13 @@ Future schema work should keep separate tables for:
 Every indexed conclusion must be tied to a repository revision and content hash.
 Freshness checks must reject or mark stale evidence when file content changes.
 
+## Index generations
+
+Repository initialization and indexing must build a new index generation without
+overwriting the previous valid index. The new generation becomes active only
+after persistence validation succeeds. Cancellation or failure must preserve the
+previous valid generation.
+
 ## Migration strategy
 
 Migration execution logic belongs under `src/rust/adapters/persistence/`. Migrations

@@ -27,7 +27,9 @@ bin --wires together--> interfaces + application + adapters
   on Tree-sitter, SQLite, MCP, CLI, filesystem, network, or process concerns.
 - `src/rust/ports`: traits for external capabilities. Ports can depend on `core` but
   cannot expose third-party parser, database, or transport types.
-- `src/rust/application`: use-case orchestration for indexing, query, and conformance.
+- `src/rust/application`: use-case orchestration for indexing, query,
+  conformance, installation planning, progress, repository lifecycle, metrics,
+  and telemetry policy.
   It depends on `core` and `ports`.
 - `src/rust/interfaces`: CLI and MCP input/output boundaries. It delegates to
   application use cases and does not own pattern-family logic.
@@ -47,6 +49,8 @@ repository files -> Tree-sitter syntax adapter -> language-native semantic worke
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output.
+Installer flows stay separate from repository indexing flows because they modify
+machine-level agent integration rather than repository-local index state.
 
 ## Composition root
 

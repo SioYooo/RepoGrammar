@@ -11,6 +11,10 @@
   placeholder.
 - TypeScript/JavaScript-first MVP language policy with Python deferred to a
   focused second-language phase.
+- Pattern-family-first CLI command surface, with CodeGraph-style graph commands
+  rejected as top-level v0.1 commands.
+- Safe contracts for agent installation, initialization progress, metrics, and
+  telemetry consent.
 - Mirrored `AGENTS.md` and `CLAUDE.md` governance contract.
 - Documentation system covering architecture, specifications, development
   workflow, ADRs, roadmap, skills, and memories.

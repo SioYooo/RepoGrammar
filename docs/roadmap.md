@@ -5,6 +5,7 @@
 - Repository governance and mirrored agent contract.
 - Rust package skeleton.
 - Semantic worker boundary and TypeScript worker protocol placeholder.
+- Pattern-family-first CLI command surface and safe command-contract parsing.
 - Core domain type placeholders.
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
@@ -18,6 +19,15 @@
 - Define the TypeScript semantic worker protocol tests and version policy.
 - Convert parser AST into RepoGrammar-owned unified IR.
 - Add deterministic fixture coverage under `src/fixtures/`.
+
+## Command implementation path
+
+- Implement repository-local initialization generations and locking.
+- Implement `find`, `family`, `explain`, and `check` against real stored
+  pattern-family evidence.
+- Implement read-only `serve` for MCP.
+- Implement safe installer writes only after native agent detection, backups,
+  receipts, and MCP self-tests are validated.
 
 ## v0.1 language scope
 

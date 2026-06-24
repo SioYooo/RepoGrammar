@@ -47,6 +47,8 @@
 - Mark unresolved static-analysis facts as `UNKNOWN`; do not convert heuristics into certainty.
 - Treat Tree-sitter as a syntax and candidate-generation layer, not as the sole semantic oracle. Structural similarity alone must not prove semantic family membership.
 - RepoGrammar v0.1 official language scope is TypeScript/JavaScript only. Python is planned second and must be marked experimental until a focused v0.2 adapter is accepted.
+- Keep the CLI pattern-family-first. Do not add `callers`, `callees`, `impact`, `affected`, `node`, or `explore` as top-level v0.1 commands.
+- Do not impose RepoGrammar's mirrored `AGENTS.md`/`CLAUDE.md` policy on repositories that consume RepoGrammar.
 - Do not add a production dependency without demonstrated need and an accompanying architecture or decision update.
 
 ## Completion

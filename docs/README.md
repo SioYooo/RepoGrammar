@@ -23,10 +23,15 @@ context lives under `.agents/memories/`.
 - Module dependencies: `architecture/dependency-rules.md`.
 - Module ownership: `architecture/module-map.md`.
 - Product boundaries: `specifications/product.md`.
+- CLI surface: `specifications/cli.md`.
+- Agent installation: `specifications/installation.md`.
+- Initialization progress: `specifications/initialization-progress.md`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - Indexing pipeline: `specifications/indexing-pipeline.md`.
 - Storage boundaries: `specifications/storage.md`.
 - MCP tool intent: `specifications/mcp-api.md`.
+- Metrics taxonomy: `specifications/metrics.md`.
+- Telemetry policy: `specifications/telemetry.md`.
 - Language-native semantic workers: `specifications/semantic-workers.md`.
 - MVP language scope: `decisions/ADR-0005-ts-js-first-mvp.md`.
 - Quality gates: `development/repository-guard.md` and `development/testing.md`.
@@ -36,6 +41,13 @@ context lives under `.agents/memories/`.
 - Code change: read the mirrored root guide, this file, the relevant skill under
   `.agents/skills/`, the module map, and the specification for the touched
   area.
+- CLI surface change: read `specifications/cli.md` and
+  `.agents/skills/repogrammar-cli/SKILL.md`.
+- Installer change: read `specifications/installation.md` and
+  `.agents/skills/agent-integration/SKILL.md`.
+- Telemetry or metric change: read `specifications/telemetry.md`,
+  `specifications/metrics.md`, and
+  `.agents/skills/telemetry-and-metrics/SKILL.md`.
 - Documentation change: read `development/documentation-policy.md` and the
   canonical source for the affected topic.
 - MCP contract change: read `.agents/skills/mcp-contract-change/SKILL.md` and
