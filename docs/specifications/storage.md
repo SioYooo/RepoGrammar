@@ -88,7 +88,8 @@ diagnostic and lifecycle state.
 
 `repogrammar init` must not dirty the user's tracked working tree by default.
 On init, RepoGrammar must add these patterns to `.git/info/exclude` unless they
-are already present:
+are already present. Worktree-style `.git` files that point at a Git directory
+must be handled without writing tracked files:
 
 ```text
 .repogrammar/
@@ -109,7 +110,14 @@ RepoGrammar must also create `.repogrammar/.gitignore`:
 Root `.gitignore` may be modified only when the user passes
 `repogrammar init --write-gitignore` or confirms an interactive prompt. If
 RepoGrammar modifies root `.gitignore`, it must use a small marker-fenced
-section and avoid duplicate entries.
+section and avoid duplicate entries. An incomplete RepoGrammar marker section
+must be refused rather than repaired silently.
+
+The bootstrap `init` implementation creates the lifecycle directories,
+`.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`, but it
+does not create SQLite databases, active generations, telemetry queues, or real
+index metadata. Bootstrap `status` and `doctor` must report storage and indexing
+as `not_implemented` instead of `pass`.
 
 ## File Discovery Exclusions
 

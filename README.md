@@ -16,12 +16,15 @@ claim.
 
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
-pattern-family-first CLI boundary, and repository guard checks.
+pattern-family-first CLI boundary, repo-local lifecycle commands, and
+repository guard checks.
 
-It does not yet implement real pattern mining, indexing, storage migrations, or
-a working MCP server. Commands that would mutate repositories, install agent
-configuration, run indexing, or serve MCP return explicit not-implemented
-errors until those contracts are implemented and tested.
+It does not yet implement real pattern mining, indexing, SQLite storage
+migrations, or a working MCP server. `init`, `uninit`, `status`, `doctor`,
+`unlock`, and `logs` operate only on safe repo-local lifecycle state. Commands
+that install agent configuration, run indexing, sync indexes, or serve MCP
+return explicit not-implemented errors until those contracts are implemented
+and tested.
 
 ## Why RepoGrammar?
 
@@ -52,8 +55,9 @@ Use Cargo from the repository root:
 ```text
 cargo run --quiet --bin repogrammar -- version
 cargo run --quiet --bin repogrammar -- help
+cargo run --quiet --bin repogrammar -- init
 cargo run --quiet --bin repogrammar -- status
-cargo run --quiet --bin repogrammar -- doctor
+cargo run --quiet --bin repogrammar -- doctor --json
 ```
 
 Try the current pattern-family CLI boundary:
@@ -65,10 +69,11 @@ cargo run --quiet --bin repogrammar -- explain --project . --token-budget 8000 <
 cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <target>
 ```
 
-The command surface is intentionally present before the full engine exists so
-contracts, tests, and documentation can stabilize around pattern-family results.
-Query commands currently return explicit missing-index fallback guidance; with
-`--json`, that fallback is a structured object with `implemented: false`.
+The lifecycle surface is intentionally present before the full engine exists so
+repo-local state boundaries, command contracts, tests, and documentation can
+stabilize before indexing and mining begin. Query commands currently return
+explicit missing-index fallback guidance; with `--json`, that fallback is a
+structured object with `implemented: false`.
 
 ## Product Shape
 
@@ -79,7 +84,7 @@ Query commands currently return explicit missing-index fallback guidance; with
 | Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
 | Storage | SQLite and FTS5 are specified | Local evidence index with migrations and provenance |
-| State directory | Repo-local `.repogrammar/` is specified | One repository-derived SQLite index per project, not a global code-derived database |
+| State directory | Safe `.repogrammar/` lifecycle is implemented without indexing | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
 
@@ -107,10 +112,12 @@ The v0.1 CLI is organized around implementation-pattern families:
 
 ```text
 repogrammar init
+repogrammar uninit
 repogrammar index
 repogrammar sync
 repogrammar status
 repogrammar doctor
+repogrammar unlock
 repogrammar logs
 repogrammar find
 repogrammar families
@@ -162,14 +169,16 @@ The dependency direction and module ownership are documented in:
 
 ## Roadmap
 
-The next implementation phase is parser, semantic-worker, and IR design:
+The next implementation phase is file discovery and repository-local storage
+substrate:
 
-- implement TypeScript and JavaScript code-unit extraction;
-- define the TypeScript semantic worker protocol tests and version policy;
-- convert parser AST output into a RepoGrammar-owned unified IR;
-- add deterministic fixture coverage under `src/fixtures/`;
-- implement repository-local initialization, indexing, and sync only after their
-  storage and locking contracts are tested.
+- implement Git-aware TS/JS file discovery and skip reasons;
+- enforce `.repogrammar/` and `.repogrammar-*` discovery exclusions;
+- add content hashes and size-limit handling;
+- design SQLite migrations and generation activation before storing indexed
+  facts;
+- keep parser, semantic-worker execution, and mining deferred until lifecycle,
+  discovery, and storage boundaries are validated.
 
 See [docs/roadmap.md](docs/roadmap.md) for the staged plan.
 

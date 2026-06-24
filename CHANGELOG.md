@@ -22,6 +22,8 @@
   rejected as top-level v0.1 commands.
 - Safe contracts for agent installation, initialization progress, metrics, and
   telemetry consent.
+- Repo-local lifecycle implementation for `init`, `uninit`, `status`,
+  `doctor`, `unlock`, and `logs` without real indexing or SQLite storage.
 - Mirrored `AGENTS.md` and `CLAUDE.md` governance contract.
 - Documentation system covering architecture, specifications, development
   workflow, ADRs, roadmap, skills, and memories.
@@ -42,3 +44,6 @@
 - Documented progress `WorkUnits` constructor validation and CLI missing-index
   fallback/deferred implementation status, including structured `--json`
   fallback output for query commands.
+- Documented safe repo-local lifecycle behavior, including state directory
+  override validation, Git ignore hygiene, bootstrap manifest status, and
+  conservative lock/log handling.

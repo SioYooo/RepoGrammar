@@ -22,6 +22,11 @@ allowed.
 - CLI not-implemented behavior must be stable and asserted.
 - CLI missing-index fallback tests must cover both human-readable output and
   `--json` output for the query command surface.
+- Repo-local lifecycle tests must use temporary workspaces and cover init
+  layout, idempotent repair, Git exclude hygiene, optional root `.gitignore`
+  marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
+  human and JSON status/doctor output, corrupted manifests, missing subdirs,
+  `uninit --yes`, conservative unlock behavior, and redacted logs metadata.
 - Protocol fixture tests must parse fixture lines as JSON before checking
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
@@ -36,6 +41,7 @@ measurement taxonomy, semantic certainty behavior, protocol token mappings,
 strict content-hash validation, TypeScript worker version fallback, progress
 rendering and `WorkUnits` validation, schema coverage, JSON-parsed semantic
 worker fixture coverage, telemetry consent, transport-neutral MCP tool names,
-CLI command surface, missing-index fallback human/JSON output and deferred
-implementation status, installer dry-run parsing, and `repo-guard`
-sync/path/diff/ADR-0008 required document logic.
+CLI command surface, missing-index fallback human/JSON output, repo-local
+lifecycle init/status/doctor/uninit/unlock/logs safety behavior, installer
+dry-run parsing, and `repo-guard` sync/path/diff/ADR-0008 required document
+logic.

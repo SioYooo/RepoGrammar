@@ -85,6 +85,10 @@ default, or under `REPOGRAMMAR_DIR` when that environment variable is set. It
 must not modify tracked repository files by default. It must write
 `.repogrammar/` and `.repogrammar-*/` to `.git/info/exclude` when Git is
 available, and it must create `.repogrammar/.gitignore` as a second defense.
+`REPOGRAMMAR_DIR` is a repo-local directory-name override only; empty values,
+absolute paths, traversal, nested paths, symlink state directories, file
+conflicts, and names outside `.repogrammar` or `.repogrammar-*` must be
+rejected.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -94,17 +98,23 @@ confirmation, root `.gitignore` must remain untouched.
 command that may remove `.repogrammar/`; `repogrammar uninstall` must not remove
 project indexes. `uninit` must make logs deletion explicit.
 
-`repogrammar status` must report whether the repository is initialized, whether
-the active index is fresh, the active generation, schema version, journal mode,
-and relevant warning states.
+`repogrammar status` must support human and `--json` output. It must report
+whether the repository is initialized, manifest status, the active generation,
+schema version, journal mode, storage/indexing implementation status, missing
+subdirectories, and relevant warning states. During bootstrap, schema version is
+reported only for a valid bootstrap manifest and journal mode remains
+`not_implemented`.
 
-`repogrammar doctor` must check database integrity, schema version, journal
-mode, lock state, active generation consistency, Git hygiene, and state
-directory configuration.
+`repogrammar doctor` must support human and `--json` output. It must check
+manifest status, required lifecycle subdirectories, storage/indexing
+implementation status, lock state, Git hygiene, and state directory
+configuration. Once SQLite exists, it must also check database integrity,
+schema version, journal mode, and active generation consistency.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
-must require explicit confirmation.
+must require explicit confirmation. During bootstrap, unlock is inspection-only
+and must report known lock files without deleting them.
 
 `repogrammar logs` reads repo-local diagnostic logs. It supports:
 
@@ -113,7 +123,9 @@ must require explicit confirmation.
 - `--component index|daemon|mcp|telemetry`;
 - `--redact`.
 
-Logs are diagnostic state, not telemetry.
+Logs are diagnostic state, not telemetry. During bootstrap, `logs` exposes
+redacted metadata only; machine-readable output must not include source
+snippets or absolute paths.
 
 ## Installer commands
 
@@ -162,7 +174,7 @@ During the bootstrap, pattern-family query commands use this fallback shape and
 append explicit deferred-status text that query execution still requires a
 validated pattern-family index. `status` and `doctor` may report a clean
 not-initialized state without opening storage. They must not imply that real
-indexing, storage activation, or MCP serving has run.
+indexing, SQLite storage activation, or MCP serving has run.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -182,11 +194,15 @@ changed.
 
 ## Current implementation status
 
-The bootstrap recognizes the command surface and required options. `status` and
-`doctor` expose safe missing-index status without initializing storage.
-Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
+The bootstrap recognizes the command surface and required options. `init`
+creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
+lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
+ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
+directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
+repo-local lifecycle information without claiming real indexing or SQLite
+storage. Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
 not-implemented guidance when no validated index is available, and return a
-structured fallback object when `--json` is present. Commands that would mutate
-repository state, install agent configuration, run real indexing, or serve MCP
-return explicit not-implemented or deferred-write errors until those
-implementations are designed and tested.
+structured fallback object when `--json` is present. Commands that install agent
+configuration, run real indexing, sync indexes, or serve MCP return explicit
+not-implemented or deferred-write errors until those implementations are
+designed and tested.
