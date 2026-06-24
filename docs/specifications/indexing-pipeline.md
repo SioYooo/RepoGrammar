@@ -100,9 +100,11 @@ The TypeScript worker is the first planned semantic frontend. The Rust-side
 TypeScript process adapter can validate NDJSON worker output and translate facts
 into RepoGrammar-owned semantic facts, but the syntax-only `index` and `sync`
 path does not launch that worker, store semantic facts, or treat worker output
-as fresh until those facts can be matched against the indexed manifest and code
-units for the same generation. Other languages should use their own compiler,
-type-checker, or LSP where that is the most authoritative source.
+as fresh. The storage adapter can persist already-validated semantic facts only
+after evidence matches an indexed manifest entry and code-unit hash/range in the
+same building generation; indexing integration must use that gate before any
+semantic fact can influence claims. Other languages should use their own
+compiler, type-checker, or LSP where that is the most authoritative source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is

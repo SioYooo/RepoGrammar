@@ -25,6 +25,7 @@ pub const PINNED_TYPESCRIPT_MAJOR_VERSION: u16 = 6;
 pub const DEFAULT_SEMANTIC_WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKER_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKER_LINE_BYTES: usize = 64 * 1024;
+const MAX_WORKER_REQUEST_BYTES: usize = 4 * 1024;
 const REQUEST_ID: &str = "repogrammar-typescript-semantic-worker";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,9 +75,9 @@ impl TypeScriptSemanticWorkerBoundary {
 impl SemanticWorker for TypeScriptSemanticWorkerBoundary {
     fn analyze_project(
         &self,
-        request: SemanticWorkerRequest,
+        mut request: SemanticWorkerRequest,
     ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
-        validate_request(&request)?;
+        validate_request(&mut request)?;
         let allowed_paths = normalized_changed_files(&request.changed_files);
         let output = self.run_worker(request)?;
         parse_worker_output(&output, REQUEST_ID, &allowed_paths)
@@ -87,12 +88,8 @@ fn parse_major_version(version: &str) -> Option<u16> {
     version.split('.').next()?.parse().ok()
 }
 
-fn validate_request(request: &SemanticWorkerRequest) -> Result<(), SemanticWorkerError> {
-    if request.project_root.trim().is_empty() {
-        return Err(SemanticWorkerError::ProtocolViolation(
-            "semantic worker project root must not be empty".to_string(),
-        ));
-    }
+fn validate_request(request: &mut SemanticWorkerRequest) -> Result<(), SemanticWorkerError> {
+    request.project_root = validate_project_root(&request.project_root)?;
     for changed_file in &request.changed_files {
         validate_repo_relative_path(changed_file).map_err(|_| {
             SemanticWorkerError::ProtocolViolation(
@@ -101,6 +98,36 @@ fn validate_request(request: &SemanticWorkerRequest) -> Result<(), SemanticWorke
         })?;
     }
     Ok(())
+}
+
+fn validate_project_root(project_root: &str) -> Result<String, SemanticWorkerError> {
+    if project_root.trim().is_empty() || project_root.contains('\0') {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker project root must be a valid absolute directory".to_string(),
+        ));
+    }
+    let path = Path::new(project_root);
+    if !path.is_absolute() {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker project root must be absolute".to_string(),
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker project root must be a readable directory".to_string(),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker project root must be a real directory".to_string(),
+        ));
+    }
+    let canonical = path.canonicalize().map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker project root must be canonicalizable".to_string(),
+        )
+    })?;
+    Ok(canonical.display().to_string())
 }
 
 fn normalized_changed_files(changed_files: &[String]) -> BTreeSet<String> {
@@ -129,6 +156,16 @@ impl TypeScriptSemanticWorkerBoundary {
             "project_root": request.project_root,
             "changed_files": changed_files,
         });
+        let request_bytes = serde_json::to_vec(&payload).map_err(|_| {
+            SemanticWorkerError::ProtocolViolation(
+                "semantic worker request could not be serialized".to_string(),
+            )
+        })?;
+        if request_bytes.len() > MAX_WORKER_REQUEST_BYTES {
+            return Err(SemanticWorkerError::ProtocolViolation(
+                "semantic worker request exceeded size limit".to_string(),
+            ));
+        }
 
         let mut command = Command::new(&self.executable);
         command
@@ -146,11 +183,6 @@ impl TypeScriptSemanticWorkerBoundary {
         let mut stdin = child.stdin.take().ok_or_else(|| {
             SemanticWorkerError::Unavailable(
                 "semantic worker stdin could not be opened".to_string(),
-            )
-        })?;
-        let request_bytes = serde_json::to_vec(&payload).map_err(|_| {
-            SemanticWorkerError::ProtocolViolation(
-                "semantic worker request could not be serialized".to_string(),
             )
         })?;
         stdin.write_all(&request_bytes).map_err(|_| {
@@ -185,8 +217,8 @@ impl TypeScriptSemanticWorkerBoundary {
                     "semantic worker status could not be read".to_string(),
                 )
             })? {
-                let stdout = join_reader(stdout_reader)?;
-                let _stderr = join_reader(stderr_reader)?;
+                let stdout = join_reader_before_deadline(stdout_reader, start, self.timeout)?;
+                let _stderr = join_reader_before_deadline(stderr_reader, start, self.timeout)?;
                 if !status.success() {
                     return Err(SemanticWorkerError::WorkerCrashed(
                         "semantic worker exited unsuccessfully".to_string(),
@@ -235,6 +267,23 @@ fn join_reader(
     reader.join().map_err(|_| {
         SemanticWorkerError::Unavailable("semantic worker output reader failed".to_string())
     })?
+}
+
+fn join_reader_before_deadline(
+    reader: thread::JoinHandle<Result<Vec<u8>, SemanticWorkerError>>,
+    start: Instant,
+    timeout: Duration,
+) -> Result<Vec<u8>, SemanticWorkerError> {
+    let reader = reader;
+    while !reader.is_finished() {
+        if start.elapsed() >= timeout {
+            return Err(SemanticWorkerError::Timeout(
+                "semantic worker timed out".to_string(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    join_reader(reader)
 }
 
 fn parse_worker_output(
@@ -371,12 +420,16 @@ fn parse_fact_message(
     let kind =
         SemanticFactKind::parse_protocol_str(required_string(object, "fact_kind", line_number)?)
             .map_err(|_| protocol_error(line_number, "fact_kind is not supported"))?;
-    let subject = required_string(object, "subject", line_number)?.to_string();
+    let subject = protocol_text(
+        required_string(object, "subject", line_number)?,
+        line_number,
+    )?;
     let target = parse_target(object.get("target"), line_number)?;
     let origin = parse_origin(object, line_number)?;
     let certainty =
         FactCertainty::parse_protocol_str(required_string(object, "certainty", line_number)?)
             .map_err(|_| protocol_error(line_number, "certainty is not supported"))?;
+    validate_semantic_version_support(&origin, certainty, line_number)?;
     let evidence = parse_evidence(object, line_number)?;
     let assumptions = object
         .get("assumptions")
@@ -384,10 +437,10 @@ fn parse_fact_message(
         .ok_or_else(|| protocol_error(line_number, "assumptions must be an array"))?
         .iter()
         .map(|value| {
-            value
+            let value = value
                 .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| protocol_error(line_number, "assumptions must contain strings"))
+                .ok_or_else(|| protocol_error(line_number, "assumptions must contain strings"))?;
+            protocol_text(value, line_number)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -402,15 +455,38 @@ fn parse_fact_message(
     })
 }
 
+fn validate_semantic_version_support(
+    origin: &FactOrigin,
+    certainty: FactCertainty,
+    line_number: usize,
+) -> Result<(), SemanticWorkerError> {
+    if origin.engine == "typescript"
+        && certainty == FactCertainty::Semantic
+        && !matches!(
+            classify_typescript_version(&origin.engine_version),
+            TypeScriptVersionSupport::SupportedCompilerApi { .. }
+        )
+    {
+        Err(SemanticWorkerError::UnsupportedVersion(format!(
+            "line {line_number}: semantic worker reported unsupported TypeScript version"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn parse_target(
     target: Option<&Value>,
     line_number: usize,
 ) -> Result<Option<SymbolId>, SemanticWorkerError> {
     match target {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) if !value.trim().is_empty() => SymbolId::new(value.clone())
-            .map(Some)
-            .map_err(|_| protocol_error(line_number, "target must not be empty")),
+        Some(Value::String(value)) if !value.trim().is_empty() => {
+            let value = protocol_text(value, line_number)?;
+            SymbolId::new(value)
+                .map(Some)
+                .map_err(|_| protocol_error(line_number, "target must not be empty"))
+        }
         Some(Value::String(_)) => Err(protocol_error(line_number, "target must not be empty")),
         Some(_) => Err(protocol_error(
             line_number,
@@ -434,9 +510,12 @@ fn parse_origin(
         "origin",
     )?;
     Ok(FactOrigin {
-        engine: required_string(origin, "engine", line_number)?.to_string(),
-        engine_version: required_string(origin, "engine_version", line_number)?.to_string(),
-        method: required_string(origin, "method", line_number)?.to_string(),
+        engine: protocol_text(required_string(origin, "engine", line_number)?, line_number)?,
+        engine_version: protocol_text(
+            required_string(origin, "engine_version", line_number)?,
+            line_number,
+        )?,
+        method: protocol_text(required_string(origin, "method", line_number)?, line_number)?,
     })
 }
 
@@ -487,7 +566,7 @@ fn parse_evidence(
         code_unit_id,
         range,
         provenance,
-        required_string(evidence, "note", line_number)?,
+        protocol_text(required_string(evidence, "note", line_number)?, line_number)?,
     )
     .map_err(|_| protocol_error(line_number, "evidence note must not be empty"))
 }
@@ -625,7 +704,7 @@ fn validate_allowed_keys(
         if !allowed.contains(&key.as_str()) {
             return Err(protocol_error(
                 line_number,
-                &format!("{context} contains unsupported field {key}"),
+                &format!("{context} contains unsupported field"),
             ));
         }
     }
@@ -657,6 +736,36 @@ fn required_usize(
 
 fn protocol_error(line_number: usize, message: &str) -> SemanticWorkerError {
     SemanticWorkerError::ProtocolViolation(format!("line {line_number}: {message}"))
+}
+
+fn protocol_text(value: &str, line_number: usize) -> Result<String, SemanticWorkerError> {
+    if value.contains('\0')
+        || value.contains('\n')
+        || value.contains('\r')
+        || value.contains("://")
+        || looks_like_embedded_absolute_path(value)
+        || looks_like_source_snippet(value)
+    {
+        Err(protocol_error(
+            line_number,
+            "text field contains unsupported content",
+        ))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn looks_like_embedded_absolute_path(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .any(|token| Path::new(token).is_absolute() || looks_like_windows_absolute_path(token))
+}
+
+fn looks_like_source_snippet(value: &str) -> bool {
+    value.contains("=>")
+        || (value.contains('=') && value.contains(';'))
+        || value.contains('{')
+        || value.contains('}')
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), ()> {
@@ -695,7 +804,7 @@ mod tests {
     use serde_json::json;
     use std::fs;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::time::Duration;
 
     #[test]
@@ -757,6 +866,21 @@ mod tests {
     }
 
     #[test]
+    fn worker_output_parser_rejects_unsupported_semantic_typescript_versions() {
+        let mut fact = valid_fact_message();
+        fact["origin"]["engine_version"] = json!("7.0.0-dev");
+
+        let error = parse_worker_output(
+            &ndjson(vec![fact, valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect_err("unsupported TypeScript SEMANTIC fact must fail");
+
+        assert!(matches!(error, SemanticWorkerError::UnsupportedVersion(_)));
+    }
+
+    #[test]
     fn worker_output_parser_rejects_malformed_messages() {
         let malformed_outputs = [
             "{not-json}\n".to_string(),
@@ -811,6 +935,22 @@ mod tests {
             ]),
             ndjson(vec![
                 {
+                    let mut fact = valid_fact_message();
+                    fact["evidence"]["note"] = json!("const secret = true;");
+                    fact
+                },
+                valid_end_of_stream_message(),
+            ]),
+            ndjson(vec![
+                {
+                    let mut fact = valid_fact_message();
+                    fact["assumptions"] = json!(["read /tmp/secret"]);
+                    fact
+                },
+                valid_end_of_stream_message(),
+            ]),
+            ndjson(vec![
+                {
                     let mut progress = valid_progress_message();
                     progress["work"]["completed"] = json!(2);
                     progress["work"]["total"] = json!(1);
@@ -842,6 +982,22 @@ mod tests {
         let error = read_pipe(std::io::Cursor::new(oversized))
             .expect_err("oversized worker output must fail");
         assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+    }
+
+    #[test]
+    fn unsupported_protocol_fields_do_not_leak_field_names() {
+        let mut fact = valid_fact_message();
+        fact["/tmp/secret UNIQUE_SENTINEL"] = json!(true);
+        let error = parse_worker_output(
+            &ndjson(vec![fact, valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect_err("unsupported field must fail");
+
+        let debug = format!("{error:?}");
+        assert!(!debug.contains("/tmp/secret"));
+        assert!(!debug.contains("UNIQUE_SENTINEL"));
     }
 
     #[test]
@@ -901,6 +1057,60 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn process_boundary_preserves_timeout_after_child_exits_with_inherited_pipe() {
+        let workspace = TempWorkspace::new("typescript-worker-inherited-pipe");
+        let inherited_pipe = executable_script(
+            &workspace,
+            "inherited-pipe.sh",
+            "#!/bin/sh\n( /bin/sleep 1 ) &\nexit 0\n",
+        );
+
+        let error = TypeScriptSemanticWorkerBoundary::new(inherited_pipe.display().to_string())
+            .with_timeout(Duration::from_millis(20))
+            .analyze_project(valid_request(&workspace))
+            .expect_err("inherited pipe must still honor worker timeout");
+
+        assert!(matches!(error, SemanticWorkerError::Timeout(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_boundary_sends_sorted_deduplicated_changed_files() {
+        let workspace = TempWorkspace::new("typescript-worker-request-order");
+        let request_path = workspace.path().join("request.json");
+        let script = executable_script(
+            &workspace,
+            "capture.sh",
+            "#!/bin/sh\n/bin/cat > \"$1\"\n/bin/cat <<'EOF'\n{\"protocol_version\":1,\"message_type\":\"end_of_stream\",\"request_id\":\"repogrammar-typescript-semantic-worker\"}\nEOF\n",
+        );
+        let worker = TypeScriptSemanticWorkerBoundary::new(script.display().to_string())
+            .with_args([request_path.display().to_string()])
+            .with_timeout(Duration::from_secs(2));
+
+        let facts = worker
+            .analyze_project(SemanticWorkerRequest {
+                project_root: workspace.path().display().to_string(),
+                changed_files: vec![
+                    "src/z.ts".to_string(),
+                    "src/a.ts".to_string(),
+                    "src/z.ts".to_string(),
+                ],
+            })
+            .expect("worker should accept EOS-only response");
+
+        assert!(facts.is_empty());
+        let request_json: Value = serde_json::from_str(
+            &fs::read_to_string(request_path).expect("captured worker request"),
+        )
+        .expect("request should be JSON");
+        assert_eq!(
+            request_json["changed_files"],
+            json!(["src/a.ts", "src/z.ts"])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn process_boundary_rejects_crash_timeout_and_leaky_stderr_without_leaking() {
         let workspace = TempWorkspace::new("typescript-worker-failures");
         let crash = executable_script(
@@ -927,9 +1137,10 @@ mod tests {
     #[test]
     fn boundary_rejects_invalid_request_paths() {
         let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
+        let workspace = TempWorkspace::new("typescript-worker-invalid-request");
         let error = worker
             .analyze_project(SemanticWorkerRequest {
-                project_root: ".".to_string(),
+                project_root: workspace.path().display().to_string(),
                 changed_files: vec!["../secret.ts".to_string()],
             })
             .expect_err("traversal changed file must be rejected before spawn");
@@ -938,11 +1149,65 @@ mod tests {
 
         let error = TypeScriptSemanticWorkerBoundary::new("relative-worker")
             .analyze_project(SemanticWorkerRequest {
-                project_root: ".".to_string(),
+                project_root: workspace.path().display().to_string(),
                 changed_files: Vec::new(),
             })
             .expect_err("relative worker executable must be rejected before spawn");
         assert!(matches!(error, SemanticWorkerError::Unavailable(_)));
+    }
+
+    #[test]
+    fn boundary_rejects_oversized_requests_before_spawn() {
+        let workspace = TempWorkspace::new("typescript-worker-request-too-large");
+        let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
+        let changed_files = (0..MAX_WORKER_REQUEST_BYTES)
+            .map(|index| format!("src/file{index}.ts"))
+            .collect::<Vec<_>>();
+
+        let error = worker
+            .analyze_project(SemanticWorkerRequest {
+                project_root: workspace.path().display().to_string(),
+                changed_files,
+            })
+            .expect_err("oversized request should be rejected");
+
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+    }
+
+    #[test]
+    fn boundary_rejects_invalid_project_roots() {
+        let workspace = TempWorkspace::new("typescript-worker-invalid-root");
+        let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
+        for project_root in [
+            ".".to_string(),
+            workspace.path().join("missing").display().to_string(),
+            format!("{}\0bad", workspace.path().display()),
+        ] {
+            let error = worker
+                .analyze_project(SemanticWorkerRequest {
+                    project_root,
+                    changed_files: Vec::new(),
+                })
+                .expect_err("invalid project root must be rejected");
+            assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn boundary_rejects_symlink_project_root() {
+        let workspace = TempWorkspace::new("typescript-worker-symlink-root");
+        let link = workspace.path().join("root-link");
+        symlink(workspace.path(), &link).expect("create symlink root");
+
+        let error = TypeScriptSemanticWorkerBoundary::new("/unused")
+            .analyze_project(SemanticWorkerRequest {
+                project_root: link.display().to_string(),
+                changed_files: Vec::new(),
+            })
+            .expect_err("symlink project root must be rejected");
+
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
     }
 
     fn valid_request(workspace: &TempWorkspace) -> SemanticWorkerRequest {

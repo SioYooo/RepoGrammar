@@ -118,8 +118,15 @@ The bootstrap `init` implementation creates the lifecycle directories,
 `index` and `sync` implementation creates SQLite generations from TS/JS discovery
 metadata plus syntax-only code-unit records and activates
 `.repogrammar/current-generation` after validation. It does not yet create a
-top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, semantic facts,
-families, evidence, freshness manifests, or query read paths.
+top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, families,
+freshness manifests, or query read paths.
+
+The storage port and SQLite adapter can persist semantic facts together with
+repo-relative evidence rows for a building generation, but only when the fact is
+already validated against an indexed code unit, matching content hash, and byte
+range in that same generation. This is a storage substrate for future semantic
+worker integration; the current `index` and `sync` commands do not launch a
+worker or record semantic facts.
 
 ## File Discovery Exclusions
 
@@ -142,7 +149,8 @@ reasons, and `index`/`sync` store the discovered file manifest in a
 generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
-semantic facts, families, evidence, and query read-path state are not stored.
+families, query read-path state, and semantic-worker-produced facts are not
+stored by `index`/`sync`.
 
 Experimental Python discovery, once accepted, must record its support level and
 must not be stored or reported as official v0.1 production support. Optional
@@ -240,11 +248,19 @@ PRAGMA temp_store=MEMORY;
 
 The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,
-family members, variation slots, and evidence links. The current writer populates
-only indexed files and syntax-only code units. It enforces foreign keys,
-repo-relative paths at the Rust port boundary, matching file/code-unit content
-hashes, code-unit byte ranges bounded by indexed file size, and validation before
-activation.
+family members, variation slots, and evidence links. The current `index` and
+`sync` command path populates only indexed files and syntax-only code units.
+The storage port also exposes a semantic-fact writer for future frontend
+integration; it accepts only building generations and requires evidence to
+match an indexed code unit's repository-relative path, content hash, and byte
+range in the same generation. Generation validation must reject malformed
+semantic evidence rows before activation. The storage adapter enforces foreign
+keys, repo-relative paths at the Rust port boundary, matching file/code-unit
+content hashes, code-unit byte ranges bounded by indexed file size, and
+validation before activation.
+The current storage schema version is `2`. Existing pre-release schema `1`
+generation databases are treated as stale and must be rebuilt rather than
+silently upgraded in place.
 The database must later store repository revision, worktree hash, language
 adapter versions, freshness metadata, canonical templates, exception records,
 and richer provenance once those producers exist. Searchable source evidence

@@ -106,11 +106,21 @@ violations, but it must not return raw stderr, source snippets, or absolute
 paths in errors.
 
 Worker execution must use an explicit absolute executable path plus argument
-vector, not shell interpolation. When a request provides changed file paths, the
-adapter must reject facts whose evidence path was not requested. Future indexing
-integration must additionally match worker evidence against the active
-generation manifest, content hashes, and code-unit ranges before storing facts
-or using them for claims.
+vector, not shell interpolation. The Rust-side adapter must reject relative,
+missing, symlink, or non-directory project roots before spawning the worker.
+Requests must be size-bounded before writing to worker stdin so a worker that
+does not read cannot bypass timeout supervision. Unsupported TypeScript compiler
+API versions must not be accepted with `SEMANTIC` certainty; those facts must be
+rejected as unsupported-version output unless the worker reports a syntax-only
+or unknown fallback.
+When a request provides changed file paths, the adapter must reject facts whose
+evidence path was not requested. Runtime fact text fields must reject obvious
+absolute paths, URI schemes, NUL/newline payloads, and source-like snippets
+until source-retention policy is defined. Future indexing integration must
+pass worker facts through the storage gate that matches evidence against the
+building generation manifest, content hashes, and code-unit ranges before using
+those facts for claims. Current `index` and `sync` commands still do not launch
+the worker or store worker-produced facts.
 
 ## Certainty
 

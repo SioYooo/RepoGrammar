@@ -1,9 +1,10 @@
 //! Storage use-case boundary.
 
+use crate::core::model::{FactCertainty, SemanticFactKind};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    StorageInspection,
+    IndexedSemanticFactRecord, StorageInspection,
 };
 use std::path::{Component, Path};
 
@@ -32,6 +33,17 @@ pub fn record_code_unit(
     validate_code_unit(unit)?;
     store
         .record_code_unit(generation, unit)
+        .map_err(index_store_error)
+}
+
+pub fn record_semantic_fact(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    fact: &IndexedSemanticFactRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_semantic_fact(fact)?;
+    store
+        .record_semantic_fact(generation, fact)
         .map_err(index_store_error)
 }
 
@@ -102,6 +114,106 @@ fn validate_code_unit(unit: &IndexedCodeUnitRecord) -> Result<(), RepoGrammarErr
         ));
     }
     Ok(())
+}
+
+fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGrammarError> {
+    for (field_name, value) in [
+        ("semantic fact id", fact.fact_id.as_str()),
+        ("semantic fact kind", fact.kind.as_str()),
+        ("semantic fact subject", fact.subject.as_str()),
+        ("semantic fact certainty", fact.certainty.as_str()),
+        ("semantic fact origin engine", fact.origin_engine.as_str()),
+        (
+            "semantic fact origin engine version",
+            fact.origin_engine_version.as_str(),
+        ),
+        ("semantic fact origin method", fact.origin_method.as_str()),
+        ("semantic fact evidence id", fact.evidence_id.as_str()),
+        ("semantic fact code unit id", fact.code_unit_id.as_str()),
+        ("semantic fact path", fact.path.as_str()),
+        ("semantic fact note", fact.note.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "{field_name} must not be empty"
+            )));
+        }
+    }
+    if fact
+        .target
+        .as_ref()
+        .is_some_and(|target| target.trim().is_empty())
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "semantic fact target must not be empty when present".to_string(),
+        ));
+    }
+    SemanticFactKind::parse_protocol_str(&fact.kind)
+        .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))?;
+    FactCertainty::parse_protocol_str(&fact.certainty)
+        .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))?;
+    for (field_name, value) in [
+        ("semantic fact id", fact.fact_id.as_str()),
+        ("semantic fact subject", fact.subject.as_str()),
+        ("semantic fact origin engine", fact.origin_engine.as_str()),
+        (
+            "semantic fact origin engine version",
+            fact.origin_engine_version.as_str(),
+        ),
+        ("semantic fact origin method", fact.origin_method.as_str()),
+        ("semantic fact evidence id", fact.evidence_id.as_str()),
+        ("semantic fact code unit id", fact.code_unit_id.as_str()),
+        ("semantic fact note", fact.note.as_str()),
+    ] {
+        validate_semantic_text_field(field_name, value)?;
+    }
+    if let Some(target) = &fact.target {
+        validate_semantic_text_field("semantic fact target", target)?;
+    }
+    for assumption in &fact.assumptions {
+        if assumption.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(
+                "semantic fact assumptions must not contain empty values".to_string(),
+            ));
+        }
+        validate_semantic_text_field("semantic fact assumption", assumption)?;
+    }
+    validate_repo_relative_path(&fact.path)?;
+    if fact.start_byte > fact.end_byte {
+        return Err(RepoGrammarError::InvalidInput(
+            "semantic fact source range start must not exceed end".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_semantic_text_field(field_name: &str, value: &str) -> Result<(), RepoGrammarError> {
+    if value.contains('\0')
+        || value.contains('\n')
+        || value.contains('\r')
+        || value.contains("://")
+        || looks_like_embedded_absolute_path(value)
+        || looks_like_source_snippet(value)
+    {
+        Err(RepoGrammarError::InvalidInput(format!(
+            "{field_name} contains unsupported content"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn looks_like_embedded_absolute_path(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .any(|token| Path::new(token).is_absolute() || looks_like_windows_absolute_path(token))
+}
+
+fn looks_like_source_snippet(value: &str) -> bool {
+    value.contains("=>")
+        || (value.contains('=') && value.contains(';'))
+        || value.contains('{')
+        || value.contains('}')
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), RepoGrammarError> {
@@ -175,6 +287,14 @@ mod tests {
             Ok(())
         }
 
+        fn record_semantic_fact(
+            &self,
+            _generation: &GenerationHandle,
+            _fact: &IndexedSemanticFactRecord,
+        ) -> Result<(), IndexStoreError> {
+            Ok(())
+        }
+
         fn validate_generation(
             &self,
             _generation: &GenerationHandle,
@@ -215,6 +335,27 @@ mod tests {
         }
     }
 
+    fn semantic_fact() -> IndexedSemanticFactRecord {
+        IndexedSemanticFactRecord {
+            fact_id: "fact:src/a.ts#import:express".to_string(),
+            kind: "RESOLVED_IMPORT".to_string(),
+            subject: "src/a.ts#import:express".to_string(),
+            target: Some("node_modules/@types/express/index.d.ts#Request".to_string()),
+            certainty: "SEMANTIC".to_string(),
+            origin_engine: "typescript".to_string(),
+            origin_engine_version: "6.0.0".to_string(),
+            origin_method: "compiler_api".to_string(),
+            assumptions: Vec::new(),
+            evidence_id: "evidence:fact:src/a.ts#import:express".to_string(),
+            code_unit_id: "unit:src/a.ts#module:0-1".to_string(),
+            path: "src/a.ts".to_string(),
+            content_hash: file("src/a.ts").content_hash,
+            start_byte: 0,
+            end_byte: 1,
+            note: "compiler resolved import target".to_string(),
+        }
+    }
+
     #[test]
     fn generation_use_cases_delegate_through_storage_port() {
         let store = FakeStore;
@@ -234,6 +375,7 @@ mod tests {
             },
         )
         .expect("record unit");
+        record_semantic_fact(&store, &generation, &semantic_fact()).expect("record semantic fact");
         validate_index_generation(&store, &generation).expect("validate generation");
         activate_index_generation(&store, &generation).expect("activate generation");
         let inspection = inspect_index_storage(&store).expect("inspect storage");
@@ -321,5 +463,104 @@ mod tests {
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
+    }
+
+    #[test]
+    fn semantic_fact_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let fact = semantic_fact();
+
+        let mut missing_id = fact.clone();
+        missing_id.fact_id = " ".to_string();
+        assert!(record_semantic_fact(&store, &generation, &missing_id)
+            .expect_err("missing id")
+            .to_string()
+            .contains("id"));
+
+        let mut blank_target = fact.clone();
+        blank_target.target = Some(" ".to_string());
+        assert!(record_semantic_fact(&store, &generation, &blank_target)
+            .expect_err("blank target")
+            .to_string()
+            .contains("target"));
+
+        let mut absolute_path = fact.clone();
+        absolute_path.path = "/tmp/a.ts".to_string();
+        assert!(record_semantic_fact(&store, &generation, &absolute_path)
+            .expect_err("absolute path")
+            .to_string()
+            .contains("repository-relative"));
+
+        let mut traversal = fact.clone();
+        traversal.path = "../a.ts".to_string();
+        assert!(record_semantic_fact(&store, &generation, &traversal)
+            .expect_err("traversal path")
+            .to_string()
+            .contains("outside repository"));
+
+        let mut missing_origin = fact.clone();
+        missing_origin.origin_engine = " ".to_string();
+        assert!(record_semantic_fact(&store, &generation, &missing_origin)
+            .expect_err("missing origin")
+            .to_string()
+            .contains("origin"));
+
+        let mut invalid_kind = fact.clone();
+        invalid_kind.kind = "CALL".to_string();
+        assert!(record_semantic_fact(&store, &generation, &invalid_kind)
+            .expect_err("invalid kind")
+            .to_string()
+            .contains("unsupported semantic fact kind"));
+
+        let mut invalid_certainty = fact.clone();
+        invalid_certainty.certainty = "LOW_CONFIDENCE".to_string();
+        assert!(
+            record_semantic_fact(&store, &generation, &invalid_certainty)
+                .expect_err("invalid certainty")
+                .to_string()
+                .contains("unsupported fact certainty")
+        );
+
+        let mut leaky_target = fact.clone();
+        leaky_target.target = Some("file:///tmp/secret".to_string());
+        assert!(record_semantic_fact(&store, &generation, &leaky_target)
+            .expect_err("leaky target")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut leaky_assumption = fact.clone();
+        leaky_assumption.assumptions = vec!["read /tmp/secret".to_string()];
+        assert!(record_semantic_fact(&store, &generation, &leaky_assumption)
+            .expect_err("leaky assumption")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut source_like_note = fact.clone();
+        source_like_note.note = "const secret = true;".to_string();
+        assert!(record_semantic_fact(&store, &generation, &source_like_note)
+            .expect_err("source-like note")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut reversed = fact.clone();
+        reversed.start_byte = 2;
+        reversed.end_byte = 1;
+        assert!(record_semantic_fact(&store, &generation, &reversed)
+            .expect_err("reversed range")
+            .to_string()
+            .contains("range"));
+    }
+
+    #[test]
+    fn semantic_fact_validation_accepts_null_target_and_empty_assumptions() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut fact = semantic_fact();
+        fact.target = None;
+        fact.assumptions = Vec::new();
+
+        record_semantic_fact(&store, &generation, &fact)
+            .expect("null target and empty assumptions remain valid");
     }
 }

@@ -37,6 +37,9 @@
   migrations, WAL and foreign-key PRAGMAs, required-table validation,
   repository-relative indexed-file records, active-generation pointer
   activation, and rollback preservation when validation fails.
+- Semantic-fact/evidence storage substrate that records validated facts only for
+  building generations when evidence matches an indexed code unit, content hash,
+  repository-relative path, and byte range.
 - Syntax-only `index` and `sync` integration that runs TS/JS discovery, reads
   source through a repo-relative hash-checked boundary, stores repo-relative file
   metadata and structural code-unit records in a new SQLite generation, validates
@@ -45,6 +48,10 @@
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.
+- Regression coverage for semantic-fact/evidence storage, including fact-token
+  validation, sanitized text fields, same-generation code-unit path/hash/range
+  evidence, building-only writes, malformed evidence rejection before
+  activation, and atomic rollback of failed fact writes.
 - v0.1 parallel development planning artifacts for repo-local lifecycle,
   adapter/provider abstraction, experimental Python dogfooding, optional
   CodeGraph provider boundaries, typed UNKNOWN governance, family compression,
@@ -87,6 +94,13 @@
   persistence adapter for repository-local SQLite storage.
 - Documented `serde_json` as a production dependency for runtime
   semantic-worker NDJSON validation in adapter code.
+- Hardened Rust-side TypeScript semantic-worker process handling around
+  canonical project roots, request size limits, inherited-pipe timeout handling,
+  unsupported semantic TypeScript versions, sorted/deduplicated changed-file
+  requests, field-name redaction, and source/path-like text rejection.
+- Bumped the pre-release storage schema to version 2 for semantic-fact/evidence
+  constraints; stale schema 1 generation databases must be rebuilt rather than
+  silently treated as compatible.
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
   domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
   boundaries with the current syntax-only indexing baseline.

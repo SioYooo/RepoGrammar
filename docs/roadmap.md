@@ -16,8 +16,9 @@
   hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
   and deterministic ordering.
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
-  foreign-key enforcement, validation before activation, and rollback
-  preservation for failed generations.
+  foreign-key enforcement, semantic-fact/evidence write validation for building
+  generations, validation before activation, and rollback preservation for
+  failed generations.
 - Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
   structural code units in active SQLite generations without source snippets,
   absolute paths, semantic facts, or family evidence.
@@ -50,11 +51,12 @@ The detailed coordination artifact is
 
 The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
-indexing, and the Rust-side semantic-worker process/NDJSON validation boundary.
-The next implementation slice should refine one boundary at a time: generation
-freshness matching for semantic facts, storage read paths, parser-to-IR, or the
-actual TypeScript compiler worker. Keep syntax-only code units structural and
-non-semantic while validating the next boundary.
+indexing, semantic-fact/evidence storage substrate, and the Rust-side
+semantic-worker process/NDJSON validation boundary. The next implementation
+slice should refine one boundary at a time: command-level semantic-fact
+indexing, storage read paths, parser-to-IR, or the actual TypeScript compiler
+worker. Keep syntax-only code units structural and non-semantic while validating
+the next boundary.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 storage read paths, freshness checks, and evidence contracts are validated
@@ -62,8 +64,8 @@ together.
 
 ## Command implementation path
 
-- Match semantic-worker facts against indexed file/code-unit hashes before
-  storing or using them for claims.
+- Wire semantic-worker facts into `index`/`sync` only after matching them against
+  indexed file/code-unit hashes and generation freshness.
 - Add parser-to-IR storage after syntax-only generations remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.

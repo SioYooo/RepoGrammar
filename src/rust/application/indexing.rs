@@ -289,7 +289,7 @@ mod tests {
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
         GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-        StorageInspection, STORAGE_SCHEMA_VERSION,
+        IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
     use crate::ports::source_store::{SourceStore, SourceText};
@@ -795,6 +795,14 @@ mod tests {
                 panic!("code unit recording must not run after file record failure")
             }
 
+            fn record_semantic_fact(
+                &self,
+                _generation: &GenerationHandle,
+                _fact: &IndexedSemanticFactRecord,
+            ) -> Result<(), IndexStoreError> {
+                panic!("semantic fact recording must not run during syntax-only indexing")
+            }
+
             fn validate_generation(
                 &self,
                 _generation: &GenerationHandle,
@@ -863,6 +871,14 @@ mod tests {
                     .borrow_mut()
                     .push(generation.generation_id.clone());
                 Ok(())
+            }
+
+            fn record_semantic_fact(
+                &self,
+                _generation: &GenerationHandle,
+                _fact: &IndexedSemanticFactRecord,
+            ) -> Result<(), IndexStoreError> {
+                panic!("semantic fact recording must not run during syntax-only indexing")
             }
 
             fn validate_generation(

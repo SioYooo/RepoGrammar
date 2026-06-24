@@ -5,7 +5,7 @@
 
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    StorageInspection, STORAGE_SCHEMA_VERSION,
+    IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -244,6 +244,120 @@ impl IndexStore for SqliteIndexStore {
         Ok(())
     }
 
+    fn record_semantic_fact(
+        &self,
+        generation: &GenerationHandle,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&fact.path)?;
+        let mut connection = self.open_existing_generation(&generation.generation_id)?;
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {}
+            Some(_) => {
+                return Err(IndexStoreError::InvalidState(
+                    "semantic facts may only be recorded for building generations".to_string(),
+                ));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
+        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = connection
+            .query_row(
+                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
+                        code_units.end_byte, indexed_files.content_hash \
+                 FROM code_units \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = code_units.generation_id \
+                  AND indexed_files.path = code_units.path \
+                 WHERE code_units.generation_id = ?1 \
+                   AND code_units.code_unit_id = ?2",
+                params![generation.generation_id, fact.code_unit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "semantic fact must reference an indexed code unit in the same generation",
+            ));
+        };
+        if unit_path != fact.path {
+            return Err(invalid_record(
+                "semantic fact evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != fact.content_hash.as_str() || file_hash != fact.content_hash.as_str() {
+            return Err(invalid_record(
+                "semantic fact content hash must match indexed file and code unit",
+            ));
+        }
+        let start_byte = i64::try_from(fact.start_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(fact.end_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        if start_byte < unit_start_byte || end_byte > unit_end_byte {
+            return Err(invalid_record(
+                "semantic fact range must stay within code unit range",
+            ));
+        }
+        let assumptions_json = serde_json::to_string(&fact.assumptions).map_err(|_| {
+            IndexStoreError::InvalidRecord("semantic fact assumptions are invalid".to_string())
+        })?;
+
+        let transaction = connection.transaction().map_err(sql_unavailable)?;
+        transaction
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    generation.generation_id,
+                    fact.evidence_id,
+                    fact.code_unit_id,
+                    fact.path,
+                    fact.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    fact.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        transaction
+            .execute(
+                "INSERT INTO semantic_facts \
+                 (generation_id, fact_id, kind, subject, target, certainty, \
+                  origin_engine, origin_engine_version, origin_method, assumptions_json, evidence_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    generation.generation_id,
+                    fact.fact_id,
+                    fact.kind,
+                    fact.subject,
+                    fact.target.as_deref(),
+                    fact.certainty,
+                    fact.origin_engine,
+                    fact.origin_engine_version,
+                    fact.origin_method,
+                    assumptions_json,
+                    fact.evidence_id,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        transaction.commit().map_err(sql_unavailable)?;
+        Ok(())
+    }
+
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
         let connection = self.open_existing_generation(&generation.generation_id)?;
         let inspection = inspect_connection(&connection, Some(generation.generation_id.as_str()))?;
@@ -260,6 +374,11 @@ impl IndexStore for SqliteIndexStore {
         if !required_schema_is_present(&connection)? {
             return Err(IndexStoreError::InvalidState(
                 "required storage schema is missing or malformed".to_string(),
+            ));
+        }
+        if semantic_evidence_violation_count(&connection, &generation.generation_id)? != 0 {
+            return Err(IndexStoreError::InvalidState(
+                "semantic fact evidence is inconsistent with indexed code units".to_string(),
             ));
         }
         if generation_status(&connection, &generation.generation_id)?.as_deref() == Some("failed") {
@@ -549,6 +668,43 @@ fn foreign_key_violation_count(connection: &Connection) -> Result<usize, IndexSt
     Ok(count)
 }
 
+fn semantic_evidence_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM semantic_facts \
+             JOIN evidence \
+               ON evidence.generation_id = semantic_facts.generation_id \
+              AND evidence.evidence_id = semantic_facts.evidence_id \
+             LEFT JOIN code_units \
+               ON code_units.generation_id = evidence.generation_id \
+              AND code_units.code_unit_id = evidence.code_unit_id \
+             LEFT JOIN indexed_files \
+               ON indexed_files.generation_id = evidence.generation_id \
+              AND indexed_files.path = evidence.path \
+             WHERE semantic_facts.generation_id = ?1 \
+               AND (evidence.code_unit_id IS NULL \
+                    OR code_units.code_unit_id IS NULL \
+                    OR indexed_files.path IS NULL \
+                    OR evidence.path <> code_units.path \
+                    OR evidence.content_hash <> code_units.content_hash \
+                    OR evidence.content_hash <> indexed_files.content_hash \
+                    OR evidence.start_byte < code_units.start_byte \
+                    OR evidence.end_byte > code_units.end_byte)",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    usize::try_from(count).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "semantic evidence violation count is outside valid range".to_string(),
+        )
+    })
+}
+
 fn generation_status(
     connection: &Connection,
     generation_id: &str,
@@ -768,10 +924,15 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
             "subject",
             "target",
             "certainty",
+            "origin_engine",
+            "origin_engine_version",
+            "origin_method",
+            "assumptions_json",
+            "evidence_id",
         ],
         primary_key_columns: &["generation_id", "fact_id"],
-        minimum_foreign_key_rows: 1,
-        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY"],
+        minimum_foreign_key_rows: 2,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
     RequiredTableSchema {
         name: "families",
@@ -807,7 +968,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
             "note",
         ],
         primary_key_columns: &["generation_id", "evidence_id"],
-        minimum_foreign_key_rows: 3,
+        minimum_foreign_key_rows: 4,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
 ];
@@ -879,8 +1040,14 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
     subject TEXT NOT NULL,
     target TEXT,
     certainty TEXT NOT NULL,
+    origin_engine TEXT NOT NULL,
+    origin_engine_version TEXT NOT NULL,
+    origin_method TEXT NOT NULL,
+    assumptions_json TEXT NOT NULL DEFAULT '[]' CHECK (assumptions_json <> ''),
+    evidence_id TEXT NOT NULL,
     PRIMARY KEY (generation_id, fact_id),
-    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, evidence_id) REFERENCES evidence(generation_id, evidence_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS families (
@@ -921,7 +1088,8 @@ CREATE TABLE IF NOT EXISTS evidence (
     note TEXT NOT NULL,
     PRIMARY KEY (generation_id, evidence_id),
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
-    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE
+    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, code_unit_id) REFERENCES code_units(generation_id, code_unit_id) ON DELETE CASCADE
 );
 "#;
 
@@ -959,6 +1127,27 @@ mod tests {
             start_byte: 0,
             end_byte: 10,
             content_hash: file(path).content_hash,
+        }
+    }
+
+    fn semantic_fact(path: &str) -> IndexedSemanticFactRecord {
+        IndexedSemanticFactRecord {
+            fact_id: format!("fact:{path}#import:express"),
+            kind: "RESOLVED_IMPORT".to_string(),
+            subject: format!("{path}#import:express"),
+            target: Some("node_modules/@types/express/index.d.ts#Request".to_string()),
+            certainty: "SEMANTIC".to_string(),
+            origin_engine: "typescript".to_string(),
+            origin_engine_version: "6.0.0".to_string(),
+            origin_method: "compiler_api".to_string(),
+            assumptions: Vec::new(),
+            evidence_id: format!("evidence:fact:{path}#import:express"),
+            code_unit_id: code_unit(path).id,
+            path: path.to_string(),
+            content_hash: file(path).content_hash,
+            start_byte: 0,
+            end_byte: 10,
+            note: "compiler resolved import target".to_string(),
         }
     }
 
@@ -1155,6 +1344,326 @@ mod tests {
     }
 
     #[test]
+    fn semantic_fact_records_are_persisted_with_evidence_without_source_text_or_absolute_paths() {
+        let workspace = TempWorkspace::new("sqlite-semantic-facts");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let file = file("src/a.ts");
+        let unit = code_unit("src/a.ts");
+        let mut fact = semantic_fact("src/a.ts");
+        fact.assumptions = vec!["path alias resolved from tsconfig".to_string()];
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &unit)
+            .expect("record code unit");
+
+        store
+            .record_semantic_fact(&generation, &fact)
+            .expect("record semantic fact");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let stored_fact = connection
+            .query_row(
+                "SELECT fact_id, kind, subject, target, certainty, origin_engine, \
+                        origin_engine_version, origin_method, assumptions_json, evidence_id \
+                 FROM semantic_facts",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                },
+            )
+            .expect("query semantic fact");
+        assert_eq!(stored_fact.0, fact.fact_id);
+        assert_eq!(stored_fact.1, "RESOLVED_IMPORT");
+        assert_eq!(stored_fact.2, fact.subject);
+        assert_eq!(stored_fact.3, fact.target);
+        assert_eq!(stored_fact.4, "SEMANTIC");
+        assert_eq!(stored_fact.5, "typescript");
+        assert_eq!(stored_fact.6, "6.0.0");
+        assert_eq!(stored_fact.7, "compiler_api");
+        assert_eq!(
+            stored_fact.8,
+            r#"["path alias resolved from tsconfig"]"#.to_string()
+        );
+        assert_eq!(stored_fact.9, fact.evidence_id);
+
+        let evidence = connection
+            .query_row(
+                "SELECT evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note \
+                 FROM evidence",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .expect("query evidence");
+        assert_eq!(evidence.0, fact.evidence_id);
+        assert_eq!(evidence.1, unit.id);
+        assert_eq!(evidence.2, "src/a.ts");
+        assert_eq!(evidence.3, file.content_hash.as_str());
+        assert_eq!(evidence.4, 0);
+        assert_eq!(evidence.5, 10);
+        assert_eq!(evidence.6, fact.note);
+        let workspace_path = workspace.path().to_string_lossy();
+        for value in [
+            stored_fact.0,
+            stored_fact.2,
+            stored_fact.8,
+            stored_fact.9,
+            evidence.0,
+            evidence.1,
+            evidence.2,
+            evidence.6,
+        ] {
+            assert!(!value.contains(workspace_path.as_ref()));
+            assert!(!value.contains("UNIQUE_SOURCE_SENTINEL"));
+        }
+    }
+
+    #[test]
+    fn semantic_fact_records_must_match_indexed_code_unit_evidence() {
+        let workspace = TempWorkspace::new("sqlite-semantic-fact-rejects");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_indexed_file(&generation, &file("src/b.ts"))
+            .expect("record second file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_code_unit(&generation, &code_unit("src/b.ts"))
+            .expect("record second code unit");
+        let fact = semantic_fact("src/a.ts");
+
+        let mut missing_unit = fact.clone();
+        missing_unit.code_unit_id = "unit:missing".to_string();
+        let error = store
+            .record_semantic_fact(&generation, &missing_unit)
+            .expect_err("missing code unit");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut wrong_path = fact.clone();
+        wrong_path.path = "src/b.ts".to_string();
+        let error = store
+            .record_semantic_fact(&generation, &wrong_path)
+            .expect_err("path mismatch");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut wrong_hash = fact.clone();
+        wrong_hash.content_hash = ContentHash::new(
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .expect("valid hash");
+        let error = store
+            .record_semantic_fact(&generation, &wrong_hash)
+            .expect_err("hash mismatch");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut starts_before_unit = fact.clone();
+        starts_before_unit.start_byte = 0;
+        starts_before_unit.end_byte = 1;
+        starts_before_unit.code_unit_id = {
+            let mut offset_unit = code_unit("src/a.ts");
+            offset_unit.id = "unit:src/a.ts#module:2-10".to_string();
+            offset_unit.start_byte = 2;
+            store
+                .record_code_unit(&generation, &offset_unit)
+                .expect("record offset code unit");
+            offset_unit.id
+        };
+        let error = store
+            .record_semantic_fact(&generation, &starts_before_unit)
+            .expect_err("range starts before unit");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut ends_after_unit = fact;
+        ends_after_unit.end_byte = 11;
+        let error = store
+            .record_semantic_fact(&generation, &ends_after_unit)
+            .expect_err("range ends after unit");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn semantic_fact_records_reject_stale_or_wrong_generation_code_units() {
+        let workspace = TempWorkspace::new("sqlite-semantic-fact-stale");
+        let store = store(&workspace);
+        let first = store.prepare_next_generation().expect("prepare first");
+        store
+            .record_indexed_file(&first, &file("src/a.ts"))
+            .expect("record first file");
+        store
+            .record_code_unit(&first, &code_unit("src/a.ts"))
+            .expect("record first code unit");
+        store.activate_generation(&first).expect("activate first");
+
+        let second = store.prepare_next_generation().expect("prepare second");
+        let mut changed_file = file("src/a.ts");
+        changed_file.content_hash = ContentHash::new(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("valid hash");
+        changed_file.size_bytes = 42;
+        store
+            .record_indexed_file(&second, &changed_file)
+            .expect("record second file");
+        let mut changed_unit = code_unit("src/a.ts");
+        changed_unit.content_hash = changed_file.content_hash.clone();
+        changed_unit.id = "unit:src/a.ts#module:0-5".to_string();
+        changed_unit.end_byte = 5;
+        store
+            .record_code_unit(&second, &changed_unit)
+            .expect("record second code unit");
+
+        let stale_fact = semantic_fact("src/a.ts");
+        let error = store
+            .record_semantic_fact(&second, &stale_fact)
+            .expect_err("stale code unit id must not cross generations");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+        assert_eq!(
+            store
+                .inspect()
+                .expect("inspect after stale fact")
+                .active_generation,
+            Some(first.generation_id)
+        );
+    }
+
+    #[test]
+    fn semantic_fact_records_require_building_generation() {
+        let workspace = TempWorkspace::new("sqlite-semantic-fact-status");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .validate_generation(&generation)
+            .expect("validate generation");
+
+        let error = store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect_err("validated generation must reject semantic fact writes");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn generation_validation_rejects_malformed_semantic_evidence_rows() {
+        let workspace = TempWorkspace::new("sqlite-semantic-fact-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_indexed_file(&generation, &file("src/b.ts"))
+            .expect("record second file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, 'evidence:bad', ?2, 'src/b.ts', ?3, 0, 1, 'bad cross-file evidence')",
+                params![
+                    generation.generation_id,
+                    code_unit("src/a.ts").id,
+                    file("src/b.ts").content_hash.as_str(),
+                ],
+            )
+            .expect("insert inconsistent evidence");
+        connection
+            .execute(
+                "INSERT INTO semantic_facts \
+                 (generation_id, fact_id, kind, subject, target, certainty, origin_engine, \
+                  origin_engine_version, origin_method, assumptions_json, evidence_id) \
+                 VALUES (?1, 'fact:bad', 'RESOLVED_IMPORT', 'src/a.ts#import', NULL, \
+                         'SEMANTIC', 'typescript', '6.0.0', 'compiler_api', '[]', 'evidence:bad')",
+                params![generation.generation_id],
+            )
+            .expect("insert semantic fact");
+
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("malformed semantic evidence must block activation");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn semantic_fact_storage_failure_is_atomic_without_partial_rows() {
+        let workspace = TempWorkspace::new("sqlite-semantic-fact-atomic");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        let fact = semantic_fact("src/a.ts");
+        store
+            .record_semantic_fact(&generation, &fact)
+            .expect("record first semantic fact");
+        let duplicate = IndexedSemanticFactRecord {
+            fact_id: "fact:src/a.ts#import:duplicate".to_string(),
+            ..fact
+        };
+
+        let error = store
+            .record_semantic_fact(&generation, &duplicate)
+            .expect_err("duplicate evidence id must fail without partial rows");
+        assert!(matches!(error, IndexStoreError::Unavailable(_)));
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let fact_count: u32 = connection
+            .query_row("SELECT count(*) FROM semantic_facts", [], |row| row.get(0))
+            .expect("semantic fact count");
+        let evidence_count: u32 = connection
+            .query_row("SELECT count(*) FROM evidence", [], |row| row.get(0))
+            .expect("evidence count");
+        assert_eq!(fact_count, 1);
+        assert_eq!(evidence_count, 1);
+    }
+
+    #[test]
     fn failed_generation_validation_preserves_previous_active_generation() {
         let workspace = TempWorkspace::new("sqlite-rollback");
         let store = store(&workspace);
@@ -1249,7 +1758,7 @@ mod tests {
             .execute_batch(
                 r#"
                 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
-                INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'weak', 'now');
+                INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'weak', 'now');
                 CREATE TABLE index_generations (generation_id TEXT PRIMARY KEY, status TEXT, created_at TEXT, activated_at TEXT, repogrammar_version TEXT, repository_revision TEXT, worktree_hash TEXT);
                 INSERT INTO index_generations (generation_id, status, created_at, repogrammar_version) VALUES ('gen-000001', 'building', 'now', '0.1.0');
                 CREATE TABLE indexed_files (generation_id TEXT, path TEXT, content_hash TEXT, size_bytes INTEGER, language TEXT);

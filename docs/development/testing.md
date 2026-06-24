@@ -37,8 +37,11 @@ allowed.
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, activation pointer validation, preservation of the
   previous active generation after failed validation, repository-relative
-  indexed-file paths, and rejection of symlinked or malformed
-  active-generation pointers.
+  indexed-file paths, semantic-fact/evidence storage with same-generation
+  code-unit path/hash/range validation, malformed semantic evidence rejection
+  before activation, atomic rollback of failed fact writes, building-generation
+  write gates, and rejection of symlinked or malformed active-generation
+  pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
@@ -57,7 +60,10 @@ allowed.
   impossible work counts, absolute or URI evidence paths, unsupported snippet
   fields, sanitized worker-error mapping, worker crashes, timeouts, oversized
   output, invalid request paths, unrequested fact paths, and relative executable
-  rejection.
+  rejection. They must also cover inherited-pipe timeout handling, unsupported
+  field-name redaction, invalid/symlink project roots, oversized request guards,
+  unsupported TypeScript versions with semantic certainty, sorted/deduplicated
+  request files, and rejected absolute-path or source-like free text.
 - Experimental Python dogfooding tests, once added, must be opt-in and must
   assert experimental support level plus typed `UNKNOWN` for dynamic imports,
   monkey patching, pytest fixture injection, runtime dependency injection,
@@ -82,7 +88,8 @@ NDJSON validation behavior, telemetry consent, transport-neutral MCP tool names,
 CLI command surface, missing-index fallback human/JSON output, repo-local
 lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
 discovery filtering/hash/path-safety behavior, SQLite storage migration and
-generation-activation safety behavior, syntax-only code-unit extraction and
-storage bridging, source-read hash/path safety, storage-aware status/doctor
-reporting, product runtime wiring, installer dry-run parsing, and
+generation-activation safety behavior, validated semantic-fact/evidence storage
+substrate behavior, syntax-only code-unit extraction and storage bridging,
+source-read hash/path safety, storage-aware status/doctor reporting, product
+runtime wiring, installer dry-run parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

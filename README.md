@@ -23,7 +23,9 @@ and repository guard checks.
 It does not yet implement pattern mining, TypeScript compiler analysis, query
 execution, or a working MCP server. The Rust-side TypeScript semantic-worker
 adapter can execute a configured process and validate NDJSON v1 facts, but
-`index` and `sync` do not launch that worker or store semantic facts yet.
+`index` and `sync` do not launch that worker or store semantic facts yet. The
+storage layer can persist already-validated semantic facts with repo-relative
+evidence for a building generation, but no current command produces those rows.
 `init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
 metadata plus syntax-only `code_units` records: repo-relative path, language,
@@ -92,7 +94,7 @@ structured object with `implemented: false`.
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter validates NDJSON v1 worker output; compiler worker execution is not wired into indexing | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic facts, migrations, and provenance |
+| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, validated semantic-fact/evidence write substrate, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic workers, read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
@@ -183,9 +185,9 @@ The next implementation phase should refine one boundary at a time from the
 v0.1 parallel development plan:
 
 - keep syntax-only code units structural and non-semantic;
-- keep TypeScript compiler worker source, semantic-fact indexing, mining, query
-  execution, and MCP transport deferred until parser output, storage, and
-  semantic-worker boundaries are validated together.
+- keep TypeScript compiler worker source, semantic-fact indexing from commands,
+  mining, query execution, and MCP transport deferred until parser output,
+  storage, and semantic-worker boundaries are validated together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 

@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 1;
+pub const STORAGE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -29,6 +29,26 @@ pub struct IndexedCodeUnitRecord {
     pub start_byte: usize,
     pub end_byte: usize,
     pub content_hash: ContentHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedSemanticFactRecord {
+    pub fact_id: String,
+    pub kind: String,
+    pub subject: String,
+    pub target: Option<String>,
+    pub certainty: String,
+    pub origin_engine: String,
+    pub origin_engine_version: String,
+    pub origin_method: String,
+    pub assumptions: Vec<String>,
+    pub evidence_id: String,
+    pub code_unit_id: String,
+    pub path: String,
+    pub content_hash: ContentHash,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +83,12 @@ pub trait IndexStore {
         &self,
         generation: &GenerationHandle,
         unit: &IndexedCodeUnitRecord,
+    ) -> Result<(), IndexStoreError>;
+
+    fn record_semantic_fact(
+        &self,
+        generation: &GenerationHandle,
+        fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError>;
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;

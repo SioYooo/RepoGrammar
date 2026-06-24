@@ -1324,6 +1324,7 @@ mod tests {
     use crate::application::repository::{
         repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
     };
+    use crate::ports::index_store::STORAGE_SCHEMA_VERSION;
     use crate::test_support::TempWorkspace;
     use rusqlite::Connection;
     use serde_json::Value;
@@ -1947,7 +1948,7 @@ mod tests {
             .contains(workspace.path().to_string_lossy().as_ref()));
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000001");
-        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["schema_version"], STORAGE_SCHEMA_VERSION);
         assert_eq!(value["journal_mode"], "wal");
         assert_eq!(value["integrity_check"], "ok");
         assert_eq!(value["storage"], "available");
