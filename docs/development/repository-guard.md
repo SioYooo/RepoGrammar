@@ -19,7 +19,8 @@ The check command verifies:
 - `AGENTS.md` and `CLAUDE.md` exist.
 - both guides are regular files and not symlinks.
 - both guides are byte-identical.
-- required bootstrap docs and workflows exist.
+- required bootstrap docs and workflows exist, including
+  `docs/decisions/ADR-0008-repo-local-state-boundary.md`.
 - required skills exist and have `name` and `description` front matter.
 - nested `AGENTS.md` or `CLAUDE.md` files do not exist.
 - lowercase `agents.md` or `claude.md` duplicates do not exist.

@@ -49,6 +49,7 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/decisions/ADR-0005-ts-js-first-mvp.md",
     "docs/decisions/ADR-0006-pattern-family-cli.md",
     "docs/decisions/ADR-0007-safe-install-progress-telemetry.md",
+    "docs/decisions/ADR-0008-repo-local-state-boundary.md",
     "docs/roadmap.md",
     ".agents/memories/README.md",
     ".agents/memories/project-state.md",
@@ -513,6 +514,26 @@ mod tests {
         assert!(violations
             .iter()
             .any(|violation| violation.rule == "RootGuideDrift"));
+    }
+
+    #[test]
+    fn required_documents_include_repo_local_state_boundary_adr() {
+        let root = TempRoot::new("missing-adr-0008");
+        for document in REQUIRED_DOCUMENTS
+            .iter()
+            .copied()
+            .filter(|document| *document != "docs/decisions/ADR-0008-repo-local-state-boundary.md")
+        {
+            write_file(root.path().join(document), b"present\n");
+        }
+
+        let mut violations = Vec::new();
+        check_required_documents(root.path(), &mut violations);
+
+        assert!(violations.iter().any(|violation| {
+            violation.path == "docs/decisions/ADR-0008-repo-local-state-boundary.md"
+                && violation.rule == "RequiredDocumentMissing"
+        }));
     }
 
     #[test]
