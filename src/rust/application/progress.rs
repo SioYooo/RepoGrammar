@@ -30,7 +30,33 @@ impl ProgressStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkUnits {
     Unknown,
-    Known { completed: u64, total: u64 },
+    Known(KnownWorkUnits),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownWorkUnits {
+    completed: u64,
+    total: u64,
+}
+
+impl WorkUnits {
+    pub fn known(completed: u64, total: u64) -> Result<Self, String> {
+        if completed > total {
+            Err("completed work units must not exceed total work units".to_string())
+        } else {
+            Ok(Self::Known(KnownWorkUnits { completed, total }))
+        }
+    }
+}
+
+impl KnownWorkUnits {
+    pub fn completed(self) -> u64 {
+        self.completed
+    }
+
+    pub fn total(self) -> u64 {
+        self.total
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,10 +85,12 @@ impl ProgressEvent {
     pub fn render_plain(&self) -> String {
         match self.work {
             WorkUnits::Unknown => format!("{}: {}\n", self.stage.as_str(), self.message),
-            WorkUnits::Known { completed, total } => format!(
+            WorkUnits::Known(work) => format!(
                 "{}: {} ({completed}/{total})\n",
                 self.stage.as_str(),
-                self.message
+                self.message,
+                completed = work.completed(),
+                total = work.total()
             ),
         }
     }
@@ -70,8 +98,10 @@ impl ProgressEvent {
     pub fn render_ndjson(&self) -> String {
         let work = match self.work {
             WorkUnits::Unknown => "\"work\":{\"kind\":\"unknown\"}".to_string(),
-            WorkUnits::Known { completed, total } => format!(
-                "\"work\":{{\"kind\":\"known\",\"completed\":{completed},\"total\":{total}}}"
+            WorkUnits::Known(work) => format!(
+                "\"work\":{{\"kind\":\"known\",\"completed\":{},\"total\":{}}}",
+                work.completed(),
+                work.total()
             ),
         };
         format!(
@@ -139,16 +169,24 @@ mod tests {
         let event = ProgressEvent::new(
             ProgressStage::FileScanning,
             "scanning files",
-            WorkUnits::Known {
-                completed: 3,
-                total: 10,
-            },
+            WorkUnits::known(3, 10).expect("valid known work units"),
         );
 
         let plain = event.render_plain();
         assert!(plain.contains("3/10"));
         assert!(!plain.contains('%'));
         assert!(!plain.to_ascii_lowercase().contains("eta"));
+    }
+
+    #[test]
+    fn known_work_units_reject_completed_above_total() {
+        let known = WorkUnits::known(3, 10).expect("valid known work units");
+        let WorkUnits::Known(work) = known else {
+            panic!("expected known work units");
+        };
+        assert_eq!(work.completed(), 3);
+        assert_eq!(work.total(), 10);
+        assert!(WorkUnits::known(11, 10).is_err());
     }
 
     #[test]
