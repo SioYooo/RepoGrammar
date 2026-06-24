@@ -29,6 +29,8 @@ context lives under `.agents/memories/`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - Indexing pipeline: `specifications/indexing-pipeline.md`.
 - Storage boundaries: `specifications/storage.md`.
+- Repo-local state boundary: `decisions/ADR-0008-repo-local-state-boundary.md`
+  and `specifications/storage.md`.
 - MCP tool intent: `specifications/mcp-api.md`.
 - Metrics taxonomy: `specifications/metrics.md`.
 - Telemetry policy: `specifications/telemetry.md`.
@@ -58,6 +60,9 @@ context lives under `.agents/memories/`.
   `specifications/product.md`, and `docs/roadmap.md`.
 - Storage change: read `specifications/storage.md` and
   `decisions/ADR-0002-local-sqlite-index.md`.
+- Repo-local state, logs, locks, or project configuration change: read
+  `decisions/ADR-0008-repo-local-state-boundary.md` and
+  `specifications/storage.md`.
 - Core model change: read `specifications/domain-model.md` and
   `.agents/skills/repogrammar-domain/SKILL.md`.
 

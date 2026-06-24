@@ -21,12 +21,18 @@ analysis rules.
 - `AGENTS.md` and `CLAUDE.md` must remain byte-identical root files.
 - The first version is local-only and does not use LLMs, embeddings, vector
   databases, or cloud APIs.
+- Repository-derived analysis state belongs in repo-local `.repogrammar/` or
+  `REPOGRAMMAR_DIR`; global state must not store code-derived family facts,
+  evidence, source paths, symbols, prompts, query text, or repo-specific SQLite
+  indexes.
 - Tree-sitter is the intended syntax technology, but AST types must stay in
   adapters and Tree-sitter facts are not final semantic truth.
 - v0.1 official language scope is TypeScript/JavaScript only. Python is planned
   second and remains experimental until accepted for v0.2.
 - v0.1 CLI is pattern-family-first; CodeGraph-style graph navigation command
   names are not top-level commands.
+- The default v0.1 MCP surface is one `repogrammar_context` tool with explicit
+  operations, while CLI remains multi-command.
 - Anonymous telemetry and research trace collection are separate consent paths.
 - Static uncertainty must be represented as `UNKNOWN`.
 

@@ -26,7 +26,8 @@ Open questions include:
 - MCP response schema stability.
 - Native agent detection and installation receipt format.
 - Local telemetry aggregation format and export path.
-- Index generation locking and cancellation behavior.
+- Concrete lock-file validation edge cases and cross-platform stale-process
+  detection.
 
 ## Implications
 

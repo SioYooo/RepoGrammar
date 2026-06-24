@@ -23,6 +23,9 @@ contract types, serialization behavior, or documented MCP error semantics.
 
 - Decide whether the change is a major feature.
 - Confirm no MCP SDK type leaks into `core`.
+- Preserve the default minimal MCP surface unless an ADR changes it:
+  `repogrammar_context` with explicit operations rather than multiple default
+  pattern-family tools.
 
 # Step-by-step procedure
 

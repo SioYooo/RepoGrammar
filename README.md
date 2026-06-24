@@ -77,11 +77,16 @@ contracts, tests, and documentation can stabilize around pattern-family results.
 | Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary and protocol placeholder exist | Language-native semantic workers provide compiler/API facts |
 | Storage | SQLite and FTS5 are specified | Local evidence index with migrations and provenance |
+| State directory | Repo-local `.repogrammar/` is specified | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
 
 RepoGrammar does not depend on cloud services, local LLMs, embedding models,
 vector databases, or remote APIs for v0.1.
+
+Repository-derived analysis state belongs in `.repogrammar/` by default. Global
+state is limited to installation receipts, binary/cache metadata, telemetry
+preference, anonymous machine id, and non-repository-derived runtime artifacts.
 
 ## Evidence Discipline
 
@@ -104,6 +109,7 @@ repogrammar index
 repogrammar sync
 repogrammar status
 repogrammar doctor
+repogrammar logs
 repogrammar find
 repogrammar families
 repogrammar family

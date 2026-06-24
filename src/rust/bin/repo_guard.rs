@@ -62,7 +62,8 @@ const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "c", "cc", "cpp", "h", "hpp", "go", "py", "js", "jsx", "ts", "tsx", "java", "kt", "kts",
     "sh", "bash", "zsh", "ps1", "sql",
 ];
-const IGNORED_DIRS: &[&str] = &[".git", "target", ".codegraph"];
+const IGNORED_DIRS: &[&str] = &[".git", "target", ".codegraph", ".repogrammar"];
+const IGNORED_DIR_PREFIXES: &[&str] = &[".repogrammar-"];
 
 fn main() {
     let root = match env::current_dir() {
@@ -346,7 +347,12 @@ fn should_skip_dir(root: &Path, path: &Path) -> bool {
     }
     path.file_name()
         .and_then(OsStr::to_str)
-        .is_some_and(|name| IGNORED_DIRS.contains(&name))
+        .is_some_and(|name| {
+            IGNORED_DIRS.contains(&name)
+                || IGNORED_DIR_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+        })
 }
 
 fn relative_path(root: &Path, path: &Path) -> PathBuf {
@@ -520,6 +526,27 @@ mod tests {
 
         assert!(violations.iter().any(|violation| {
             violation.rule == "SourceOutsideSrc" && violation.path == "tool.py"
+        }));
+    }
+
+    #[test]
+    fn repo_local_state_directories_are_ignored() {
+        let root = TempRoot::new("state-dirs");
+        write_file(root.path().join("AGENTS.md"), b"# Same\n");
+        write_file(root.path().join("CLAUDE.md"), b"# Same\n");
+        write_file(
+            root.path().join(".repogrammar/cache/generated.py"),
+            b"print('cache')\n",
+        );
+        write_file(
+            root.path().join(".repogrammar-win/cache/generated.ts"),
+            b"export const cache = true;\n",
+        );
+
+        let violations = check_repository(root.path()).expect("check repository");
+
+        assert!(!violations.iter().any(|violation| {
+            violation.rule == "SourceOutsideSrc" && violation.path.starts_with(".repogrammar")
         }));
     }
 

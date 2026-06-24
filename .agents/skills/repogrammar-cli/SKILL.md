@@ -28,9 +28,11 @@ mapping, or any CLI command name or option.
 
 1. Map new query behavior to pattern-family concepts.
 2. Keep graph navigation under a future secondary namespace if needed.
-3. Add option parsing tests.
-4. Add not-implemented behavior when storage or indexing is not ready.
-5. Update README, CLI specification, MCP mapping, and CHANGELOG as needed.
+3. Keep CLI commands human-facing and multi-command while mapping MCP to the
+   default `repogrammar_context` operation model.
+4. Add option parsing tests.
+5. Add not-implemented behavior when storage or indexing is not ready.
+6. Update README, CLI specification, MCP mapping, and CHANGELOG as needed.
 
 # Required verification
 

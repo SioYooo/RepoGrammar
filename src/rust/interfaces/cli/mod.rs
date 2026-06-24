@@ -65,7 +65,7 @@ fn usage() -> String {
     [
         "Usage: repogrammar <command> [options]",
         "",
-        "Project lifecycle: init, uninit, index, sync, status, doctor, unlock",
+        "Project lifecycle: init, uninit, index, sync, status, doctor, unlock, logs",
         "Pattern-family queries: find, families, family, member, explain, check, files, units",
         "Agent integration: serve, install, uninstall",
         "Metrics: stats, telemetry",
@@ -78,7 +78,7 @@ fn usage() -> String {
 fn is_project_lifecycle_command(command: &str) -> bool {
     matches!(
         command,
-        "init" | "uninit" | "index" | "sync" | "status" | "doctor" | "unlock"
+        "init" | "uninit" | "index" | "sync" | "status" | "doctor" | "unlock" | "logs"
     )
 }
 
@@ -101,6 +101,16 @@ fn is_forbidden_graph_command(command: &str) -> bool {
 }
 
 fn handle_project_lifecycle(command: &str, rest: &[String]) -> CliOutput {
+    if command == "logs" {
+        if let Err(error) = parse_log_options(rest) {
+            return CliOutput::failure(2, format!("{error}\n"));
+        }
+        return CliOutput::failure(
+            2,
+            "repogrammar logs is not implemented yet; repo-local logs must be redacted and rotated before exposure\n",
+        );
+    }
+
     if let Err(error) = parse_long_running_options(rest) {
         return CliOutput::failure(2, format!("{error}\n"));
     }
@@ -136,9 +146,9 @@ fn handle_query(command: &str, rest: &[String]) -> CliOutput {
 
     let contract = match command {
         "find" => "find returns candidate families, target compatibility, dominant patterns, variation points, exceptions, unknowns, and minimal contrastive evidence; it must not return only top-k similar files",
-        "family" => "family is the CLI equivalent of show_family",
-        "explain" => "explain is the CLI equivalent of explain_deviation",
-        "check" => "check is the CLI equivalent of check_conformance",
+        "family" => "family is the CLI equivalent of the repogrammar_context show_family operation",
+        "explain" => "explain is the CLI equivalent of the repogrammar_context explain_deviation operation",
+        "check" => "check is the CLI equivalent of the repogrammar_context check_conformance operation",
         _ => "query command requires an initialized pattern-family index",
     };
 
@@ -226,9 +236,35 @@ fn parse_long_running_options(rest: &[String]) -> Result<(), String> {
                 }
                 index += 2;
             }
-            "--json" | "--quiet" | "--verbose" => index += 1,
+            "--json" | "--quiet" | "--verbose" | "--write-gitignore" | "--force" => index += 1,
             value if !value.starts_with('-') => index += 1,
             other => return Err(format!("unknown long-running option: {other}")),
+        }
+    }
+    Ok(())
+}
+
+fn parse_log_options(rest: &[String]) -> Result<(), String> {
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--component" => {
+                let Some(value) = rest.get(index + 1) else {
+                    return Err("--component requires index, daemon, mcp, or telemetry".to_string());
+                };
+                if !matches!(value.as_str(), "index" | "daemon" | "mcp" | "telemetry") {
+                    return Err("--component requires index, daemon, mcp, or telemetry".to_string());
+                }
+                index += 2;
+            }
+            "--since" => {
+                if rest.get(index + 1).is_none() {
+                    return Err("--since requires a duration".to_string());
+                }
+                index += 2;
+            }
+            "--tail" | "--redact" | "--json" | "--quiet" | "--verbose" => index += 1,
+            other => return Err(format!("unknown logs option: {other}")),
         }
     }
     Ok(())
@@ -365,10 +401,34 @@ mod tests {
 
     #[test]
     fn long_running_options_are_accepted() {
-        let output = run(["init", ".", "--progress", "always", "--json", "--verbose"]);
+        let output = run([
+            "init",
+            ".",
+            "--progress",
+            "always",
+            "--json",
+            "--verbose",
+            "--write-gitignore",
+        ]);
 
         assert_eq!(output.status, 2);
         assert!(output.stderr.contains("typed progress events"));
+    }
+
+    #[test]
+    fn logs_options_are_accepted() {
+        let output = run([
+            "logs",
+            "--tail",
+            "--since",
+            "1h",
+            "--component",
+            "index",
+            "--redact",
+        ]);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stderr.contains("repo-local logs"));
     }
 
     #[test]

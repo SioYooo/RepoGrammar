@@ -22,10 +22,13 @@
 
 ## Command implementation path
 
-- Implement repository-local initialization generations and locking.
+- Implement repository-local `.repogrammar/` initialization, `.git/info/exclude`
+  hygiene, `.repogrammar/.gitignore`, manifest writing, generations, and
+  locking.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
-- Implement read-only `serve` for MCP.
+- Implement read-only `serve` for MCP with the default `repogrammar_context`
+  tool and missing/stale-index fallback semantics.
 - Implement safe installer writes only after native agent detection, backups,
   receipts, and MCP self-tests are validated.
 
@@ -48,6 +51,8 @@
 - Candidate discovery and representative selection.
 - Structural alignment, anti-unification, and clustering.
 - SQLite schema and FTS5-backed evidence storage.
+- Optional watcher/daemon support that marks affected families stale and lazily
+  recomputes instead of eagerly rebuilding the whole repository.
 - MCP transport implementation for planned tools.
 - Framework adapters for Express, NestJS, React, Jest, and Vitest.
 

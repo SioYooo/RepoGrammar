@@ -4,6 +4,7 @@ The intended pipeline is:
 
 ```text
 Repository files
+-> File discovery and exclusion filtering
 -> Tree-sitter parsing
 -> Code-unit extraction
 -> Unified IR
@@ -24,6 +25,23 @@ The repository currently defines module boundaries, semantic-worker protocol
 placeholders, and minimal types only. It does not parse real code, call a
 TypeScript compiler, build an index, align structures, anti-unify templates,
 cluster families, or persist results.
+
+## File discovery and exclusions
+
+File discovery must respect repository ignore rules and RepoGrammar state
+boundaries before parsing begins. RepoGrammar must skip `.repogrammar/` and
+`.repogrammar-*` unconditionally, even when `REPOGRAMMAR_DIR` changes the active
+state directory.
+
+Discovery must honor `.gitignore` rules and default exclusions for dependency,
+build, cache, coverage, virtual environment, and generated output directories.
+Files larger than the configured size limit are skipped, with 1 MB as the
+default limit.
+
+Optional `repogrammar.json` may configure language enablement, custom file
+extensions, include/exclude patterns, framework adapters, and family thresholds.
+Malformed configuration must warn and fall back to safe defaults rather than
+failing indexing.
 
 ## Tree-sitter parsing
 
@@ -84,3 +102,13 @@ Vitest. Framework rules belong in `src/rust/adapters/frameworks/`.
 
 Classification must produce dominant pattern, variation, exception, or unknown
 with evidence and freshness checks.
+
+## Sync and freshness
+
+The v0.1 indexing model is manual: `init`, `index`, `sync`, freshness warnings
+in `status`, and freshness checks before query or MCP claims. A daemon or
+watcher is optional and must not be required for correctness.
+
+If a future watcher is implemented, it should reparse changed units, mark
+affected families stale, and lazily recompute on query. It should not eagerly
+recompute the whole repository by default.

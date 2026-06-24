@@ -1,20 +1,222 @@
 # Storage Specification
 
-RepoGrammar will use local SQLite with FTS5 for index metadata and searchable
-source evidence. The bootstrap defines only the adapter boundary.
+RepoGrammar stores repository-derived analysis state inside each analyzed
+repository. It does not use a global database for code-derived family facts,
+evidence, source hashes, freshness metadata, or repository paths.
 
-## SQLite responsibilities
+The default project state directory is:
 
-- Store repository revision and index metadata.
-- Store code units, source ranges, content hashes, and provenance.
-- Store family records, canonical templates, variation points, exceptions, and
-  evidence links once implemented.
-- Support local full-text search where useful through FTS5.
+```text
+.repogrammar/
+```
 
-## Expected table boundaries
+`REPOGRAMMAR_DIR` may override the directory name for a checkout. This is
+required for cases such as Windows and WSL sharing one checkout, where SQLite
+and daemon locks must not be shared across OS boundaries. RepoGrammar must skip
+`.repogrammar/` and `.repogrammar-*` during indexing, watching, file discovery,
+token counting, and evidence selection.
+
+## Global State Boundary
+
+Global user state may contain only:
+
+- installed binary and cache metadata;
+- agent integration receipts;
+- anonymous telemetry preference and anonymous machine id;
+- downloaded grammar or runtime artifacts that are not repository-derived;
+- global user preferences.
+
+Global user state must not contain:
+
+- source code;
+- source-derived family facts;
+- evidence text;
+- file paths from indexed repositories;
+- symbol names;
+- raw prompts;
+- query text;
+- repository-specific SQLite indexes.
+
+## Project State Directory
+
+The repository-local state directory should use this layout once storage is
+implemented:
+
+```text
+.repogrammar/
+|-- .gitignore
+|-- manifest.json
+|-- repogrammar.sqlite
+|-- repogrammar.sqlite-wal
+|-- repogrammar.sqlite-shm
+|-- current-generation
+|-- generations/
+|   |-- gen-000001/
+|   |   |-- repogrammar.sqlite
+|   |   `-- manifest.json
+|   `-- gen-000002/
+|-- cache/
+|   |-- tree-sitter/
+|   |-- semantic-workers/
+|   |-- fingerprints/
+|   `-- token-counts/
+|-- logs/
+|   |-- daemon.log
+|   |-- index.log
+|   |-- mcp.log
+|   `-- telemetry.log
+|-- locks/
+|   |-- index.lock
+|   |-- daemon.lock
+|   `-- sqlite.lock
+|-- telemetry/
+|   |-- daily-rollups.jsonl
+|   `-- unsent-queue.jsonl
+|-- tmp/
+`-- receipts/
+    |-- init.json
+    `-- last-successful-index.json
+```
+
+`manifest.json` records the active index metadata. `repogrammar.sqlite` is the
+active database. `generations/` supports atomic rebuild and rollback. `cache/`
+contains derived parser, semantic-worker, fingerprint, and token-count caches.
+`logs/`, `locks/`, `telemetry/`, `tmp/`, and `receipts/` are repo-local
+diagnostic and lifecycle state.
+
+## Git Hygiene
+
+`repogrammar init` must not dirty the user's tracked working tree by default.
+On init, RepoGrammar must add these patterns to `.git/info/exclude` unless they
+are already present:
+
+```text
+.repogrammar/
+.repogrammar-*/
+```
+
+RepoGrammar must also create `.repogrammar/.gitignore`:
+
+```text
+# RepoGrammar local generated state.
+# This directory contains repository-local indexes, logs, caches, locks,
+# telemetry rollups, and temporary files. Do not commit it.
+
+*
+!.gitignore
+```
+
+Root `.gitignore` may be modified only when the user passes
+`repogrammar init --write-gitignore` or confirms an interactive prompt. If
+RepoGrammar modifies root `.gitignore`, it must use a small marker-fenced
+section and avoid duplicate entries.
+
+## File Discovery Exclusions
+
+Indexing must respect repository ignore rules and default generated-artifact
+exclusions. At minimum, RepoGrammar must skip:
+
+- `.repogrammar/` and `.repogrammar-*`;
+- dependency, build, cache, coverage, virtual environment, and generated output
+  directories such as `node_modules`, `vendor`, `dist`, `build`, `target`,
+  `.venv`, `Pods`, `.next`, and `coverage`;
+- files ignored by Git or by nested `.gitignore` rules;
+- files larger than the configured size limit, with 1 MB as the default limit.
+
+Explicit project configuration may opt in additional files, but ignored
+third-party and generated artifacts must not enter family evidence by accident.
+
+## Project Configuration
+
+Optional shared project configuration lives at the repository root:
+
+```text
+repogrammar.json
+```
+
+The file may configure language enablement, custom file extensions,
+include/exclude patterns, framework adapters, family thresholds, and telemetry
+inheritance. Missing configuration means zero-config defaults. Malformed
+configuration must produce a warning and fall back to safe defaults; it must not
+crash indexing.
+
+Local-only configuration belongs under `.repogrammar/` or global user config,
+not in `repogrammar.json`.
+
+## Manifest and Freshness
+
+`.repogrammar/manifest.json` must include enough metadata to decide whether
+family claims are fresh for the current repository state. It must include at
+least:
+
+```json
+{
+  "schema_version": 1,
+  "repogrammar_version": "0.1.0",
+  "created_at": "2026-06-24T00:00:00Z",
+  "last_indexed_at": "2026-06-24T00:00:00Z",
+  "repository": {
+    "root_canonical_hash": "sha256:...",
+    "git_head": "abc123",
+    "worktree_hash": "sha256:...",
+    "dirty": true
+  },
+  "storage": {
+    "database": "repogrammar.sqlite",
+    "journal_mode": "wal",
+    "active_generation": "gen-000002"
+  },
+  "languages": {
+    "typescript": {
+      "status": "supported",
+      "syntax_frontend": "tree-sitter",
+      "semantic_worker": "typescript",
+      "semantic_worker_version": "6.x"
+    },
+    "python": {
+      "status": "planned"
+    }
+  },
+  "index": {
+    "files_indexed": 4812,
+    "code_units": 36881,
+    "families": 624,
+    "unknown_facts": 203,
+    "abstained_groups": 91
+  }
+}
+```
+
+Database source paths must be repository-relative. Manifest and telemetry may
+store a hash of the canonical repository root, but telemetry must not upload the
+raw path. Every family and evidence row must carry file content hash, source
+range, generation id, and repository revision metadata.
+
+## SQLite Responsibilities
+
+RepoGrammar uses one SQLite database per repository state directory. SQLite and
+SQL migration logic belong only in persistence adapters.
+
+Required PRAGMAs:
+
+```text
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA foreign_keys=ON;
+PRAGMA busy_timeout=5000;
+PRAGMA temp_store=MEMORY;
+```
+
+The database must store schema metadata, tool version, schema version, index
+generation id, repository revision, worktree hash, language adapter versions,
+freshness metadata, code units, source ranges, content hashes, provenance,
+family records, canonical templates, variation points, exceptions, and evidence
+links once implemented. Searchable source evidence may use FTS5 where useful.
 
 Future schema work should keep separate tables for:
 
+- `schema_migrations`;
+- `index_generations`;
 - repository metadata;
 - indexed files and content hashes;
 - code units and source ranges;
@@ -24,23 +226,104 @@ Future schema work should keep separate tables for:
 - variations, exceptions, and counterexamples;
 - source evidence.
 
-## Repository revision and content hash
+`repogrammar status` must show journal mode. `repogrammar doctor` must run
+SQLite integrity checks, verify schema version, verify active generation
+consistency, and report lock state.
 
-Every indexed conclusion must be tied to a repository revision and content hash.
-Freshness checks must reject or mark stale evidence when file content changes.
-
-## Index generations
+## Index Generations
 
 Repository initialization and indexing must build a new index generation without
 overwriting the previous valid index. The new generation becomes active only
 after persistence validation succeeds. Cancellation or failure must preserve the
 previous valid generation.
 
-## Migration strategy
+Full rebuilds must write to a new generation and atomically activate it only
+after validation. All family and evidence records must bind to a
+`generation_id`. MCP serving should open the active database read-only where
+possible. Indexing is the only writer.
 
-Migration execution logic belongs under `src/rust/adapters/persistence/`. Migrations
-must be deterministic, versioned, tested, and documented before storage is
-implemented.
+## Logs
+
+RepoGrammar uses repo-local diagnostic logs:
+
+```text
+.repogrammar/logs/daemon.log
+.repogrammar/logs/index.log
+.repogrammar/logs/mcp.log
+.repogrammar/logs/telemetry.log
+```
+
+Logs must not contain source snippets, raw prompts, secrets, environment
+variables, raw error dumps, or unredacted absolute paths by default.
+Repo-local logs may include repo-relative paths; telemetry must not upload them.
+
+Supported log levels are `error`, `warn`, `info`, `debug`, and `trace`.
+`debug` and `trace` must not be enabled by default. Logs must rotate with a
+default maximum size of 10 MB per file and 5 retained files. `doctor --bundle`
+may generate a diagnostic bundle, but it must be redacted by default.
+
+Telemetry off does not disable local diagnostic logs. Local logs and telemetry
+are separate controls.
+
+## Locks and Unlock
+
+RepoGrammar uses explicit lock files under `.repogrammar/locks/`. An index lock
+must contain:
+
+```json
+{
+  "kind": "index",
+  "pid": 12345,
+  "hostname_hash": "sha256:...",
+  "os": "darwin",
+  "started_at": "2026-06-24T00:00:00Z",
+  "repogrammar_version": "0.1.0",
+  "generation": "gen-000003"
+}
+```
+
+`repogrammar unlock` must not be a blind delete command. It must:
+
+- check that the lock file exists;
+- check whether the recorded process is still alive;
+- check whether the lock belongs to the same OS and host;
+- try to acquire an advisory lock;
+- delete only confirmed stale locks;
+- refuse to delete an active process lock;
+- output the reason a lock was removed;
+- support `--force` only with explicit confirmation;
+- run or recommend `repogrammar doctor --storage` after removal.
+
+If RepoGrammar detects a network filesystem, Windows/WSL shared mount, or
+unsupported locking behavior, it must warn and recommend a separate
+`REPOGRAMMAR_DIR` such as `.repogrammar-linux` or `.repogrammar-win`.
+
+## Freshness and Sync
+
+Every query must check index freshness against the current repository state. If
+the index is missing, RepoGrammar must return clean fallback guidance rather
+than failing noisily:
+
+```text
+FALLBACK_TO_CODE_SEARCH
+reason: repository is not initialized
+guidance: run repogrammar init
+```
+
+If the index is stale, RepoGrammar must either return a stale warning or refuse
+family claims whose evidence changed.
+
+Auto-sync is optional in v0.1. The v0.1 baseline is `init`, `index`, `sync`,
+freshness warnings in `status`, and freshness checks before MCP claims. A future
+watcher may reparse changed units, mark affected families stale, and lazily
+recompute on query, but it should not eagerly recompute the whole repository by
+default.
+
+## Migration Strategy
+
+Migration execution logic belongs under `src/rust/adapters/persistence/`.
+Migrations must be deterministic, versioned, tested, and documented before
+storage is implemented.
 
 ## Non-goals
 

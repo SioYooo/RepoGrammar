@@ -44,13 +44,18 @@ bin --wires together--> interfaces + application + adapters
 The intended indexing flow is:
 
 ```text
-repository files -> Tree-sitter syntax adapter -> language-native semantic worker -> core IR -> application pipeline -> store port -> SQLite adapter
+repository files -> discovery/exclusion policy -> Tree-sitter syntax adapter -> language-native semantic worker -> core IR -> application pipeline -> store port -> repo-local SQLite adapter
 ```
 
 Query and conformance flows reverse that direction by reading stored family and
-source evidence through ports before returning interface-specific output.
+source evidence through ports before returning interface-specific output. The
+SQLite adapter writes repository-derived state only under `.repogrammar/` or the
+directory named by `REPOGRAMMAR_DIR`.
+
 Installer flows stay separate from repository indexing flows because they modify
 machine-level agent integration rather than repository-local index state.
+`install` and `uninstall` must not create or remove `.repogrammar/`; `init` and
+`uninit` own that lifecycle.
 
 ## Composition root
 
