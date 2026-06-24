@@ -20,3 +20,6 @@ path = "src/rust/lib.rs"
 [dependencies]
 
 [dev-dependencies]
+# Dev-only: protocol fixture tests must parse NDJSON as JSON without adding
+# runtime dependencies to the bootstrap core.
+serde_json = "1"

@@ -77,6 +77,17 @@ errors must use typed error codes; unsupported TypeScript compiler API versions
 use `SEMANTIC_VERSION_UNSUPPORTED` with a syntax-only fallback instead of
 semantic certainty.
 
+Strict content hashes use the protocol form `sha256:<64 hex characters>`.
+Fixtures and tests must reject placeholder hashes such as `sha256:fixture` and
+must not treat non-SHA-256 strings as auditable provenance.
+
+Protocol fixture tests must parse each NDJSON fixture line as JSON before
+asserting message type, protocol version, evidence content hash, progress work
+payloads, unsupported-version fallback payloads, and end-of-stream messages.
+These tests validate the protocol contract only; they do not prove that a
+TypeScript worker process exists or that runtime worker JSON is being consumed
+by indexing.
+
 ## Certainty
 
 Facts use categorical certainty:
@@ -105,6 +116,7 @@ semantic family membership.
 
 The bootstrap now pins semantic worker protocol version `1`, defines stable
 Rust mappings for fact-kind and certainty tokens, and includes schemas plus
-NDJSON fixtures for a TypeScript semantic fact and an unsupported-version
-fallback. It still does not launch a Node worker or parse worker JSON at
-runtime.
+JSON-parsed NDJSON fixture tests for a TypeScript semantic fact, progress, an
+unsupported-version fallback, and end-of-stream messages. It still does not
+launch a Node worker, run TypeScript compiler APIs, or parse worker JSON during
+real indexing.
