@@ -75,7 +75,7 @@ contracts, tests, and documentation can stabilize around pattern-family results.
 | Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
 | Python | Planned second official language | Experimental only until a focused v0.2 adapter is accepted |
 | Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
-| Semantics | Worker boundary and protocol placeholder exist | Language-native semantic workers provide compiler/API facts |
+| Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
 | Storage | SQLite and FTS5 are specified | Local evidence index with migrations and provenance |
 | State directory | Repo-local `.repogrammar/` is specified | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
@@ -144,6 +144,12 @@ workers under `src/`:
 src/rust: Rust core, analysis engine, CLI, MCP, storage, repository guard
 src/workers: future language-native semantic workers
 src/protocol: versioned worker protocol documents and schemas
+```
+
+Reference metadata that is not executable source lives outside `src/`:
+
+```text
+algorithms/paper: metadata-only algorithm and supply-chain reference archive
 ```
 
 The dependency direction and module ownership are documented in:

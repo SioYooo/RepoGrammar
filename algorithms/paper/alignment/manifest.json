@@ -1,0 +1,20 @@
+{
+  "domain": "alignment",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "Tree edit distance and ordered-tree alignment references",
+      "authors": ["UNKNOWN - select and verify primary sources before implementation"],
+      "url": "https://doi.org/10.1137/0218082",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_source_selection_not_final",
+      "used_by_milestone": ["M8", "M9"],
+      "implementation_notes": [
+        "Use alignment as one view among syntax, semantic, CFG, dataflow, API, and repo context views.",
+        "Keep role-specific weights config-backed and fixture-tested."
+      ]
+    }
+  ]
+}

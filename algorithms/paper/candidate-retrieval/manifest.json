@@ -1,0 +1,26 @@
+{
+  "domain": "candidate-retrieval",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "SourcererCC: Scaling Code Clone Detection to Big-Code",
+      "authors": [
+        "Hitesh Sajnani",
+        "Vaibhav Saini",
+        "Chanchal K. Roy",
+        "Cristina V. Lopes"
+      ],
+      "url": "https://arxiv.org/abs/1512.06448",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M7"],
+      "implementation_notes": [
+        "Use inverted-index and filtering ideas for retrieval only.",
+        "Attach bucket-cap and truncation provenance whenever candidates are dropped.",
+        "Do not equate token overlap with implementation-pattern family membership."
+      ]
+    }
+  ]
+}

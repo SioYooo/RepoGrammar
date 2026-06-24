@@ -87,6 +87,12 @@ Candidate discovery will find possible analogues without claiming family
 membership. Semantic compatibility filtering must run before family membership
 is claimed.
 
+The v0.1 mining design is Evidence-Constrained Multi-View Family Induction
+(EC-MVFI). Tree-sitter syntax, TypeScript compiler facts, framework roles,
+CFG/dataflow/effect views, API usage, and repository context are separate views.
+Weak agreement may rank candidates, but family claims require compatible
+source-backed evidence; unresolved or conflicting facts remain `UNKNOWN`.
+
 ## Alignment, anti-unification, and clustering
 
 Structural alignment compares candidates. Anti-unification derives shared

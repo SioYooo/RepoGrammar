@@ -61,7 +61,21 @@ protocol. The first planned transport is NDJSON over stdio because it isolates
 compiler crashes, supports multiple compiler versions, and avoids putting Node
 or other runtimes inside the Rust core.
 
-Protocol notes and a draft schema live under `src/protocol/`.
+Protocol notes, schemas, and fixtures live under `src/protocol/`.
+
+The v1 NDJSON envelope supports these message types:
+
+- `fact`
+- `progress`
+- `worker_error`
+- `end_of_stream`
+
+Fact messages use stable protocol tokens for fact kinds and certainty values.
+Evidence must carry a core-mappable code unit id, repository-relative path,
+strict SHA-256 content hash, repository revision, byte range, and note. Worker
+errors must use typed error codes; unsupported TypeScript compiler API versions
+use `SEMANTIC_VERSION_UNSUPPORTED` with a syntax-only fallback instead of
+semantic certainty.
 
 ## Certainty
 
@@ -86,3 +100,11 @@ translated into RepoGrammar-owned semantic facts and unified IR before entering
 Compiler-native semantic facts take precedence over structural heuristics.
 Structural similarity may generate candidates, but it must not alone prove
 semantic family membership.
+
+## Implementation status
+
+The bootstrap now pins semantic worker protocol version `1`, defines stable
+Rust mappings for fact-kind and certainty tokens, and includes schemas plus
+NDJSON fixtures for a TypeScript semantic fact and an unsupported-version
+fallback. It still does not launch a Node worker or parse worker JSON at
+runtime.

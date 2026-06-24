@@ -104,6 +104,9 @@ fn escape_json_string(value: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
+            control if (control as u32) <= 0x1f => {
+                escaped.push_str(&format!("\\u{:04x}", control as u32));
+            }
             other => escaped.push(other),
         }
     }
@@ -157,5 +160,29 @@ mod tests {
         );
 
         assert!(event.render_ndjson().contains("\"kind\":\"unknown\""));
+    }
+
+    #[test]
+    fn progress_schema_lists_every_initialization_stage() {
+        let schema = include_str!("../../protocol/progress-event.schema.json");
+
+        for stage in initialization_stages() {
+            assert!(schema.contains(stage.as_str()));
+        }
+    }
+
+    #[test]
+    fn ndjson_rendering_escapes_all_json_control_characters() {
+        let event = ProgressEvent::new(
+            ProgressStage::ProjectDiscovery,
+            "nul:\u{0000} backspace:\u{0008}",
+            WorkUnits::Unknown,
+        );
+        let rendered = event.render_ndjson();
+
+        assert!(rendered.contains("\\u0000"));
+        assert!(rendered.contains("\\u0008"));
+        assert!(!rendered.contains('\u{0000}'));
+        assert!(!rendered.contains('\u{0008}'));
     }
 }

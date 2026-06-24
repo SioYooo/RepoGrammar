@@ -1,0 +1,34 @@
+{
+  "domain": "evidence-selection",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "Maximum coverage problem",
+      "authors": ["Wikipedia contributors"],
+      "url": "https://en.wikipedia.org/wiki/Maximum_coverage_problem",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_non_primary_overview",
+      "used_by_milestone": ["M10", "M11"],
+      "implementation_notes": [
+        "Use greedy coverage as an auditable baseline for evidence selection.",
+        "Prioritize high-risk variation categories before low-value lexical diversity."
+      ]
+    },
+    {
+      "title": "Budgeted submodular maximization reference",
+      "authors": ["UNKNOWN - verify from primary source before implementation"],
+      "url": "https://arxiv.org/abs/2007.04937",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_title_and_authors_not_verified",
+      "used_by_milestone": ["M11"],
+      "implementation_notes": [
+        "Use only after an explicit budget model and deterministic tests exist.",
+        "Keep token-savings claims separate from actual paired A/B measurement."
+      ]
+    }
+  ]
+}

@@ -12,6 +12,8 @@ development, and governance documentation.
   guard usage, and testing policy.
 - `decisions/`: accepted architecture decisions. ADRs are normative once
   accepted.
+- `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
+  references used to design implementation milestones.
 - `roadmap.md`: current staged implementation plan and deferred work.
 
 Repository-local skills live under `.agents/skills/`. Durable but non-normative
@@ -35,6 +37,7 @@ context lives under `.agents/memories/`.
 - Metrics taxonomy: `specifications/metrics.md`.
 - Telemetry policy: `specifications/telemetry.md`.
 - Language-native semantic workers: `specifications/semantic-workers.md`.
+- Algorithm source archive: `../algorithms/paper/README.md`.
 - MVP language scope: `decisions/ADR-0005-ts-js-first-mvp.md`.
 - Quality gates: `development/repository-guard.md` and `development/testing.md`.
 

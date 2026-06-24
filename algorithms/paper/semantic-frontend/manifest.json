@@ -1,0 +1,48 @@
+{
+  "domain": "semantic-frontend",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "TypeScript wiki: Using the Compiler API",
+      "authors": ["Microsoft TypeScript maintainers"],
+      "url": "https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M3", "M4"],
+      "implementation_notes": [
+        "Use Program, CompilerHost, SourceFile, and TypeChecker only inside the TypeScript worker boundary.",
+        "Translate all compiler facts into RepoGrammar-owned semantic facts before returning to Rust core."
+      ]
+    },
+    {
+      "title": "A 10x faster TypeScript",
+      "authors": ["Microsoft TypeScript team"],
+      "url": "https://devblogs.microsoft.com/typescript/typescript-native-port/",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M3", "M4"],
+      "implementation_notes": [
+        "Treat TypeScript native-port API stability as a compatibility risk.",
+        "Do not claim semantic certainty when the worker API version is unsupported."
+      ]
+    },
+    {
+      "title": "TSConfig allowJs",
+      "authors": ["Microsoft TypeScript maintainers"],
+      "url": "https://www.typescriptlang.org/tsconfig/allowJs.html",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M3", "M4"],
+      "implementation_notes": [
+        "Support JavaScript projects through TypeScript compiler configuration where possible.",
+        "Keep JS support inside the TS/JS v0.1 language scope."
+      ]
+    }
+  ]
+}

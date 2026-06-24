@@ -24,6 +24,15 @@ Make the smallest coherent change. Keep source code under `src/`, keep
 third-party parser/storage/transport types at adapter boundaries, and update
 tests with code changes.
 
+For nontrivial implementation work, use parallel agent teams when independent
+work slices or review lanes exist. Give each agent clear ownership, avoid
+overlapping writes, and preserve user or agent changes already present in the
+worktree.
+
+Before accepting agent-team output into the main session, inspect the changed
+logic, run the relevant checks, and resolve conflicts by understanding the code
+instead of mechanically choosing one side.
+
 ## Verification
 
 Run formatting, clippy with warnings denied, tests, repository guard, guide

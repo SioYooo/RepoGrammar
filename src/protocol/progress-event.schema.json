@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repogrammar.local/schemas/progress-event.schema.json",
+  "title": "RepoGrammar progress event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stage", "message", "work"],
+  "properties": {
+    "stage": {
+      "type": "string",
+      "enum": [
+        "project_discovery",
+        "file_scanning",
+        "syntax_parsing",
+        "semantic_resolution",
+        "code_unit_extraction_normalization",
+        "candidate_discovery",
+        "family_construction",
+        "persistence_validation"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1 },
+    "work": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "type": "string", "const": "unknown" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "completed", "total"],
+          "properties": {
+            "kind": { "type": "string", "const": "known" },
+            "completed": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    }
+  }
+}
