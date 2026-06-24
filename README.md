@@ -85,7 +85,7 @@ structured object with `implemented: false`.
 | Area | Current state | Target shape |
 |---|---|---|
 | Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
-| Python | Planned second official language | Experimental only until a focused v0.2 adapter is accepted |
+| Python | Planned second official language; pre-v0.2 work is experimental dogfooding only | Experimental FastAPI, pytest, SQLAlchemy, and Pydantic validation until a focused v0.2 adapter is accepted |
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
@@ -93,6 +93,7 @@ structured object with `implemented: false`.
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
+| Optional providers | No provider dependency | CodeGraph may be considered only as an optional lower-layer evidence provider, not a required runtime |
 
 RepoGrammar does not depend on cloud services, local LLMs, embedding models,
 vector databases, or remote APIs for v0.1.
@@ -175,15 +176,19 @@ The dependency direction and module ownership are documented in:
 
 ## Roadmap
 
-The next implementation phase is semantic-worker boundary execution or
-parser-to-IR refinement:
+The next implementation phase should refine one boundary at a time from the
+v0.1 parallel development plan:
 
 - keep syntax-only code units structural and non-semantic;
 - keep semantic-worker execution, mining, query execution, and MCP transport
   deferred until parser output, storage, and semantic-worker boundaries are
   validated together.
+- keep experimental Python dogfooding, optional CodeGraph provider work, and
+  typed `UNKNOWN` governance explicitly scoped before implementation.
 
-See [docs/roadmap.md](docs/roadmap.md) for the staged plan.
+See [docs/roadmap.md](docs/roadmap.md) and
+[docs/plans/v0.1-parallel-development-plan.md](docs/plans/v0.1-parallel-development-plan.md)
+for the staged plan.
 
 ## Development
 

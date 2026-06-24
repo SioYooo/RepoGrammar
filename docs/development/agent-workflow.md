@@ -33,6 +33,13 @@ Before accepting agent-team output into the main session, inspect the changed
 logic, run the relevant checks, and resolve conflicts by understanding the code
 instead of mechanically choosing one side.
 
+Current v0.1 implementation planning is tracked in
+`docs/plans/v0.1-parallel-development-plan.md`. Use that plan to choose phase
+scope, ownership lanes, validation gates, and commit boundaries. Update the
+plan and matching `.agents/memories/` files whenever phase scope, experimental
+Python dogfooding, optional CodeGraph provider integration, or `UNKNOWN` policy
+changes.
+
 ## Verification
 
 Run formatting, clippy with warnings denied, tests, repository guard, guide

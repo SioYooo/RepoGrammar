@@ -75,6 +75,21 @@ Abstention prevents weak evidence from becoming a false claim. Reasons include
 low confidence, competing families, dynamic runtime behavior, and unsupported
 targets.
 
+## UNKNOWN governance
+
+`UNKNOWN` is a typed analysis result. It can be blocking, non-blocking,
+recoverable, or irreducible depending on which claim is affected and what
+evidence could resolve it. Reason codes include dynamic imports, monkey
+patching, pytest fixture injection, runtime dependency injection, unresolved
+imports, missing project configuration, missing dependencies, framework magic,
+macro or preprocessor ambiguity, build variant ambiguity, conflicting facts,
+stale evidence, and insufficient support.
+
+The canonical taxonomy and propagation rules live in
+`docs/specifications/unknowns.md`. New domain behavior that emits or consumes
+unknowns must update that file when it introduces a public reason code, class,
+or recovery action.
+
 ## Freshness
 
 Freshness connects evidence to content hashes and repository revisions. Unknown

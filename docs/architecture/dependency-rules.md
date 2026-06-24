@@ -13,6 +13,9 @@
 - `bin` may wire all layers together.
 - language-native workers under `src/workers/` may use their native compiler or
   language-service ecosystem behind a versioned protocol.
+- optional providers, including any future CodeGraph provider, belong behind
+  ports and adapters. Their SDK, CLI, MCP, or file formats must not enter
+  `core`, `ports`, or `application` as concrete third-party types.
 
 ## Forbidden dependencies
 
@@ -68,6 +71,17 @@ direct SQL calls or SQLite row types.
 MCP tool names, schemas, transport errors, and serialization rules belong in
 `src/rust/interfaces/mcp/`. Domain classifications are expressed in core types before
 they are serialized for MCP.
+
+## Optional provider boundary
+
+Optional providers such as a future CodeGraph provider may supply auxiliary
+candidate, call/dependency, or graph-neighborhood facts only through
+RepoGrammar-owned port types. Missing, stale, unavailable, or conflicting
+provider facts must not fail default indexing and must become typed `UNKNOWN` or
+auxiliary diagnostics for affected claims.
+
+RepoGrammar must not create, initialize, modify, delete, or require
+provider-owned local state such as `.codegraph/`.
 
 ## Test code boundary
 

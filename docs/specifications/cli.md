@@ -172,6 +172,10 @@ If call-graph functionality is later needed, it must live under a secondary
 namespace such as `repogrammar graph callers` and must not be presented as the
 primary value proposition.
 
+An optional lower-layer provider such as CodeGraph must not change this command
+surface. Provider facts may enrich future pattern-family evidence only after
+translation into RepoGrammar-owned evidence with provenance and freshness.
+
 ## Missing or stale indexes
 
 Query commands must check project initialization and freshness before making
@@ -206,6 +210,11 @@ stable JSON object to `stderr` rather than the human text block:
 
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
+
+Once query execution exists, analysis uncertainty must be reported as typed
+`UNKNOWN` with a reason code and affected claim. Missing-index fallback,
+not-yet-implemented query execution, stale-index refusal, and typed `UNKNOWN`
+are separate states and must not be collapsed into one error string.
 
 If repository-local state exists but pattern-family query execution is still
 unimplemented or no family evidence has been built, query commands must keep the

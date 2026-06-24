@@ -27,14 +27,36 @@
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
 
-## Next phase: semantic-worker boundary or parser-to-IR refinement
+## Next implementation plan
 
-- Keep syntax-only code units structural and non-semantic while validating the
-  next boundary.
-- Add Tree-sitter or parser-to-IR refinement only behind parser/language
-  adapters, without exposing parser types to core/application.
-- Keep semantic-worker execution, mining, query execution, and MCP transport
-  deferred until parser output and storage boundaries are validated together.
+RepoGrammar v0.1 now follows a product-first and dogfooding-aware phase plan.
+The detailed coordination artifact is
+`docs/plans/v0.1-parallel-development-plan.md`.
+
+1. Phase 1: repo-local lifecycle.
+2. Phase 1.5: language and provider abstraction.
+3. Phase 1.6: experimental Python dogfooding boundary.
+4. Phase 1.7: optional CodeGraph provider boundary.
+5. Phase 1.8: UNKNOWN governance.
+6. Phase 2: file discovery for official TS/JS and experimental Python.
+7. Phase 3: storage and generation.
+8. Phase 4: parsers.
+9. Phase 5: semantic and framework facts.
+10. Phase 6: pattern-family compression / EC-MVFI-lite.
+11. Phase 7: query CLI and MCP.
+12. Phase 8: install and uninstall.
+13. Phase 9: release fixtures and smoke gate.
+
+The current codebase has completed the repo-local lifecycle substrate,
+TS/JS discovery, generation-scoped SQLite storage, and syntax-only code-unit
+indexing. The next implementation slice should refine one boundary at a time:
+storage read paths and freshness, parser-to-IR, or semantic-worker execution.
+Keep syntax-only code units structural and non-semantic while validating the next
+boundary.
+
+Do not advance mining, query execution, or MCP serving until parser output,
+storage read paths, freshness checks, and evidence contracts are validated
+together.
 
 ## Command implementation path
 
@@ -59,6 +81,29 @@
 - v0.2 target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.
+- Python dogfooding before v0.2 is for internal adapter and `UNKNOWN`
+  validation only. It must not change the official v0.1 TS/JS support claim.
+
+## CodeGraph provider path
+
+- CodeGraph is a possible optional lower-layer graph/navigation provider.
+- RepoGrammar must work without CodeGraph and must not become a CodeGraph
+  wrapper.
+- CodeGraph-derived facts, if accepted later, can support candidate retrieval,
+  dependency context, and graph-neighborhood evidence. They cannot independently
+  prove pattern-family membership.
+- RepoGrammar must not create, initialize, modify, or delete `.codegraph/`.
+
+## UNKNOWN governance path
+
+- `UNKNOWN` is a first-class typed analysis result.
+- Dynamic behavior, missing project configuration, missing dependencies,
+  conflicting facts, stale evidence, and insufficient support must not be
+  guessed away.
+- Some unknowns block only specific claims, not necessarily every family
+  classification.
+- See `docs/specifications/unknowns.md` for the current taxonomy and recovery
+  guidance.
 
 ## Later phases
 

@@ -22,6 +22,7 @@
 - For nontrivial implementation work, use parallel agent teams where independent slices exist. Assign disjoint ownership, preserve other agents' and users' edits, and integrate results only through the main session after review.
 - After implementation, inspect the changed code logic before accepting or merging agent-team output into the main session. Verify behavior with the required checks and resolve conflicts semantically, not by blindly choosing one side.
 - Every code change must include corresponding tests and documentation changes in the same atomic commit.
+- Current v0.1 implementation planning is tracked in `docs/plans/v0.1-parallel-development-plan.md` and durable memories under `.agents/memories/`. Update those plan/memory files whenever phase scope, Python dogfooding, CodeGraph provider integration, or UNKNOWN policy changes.
 - Update normative requirements in `docs/`, reusable workflows in `.agents/skills/`, durable learned context in `.agents/memories/`, and only cross-cutting mandatory rules in this mirrored contract.
 - Never leave duplicated requirements inconsistent. Update the canonical document and every affected reference.
 

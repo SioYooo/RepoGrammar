@@ -80,6 +80,11 @@ compiler, type-checker, or LSP types belong only in semantic-worker adapters and
 workers. SQLite and SQL migration logic belong only in persistence adapters. MCP
 schemas and transport errors belong only in `interfaces/mcp`.
 
+Optional providers such as a future CodeGraph provider are lower-layer
+auxiliary evidence sources. They must be isolated behind ports/adapters,
+translated into RepoGrammar-owned facts, and treated as optional. Core and
+application logic must not require provider-owned local state or APIs.
+
 ## Why ports and adapters
 
 Pattern-family conclusions must be auditable and conservative. Keeping

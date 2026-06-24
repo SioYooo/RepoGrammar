@@ -43,7 +43,9 @@ Vitest.
 RepoGrammar v0.1 officially supports TypeScript and JavaScript only. Python is
 planned as the second official language and may appear earlier only as an
 experimental adapter. Experimental Python functionality must not be documented
-as production support.
+as production support. Experimental Python dogfooding exists to validate
+language-adapter, semantic-worker, provenance, and `UNKNOWN` boundaries before a
+future v0.2 support decision.
 
 Python v0.2 should prioritize FastAPI, pytest, SQLAlchemy, and Pydantic. Django
 is deferred until after the focused FastAPI/pytest subset validates the
@@ -60,6 +62,8 @@ language-adapter abstraction.
   `explore` commands.
 - No production-readiness or token-savings claims until measured evidence
   exists.
+- No mandatory CodeGraph dependency. CodeGraph may be considered only as an
+  optional lower-layer provider, not as RepoGrammar's product identity.
 
 ## Result discipline
 
@@ -70,6 +74,12 @@ runtime behavior must lead to abstention rather than certainty.
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Compiler-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints.
+
+`UNKNOWN` is a typed result with reason codes and affected claims, not an
+implementation failure by default. Some unknowns block specific semantic,
+security, persistence, or conformance claims while still allowing weaker
+structural observations. The canonical taxonomy lives in
+`docs/specifications/unknowns.md`.
 
 ## Installation and telemetry boundaries
 

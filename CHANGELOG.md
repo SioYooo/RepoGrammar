@@ -40,6 +40,17 @@
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.
+- v0.1 parallel development planning artifacts for repo-local lifecycle,
+  adapter/provider abstraction, experimental Python dogfooding, optional
+  CodeGraph provider boundaries, typed UNKNOWN governance, family compression,
+  query/MCP, installer, and release-smoke phases.
+- Experimental Python dogfooding plan and ADR that keep Python outside official
+  v0.1 production support while targeting FastAPI, pytest, SQLAlchemy, and
+  Pydantic validation.
+- Optional CodeGraph provider plan and ADR that allow future auxiliary provider
+  evidence without making CodeGraph a dependency or product wrapper.
+- UNKNOWN governance specification with typed unknown classes, reason codes,
+  claim-blocking semantics, and recovery-action guidance.
 - Mirrored `AGENTS.md` and `CLAUDE.md` governance contract.
 - Documentation system covering architecture, specifications, development
   workflow, ADRs, roadmap, skills, and memories.
@@ -68,3 +79,6 @@
   evidence remain deferred.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.
+- Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
+  domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
+  boundaries with the current syntax-only indexing baseline.

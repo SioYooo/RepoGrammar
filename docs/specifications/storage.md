@@ -144,6 +144,12 @@ syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
 semantic facts, families, evidence, and query read-path state are not stored.
 
+Experimental Python discovery, once accepted, must record its support level and
+must not be stored or reported as official v0.1 production support. Optional
+provider facts, including future CodeGraph-derived facts, must carry provider
+provenance and freshness metadata before they can participate in family
+evidence.
+
 ## Project Configuration
 
 Optional shared project configuration lives at the repository root:
@@ -209,6 +215,8 @@ Database source paths must be repository-relative. Manifest and telemetry may
 store a hash of the canonical repository root, but telemetry must not upload the
 raw path. Every family and evidence row must carry file content hash, source
 range, generation id, and repository revision metadata.
+Unknown facts must retain reason code, affected claim, freshness status, and
+recovery guidance where applicable.
 
 ## SQLite Responsibilities
 

@@ -17,3 +17,5 @@ Current accepted ADRs:
 - ADR-0006: Pattern-family-first CLI.
 - ADR-0007: Safe installation, progress, metrics, and telemetry contracts.
 - ADR-0008: Repo-local state boundary.
+- ADR-0009: Experimental Python dogfooding.
+- ADR-0010: Optional CodeGraph provider.

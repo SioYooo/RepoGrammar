@@ -74,6 +74,11 @@ family claims whose evidence changed. Freshness checks must compare the active
 index generation and repository state described in
 `docs/specifications/storage.md`.
 
+Typed analysis uncertainty must not be flattened into transport failure. Once
+query execution exists, MCP responses must preserve `UNKNOWN` class, reason
+code, affected claim, provenance, freshness status, and suggested recovery
+action where available.
+
 ## Serving mode
 
 `repogrammar serve` runs the MCP server once implemented. v0.1 serving behavior
@@ -95,6 +100,10 @@ and owned by the installation workflow.
 - Core types must not depend on MCP SDK types.
 - MCP responses may include semantic-worker-derived facts only after they have
   been translated into RepoGrammar-owned evidence and certainty categories.
+- Optional provider facts, including any future CodeGraph-derived facts, may
+  appear only after translation into RepoGrammar-owned evidence with provider
+  provenance and freshness metadata. Provider facts cannot independently prove
+  pattern-family membership.
 - Serialization tests are required before concrete schemas are accepted.
 - Any tool name, parameter, return-shape, or error-semantics change must use
   `.agents/skills/mcp-contract-change/SKILL.md`.

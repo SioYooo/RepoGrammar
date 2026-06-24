@@ -65,6 +65,10 @@ extensions, include/exclude patterns, framework adapters, and family thresholds.
 Malformed configuration must warn and fall back to safe defaults rather than
 failing indexing.
 
+Experimental Python discovery, when added, must be opt-in and marked
+experimental. It must not change the official v0.1 TS/JS support claim or allow
+Python syntax-only facts to become production semantic claims.
+
 ## Tree-sitter parsing
 
 Tree-sitter will be used in parsing and language adapters. AST nodes must be
@@ -99,6 +103,17 @@ authoritative source.
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is
 designed and accepted.
+
+## Optional providers
+
+Optional providers such as a future CodeGraph provider may enrich candidate
+retrieval, call/dependency context, or graph-neighborhood views after their
+facts are translated into RepoGrammar-owned evidence. Provider facts must carry
+provider provenance and freshness metadata. They cannot independently prove
+pattern-family membership and must not be required for default indexing.
+
+Unavailable, stale, or conflicting provider facts become auxiliary diagnostics,
+typed `UNKNOWN`, or abstention for the affected claim.
 
 ## Code-unit extraction
 
@@ -140,6 +155,12 @@ Vitest. Framework rules belong in `src/rust/adapters/frameworks/`.
 
 Classification must produce dominant pattern, variation, exception, or unknown
 with evidence and freshness checks.
+
+`UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
+`docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey
+patching, pytest fixture injection, runtime dependency injection, macro or
+preprocessor ambiguity, stale evidence, conflicts, or insufficient support must
+remain visible to query and MCP callers.
 
 ## Sync and freshness
 

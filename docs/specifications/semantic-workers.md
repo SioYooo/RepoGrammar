@@ -45,14 +45,19 @@ TypeScript tooling is not yet validated.
 ## Python worker strategy
 
 Python is planned as the second official language, not part of v0.1 production
-support. Before v0.2, Python work may only be experimental and should be scoped
-to syntax-only or limited semantic evaluation. The first formal subset should
-prioritize FastAPI, pytest, SQLAlchemy, and Pydantic. Django is deferred.
+support. Before v0.2, Python work may only be experimental dogfooding and should
+be scoped to syntax-only or limited semantic evaluation. The first formal subset
+should prioritize FastAPI, pytest, SQLAlchemy, and Pydantic. Django and C/C++
+are deferred.
 
 Python semantic facts should use a language-native analyzer such as Pyright,
 Mypy, a language server, or a framework adapter where appropriate. Dynamic
 imports, monkey patching, decorator rewrites, pytest fixture injection, Django
 settings, and runtime dependency injection often require `UNKNOWN`.
+
+Experimental Python results must carry support-level and unknown-reason metadata
+so CLI, MCP, storage, and docs cannot accidentally present them as official
+v0.1 TS/JS support.
 
 ## Protocol
 
@@ -105,6 +110,10 @@ Facts use categorical certainty:
 
 Do not average conflicting analyzer results. Conflicts normally become
 `CONFLICTING` and lead to `UNKNOWN` or abstention.
+
+`UNKNOWN` values should include a reason code and affected claim whenever they
+cross a CLI, MCP, storage, metric, or protocol boundary. The shared taxonomy is
+defined in `docs/specifications/unknowns.md`.
 
 ## Core boundary
 

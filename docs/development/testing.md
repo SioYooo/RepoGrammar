@@ -52,6 +52,16 @@ allowed.
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
   accepted `null` targets, and accepted non-blank targets.
+- Experimental Python dogfooding tests, once added, must be opt-in and must
+  assert experimental support level plus typed `UNKNOWN` for dynamic imports,
+  monkey patching, pytest fixture injection, runtime dependency injection,
+  unresolved imports, and framework magic.
+- Optional provider tests, once added, must cover provider absent, present,
+  stale, and conflicting states without making CodeGraph or any other provider
+  required for default tests.
+- UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
+  irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
+  metrics code.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
   constructor rather than constructing impossible progress states directly.
 

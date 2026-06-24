@@ -83,7 +83,8 @@ RepoGrammar must:
 
 ## Follow-up work
 
-Implement repository-local state creation, Git hygiene, manifest writing,
+Extend the implemented repo-local lifecycle, Git hygiene, manifest writing,
 SQLite migrations, generation activation, status/doctor checks, logs, locks,
-safe unlock, missing-index fallback, and the single-tool MCP schema with tests
-before enabling production indexing or MCP serving.
+safe unlock, and missing-index fallback with freshness manifests, query read
+paths, family/evidence persistence, MCP serving, and installer wiring before
+enabling production family queries or MCP serving.

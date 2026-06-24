@@ -31,10 +31,12 @@ Index metadata, provenance, and searchable source evidence can live in one
 repository-local database file. ADR-0008 defines the `.repogrammar/` state
 boundary, global-state limits, and generation/freshness requirements. The first
 storage substrate creates generation-scoped databases and an active-generation
-pointer; wiring that substrate into `index`, `status`, `doctor`, query reads,
-and any top-level active database path remains future work.
+pointer. Current `index`, `sync`, `status`, and `doctor` wiring uses that
+substrate for TS/JS discovery metadata and syntax-only code units. Query read
+paths, family/evidence records, freshness manifests, FTS5 source-evidence
+boundaries, and any top-level active database path remain future work.
 
 ## Follow-up work
 
-Wire discovery output into validated generations, then design freshness checks,
-query read paths, and FTS5 table boundaries before storing source evidence.
+Design freshness checks, query read paths, family/evidence storage, and FTS5
+table boundaries before storing source evidence.
