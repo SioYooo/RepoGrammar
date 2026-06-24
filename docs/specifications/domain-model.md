@@ -9,6 +9,13 @@ A `CodeUnit` is a repository-owned analyzable source unit such as a function,
 class, module, or test case. It carries a language, kind, source range, and
 provenance. It must not contain Tree-sitter nodes or transport-specific types.
 
+Current syntax-only indexing can persist `CodeUnit` records for modules,
+functions, assigned arrow functions, classes, methods, React function
+components, custom hooks, Express route calls, and Jest/Vitest suite or test
+blocks. These records are structural candidates only. They are not semantic
+facts, resolved symbols, framework-equivalence claims, or pattern-family
+membership evidence.
+
 ## Unified IR
 
 The unified IR is a lightweight RepoGrammar representation derived from parser

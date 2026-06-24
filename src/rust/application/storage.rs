@@ -2,8 +2,10 @@
 
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexStoreError, IndexedFileRecord, StorageInspection,
+    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    StorageInspection,
 };
+use std::path::{Component, Path};
 
 pub fn prepare_index_generation(
     store: &impl IndexStore,
@@ -19,6 +21,17 @@ pub fn record_indexed_file(
     validate_indexed_file(file)?;
     store
         .record_indexed_file(generation, file)
+        .map_err(index_store_error)
+}
+
+pub fn record_code_unit(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    unit: &IndexedCodeUnitRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_code_unit(unit)?;
+    store
+        .record_code_unit(generation, unit)
         .map_err(index_store_error)
 }
 
@@ -52,12 +65,75 @@ fn validate_indexed_file(file: &IndexedFileRecord) -> Result<(), RepoGrammarErro
             "indexed file path must not be empty".to_string(),
         ));
     }
+    validate_repo_relative_path(&file.path)?;
     if file.language.trim().is_empty() {
         return Err(RepoGrammarError::InvalidInput(
             "indexed file language must not be empty".to_string(),
         ));
     }
     Ok(())
+}
+
+fn validate_code_unit(unit: &IndexedCodeUnitRecord) -> Result<(), RepoGrammarError> {
+    if unit.id.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "code unit id must not be empty".to_string(),
+        ));
+    }
+    if unit.path.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "code unit path must not be empty".to_string(),
+        ));
+    }
+    validate_repo_relative_path(&unit.path)?;
+    if unit.language.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "code unit language must not be empty".to_string(),
+        ));
+    }
+    if unit.kind.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "code unit kind must not be empty".to_string(),
+        ));
+    }
+    if unit.start_byte > unit.end_byte {
+        return Err(RepoGrammarError::InvalidInput(
+            "code unit source range start must not exceed end".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repo_relative_path(path: &str) -> Result<(), RepoGrammarError> {
+    if Path::new(path).is_absolute() {
+        return Err(RepoGrammarError::InvalidInput(
+            "path must be repository-relative".to_string(),
+        ));
+    }
+    if path.contains('\\') || looks_like_windows_absolute_path(path) {
+        return Err(RepoGrammarError::InvalidInput(
+            "path must be repository-relative".to_string(),
+        ));
+    }
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir
+            | Component::ParentDir
+            | Component::Prefix(_)
+            | Component::RootDir => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "path must not traverse outside repository".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn looks_like_windows_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
@@ -91,6 +167,14 @@ mod tests {
             Ok(())
         }
 
+        fn record_code_unit(
+            &self,
+            _generation: &GenerationHandle,
+            _unit: &IndexedCodeUnitRecord,
+        ) -> Result<(), IndexStoreError> {
+            Ok(())
+        }
+
         fn validate_generation(
             &self,
             _generation: &GenerationHandle,
@@ -109,6 +193,7 @@ mod tests {
             Ok(StorageInspection {
                 active_generation: Some("gen-000001".to_string()),
                 schema_version: Some(STORAGE_SCHEMA_VERSION),
+                code_unit_count: Some(0),
                 journal_mode: Some("wal".to_string()),
                 foreign_keys_enabled: Some(true),
                 busy_timeout_ms: Some(5_000),
@@ -135,6 +220,20 @@ mod tests {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
         record_indexed_file(&store, &generation, &file("src/a.ts")).expect("record file");
+        record_code_unit(
+            &store,
+            &generation,
+            &IndexedCodeUnitRecord {
+                id: "unit:src/a.ts#module:0-1".to_string(),
+                path: "src/a.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "module".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+                content_hash: file("src/a.ts").content_hash,
+            },
+        )
+        .expect("record unit");
         validate_index_generation(&store, &generation).expect("validate generation");
         activate_index_generation(&store, &generation).expect("activate generation");
         let inspection = inspect_index_storage(&store).expect("inspect storage");
@@ -157,5 +256,70 @@ mod tests {
         let error = record_indexed_file(&store, &generation, &missing_language)
             .expect_err("empty language must fail");
         assert!(error.to_string().contains("language"));
+    }
+
+    #[test]
+    fn code_unit_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let hash = file("src/a.ts").content_hash;
+        let mut unit = IndexedCodeUnitRecord {
+            id: "unit:src/a.ts#module:0-1".to_string(),
+            path: "src/a.ts".to_string(),
+            language: "typescript".to_string(),
+            kind: "module".to_string(),
+            start_byte: 0,
+            end_byte: 1,
+            content_hash: hash,
+        };
+
+        let mut missing_id = unit.clone();
+        missing_id.id = " ".to_string();
+        assert!(record_code_unit(&store, &generation, &missing_id)
+            .expect_err("missing id")
+            .to_string()
+            .contains("id"));
+
+        let mut absolute_path = unit.clone();
+        absolute_path.path = "/tmp/a.ts".to_string();
+        assert!(record_code_unit(&store, &generation, &absolute_path)
+            .expect_err("absolute path")
+            .to_string()
+            .contains("repository-relative"));
+
+        let mut windows_absolute = unit.clone();
+        windows_absolute.path = "C:\\tmp\\a.ts".to_string();
+        assert!(record_code_unit(&store, &generation, &windows_absolute)
+            .expect_err("windows absolute path")
+            .to_string()
+            .contains("repository-relative"));
+
+        let mut traversal = unit.clone();
+        traversal.path = "../a.ts".to_string();
+        assert!(record_code_unit(&store, &generation, &traversal)
+            .expect_err("traversal path")
+            .to_string()
+            .contains("outside repository"));
+
+        let mut missing_language = unit.clone();
+        missing_language.language = " ".to_string();
+        assert!(record_code_unit(&store, &generation, &missing_language)
+            .expect_err("missing language")
+            .to_string()
+            .contains("language"));
+
+        let mut missing_kind = unit.clone();
+        missing_kind.kind = " ".to_string();
+        assert!(record_code_unit(&store, &generation, &missing_kind)
+            .expect_err("missing kind")
+            .to_string()
+            .contains("kind"));
+
+        unit.start_byte = 2;
+        unit.end_byte = 1;
+        assert!(record_code_unit(&store, &generation, &unit)
+            .expect_err("reversed range")
+            .to_string()
+            .contains("range"));
     }
 }

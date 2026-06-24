@@ -110,18 +110,20 @@ manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
 configuration. Once SQLite exists, it must also check database integrity,
 schema version, journal mode, and active generation consistency.
-During the current file-manifest-only phase, `doctor` is wired to SQLite storage
-health for the active generation. It must still distinguish metadata-only
-indexing from parser/code-unit/family indexing.
+During the current syntax-only phase, `doctor` is wired to SQLite storage health
+for the active generation. It must still distinguish file-manifest-only,
+syntax-only code-unit, and future family-evidence indexing.
 
 `repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. They run TS/JS discovery, store repo-relative
-file metadata in a new generation-scoped SQLite database, validate the
-generation, and atomically activate `.repogrammar/current-generation`. Human and
-JSON output must report `file_manifest_only`, `indexed_units: 0`, `parser:
-deferred`, and `mining: deferred`. If storage health is already unhealthy, they
-must refuse and direct the user to `repogrammar doctor` rather than masking the
-corruption with a new generation.
+repository-local state directory. They run TS/JS discovery, read source through a
+repo-relative hash-checked boundary, store repo-relative file metadata and
+syntax-only code-unit records in a new generation-scoped SQLite database,
+validate the generation, and atomically activate
+`.repogrammar/current-generation`. Human and JSON output must report
+`indexing: syntax_only_code_units`, the actual `indexed_units` count,
+`parser: syntax_only`, `semantic_worker: deferred`, and `mining: deferred`. If
+storage health is already unhealthy, they must refuse and direct the user to
+`repogrammar doctor` rather than masking the corruption with a new generation.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
@@ -185,8 +187,9 @@ guidance: run repogrammar init
 During the bootstrap, pattern-family query commands use this fallback shape and
 append explicit deferred-status text that query execution still requires stored
 pattern-family evidence. `status` and `doctor` may report a clean
-not-initialized state without opening storage. They must not imply that parser,
-semantic-worker execution, mining, query execution, or MCP serving has run.
+not-initialized state without opening storage. Stored syntax-only code units are
+not query support; query commands must not imply that semantic-worker execution,
+mining, query execution, or MCP serving has run.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -204,6 +207,14 @@ stable JSON object to `stderr` rather than the human text block:
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
 
+If repository-local state exists but pattern-family query execution is still
+unimplemented or no family evidence has been built, query commands must keep the
+same `FALLBACK_TO_CODE_SEARCH` marker but use a reason such as `query execution
+requires pattern-family evidence`, not `repository is not initialized`.
+If repository status cannot be read safely, the fallback must direct the user to
+`repogrammar doctor` instead of masking corrupted state as an uninitialized
+repository.
+
 ## Current implementation status
 
 The bootstrap recognizes the command surface and required options. `init`
@@ -212,12 +223,14 @@ lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
 repo-local lifecycle information without claiming parser/mining support.
-`index` and `sync` create metadata-only SQLite generations from the TS/JS file
-discovery substrate. Their JSON output includes `generation_id`,
-`discovered_files`, `stored_files`, `indexed_units: 0`, `indexing:
-file_manifest_only`, `parser: deferred`, and `mining: deferred`; they do not
-store source snippets, absolute paths, parser facts, code units, families, or
-evidence.
+`index` and `sync` create syntax-only SQLite generations from the TS/JS file
+discovery substrate and dependency-free structural extractor. Their JSON output
+includes `generation_id`, `discovered_files`, `stored_files`, the actual
+`indexed_units` count, `indexing: syntax_only_code_units`, `parser:
+syntax_only`, `semantic_worker: deferred`, and `mining: deferred`; they do not
+store source snippets, absolute paths, semantic facts, families, or evidence.
+`files` and `units` still use the stable query fallback until a read path and
+query contract are implemented.
 Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
 not-implemented guidance when no validated index is available, and return a
 structured fallback object when `--json` is present. Commands that install agent

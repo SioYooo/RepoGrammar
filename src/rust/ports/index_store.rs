@@ -21,9 +21,21 @@ pub struct IndexedFileRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedCodeUnitRecord {
+    pub id: String,
+    pub path: String,
+    pub language: String,
+    pub kind: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub content_hash: ContentHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageInspection {
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
+    pub code_unit_count: Option<u64>,
     pub journal_mode: Option<String>,
     pub foreign_keys_enabled: Option<bool>,
     pub busy_timeout_ms: Option<u32>,
@@ -45,6 +57,12 @@ pub trait IndexStore {
         &self,
         generation: &GenerationHandle,
         file: &IndexedFileRecord,
+    ) -> Result<(), IndexStoreError>;
+
+    fn record_code_unit(
+        &self,
+        generation: &GenerationHandle,
+        unit: &IndexedCodeUnitRecord,
     ) -> Result<(), IndexStoreError>;
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;

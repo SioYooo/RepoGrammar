@@ -32,10 +32,11 @@
   migrations, WAL and foreign-key PRAGMAs, required-table validation,
   repository-relative indexed-file records, active-generation pointer
   activation, and rollback preservation when validation fails.
-- File-manifest-only `index` and `sync` integration that runs TS/JS discovery,
-  stores repo-relative file metadata in a new SQLite generation, validates it,
-  and atomically activates `.repogrammar/current-generation` without claiming
-  parser, code-unit, or family evidence.
+- Syntax-only `index` and `sync` integration that runs TS/JS discovery, reads
+  source through a repo-relative hash-checked boundary, stores repo-relative file
+  metadata and structural code-unit records in a new SQLite generation, validates
+  it, and atomically activates `.repogrammar/current-generation` without claiming
+  semantic-worker, mining, query, or family evidence.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.
@@ -62,8 +63,8 @@
 - Documented safe repo-local lifecycle behavior, including state directory
   override validation, Git ignore hygiene, bootstrap manifest status, and
   conservative lock/log handling.
-- Documented that discovery-to-storage file-manifest generations are implemented
-  while parser, code-unit extraction, semantic-worker execution, query execution,
-  and family evidence remain deferred.
+- Documented that discovery-to-storage syntax-only code-unit generations are
+  implemented while semantic-worker execution, query execution, and family
+  evidence remain deferred.
 - Documented `rusqlite` as the first production dependency, constrained to the
   persistence adapter for repository-local SQLite storage.

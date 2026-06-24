@@ -366,7 +366,7 @@ fn repo_relative_string(path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut state = [
         0x6a09e667u32,
         0xbb67ae85,

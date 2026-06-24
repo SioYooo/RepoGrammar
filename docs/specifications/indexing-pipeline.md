@@ -22,14 +22,17 @@ Repository files
 ## Bootstrap status
 
 The repository currently defines module boundaries, semantic-worker protocol
-placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, and
-file-manifest-only `index`/`sync` wiring. The current CLI can discover TS/JS
-files, store repo-relative file metadata in a generation-scoped SQLite database,
-validate that generation, and activate `.repogrammar/current-generation`.
+placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
+dependency-free syntax-only code-unit extractor, and `index`/`sync` wiring. The
+current CLI can discover TS/JS files, read source through a hash-checked
+repo-relative boundary, store repo-relative file metadata and structural code
+units in a generation-scoped SQLite database, validate that generation, and
+activate `.repogrammar/current-generation`.
 
-This slice does not parse real code, call a TypeScript compiler, extract code
-units, align structures, anti-unify templates, cluster families, persist family
-evidence, or answer query commands from stored evidence.
+This slice does not use Tree-sitter, call a TypeScript compiler, build unified
+IR, align structures, anti-unify templates, cluster families, persist family
+evidence, or answer query commands from stored evidence. Syntax-only code units
+are structural candidates, not semantic or family claims.
 
 ## File discovery and exclusions
 
@@ -67,6 +70,14 @@ failing indexing.
 Tree-sitter will be used in parsing and language adapters. AST nodes must be
 converted into `CodeUnit` and unified IR types before entering `core`.
 
+The current implementation uses a dependency-free syntax-only extractor as a
+bootstrap parser adapter. It recognizes modules, functions, assigned arrow
+functions, classes, methods, React function components, custom hooks, Express
+route calls, and Jest/Vitest `describe`/`it`/`test` blocks by structural syntax
+only. It preserves byte ranges, returns partial units with diagnostics for
+unbalanced syntax, and stores only RepoGrammar-owned `CodeUnit` metadata.
+Tree-sitter integration remains planned.
+
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
 facts.
@@ -92,7 +103,9 @@ designed and accepted.
 ## Code-unit extraction
 
 Extraction identifies functions, classes, modules, tests, and framework-specific
-units. TypeScript and JavaScript are the first language targets.
+units. TypeScript and JavaScript are the first language targets. Current stored
+unit kinds are syntax-only and include module, function, arrow function, class,
+method, React component, React hook, Express route, test suite, and test case.
 
 ## Normalization and fingerprinting
 

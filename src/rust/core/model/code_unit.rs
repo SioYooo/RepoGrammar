@@ -46,13 +46,47 @@ pub enum Language {
     Unknown(String),
 }
 
+impl Language {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::TypeScript => "typescript",
+            Self::JavaScript => "javascript",
+            Self::Unknown(value) => value.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeUnitKind {
-    Function,
-    Class,
     Module,
+    Function,
+    ArrowFunction,
+    Class,
+    Method,
+    ReactComponent,
+    ReactHook,
+    ExpressRoute,
+    TestSuite,
     TestCase,
     Unknown,
+}
+
+impl CodeUnitKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Module => "module",
+            Self::Function => "function",
+            Self::ArrowFunction => "arrow_function",
+            Self::Class => "class",
+            Self::Method => "method",
+            Self::ReactComponent => "react_component",
+            Self::ReactHook => "react_hook",
+            Self::ExpressRoute => "express_route",
+            Self::TestSuite => "test_suite",
+            Self::TestCase => "test_case",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

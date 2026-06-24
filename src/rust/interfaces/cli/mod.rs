@@ -152,7 +152,9 @@ where
         [command, rest @ ..] if is_project_lifecycle_command(command) => {
             handle_project_lifecycle(command, rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if is_query_command(command) => handle_query(command, rest),
+        [command, rest @ ..] if is_query_command(command) => {
+            handle_query(command, rest, current_dir, env_lookup, runtime)
+        }
         [command, rest @ ..] if is_installer_command(command) => handle_installer(command, rest),
         [command, rest @ ..] if command == "stats" => handle_stats(rest),
         [command, rest @ ..] if command == "telemetry" => handle_telemetry(rest),
@@ -238,18 +240,48 @@ where
     }
 }
 
-fn handle_query(command: &str, rest: &[String]) -> CliOutput {
+fn handle_query<F>(
+    command: &str,
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
     let options = match parse_query_options(rest) {
         Ok(options) => options,
         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    let (reason, guidance) = match runtime.repository_status(request) {
+        Ok(report) => match report.status {
+            RepositoryStatus::Initialized { .. } => (
+                "query execution requires pattern-family evidence",
+                "run repogrammar index after pattern-family indexing is implemented",
+            ),
+            RepositoryStatus::NotInitialized => {
+                ("repository is not initialized", "run repogrammar init")
+            }
+            RepositoryStatus::CorruptedManifest => {
+                ("repository status is unavailable", "run repogrammar doctor")
+            }
+        },
+        Err(_) => ("repository status is unavailable", "run repogrammar doctor"),
     };
 
     if options.json {
         return CliOutput::failure(
             2,
             format!(
-                "{{\"status\":\"FALLBACK_TO_CODE_SEARCH\",\"reason\":\"repository is not initialized\",\"guidance\":\"run repogrammar init\",\"command\":\"{}\",\"implemented\":false}}\n",
-                json_string(command)
+                "{{\"status\":\"FALLBACK_TO_CODE_SEARCH\",\"reason\":\"{}\",\"guidance\":\"{}\",\"command\":\"{}\",\"implemented\":false}}\n",
+                json_string(reason),
+                json_string(guidance),
+                json_string(command),
             ),
         );
     }
@@ -257,7 +289,7 @@ fn handle_query(command: &str, rest: &[String]) -> CliOutput {
     CliOutput::failure(
         2,
         format!(
-            "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\ncommand: repogrammar {command} is not implemented yet; query execution requires a validated pattern-family index\n"
+            "FALLBACK_TO_CODE_SEARCH\nreason: {reason}\nguidance: {guidance}\ncommand: repogrammar {command} is not implemented yet; query execution requires a validated pattern-family index\n"
         ),
     )
 }
@@ -495,8 +527,9 @@ fn handle_deferred_long_running(command: &str, options: &LifecycleOptions) -> Cl
     )
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct QueryOptions {
+    project_path: Option<String>,
     json: bool,
 }
 
@@ -716,10 +749,13 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
-            "--project" | "--token-budget" => {
-                if rest.get(index + 1).is_none() {
-                    return Err(format!("{} requires a value", rest[index]));
-                }
+            "--project" => {
+                let value = option_value(rest, index, "--project", "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--token-budget" => {
+                option_value(rest, index, "--token-budget", "a token budget")?;
                 index += 2;
             }
             "--json" => {
@@ -897,11 +933,12 @@ fn index_outcome_human(
     options: &LifecycleOptions,
 ) -> String {
     let mut output = format!(
-        "{command}: file discovery metadata stored\nactive_generation: {}\ndiscovered_files: {}\nstored_files: {}\nskipped_paths: {}\nindexed_units: 0\nindexing: file_manifest_only\nparser: deferred\nmining: deferred\nprogress: {}\n",
+        "{command}: syntax-only code units stored\nactive_generation: {}\ndiscovered_files: {}\nstored_files: {}\nskipped_paths: {}\nindexed_units: {}\nindexing: syntax_only_code_units\nparser: syntax_only\nsemantic_worker: deferred\nmining: deferred\nprogress: {}\n",
         outcome.active_generation.as_deref().unwrap_or("none"),
         outcome.discovered_files,
         outcome.discovered_files,
         outcome.skipped_paths,
+        outcome.indexed_units,
         options.progress.as_str()
     );
     for warning in &outcome.warnings {
@@ -918,12 +955,13 @@ fn index_outcome_json(
     options: &LifecycleOptions,
 ) -> String {
     format!(
-        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":0,\"indexing\":\"file_manifest_only\",\"parser\":\"deferred\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
+        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":{},\"indexing\":\"syntax_only_code_units\",\"parser\":\"syntax_only\",\"semantic_worker\":\"deferred\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
         json_string(command),
         optional_json_string(outcome.active_generation.as_deref()),
         outcome.discovered_files,
         outcome.discovered_files,
         outcome.skipped_paths,
+        outcome.indexed_units,
         options.progress.as_str(),
         json_array(&outcome.warnings)
     )
@@ -1185,6 +1223,7 @@ fn implementation_status(status: RepositoryImplementationStatus) -> &'static str
         RepositoryImplementationStatus::NotImplemented => "not_implemented",
         RepositoryImplementationStatus::Available => "available",
         RepositoryImplementationStatus::FileManifestOnly => "file_manifest_only",
+        RepositoryImplementationStatus::SyntaxOnlyCodeUnits => "syntax_only_code_units",
         RepositoryImplementationStatus::Unhealthy => "unhealthy",
     }
 }
@@ -1208,6 +1247,7 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::StorageNoActiveGeneration => "STORAGE_NO_ACTIVE_GENERATION",
         RepositoryDoctorCode::IndexingNotImplemented => "INDEXING_NOT_IMPLEMENTED",
         RepositoryDoctorCode::IndexingFileManifestOnly => "INDEXING_FILE_MANIFEST_ONLY",
+        RepositoryDoctorCode::IndexingSyntaxOnlyCodeUnits => "INDEXING_SYNTAX_ONLY_CODE_UNITS",
     }
 }
 
@@ -1274,9 +1314,11 @@ fn json_string(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapters::filesystem::discovery::FilesystemFileDiscovery;
+    use crate::adapters::filesystem::source_store::FilesystemSourceStore;
+    use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::application::indexing::{
-        index_repository_with_discovery_and_store, IndexingRequest,
+        index_repository_with_discovery_parser_and_store, IndexingRequest,
     };
     use crate::application::repository::DEFAULT_STATE_DIR;
     use crate::application::repository::{
@@ -1336,12 +1378,14 @@ mod tests {
                 ));
             }
 
-            index_repository_with_discovery_and_store(
+            index_repository_with_discovery_parser_and_store(
                 IndexingRequest {
                     repository_root: request.repository_root,
                     max_file_bytes: request.max_file_bytes,
                 },
                 &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
                 &store,
             )
         }
@@ -1396,10 +1440,12 @@ mod tests {
 
     #[test]
     fn pattern_family_command_surface_is_recognized() {
+        let workspace = TempWorkspace::new("cli-query-surface");
+        let env = |_: &str| None;
         for command in [
             "find", "families", "family", "member", "explain", "check", "files", "units",
         ] {
-            let output = run([command]);
+            let output = run_with_context([command], workspace.path(), &env);
 
             assert_eq!(output.status, 2);
             assert!(output.stderr.starts_with(
@@ -1412,17 +1458,23 @@ mod tests {
 
     #[test]
     fn query_options_are_accepted() {
-        let output = run([
-            "find",
-            "--project",
-            ".",
-            "--token-budget",
-            "8000",
-            "--json",
-            "--include-variations",
-            "--include-exceptions",
-            "src/user.ts",
-        ]);
+        let workspace = TempWorkspace::new("cli-query-options");
+        let env = |_: &str| None;
+        let output = run_with_context(
+            [
+                "find",
+                "--project",
+                ".",
+                "--token-budget",
+                "8000",
+                "--json",
+                "--include-variations",
+                "--include-exceptions",
+                "src/user.ts",
+            ],
+            workspace.path(),
+            &env,
+        );
 
         assert_eq!(output.status, 2);
         assert!(output.stdout.is_empty());
@@ -1437,10 +1489,12 @@ mod tests {
 
     #[test]
     fn every_query_command_supports_json_missing_index_fallback() {
+        let workspace = TempWorkspace::new("cli-query-missing-index");
+        let env = |_: &str| None;
         for command in [
             "find", "families", "family", "member", "explain", "check", "files", "units",
         ] {
-            let output = run([command, "--json"]);
+            let output = run_with_context([command, "--json"], workspace.path(), &env);
 
             assert_eq!(output.status, 2);
             assert!(output.stdout.is_empty());
@@ -1452,6 +1506,62 @@ mod tests {
             assert_eq!(fallback["command"], command);
             assert_eq!(fallback["implemented"], false);
         }
+    }
+
+    #[test]
+    fn query_fallback_distinguishes_initialized_state_from_missing_state() {
+        let workspace = TempWorkspace::new("cli-query-initialized-fallback");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let output =
+            run_with_context_and_runtime(["find", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(
+            fallback["reason"],
+            "query execution requires pattern-family evidence"
+        );
+        assert_eq!(
+            fallback["guidance"],
+            "run repogrammar index after pattern-family indexing is implemented"
+        );
+        assert_eq!(fallback["implemented"], false);
+    }
+
+    #[test]
+    fn query_fallback_reports_unavailable_repository_status() {
+        let workspace = TempWorkspace::new("cli-query-corrupted-state");
+        let env = |_: &str| None;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        fs::write(
+            workspace
+                .path()
+                .join(DEFAULT_STATE_DIR)
+                .join("manifest.json"),
+            "broken",
+        )
+        .expect("corrupt manifest");
+
+        let output = run_with_context(["find", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 2);
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(fallback["reason"], "repository status is unavailable");
+        assert_eq!(fallback["guidance"], "run repogrammar doctor");
+        assert_eq!(fallback["implemented"], false);
     }
 
     #[test]
@@ -1557,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn index_json_stores_file_manifest_without_claiming_code_units() {
+    fn index_json_stores_syntax_only_code_units_without_family_claims() {
         let workspace = TempWorkspace::new("cli-index-real-runtime");
         let env = |_: &str| None;
         let runtime = TestRuntime;
@@ -1583,9 +1693,10 @@ mod tests {
         assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["discovered_files"], 1);
         assert_eq!(value["stored_files"], 1);
-        assert_eq!(value["indexed_units"], 0);
-        assert_eq!(value["indexing"], "file_manifest_only");
-        assert_eq!(value["parser"], "deferred");
+        assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["semantic_worker"], "deferred");
         assert_eq!(value["mining"], "deferred");
         assert!(workspace
             .path()
@@ -1620,7 +1731,7 @@ mod tests {
         assert_eq!(value["generation_id"], "gen-000002");
         assert_eq!(value["discovered_files"], 2);
         assert_eq!(value["stored_files"], 2);
-        assert_eq!(value["indexed_units"], 0);
+        assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 2);
         assert_eq!(
             fs::read_to_string(
                 workspace
@@ -1794,7 +1905,7 @@ mod tests {
     }
 
     #[test]
-    fn index_human_reports_file_manifest_only_without_family_claims() {
+    fn index_human_reports_syntax_only_without_family_claims() {
         let workspace = TempWorkspace::new("cli-index-human-real-runtime");
         let env = |_: &str| None;
         let runtime = TestRuntime;
@@ -1805,10 +1916,11 @@ mod tests {
 
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
-        assert!(output.stdout.contains("file discovery metadata stored"));
-        assert!(output.stdout.contains("indexed_units: 0"));
-        assert!(output.stdout.contains("indexing: file_manifest_only"));
-        assert!(output.stdout.contains("parser: deferred"));
+        assert!(output.stdout.contains("syntax-only code units stored"));
+        assert!(output.stdout.contains("indexed_units: 1"));
+        assert!(output.stdout.contains("indexing: syntax_only_code_units"));
+        assert!(output.stdout.contains("parser: syntax_only"));
+        assert!(output.stdout.contains("semantic_worker: deferred"));
         assert!(output.stdout.contains("mining: deferred"));
         assert!(!output.stdout.contains("DOMINANT_PATTERN"));
         assert!(!output.stdout.contains("CONFORMS"));
@@ -1839,20 +1951,20 @@ mod tests {
         assert_eq!(value["journal_mode"], "wal");
         assert_eq!(value["integrity_check"], "ok");
         assert_eq!(value["storage"], "available");
-        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
 
         let doctor =
             run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
         assert_eq!(doctor.status, 0);
         let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
         assert_eq!(value["checks"]["storage"], "available");
-        assert_eq!(value["checks"]["indexing"], "file_manifest_only");
+        assert_eq!(value["checks"]["indexing"], "syntax_only_code_units");
         assert_eq!(value["checks"]["integrity_check"], "ok");
         assert!(value["findings"]
             .as_array()
             .expect("findings")
             .iter()
-            .any(|finding| finding["code"] == "INDEXING_FILE_MANIFEST_ONLY"));
+            .any(|finding| finding["code"] == "INDEXING_SYNTAX_ONLY_CODE_UNITS"));
     }
 
     #[test]

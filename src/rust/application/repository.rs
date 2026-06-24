@@ -212,6 +212,7 @@ pub enum RepositoryImplementationStatus {
     NotImplemented,
     Available,
     FileManifestOnly,
+    SyntaxOnlyCodeUnits,
     Unhealthy,
 }
 
@@ -245,6 +246,7 @@ pub enum RepositoryDoctorCode {
     StorageNoActiveGeneration,
     IndexingNotImplemented,
     IndexingFileManifestOnly,
+    IndexingSyntaxOnlyCodeUnits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,7 +455,8 @@ fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<Repository
             ),
         }),
         RepositoryImplementationStatus::NotImplemented
-        | RepositoryImplementationStatus::FileManifestOnly => {
+        | RepositoryImplementationStatus::FileManifestOnly
+        | RepositoryImplementationStatus::SyntaxOnlyCodeUnits => {
             findings.push(RepositoryDoctorFinding {
                 severity: RepositoryDoctorSeverity::Info,
                 code: RepositoryDoctorCode::StorageNotImplemented,
@@ -468,6 +471,13 @@ fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<Repository
             code: RepositoryDoctorCode::IndexingFileManifestOnly,
             detail: "file discovery metadata is stored; parser, code-unit extraction, and mining remain deferred".to_string(),
         }),
+        RepositoryImplementationStatus::SyntaxOnlyCodeUnits => {
+            findings.push(RepositoryDoctorFinding {
+                severity: RepositoryDoctorSeverity::Warning,
+                code: RepositoryDoctorCode::IndexingSyntaxOnlyCodeUnits,
+                detail: "syntax-only code units are stored; semantic worker, mining, queries, and pattern-family evidence remain deferred".to_string(),
+            })
+        }
         _ => findings.push(RepositoryDoctorFinding {
             severity: RepositoryDoctorSeverity::Info,
             code: RepositoryDoctorCode::IndexingNotImplemented,
@@ -662,7 +672,11 @@ fn status_for_resolved_state(
                 report.status = RepositoryStatus::Initialized { active_generation };
                 report.storage = RepositoryImplementationStatus::Available;
                 if inspection.active_generation.is_some() {
-                    report.indexing = RepositoryImplementationStatus::FileManifestOnly;
+                    report.indexing = if inspection.code_unit_count.unwrap_or(0) > 0 {
+                        RepositoryImplementationStatus::SyntaxOnlyCodeUnits
+                    } else {
+                        RepositoryImplementationStatus::FileManifestOnly
+                    };
                 }
                 report.storage_inspection = Some(inspection);
             }

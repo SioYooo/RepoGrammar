@@ -4,8 +4,8 @@
 //! adapter. Application code talks to it through `ports::index_store`.
 
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexStoreError, IndexedFileRecord, StorageInspection,
-    STORAGE_SCHEMA_VERSION,
+    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -189,6 +189,61 @@ impl IndexStore for SqliteIndexStore {
         Ok(())
     }
 
+    fn record_code_unit(
+        &self,
+        generation: &GenerationHandle,
+        unit: &IndexedCodeUnitRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&unit.path)?;
+        let connection = self.open_existing_generation(&generation.generation_id)?;
+        let Some((file_hash, file_size_bytes)) = connection
+            .query_row(
+                "SELECT content_hash, size_bytes FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = ?2",
+                params![generation.generation_id, unit.path],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "code unit must reference an indexed file in the same generation",
+            ));
+        };
+        if file_hash != unit.content_hash.as_str() {
+            return Err(invalid_record(
+                "code unit content hash must match indexed file content hash",
+            ));
+        }
+        let start_byte = i64::try_from(unit.start_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(unit.end_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        if end_byte > file_size_bytes {
+            return Err(invalid_record(
+                "code unit range must not exceed indexed file size",
+            ));
+        }
+        connection
+            .execute(
+                "INSERT INTO code_units \
+                 (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    generation.generation_id,
+                    unit.id,
+                    unit.path,
+                    unit.language,
+                    unit.kind,
+                    start_byte,
+                    end_byte,
+                    unit.content_hash.as_str(),
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        Ok(())
+    }
+
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
         let connection = self.open_existing_generation(&generation.generation_id)?;
         let inspection = inspect_connection(&connection, Some(generation.generation_id.as_str()))?;
@@ -259,6 +314,7 @@ impl IndexStore for SqliteIndexStore {
                 return Ok(StorageInspection {
                     active_generation: None,
                     schema_version: None,
+                    code_unit_count: None,
                     journal_mode: None,
                     foreign_keys_enabled: None,
                     busy_timeout_ms: None,
@@ -348,10 +404,23 @@ fn inspect_connection(
     let integrity_check = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(sql_unavailable)?;
+    let code_unit_count = if active_generation.is_some() {
+        let count = connection
+            .query_row("SELECT count(*) FROM code_units", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(sql_unavailable)?;
+        Some(u64::try_from(count).map_err(|_| {
+            IndexStoreError::InvalidState("code unit count is outside valid range".to_string())
+        })?)
+    } else {
+        None
+    };
 
     Ok(StorageInspection {
         active_generation: active_generation.map(str::to_string),
         schema_version,
+        code_unit_count,
         journal_mode: Some(journal_mode),
         foreign_keys_enabled: Some(foreign_keys == 1),
         busy_timeout_ms: Some(busy_timeout_ms),
@@ -881,6 +950,18 @@ mod tests {
         }
     }
 
+    fn code_unit(path: &str) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#module:0-10"),
+            path: path.to_string(),
+            language: "typescript".to_string(),
+            kind: "module".to_string(),
+            start_byte: 0,
+            end_byte: 10,
+            content_hash: file(path).content_hash,
+        }
+    }
+
     #[test]
     fn migrations_are_idempotent_and_create_required_tables() {
         let workspace = TempWorkspace::new("sqlite-migration");
@@ -977,6 +1058,100 @@ mod tests {
             .query_row("SELECT count(*) FROM indexed_files", [], |row| row.get(0))
             .expect("file count");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn code_unit_records_are_persisted_without_source_text_or_absolute_paths() {
+        let workspace = TempWorkspace::new("sqlite-code-units");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut file = file("src/a.ts");
+        file.size_bytes = 64;
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        let mut unit = code_unit("src/a.ts");
+        unit.kind = "function".to_string();
+        unit.start_byte = 7;
+        unit.end_byte = 24;
+
+        store
+            .record_code_unit(&generation, &unit)
+            .expect("record code unit");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let row = connection
+            .query_row(
+                "SELECT code_unit_id, path, language, kind, start_byte, end_byte, content_hash \
+                 FROM code_units",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .expect("query code unit");
+        assert_eq!(row.0, unit.id);
+        assert_eq!(row.1, "src/a.ts");
+        assert_eq!(row.2, "typescript");
+        assert_eq!(row.3, "function");
+        assert_eq!(row.4, 7);
+        assert_eq!(row.5, 24);
+        assert_eq!(row.6, unit.content_hash.as_str());
+        assert!(!row.0.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!row.1.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!row.0.contains("UNIQUE_SOURCE_SENTINEL"));
+    }
+
+    #[test]
+    fn code_unit_records_must_match_indexed_file_bounds_and_hash() {
+        let workspace = TempWorkspace::new("sqlite-code-unit-rejects");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut file = file("src/a.ts");
+        file.size_bytes = 10;
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+
+        let missing = code_unit("src/missing.ts");
+        let error = store
+            .record_code_unit(&generation, &missing)
+            .expect_err("missing indexed file");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut stale_hash = code_unit("src/a.ts");
+        stale_hash.content_hash = ContentHash::new(
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .expect("valid hash");
+        let error = store
+            .record_code_unit(&generation, &stale_hash)
+            .expect_err("content hash mismatch");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut too_large = code_unit("src/a.ts");
+        too_large.end_byte = 11;
+        let error = store
+            .record_code_unit(&generation, &too_large)
+            .expect_err("range exceeds file size");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+
+        let mut absolute = code_unit("/tmp/a.ts");
+        absolute.end_byte = 1;
+        let error = store
+            .record_code_unit(&generation, &absolute)
+            .expect_err("absolute path");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
     }
 
     #[test]

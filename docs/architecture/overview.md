@@ -44,8 +44,13 @@ bin --wires together--> interfaces + application + adapters
 The intended indexing flow is:
 
 ```text
-repository files -> discovery/exclusion policy -> Tree-sitter syntax adapter -> language-native semantic worker -> core IR -> application pipeline -> store port -> repo-local SQLite adapter
+repository files -> discovery/exclusion policy -> parser adapter -> code units -> language-native semantic worker -> core IR -> application pipeline -> store port -> repo-local SQLite adapter
 ```
+
+The current product path implements discovery, a dependency-free syntax-only
+parser adapter, code-unit metadata storage, and SQLite generation activation.
+Tree-sitter, semantic-worker execution, IR storage, family mining, query
+execution, and MCP transport remain later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output. The
@@ -60,11 +65,12 @@ machine-level agent integration rather than repository-local index state.
 ## Composition root
 
 `src/rust/bin/repogrammar.rs` is the product composition root. It currently
-wires the CLI boundary and repository-lifecycle surface. Product indexing,
-querying, MCP serving, and storage-health reporting still return stable
-not-implemented or fallback outputs until those adapters are connected through
-application use cases. `src/rust/bin/repo_guard.rs` is a separate governance
-tool and must not be coupled to product runtime logic.
+wires the CLI boundary, repository-lifecycle surface, TS/JS discovery,
+syntax-only parser adapter, filesystem source reader, and SQLite generation
+store for `index` and `sync`. Querying, MCP serving, semantic-worker execution,
+and mining still return stable not-implemented or fallback outputs until those
+adapters are connected through application use cases. `src/rust/bin/repo_guard.rs`
+is a separate governance tool and must not be coupled to product runtime logic.
 
 ## External dependency boundaries
 

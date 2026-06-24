@@ -17,19 +17,19 @@ claim.
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
-discovery, metadata-only index/sync wiring, a SQLite generation-storage
-substrate, and repository guard checks.
+discovery, syntax-only code-unit extraction, SQLite generation-storage wiring,
+and repository guard checks.
 
-It does not yet implement pattern mining, parser-backed code-unit extraction,
-semantic-worker execution, query execution, or a working MCP server. `init`,
-`uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle state.
-`index` and `sync` now create a file-manifest-only SQLite generation from TS/JS
-discovery metadata: repo-relative path, language, size, and strict content hash.
-They keep `indexed_units = 0` and do not store source snippets, absolute paths,
-parser facts, code units, families, or evidence. `status` and `doctor` can report
-storage health for the active generation. Commands that install agent
-configuration or serve MCP return explicit not-implemented errors until those
-contracts are implemented and tested.
+It does not yet implement pattern mining, semantic-worker execution, query
+execution, or a working MCP server. `init`, `uninit`, `unlock`, and `logs`
+operate only on safe repo-local lifecycle state. `index` and `sync` now create a
+SQLite generation from TS/JS discovery metadata plus syntax-only `code_units`
+records: repo-relative path, language, kind, byte range, and strict content hash.
+They do not store source snippets, absolute paths, semantic facts, families, or
+evidence. `status` and `doctor` can distinguish file-manifest-only generations
+from syntax-only code-unit generations. Commands that install agent configuration
+or serve MCP return explicit not-implemented errors until those contracts are
+implemented and tested.
 
 ## Why RepoGrammar?
 
@@ -86,11 +86,11 @@ structured object with `implemented: false`.
 |---|---|---|
 | Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
 | Python | Planned second official language | Experimental only until a focused v0.2 adapter is accepted |
-| Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
+| Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
-| Discovery | TS/JS discovery feeds file-manifest-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, and status/doctor health reporting are implemented behind a port | Local evidence index wired to parser output, migrations, and provenance |
-| State directory | Safe `.repogrammar/` lifecycle plus metadata-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
+| Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
+| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic facts, migrations, and provenance |
+| State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
 
@@ -175,14 +175,13 @@ The dependency direction and module ownership are documented in:
 
 ## Roadmap
 
-The next implementation phase is parser-backed code-unit extraction
-prerequisites:
+The next implementation phase is semantic-worker boundary execution or
+parser-to-IR refinement:
 
-- keep the current file-manifest-only generation contract stable;
-- add syntax/code-unit extraction only after parser dependencies and fixtures are
-  scoped;
+- keep syntax-only code units structural and non-semantic;
 - keep semantic-worker execution, mining, query execution, and MCP transport
-  deferred until parser output and storage boundaries are validated together.
+  deferred until parser output, storage, and semantic-worker boundaries are
+  validated together.
 
 See [docs/roadmap.md](docs/roadmap.md) for the staged plan.
 

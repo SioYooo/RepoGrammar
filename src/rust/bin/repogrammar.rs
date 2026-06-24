@@ -1,7 +1,9 @@
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
+use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
+use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::application::indexing::{
-    index_repository_with_discovery_and_store, IndexingOutcome, IndexingRequest,
+    index_repository_with_discovery_parser_and_store, IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -68,12 +70,14 @@ impl CliRuntime for ProductCliRuntime {
             ));
         }
 
-        index_repository_with_discovery_and_store(
+        index_repository_with_discovery_parser_and_store(
             IndexingRequest {
                 repository_root: request.repository_root,
                 max_file_bytes: request.max_file_bytes,
             },
             &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
             &store,
         )
     }
@@ -165,15 +169,17 @@ mod tests {
         assert!(index.stderr.is_empty());
         let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
         assert_eq!(value["generation_id"], "gen-000001");
-        assert_eq!(value["indexed_units"], 0);
-        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["semantic_worker"], "deferred");
 
         let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
         assert_eq!(status.status, 0);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000001");
         assert_eq!(value["storage"], "available");
-        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
         assert!(!status
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));

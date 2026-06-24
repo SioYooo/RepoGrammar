@@ -17,9 +17,9 @@
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
   foreign-key enforcement, validation before activation, and rollback
   preservation for failed generations.
-- File-manifest-only `index`/`sync` wiring that stores TS/JS discovery metadata
-  in active SQLite generations without source snippets, absolute paths, parser
-  facts, code units, or family evidence.
+- Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
+  structural code units in active SQLite generations without source snippets,
+  absolute paths, semantic facts, or family evidence.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -27,19 +27,19 @@
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
 
-## Next phase: parser-backed code-unit extraction prerequisites
+## Next phase: semantic-worker boundary or parser-to-IR refinement
 
-- Keep the file-manifest-only generation contract stable while adding parser
-  dependencies and fixtures.
-- Introduce syntax parsing and code-unit extraction behind ports without using
-  Tree-sitter as semantic proof.
+- Keep syntax-only code units structural and non-semantic while validating the
+  next boundary.
+- Add Tree-sitter or parser-to-IR refinement only behind parser/language
+  adapters, without exposing parser types to core/application.
 - Keep semantic-worker execution, mining, query execution, and MCP transport
   deferred until parser output and storage boundaries are validated together.
 
 ## Command implementation path
 
-- Add parser-backed code-unit persistence after metadata-only generations remain
-  stable.
+- Add semantic-worker execution or parser-to-IR storage after syntax-only
+  generations remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`
@@ -62,11 +62,12 @@
 
 ## Later phases
 
-- Add Tree-sitter dependency only after discovery, storage, and lifecycle
-  integration boundaries are tested.
+- Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
+  dependency policy are reviewed.
 - Validate TypeScript worker tooling and package manager before adding
   executable worker code.
-- Implement TypeScript and JavaScript code-unit extraction.
+- Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
+  syntax-only extractor where the extra precision is justified.
 - Define the TypeScript semantic worker protocol tests and version policy.
 - Verify archive metadata, licenses, and SHA-256 values before committing any
   downloaded paper or HTML artifact.

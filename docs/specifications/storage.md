@@ -115,11 +115,11 @@ must be refused rather than repaired silently.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 `.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`. The current
-`index` and `sync` implementation creates file-manifest-only SQLite generations
-from TS/JS discovery metadata and activates `.repogrammar/current-generation`
-after validation. It does not yet create a top-level `.repogrammar/repogrammar.sqlite`,
-telemetry queues, parser facts, code units, families, evidence, freshness
-manifests, or query read paths.
+`index` and `sync` implementation creates SQLite generations from TS/JS discovery
+metadata plus syntax-only code-unit records and activates
+`.repogrammar/current-generation` after validation. It does not yet create a
+top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, semantic facts,
+families, evidence, freshness manifests, or query read paths.
 
 ## File Discovery Exclusions
 
@@ -139,9 +139,10 @@ third-party and generated artifacts must not enter family evidence by accident.
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, and `.jsx` files only. It returns repo-relative metadata and skip
 reasons, and `index`/`sync` store the discovered file manifest in a
-generation-scoped SQLite database. This is metadata-only indexing: source
-snippets, absolute paths, parser output, code units, families, and evidence are
-not stored.
+generation-scoped SQLite database. The current index path also stores
+syntax-only `code_units` containing repo-relative path, language, kind,
+start/end byte range, and content hash. Source snippets, absolute paths,
+semantic facts, families, evidence, and query read-path state are not stored.
 
 ## Project Configuration
 
@@ -230,9 +231,12 @@ PRAGMA temp_store=MEMORY;
 ```
 
 The initial schema stores schema metadata, generation rows, indexed files,
-placeholder code-unit records, IR nodes and edges, semantic facts, families,
-family members, variation slots, and evidence links. It enforces foreign keys,
-repo-relative paths at the Rust port boundary, and validation before activation.
+syntax-only code-unit records, IR nodes and edges, semantic facts, families,
+family members, variation slots, and evidence links. The current writer populates
+only indexed files and syntax-only code units. It enforces foreign keys,
+repo-relative paths at the Rust port boundary, matching file/code-unit content
+hashes, code-unit byte ranges bounded by indexed file size, and validation before
+activation.
 The database must later store repository revision, worktree hash, language
 adapter versions, freshness metadata, canonical templates, exception records,
 and richer provenance once those producers exist. Searchable source evidence
