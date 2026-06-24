@@ -120,6 +120,9 @@ runtime wiring, optional semantic-worker fact ingestion through the
 same-generation storage gate, sanitized worker fallback during indexing,
 structural IR node/containment-edge storage for syntax-only code units,
 active semantic-fact/evidence read-path validation for future claim builders,
+typed UNKNOWN class/reason token validation, internal semantic-fact
+freshness/readiness gating for fresh, stale, missing, weak-certainty, and
+conflicting facts,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 and

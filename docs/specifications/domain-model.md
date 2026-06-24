@@ -37,6 +37,11 @@ certainty, evidence, and assumptions.
 Certainty levels are semantic, dataflow-derived, structural,
 framework-heuristic, conflicting, and unknown. Structural certainty is not
 enough to prove family membership.
+The current Rust domain includes an internal claim-input readiness gate for
+semantic facts: fresh `SEMANTIC` and `DATAFLOW_DERIVED` facts may become inputs
+to future family claim builders, while stale evidence, conflicting facts,
+structural certainty, framework heuristics, and unknown certainty are blocked
+with typed `UNKNOWN`. Readiness is not itself a family classification.
 
 ## PatternFamily
 
@@ -100,6 +105,12 @@ or recovery action.
 
 Freshness connects evidence to content hashes and repository revisions. Unknown
 or stale freshness must be represented explicitly.
+The current implementation has a file-hash freshness policy for active semantic
+facts. It compares stored fact evidence hashes with current source reads before
+allowing a fact to become eligible input for future claim builders. Missing or
+changed source becomes a blocking `UNKNOWN` with reason `StaleEvidence` and a
+`run repogrammar sync` recovery suggestion. Repository-revision and worktree-wide
+freshness are still deferred.
 
 ## Classification vocabulary
 

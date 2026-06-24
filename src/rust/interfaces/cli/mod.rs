@@ -2,7 +2,10 @@
 
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{plan_install, AgentTarget, InstallRequest, InstallScope};
-use crate::application::query::{IndexedCodeUnitsReport, IndexedFilesReport};
+use crate::application::query::{
+    query_preflight, repository_status_unavailable_fallback, IndexedCodeUnitsReport,
+    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+};
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
     unlock_repository, RepositoryDoctorCode, RepositoryDoctorFinding, RepositoryDoctorReport,
@@ -275,50 +278,39 @@ where
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
     };
+    let operation = if matches!(command, "files" | "units") {
+        QueryPreflightOperation::ActiveIndexInventory
+    } else {
+        QueryPreflightOperation::PatternFamilyQuery
+    };
     let status_report = match runtime.repository_status(request.clone()) {
         Ok(report) => report,
         Err(_) => {
+            let fallback = repository_status_unavailable_fallback(operation);
             return query_fallback(
                 command,
                 options.json,
-                "repository status is unavailable",
-                "run repogrammar doctor",
-                false,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
             );
         }
     };
 
-    if matches!(command, "files" | "units") {
-        let maybe_fallback = match status_report.status {
-            RepositoryStatus::NotInitialized => Some((
-                "repository is not initialized",
-                "run repogrammar init",
-                false,
-            )),
-            RepositoryStatus::CorruptedManifest => Some((
-                "repository status is unavailable",
-                "run repogrammar doctor",
-                false,
-            )),
-            RepositoryStatus::Initialized { .. }
-                if status_report.storage == RepositoryImplementationStatus::Unhealthy =>
-            {
-                Some((
-                    "repository status is unavailable",
-                    "run repogrammar doctor",
-                    true,
-                ))
-            }
-            RepositoryStatus::Initialized {
-                ref active_generation,
-            } if active_generation == "none" || active_generation == "not implemented" => {
-                Some(("no active index generation", "run repogrammar index", true))
-            }
-            RepositoryStatus::Initialized { .. } => None,
-        };
-        if let Some((reason, guidance, implemented)) = maybe_fallback {
-            return query_fallback(command, options.json, reason, guidance, implemented);
+    match query_preflight(operation, &status_report) {
+        QueryPreflightReport::Fallback(fallback) => {
+            return query_fallback(
+                command,
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
+            );
         }
+        QueryPreflightReport::Ready => {}
+    }
+
+    if matches!(command, "files" | "units") {
         return match command {
             "files" => match runtime.indexed_files(request) {
                 Ok(report) if options.json => CliOutput::success(indexed_files_json(&report)),
@@ -346,19 +338,13 @@ where
         };
     }
 
-    let (reason, guidance) = match status_report.status {
-        RepositoryStatus::Initialized { .. } => (
-            "query execution requires pattern-family evidence",
-            "run repogrammar index after pattern-family indexing is implemented",
-        ),
-        RepositoryStatus::NotInitialized => {
-            ("repository is not initialized", "run repogrammar init")
-        }
-        RepositoryStatus::CorruptedManifest => {
-            ("repository status is unavailable", "run repogrammar doctor")
-        }
-    };
-    query_fallback(command, options.json, reason, guidance, false)
+    query_fallback(
+        command,
+        options.json,
+        "query execution requires pattern-family evidence",
+        "run repogrammar index after pattern-family indexing is implemented",
+        false,
+    )
 }
 
 fn query_fallback(
@@ -1824,7 +1810,10 @@ mod tests {
             assert!(output.stderr.starts_with(
                 "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
             ));
-            assert!(output.stderr.contains("not implemented yet"));
+            assert!(output
+                .stderr
+                .contains("requires a readable active syntax-only index"));
+            assert!(!output.stderr.contains("not implemented yet"));
             assert!(output.stdout.is_empty());
         }
     }
@@ -2074,7 +2063,10 @@ mod tests {
             assert_eq!(fallback["reason"], "repository is not initialized");
             assert_eq!(fallback["guidance"], "run repogrammar init");
             assert_eq!(fallback["command"], command);
-            assert_eq!(fallback["implemented"], false);
+            assert_eq!(
+                fallback["implemented"],
+                matches!(command, "files" | "units")
+            );
         }
     }
 

@@ -218,11 +218,18 @@ append explicit deferred-status text that query execution still requires stored
 pattern-family evidence. `status` and `doctor` may report a clean
 not-initialized state without opening storage. Stored syntax-only code units are
 not family evidence; stored semantic facts are not family evidence until
-freshness and claim gates exist. Query commands must not imply that TypeScript
-compiler analysis, mining, family-query execution, or MCP serving has run. The
+freshness gates and family-evidence claim builders exist. Query commands must
+not imply that TypeScript compiler analysis, mining, family-query execution, or
+MCP serving has run. The
 `files` and `units` commands are a limited exception: when an active syntax-only
 generation exists, they may read and return repo-relative indexed-file metadata
 and code-unit records for inventory/debugging only.
+The query application layer now owns a shared preflight contract so pattern
+family commands remain fallback-only until family evidence exists, while
+`files` and `units` are treated as implemented inventory commands whose fallback
+means an active syntax-only index precondition is missing or unreadable.
+Semantic-fact freshness/readiness checks remain internal and must not introduce
+semantic-fact CLI output before family claim builders exist.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:

@@ -74,6 +74,15 @@
   content hashes, code-unit ids, and byte ranges. This remains internal and does
   not expose semantic facts through CLI/MCP query commands or make them
   freshness-validated family evidence.
+- Internal semantic-fact freshness and claim-input readiness gate that checks
+  active fact evidence against current source content hashes, blocks stale or
+  missing evidence with typed `StaleEvidence` `UNKNOWN`, and keeps structural,
+  framework-heuristic, conflicting, or unknown certainty out of future family
+  claim inputs.
+- Application-level query preflight contract that keeps pattern-family query
+  commands in fallback until family evidence exists while treating `files` and
+  `units` as implemented inventory commands whose missing-index fallback is an
+  active-index precondition failure.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.

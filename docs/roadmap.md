@@ -6,7 +6,7 @@
 - Rust package skeleton.
 - Semantic worker boundary plus v1 protocol tokens, schemas, NDJSON fixtures,
   and a Rust-side TypeScript process adapter that validates worker stdout into
-  owned semantic facts without wiring those facts into indexing yet.
+  owned semantic facts without treating those facts as family evidence.
 - Dependency-free TypeScript worker executable stub that validates stdin and
   reports compiler-backed semantic analysis as unavailable without inspecting
   source files.
@@ -33,6 +33,10 @@
   new generation.
 - Active `files`/`units` inventory reads for repo-relative indexed-file metadata
   and syntax-only code units from the validated active generation.
+- Internal semantic-fact freshness and claim-input readiness gate that compares
+  active fact evidence with current source hashes and blocks stale, weak, or
+  conflicting facts with typed `UNKNOWN` before any future family claim builder
+  can consume them.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -66,11 +70,12 @@ indexing, CodeUnit-derived IR node/containment-edge storage, active syntax-only
 files/units inventory reads, internal active semantic-fact/evidence reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
-ingestion through the storage gate. The next implementation slice should refine
-one boundary at a time: family-query contracts, framework role facts, semantic
-fact freshness gates, or the actual TypeScript compiler integration. Keep
+ingestion through the storage gate, plus an internal semantic-fact file-hash
+freshness and claim-input readiness gate. The next implementation slice should
+refine one boundary at a time: family-query contracts, framework role facts,
+full family-claim gates, or TypeScript compiler toolchain preparation. Keep
 syntax-only code units, structural IR, and stored semantic facts out of family
-claims until freshness and claim builders exist.
+claims until family-evidence claim builders exist.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 family-evidence read paths, freshness checks, and evidence contracts are
@@ -78,8 +83,9 @@ validated together.
 
 ## Command implementation path
 
-- Add freshness metadata and claim gates for stored semantic-worker facts before
-  they can influence pattern-family evidence.
+- Add full repository/worktree freshness metadata and family-claim gates for
+  stored semantic-worker facts before they can influence pattern-family
+  evidence.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
 - Implement `find`, `family`, `explain`, and `check` against real stored

@@ -30,8 +30,10 @@ default; when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, they
 may run that worker with optional argv from
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store only facts that pass the
 building generation's path/hash/range evidence gate. Stored semantic facts are
-not yet
-freshness-validated family evidence and do not enable query or MCP claims.
+not family evidence and do not enable query or MCP claims. The query application
+boundary can now run an internal file-hash freshness and claim-input readiness
+gate over active semantic facts for future claim builders; that gate does not
+classify families.
 `init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
 metadata plus syntax-only `code_units` records and structural IR records:
@@ -106,7 +108,7 @@ to active syntax-only index metadata.
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, active files/units read path, validated semantic-fact/evidence write substrate, and status/doctor health reporting are implemented behind a port | Local evidence index wired to semantic workers, family read paths, migrations, and provenance |
+| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, active files/units read path, validated semantic-fact/evidence write/read substrate, internal semantic-fact freshness/readiness gate, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |

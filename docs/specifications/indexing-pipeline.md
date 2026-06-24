@@ -126,10 +126,15 @@ accepted facts only after evidence matches an indexed manifest entry, code-unit
 id, content hash, and byte range in the same building generation.
 Worker fallback statuses keep the generation syntax-only, while storage-gate
 conflicts abort the new generation. Active-generation semantic facts can be read
-back only through the storage/query boundary for future claim construction. No
-semantic fact may influence claims until freshness gates and family-evidence
-claim builders exist. Other languages should use their own compiler,
-type-checker, or LSP where that is the most authoritative source.
+back only through the storage/query boundary for future claim construction. The
+current query application boundary has an internal file-hash freshness and
+claim-input readiness gate for active semantic facts: stale or missing source
+blocks the affected future claim input as `StaleEvidence`, weak certainty blocks
+as `InsufficientSupport`, and conflicting certainty blocks as
+`ConflictingFacts`. This does not classify families or expose semantic facts
+through CLI/MCP. No semantic fact may influence family claims until full
+family-evidence claim builders exist. Other languages should use their own
+compiler, type-checker, or LSP where that is the most authoritative source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is

@@ -130,6 +130,11 @@ regular `current-generation` pointer, validate the generation schema and health,
 and recheck stored repo-relative paths, strict content hashes, languages, unit
 ids, byte ranges, IR node/edge references, semantic fact kind/certainty tokens,
 assumptions JSON, and same-generation evidence before returning records.
+The query application layer can now run an internal file-hash freshness and
+claim-input readiness gate over active semantic facts using the current
+source-store hash boundary. That gate does not require a storage schema bump,
+does not persist family claims, and does not expose semantic facts through
+CLI/MCP.
 
 The storage port and SQLite adapter can persist semantic facts together with
 repo-relative evidence rows for a building generation, but only when the fact is
@@ -397,6 +402,12 @@ guidance: run repogrammar init
 
 If the index is stale, RepoGrammar must either return a stale warning or refuse
 family claims whose evidence changed.
+
+The current implementation performs only an internal semantic-fact
+claim-input readiness check against current source content hashes. Changed or
+missing source blocks the affected semantic fact with typed `StaleEvidence`.
+Repository-revision, worktree-wide, and persisted family freshness remain
+deferred.
 
 Auto-sync is optional in v0.1. The v0.1 baseline is `init`, `index`, `sync`,
 freshness warnings in `status`, and freshness checks before MCP claims. A future

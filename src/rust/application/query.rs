@@ -1,11 +1,18 @@
 //! Query use-case boundary for finding repository analogues.
 
-use crate::core::model::PatternClassification;
+use crate::application::repository::{
+    RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
+};
+use crate::core::model::{FactCertainty, PatternClassification};
+use crate::core::policy::freshness::{
+    content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
+};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
     IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedSemanticFactRecord,
 };
+use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalogueQuery {
@@ -19,6 +26,95 @@ pub struct AnalogueResult {
 
 pub fn find_analogues(_query: AnalogueQuery) -> Result<Vec<AnalogueResult>, RepoGrammarError> {
     Err(RepoGrammarError::NotImplemented("find_analogues"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryPreflightOperation {
+    PatternFamilyQuery,
+    ActiveIndexInventory,
+}
+
+impl QueryPreflightOperation {
+    pub fn command_is_implemented(self) -> bool {
+        matches!(self, Self::ActiveIndexInventory)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryFallbackReport {
+    pub reason: &'static str,
+    pub guidance: &'static str,
+    pub implemented: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryPreflightReport {
+    Ready,
+    Fallback(QueryFallbackReport),
+}
+
+pub fn repository_status_unavailable_fallback(
+    operation: QueryPreflightOperation,
+) -> QueryFallbackReport {
+    QueryFallbackReport {
+        reason: "repository status is unavailable",
+        guidance: "run repogrammar doctor",
+        implemented: operation.command_is_implemented(),
+    }
+}
+
+pub fn query_preflight(
+    operation: QueryPreflightOperation,
+    status_report: &RepositoryStatusReport,
+) -> QueryPreflightReport {
+    match &status_report.status {
+        RepositoryStatus::NotInitialized => fallback(
+            "repository is not initialized",
+            "run repogrammar init",
+            operation.command_is_implemented(),
+        ),
+        RepositoryStatus::CorruptedManifest => {
+            QueryPreflightReport::Fallback(repository_status_unavailable_fallback(operation))
+        }
+        RepositoryStatus::Initialized { active_generation } => {
+            if !status_report.missing_subdirs.is_empty()
+                || status_report.storage == RepositoryImplementationStatus::Unhealthy
+            {
+                return QueryPreflightReport::Fallback(repository_status_unavailable_fallback(
+                    operation,
+                ));
+            }
+
+            match operation {
+                QueryPreflightOperation::ActiveIndexInventory
+                    if active_generation == "none"
+                        || active_generation == "not implemented"
+                        || status_report.indexing
+                            != RepositoryImplementationStatus::SyntaxOnlyCodeUnits =>
+                {
+                    fallback("no active index generation", "run repogrammar index", true)
+                }
+                QueryPreflightOperation::ActiveIndexInventory => QueryPreflightReport::Ready,
+                QueryPreflightOperation::PatternFamilyQuery => fallback(
+                    "query execution requires pattern-family evidence",
+                    "run repogrammar index after pattern-family indexing is implemented",
+                    false,
+                ),
+            }
+        }
+    }
+}
+
+fn fallback(
+    reason: &'static str,
+    guidance: &'static str,
+    implemented: bool,
+) -> QueryPreflightReport {
+    QueryPreflightReport::Fallback(QueryFallbackReport {
+        reason,
+        guidance,
+        implemented,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +133,24 @@ pub struct IndexedCodeUnitsReport {
 pub struct IndexedSemanticFactsReport {
     pub active_generation: String,
     pub facts: Vec<IndexedSemanticFactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFactReadinessRequest {
+    pub repository_root: String,
+    pub max_file_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFactReadinessReport {
+    pub active_generation: String,
+    pub facts: Vec<SemanticFactReadinessRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFactReadinessRecord {
+    pub fact_id: String,
+    pub readiness: ClaimInputReadiness,
 }
 
 pub fn list_indexed_files(store: &impl IndexStore) -> Result<IndexedFilesReport, RepoGrammarError> {
@@ -71,6 +185,46 @@ pub fn list_semantic_facts(
     })
 }
 
+pub fn assess_semantic_fact_readiness(
+    request: SemanticFactReadinessRequest,
+    store: &impl IndexStore,
+    source_store: &impl SourceStore,
+) -> Result<SemanticFactReadinessReport, RepoGrammarError> {
+    let snapshot = store
+        .list_active_semantic_facts()
+        .map_err(index_store_error)?;
+    let mut facts = Vec::with_capacity(snapshot.facts.len());
+    for fact in snapshot.facts {
+        let source = source_store.read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: fact.path,
+            expected_content_hash: fact.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        });
+        let current_hash = match source {
+            Ok(source) => Some(source.content_hash),
+            Err(SourceStoreError::InvalidRequest(_)) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "source freshness request is invalid".to_string(),
+                ));
+            }
+            Err(_) => None,
+        };
+        let freshness = content_hash_freshness(&fact.content_hash, current_hash.as_ref());
+        let certainty = FactCertainty::parse_protocol_str(&fact.certainty).map_err(|_| {
+            RepoGrammarError::InvalidInput("stored semantic fact certainty is invalid".to_string())
+        })?;
+        facts.push(SemanticFactReadinessRecord {
+            fact_id: fact.fact_id,
+            readiness: semantic_fact_claim_input_readiness(certainty, freshness),
+        });
+    }
+    Ok(SemanticFactReadinessReport {
+        active_generation: snapshot.generation_id,
+        facts,
+    })
+}
+
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
         IndexStoreError::Unavailable(message)
@@ -82,13 +236,23 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::ContentHash;
+    use crate::application::repository::RepositoryManifestStatus;
+    use crate::core::model::{ContentHash, UnknownClass, UnknownReasonCode};
     use crate::ports::index_store::{
         ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
         IndexedIrEdgeRecord, IndexedIrNodeRecord, StorageInspection,
     };
+    use crate::ports::source_store::SourceText;
 
-    struct FakeStore;
+    struct FakeStore {
+        facts: Vec<IndexedSemanticFactRecord>,
+    }
+
+    impl FakeStore {
+        fn new(facts: Vec<IndexedSemanticFactRecord>) -> Self {
+            Self { facts }
+        }
+    }
 
     impl IndexStore for FakeStore {
         fn prepare_next_generation(&self) -> Result<GenerationHandle, IndexStoreError> {
@@ -152,7 +316,7 @@ mod tests {
         fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
             Ok(ActiveSemanticFacts {
                 generation_id: "gen-000001".to_string(),
-                facts: vec![semantic_fact()],
+                facts: self.facts.clone(),
             })
         }
 
@@ -184,12 +348,16 @@ mod tests {
     }
 
     fn semantic_fact() -> IndexedSemanticFactRecord {
+        semantic_fact_with_certainty("SEMANTIC")
+    }
+
+    fn semantic_fact_with_certainty(certainty: &str) -> IndexedSemanticFactRecord {
         IndexedSemanticFactRecord {
             fact_id: "semantic-fact:000000".to_string(),
             kind: "RESOLVED_IMPORT".to_string(),
             subject: "src/a.ts#import:express".to_string(),
             target: None,
-            certainty: "SEMANTIC".to_string(),
+            certainty: certainty.to_string(),
             origin_engine: "typescript".to_string(),
             origin_engine_version: "6.0.0".to_string(),
             origin_method: "compiler_api".to_string(),
@@ -207,11 +375,362 @@ mod tests {
         }
     }
 
+    struct StaticSourceStore {
+        result: Result<SourceText, SourceStoreError>,
+    }
+
+    impl SourceStore for StaticSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            assert_eq!(request.repository_root, "/repo");
+            assert_eq!(request.path, "src/a.ts");
+            assert_eq!(request.max_file_bytes, 1024);
+            self.result.clone()
+        }
+    }
+
+    fn source_store_with_hash(content_hash: ContentHash) -> StaticSourceStore {
+        StaticSourceStore {
+            result: Ok(SourceText {
+                path: "src/a.ts".to_string(),
+                content_hash,
+                text: "source is not inspected by readiness tests".to_string(),
+            }),
+        }
+    }
+
+    fn missing_source_store(message: &str) -> StaticSourceStore {
+        StaticSourceStore {
+            result: Err(SourceStoreError::Missing(message.to_string())),
+        }
+    }
+
+    fn hash_mismatch_source_store(message: &str) -> StaticSourceStore {
+        StaticSourceStore {
+            result: Err(SourceStoreError::HashMismatch(message.to_string())),
+        }
+    }
+
+    fn readiness_request() -> SemanticFactReadinessRequest {
+        SemanticFactReadinessRequest {
+            repository_root: "/repo".to_string(),
+            max_file_bytes: 1024,
+        }
+    }
+
+    fn status_report(
+        status: RepositoryStatus,
+        storage: RepositoryImplementationStatus,
+        active_indexing: RepositoryImplementationStatus,
+        missing_subdirs: Vec<&str>,
+    ) -> RepositoryStatusReport {
+        RepositoryStatusReport {
+            state_dir: ".repogrammar".to_string(),
+            status,
+            manifest: RepositoryManifestStatus::Valid,
+            missing_subdirs: missing_subdirs.into_iter().map(str::to_string).collect(),
+            storage,
+            indexing: active_indexing,
+            storage_inspection: None,
+            storage_error: None,
+        }
+    }
+
+    fn fallback_report(report: QueryPreflightReport) -> QueryFallbackReport {
+        match report {
+            QueryPreflightReport::Fallback(fallback) => fallback,
+            QueryPreflightReport::Ready => panic!("expected fallback report"),
+        }
+    }
+
+    #[test]
+    fn query_preflight_reports_missing_repository_without_storage_claims() {
+        let status = status_report(
+            RepositoryStatus::NotInitialized,
+            RepositoryImplementationStatus::NotImplemented,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+
+        let pattern = fallback_report(query_preflight(
+            QueryPreflightOperation::PatternFamilyQuery,
+            &status,
+        ));
+        assert_eq!(pattern.reason, "repository is not initialized");
+        assert_eq!(pattern.guidance, "run repogrammar init");
+        assert!(!pattern.implemented);
+
+        let inventory = fallback_report(query_preflight(
+            QueryPreflightOperation::ActiveIndexInventory,
+            &status,
+        ));
+        assert_eq!(inventory.reason, "repository is not initialized");
+        assert_eq!(inventory.guidance, "run repogrammar init");
+        assert!(inventory.implemented);
+    }
+
+    #[test]
+    fn query_preflight_treats_unreadable_repository_state_as_status_unavailable() {
+        for status in [
+            status_report(
+                RepositoryStatus::CorruptedManifest,
+                RepositoryImplementationStatus::NotImplemented,
+                RepositoryImplementationStatus::NotImplemented,
+                Vec::new(),
+            ),
+            status_report(
+                RepositoryStatus::Initialized {
+                    active_generation: "gen-000001".to_string(),
+                },
+                RepositoryImplementationStatus::Unhealthy,
+                RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+                Vec::new(),
+            ),
+            status_report(
+                RepositoryStatus::Initialized {
+                    active_generation: "gen-000001".to_string(),
+                },
+                RepositoryImplementationStatus::Available,
+                RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+                vec!["generations"],
+            ),
+        ] {
+            let fallback = fallback_report(query_preflight(
+                QueryPreflightOperation::ActiveIndexInventory,
+                &status,
+            ));
+
+            assert_eq!(fallback.reason, "repository status is unavailable");
+            assert_eq!(fallback.guidance, "run repogrammar doctor");
+            assert!(fallback.implemented);
+        }
+    }
+
+    #[test]
+    fn query_preflight_requires_active_generation_for_inventory_commands() {
+        for active_generation in ["none", "not implemented"] {
+            let status = status_report(
+                RepositoryStatus::Initialized {
+                    active_generation: active_generation.to_string(),
+                },
+                RepositoryImplementationStatus::Available,
+                RepositoryImplementationStatus::FileManifestOnly,
+                Vec::new(),
+            );
+
+            let fallback = fallback_report(query_preflight(
+                QueryPreflightOperation::ActiveIndexInventory,
+                &status,
+            ));
+
+            assert_eq!(fallback.reason, "no active index generation");
+            assert_eq!(fallback.guidance, "run repogrammar index");
+            assert!(fallback.implemented);
+        }
+
+        let file_manifest_only = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::FileManifestOnly,
+            Vec::new(),
+        );
+        let fallback = fallback_report(query_preflight(
+            QueryPreflightOperation::ActiveIndexInventory,
+            &file_manifest_only,
+        ));
+        assert_eq!(fallback.reason, "no active index generation");
+        assert_eq!(fallback.guidance, "run repogrammar index");
+        assert!(fallback.implemented);
+    }
+
+    #[test]
+    fn query_preflight_allows_inventory_reads_for_active_generation() {
+        let status = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            query_preflight(QueryPreflightOperation::ActiveIndexInventory, &status),
+            QueryPreflightReport::Ready
+        );
+    }
+
+    #[test]
+    fn query_preflight_keeps_pattern_queries_fallback_only_without_family_evidence() {
+        let status = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        );
+
+        let fallback = fallback_report(query_preflight(
+            QueryPreflightOperation::PatternFamilyQuery,
+            &status,
+        ));
+
+        assert_eq!(
+            fallback.reason,
+            "query execution requires pattern-family evidence"
+        );
+        assert_eq!(
+            fallback.guidance,
+            "run repogrammar index after pattern-family indexing is implemented"
+        );
+        assert!(!fallback.implemented);
+    }
+
     #[test]
     fn list_semantic_facts_delegates_through_index_store() {
-        let report = list_semantic_facts(&FakeStore).expect("list semantic facts");
+        let report = list_semantic_facts(&FakeStore::new(vec![semantic_fact()]))
+            .expect("list semantic facts");
 
         assert_eq!(report.active_generation, "gen-000001");
         assert_eq!(report.facts, vec![semantic_fact()]);
+    }
+
+    #[test]
+    fn fresh_semantic_fact_is_only_eligible_future_claim_input() {
+        let fact = semantic_fact();
+        let report = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact.clone()]),
+            &source_store_with_hash(fact.content_hash),
+        )
+        .expect("assess readiness");
+
+        assert_eq!(report.active_generation, "gen-000001");
+        assert_eq!(report.facts.len(), 1);
+        assert_eq!(report.facts[0].fact_id, "semantic-fact:000000");
+        assert_eq!(
+            report.facts[0].readiness,
+            ClaimInputReadiness::EligibleInput
+        );
+        assert!(matches!(
+            find_analogues(AnalogueQuery {
+                target_path: "src/a.ts".to_string()
+            }),
+            Err(RepoGrammarError::NotImplemented("find_analogues"))
+        ));
+    }
+
+    #[test]
+    fn changed_source_blocks_semantic_fact_with_stale_evidence_unknown() {
+        let fact = semantic_fact();
+        let changed_hash = ContentHash::new(
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .expect("valid changed hash");
+        let report = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact]),
+            &source_store_with_hash(changed_hash),
+        )
+        .expect("assess readiness");
+
+        let ClaimInputReadiness::Blocked { unknown } = &report.facts[0].readiness else {
+            panic!("changed source must block semantic fact readiness");
+        };
+        assert_eq!(unknown.class, UnknownClass::Blocking);
+        assert_eq!(unknown.reason, UnknownReasonCode::StaleEvidence);
+        assert_eq!(unknown.affected_claim, "semantic_fact_claim_input");
+        assert_eq!(unknown.recovery.as_deref(), Some("run repogrammar sync"));
+    }
+
+    #[test]
+    fn missing_source_blocks_semantic_fact_without_leaking_source_error() {
+        let fact = semantic_fact();
+        let report = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact]),
+            &missing_source_store("/repo/src/a.ts vanished with secret detail"),
+        )
+        .expect("assess readiness");
+
+        let debug = format!("{report:?}");
+        assert!(!debug.contains("/repo"));
+        assert!(!debug.contains("secret detail"));
+        let ClaimInputReadiness::Blocked { unknown } = &report.facts[0].readiness else {
+            panic!("missing source must block semantic fact readiness");
+        };
+        assert_eq!(unknown.reason, UnknownReasonCode::StaleEvidence);
+    }
+
+    #[test]
+    fn hash_mismatch_blocks_semantic_fact_without_leaking_source_error() {
+        let fact = semantic_fact();
+        let report = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact]),
+            &hash_mismatch_source_store("/repo/src/a.ts hash mismatch with secret detail"),
+        )
+        .expect("assess readiness");
+
+        let debug = format!("{report:?}");
+        assert!(!debug.contains("/repo"));
+        assert!(!debug.contains("secret detail"));
+        let ClaimInputReadiness::Blocked { unknown } = &report.facts[0].readiness else {
+            panic!("hash mismatch must block semantic fact readiness");
+        };
+        assert_eq!(unknown.reason, UnknownReasonCode::StaleEvidence);
+        assert_eq!(unknown.recovery.as_deref(), Some("run repogrammar sync"));
+    }
+
+    #[test]
+    fn invalid_source_freshness_request_is_sanitized_error() {
+        let fact = semantic_fact();
+        let error = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact]),
+            &StaticSourceStore {
+                result: Err(SourceStoreError::InvalidRequest(
+                    "/repo/src/a.ts invalid with secret detail".to_string(),
+                )),
+            },
+        )
+        .expect_err("invalid freshness request must be an application error");
+
+        assert_eq!(
+            error,
+            RepoGrammarError::InvalidInput("source freshness request is invalid".to_string())
+        );
+        let debug = format!("{error:?}");
+        assert!(!debug.contains("/repo"));
+        assert!(!debug.contains("secret detail"));
+    }
+
+    #[test]
+    fn weak_certainty_facts_are_not_claim_inputs_even_when_fresh() {
+        for (certainty, reason) in [
+            ("STRUCTURAL", UnknownReasonCode::InsufficientSupport),
+            (
+                "FRAMEWORK_HEURISTIC",
+                UnknownReasonCode::InsufficientSupport,
+            ),
+            ("UNKNOWN", UnknownReasonCode::InsufficientSupport),
+            ("CONFLICTING", UnknownReasonCode::ConflictingFacts),
+        ] {
+            let fact = semantic_fact_with_certainty(certainty);
+            let report = assess_semantic_fact_readiness(
+                readiness_request(),
+                &FakeStore::new(vec![fact.clone()]),
+                &source_store_with_hash(fact.content_hash),
+            )
+            .expect("assess readiness");
+
+            let ClaimInputReadiness::Blocked { unknown } = &report.facts[0].readiness else {
+                panic!("{certainty} must not become eligible claim input");
+            };
+            assert_eq!(unknown.class, UnknownClass::Blocking);
+            assert_eq!(unknown.reason, reason);
+        }
     }
 }

@@ -1,7 +1,8 @@
 # Project State
 
 - Status: Bootstrap plus syntax-only indexing, structural IR storage, opt-in
-  semantic fact ingestion, and active semantic-fact reads
+  semantic fact ingestion, active semantic-fact reads, and internal
+  semantic-fact freshness/readiness gating
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -23,7 +24,8 @@ validation, a dependency-free TypeScript worker stub that reports compiler
 analysis as unavailable, a validated semantic-fact storage writer, and opt-in
 command-level semantic-worker fact ingestion through the same-generation storage
 gate. It also has an internal active-generation semantic-fact/evidence read path
-for future claim builders.
+for future claim builders and an internal file-hash freshness/readiness gate
+that blocks stale, weak, or conflicting facts with typed `UNKNOWN`.
 
 ## Durable knowledge
 
@@ -54,14 +56,17 @@ The application query/storage boundary can read active semantic facts back from
 the active generation after revalidating stored fact kind/certainty tokens,
 assumptions JSON, repo-relative evidence, content hashes, code-unit ids, and
 byte ranges. This is an internal substrate only; CLI/MCP query commands do not
-render semantic facts and stored facts are not freshness-validated family
-evidence.
+render semantic facts. The query application layer can check active semantic
+facts against current source hashes and classify them as eligible inputs for
+future claim builders or typed `UNKNOWN` blockers (`StaleEvidence`,
+`InsufficientSupport`, or `ConflictingFacts`). Fresh eligible facts are still
+not family evidence.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
-semantic-fact freshness/claim gates, typed IR attributes beyond the structural
-bootstrap graph, semantic/framework facts, family mining, query-ready family
-evidence, pattern-family query execution, MCP serving, installer writes, and
-telemetry network transport are not implemented.
+full repository/worktree freshness metadata, family-claim gates, typed IR
+attributes beyond the structural bootstrap graph, semantic/framework facts,
+family mining, query-ready family evidence, pattern-family query execution, MCP
+serving, installer writes, and telemetry network transport are not implemented.
 
 Pattern-family query commands still use stable fallback behavior. `files` and
 `units` can return active syntax-only index metadata, but stored syntax-only
@@ -82,5 +87,5 @@ canonical specs.
 ## Revalidation conditions
 
 Update this memory after Tree-sitter integration, TypeScript compiler API
-integration, semantic-fact freshness/claim gates, family-query claim paths, MCP
-serving, installer writes, or production family evidence lands.
+integration, full family-claim gates, family-query claim paths, MCP serving,
+installer writes, or production family evidence lands.

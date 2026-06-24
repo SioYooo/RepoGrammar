@@ -53,6 +53,15 @@ semantic family membership. Compiler-native semantic facts, framework roles,
 CFG/dataflow/effect summaries, API usage, and repository context may strengthen
 claims only when their provenance and freshness checks pass.
 
+The Rust domain currently exposes stable typed `UNKNOWN` classes and reason
+codes and uses them in the internal semantic-fact claim-input readiness gate.
+Fresh `SEMANTIC` and `DATAFLOW_DERIVED` facts may be eligible inputs for future
+claim builders, but that eligibility is not a pattern-family claim. Stale or
+missing source evidence blocks the affected semantic-fact claim input with
+`StaleEvidence`; `STRUCTURAL`, `FRAMEWORK_HEURISTIC`, and `UNKNOWN` certainty
+block with `InsufficientSupport`; `CONFLICTING` certainty blocks with
+`ConflictingFacts`.
+
 If views disagree, RepoGrammar must preserve the conflict as
 `ConflictingFacts`, produce `CONFLICTING` internally where appropriate, and
 abstain or emit `UNKNOWN` for affected claims. Do not average or vote away
