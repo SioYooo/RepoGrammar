@@ -19,6 +19,8 @@
 
 - Inspect repository status and existing instructions before editing. Preserve unrelated user changes.
 - Make the smallest coherent change. Do not perform unrelated refactors, broad formatting, dependency upgrades, or speculative rewrites.
+- For nontrivial implementation work, use parallel agent teams where independent slices exist. Assign disjoint ownership, preserve other agents' and users' edits, and integrate results only through the main session after review.
+- After implementation, inspect the changed code logic before accepting or merging agent-team output into the main session. Verify behavior with the required checks and resolve conflicts semantically, not by blindly choosing one side.
 - Every code change must include corresponding tests and documentation changes in the same atomic commit.
 - Update normative requirements in `docs/`, reusable workflows in `.agents/skills/`, durable learned context in `.agents/memories/`, and only cross-cutting mandatory rules in this mirrored contract.
 - Never leave duplicated requirements inconsistent. Update the canonical document and every affected reference.

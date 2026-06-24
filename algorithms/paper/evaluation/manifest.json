@@ -1,0 +1,34 @@
+{
+  "domain": "evaluation",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "BigCloneBench and clone-evaluation lineage",
+      "authors": ["UNKNOWN - select and verify primary sources before implementation"],
+      "url": "https://github.com/clonebench/BigCloneBench",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_source_selection_not_final",
+      "used_by_milestone": ["M12", "M13"],
+      "implementation_notes": [
+        "Use repository-level split enforcement and adjudicated labels.",
+        "Keep clone-detection benchmarks separate from pattern-family claim validation."
+      ]
+    },
+    {
+      "title": "Recent caution on BigCloneBench semantic-clone suitability",
+      "authors": ["UNKNOWN - verify from primary source before implementation"],
+      "url": "https://arxiv.org/abs/2505.04311",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_title_and_authors_not_verified",
+      "used_by_milestone": ["M12", "M13"],
+      "implementation_notes": [
+        "Do not treat benchmark inclusion as proof of semantic equivalence.",
+        "Report annotation protocol, annotator agreement, and abstention rates."
+      ]
+    }
+  ]
+}

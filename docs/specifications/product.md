@@ -17,6 +17,12 @@ or similarity search results. A result should be able to describe:
 - source evidence for every conclusion;
 - `UNKNOWN` when static analysis cannot support a claim.
 
+The v0.1 technical narrative is Evidence-Constrained Multi-View Family
+Induction (EC-MVFI): syntax, compiler semantics, framework role, CFG/dataflow
+and effect, API usage, and repository-context views may propose and validate
+families, but claims are emitted only when evidence and compatibility gates
+support them. Otherwise the result must remain `UNKNOWN`.
+
 The CLI and MCP surfaces must preserve this identity. Human-facing commands are
 organized around implementation-pattern families, not generic symbol graph
 navigation.

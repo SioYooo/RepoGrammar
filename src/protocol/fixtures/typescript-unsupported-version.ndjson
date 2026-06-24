@@ -1,0 +1,2 @@
+{"protocol_version":1,"message_type":"worker_error","request_id":"fixture-ts-unsupported","error_code":"SEMANTIC_VERSION_UNSUPPORTED","message":"TypeScript semantic compiler API version is not supported by this worker boundary","fallback":{"mode":"syntax_only","certainty":"STRUCTURAL"}}
+{"protocol_version":1,"message_type":"end_of_stream","request_id":"fixture-ts-unsupported"}

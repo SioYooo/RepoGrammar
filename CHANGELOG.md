@@ -9,6 +9,13 @@
   adapters.
 - Language-native semantic worker boundary and TypeScript worker protocol
   placeholder.
+- Semantic worker v1 protocol tokens, message schemas, and NDJSON fixtures for
+  TypeScript semantic facts and unsupported-version fallback.
+- Metadata-only algorithm paper archive for syntax, semantics, retrieval,
+  graph fingerprints, alignment, anti-unification, clustering, evidence
+  selection, evaluation, and installer supply-chain references.
+- Parallel-agent implementation and post-implementation logic-review
+  requirements in the mirrored agent contract.
 - TypeScript/JavaScript-first MVP language policy with Python deferred to a
   focused second-language phase.
 - Pattern-family-first CLI command surface, with CodeGraph-style graph commands

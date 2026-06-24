@@ -4,7 +4,9 @@
 
 - Repository governance and mirrored agent contract.
 - Rust package skeleton.
-- Semantic worker boundary and TypeScript worker protocol placeholder.
+- Semantic worker boundary plus v1 protocol tokens, schemas, and NDJSON
+  fixtures for a TypeScript fact and unsupported-version fallback.
+- Metadata-only algorithm paper archive under `algorithms/paper/`.
 - Pattern-family-first CLI command surface and safe command-contract parsing.
 - Core domain type placeholders.
 - Parser, storage, telemetry, CLI, and MCP boundaries.
@@ -17,6 +19,8 @@
   executable worker code.
 - Implement TypeScript and JavaScript code-unit extraction.
 - Define the TypeScript semantic worker protocol tests and version policy.
+- Verify archive metadata, licenses, and SHA-256 values before committing any
+  downloaded paper or HTML artifact.
 - Convert parser AST into RepoGrammar-owned unified IR.
 - Add deterministic fixture coverage under `src/fixtures/`.
 

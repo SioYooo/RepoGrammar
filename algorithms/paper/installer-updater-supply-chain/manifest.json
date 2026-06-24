@@ -1,0 +1,48 @@
+{
+  "domain": "installer-updater-supply-chain",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "The Update Framework",
+      "authors": ["TUF contributors"],
+      "url": "https://theupdateframework.io/",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M1", "M12"],
+      "implementation_notes": [
+        "Use signed metadata and artifact hashes for update planning.",
+        "Preserve the current version on failed upgrade self-test."
+      ]
+    },
+    {
+      "title": "SPDX specification",
+      "authors": ["SPDX contributors"],
+      "url": "https://spdx.dev/specifications/",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M1", "M12"],
+      "implementation_notes": [
+        "Use SBOM metadata for release bundle auditability.",
+        "Keep installer receipts separate from repository-derived indexes."
+      ]
+    },
+    {
+      "title": "Reproducible builds overview",
+      "authors": ["UNKNOWN - verify from primary source before implementation"],
+      "url": "https://arxiv.org/abs/2104.06020",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_title_and_authors_not_verified",
+      "used_by_milestone": ["M12"],
+      "implementation_notes": [
+        "Use as background for release reproducibility gates after bundle layout exists.",
+        "Do not claim reproducibility until the build process is measured and documented."
+      ]
+    }
+  ]
+}

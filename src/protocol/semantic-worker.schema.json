@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://repogrammar.local/schemas/semantic-worker.schema.json",
-  "title": "RepoGrammar semantic worker fact",
+  "title": "RepoGrammar semantic worker fact payload",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,7 +17,17 @@
   "properties": {
     "protocol_version": { "type": "integer", "const": 1 },
     "request_id": { "type": "string", "minLength": 1 },
-    "fact_kind": { "type": "string", "minLength": 1 },
+    "fact_kind": {
+      "type": "string",
+      "enum": [
+        "RESOLVED_CALL",
+        "RESOLVED_IMPORT",
+        "SYMBOL",
+        "TYPE",
+        "FRAMEWORK_ROLE",
+        "UNKNOWN"
+      ]
+    },
     "subject": { "type": "string", "minLength": 1 },
     "target": { "type": ["string", "null"] },
     "origin": {
@@ -44,11 +54,26 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "start_byte", "end_byte"],
+      "required": [
+        "code_unit_id",
+        "path",
+        "content_hash",
+        "repository_revision",
+        "start_byte",
+        "end_byte",
+        "note"
+      ],
       "properties": {
+        "code_unit_id": { "type": "string", "minLength": 1 },
         "path": { "type": "string", "minLength": 1 },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "repository_revision": { "type": "string", "minLength": 1 },
         "start_byte": { "type": "integer", "minimum": 0 },
-        "end_byte": { "type": "integer", "minimum": 0 }
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "note": { "type": "string", "minLength": 1 }
       }
     },
     "assumptions": {
