@@ -412,6 +412,25 @@ mod tests {
     }
 
     #[test]
+    fn every_query_command_supports_json_missing_index_fallback() {
+        for command in [
+            "find", "families", "family", "member", "explain", "check", "files", "units",
+        ] {
+            let output = run([command, "--json"]);
+
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            let fallback: Value =
+                serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
+            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+            assert_eq!(fallback["reason"], "repository is not initialized");
+            assert_eq!(fallback["guidance"], "run repogrammar init");
+            assert_eq!(fallback["command"], command);
+            assert_eq!(fallback["implemented"], false);
+        }
+    }
+
+    #[test]
     fn forbidden_graph_commands_are_not_top_level() {
         for command in [
             "callers", "callees", "impact", "affected", "node", "explore",

@@ -147,13 +147,30 @@ mod tests {
 
     #[test]
     fn protocol_fixture_validation_rejects_empty_target() {
+        for target in [json!(""), json!("   ")] {
+            let mut fact = valid_fact_message();
+            fact["target"] = target;
+            let fixture = fixture_content(vec![fact, valid_end_of_stream_message()]);
+
+            let error =
+                validate_protocol_fixture(&fixture).expect_err("empty target must be rejected");
+
+            assert!(error.contains("target must not be empty"));
+        }
+    }
+
+    #[test]
+    fn protocol_fixture_validation_accepts_null_and_non_empty_targets() {
+        validate_protocol_fixture(&fixture_content(vec![
+            valid_fact_message(),
+            valid_end_of_stream_message(),
+        ]))
+        .expect("non-empty target must be accepted");
+
         let mut fact = valid_fact_message();
-        fact["target"] = json!("");
-        let fixture = fixture_content(vec![fact, valid_end_of_stream_message()]);
-
-        let error = validate_protocol_fixture(&fixture).expect_err("empty target must be rejected");
-
-        assert!(error.contains("target must not be empty"));
+        fact["target"] = Value::Null;
+        validate_protocol_fixture(&fixture_content(vec![fact, valid_end_of_stream_message()]))
+            .expect("null target must be accepted");
     }
 
     fn validate_protocol_fixture(content: &str) -> Result<(), String> {
