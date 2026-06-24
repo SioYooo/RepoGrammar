@@ -14,22 +14,25 @@
 - Git-aware TypeScript and JavaScript file discovery substrate with strict
   hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
   and deterministic ordering.
+- SQLite storage substrate with generation-scoped migrations, WAL settings,
+  foreign-key enforcement, validation before activation, and rollback
+  preservation for failed generations.
 - Core domain type placeholders.
 - Parser, storage, telemetry, CLI, and MCP boundaries.
 - Repository guard and CI quality gates.
 
-## Next phase: storage substrate
+## Next phase: indexing integration
 
-- Design SQLite migrations and generation activation before storing indexed
-  facts.
-- Connect the existing discovery substrate to generation validation.
-- Keep parser, semantic-worker execution, and mining deferred until storage can
-  preserve a previous valid generation on failure.
+- Connect the existing discovery substrate to SQLite generation validation
+  without storing source snippets or absolute paths.
+- Surface storage health through `status` and `doctor`.
+- Keep parser, semantic-worker execution, and mining deferred until lifecycle,
+  discovery, and storage are integrated behind the existing ports.
 
 ## Command implementation path
 
-- Implement SQLite-backed generations, migrations, WAL settings, rollback, and
-  freshness validation after discovery is safe.
+- Wire SQLite-backed generations into `index`, `sync`, `status`, and `doctor`
+  after discovery is safe.
 - Implement `find`, `family`, `explain`, and `check` against real stored
   pattern-family evidence.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`
@@ -52,8 +55,8 @@
 
 ## Later phases
 
-- Add Tree-sitter dependency only after discovery and storage boundaries are
-  tested.
+- Add Tree-sitter dependency only after discovery, storage, and lifecycle
+  integration boundaries are tested.
 - Validate TypeScript worker tooling and package manager before adding
   executable worker code.
 - Implement TypeScript and JavaScript code-unit extraction.

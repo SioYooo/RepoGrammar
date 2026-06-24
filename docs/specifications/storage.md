@@ -115,9 +115,11 @@ must be refused rather than repaired silently.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 `.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`, but it
-does not create SQLite databases, active generations, telemetry queues, or real
-index metadata. Bootstrap `status` and `doctor` must report storage and indexing
-as `not_implemented` instead of `pass`.
+does not yet create SQLite databases, active generations, telemetry queues, or
+real index metadata through the CLI. A persistence adapter can create and
+validate generation-scoped SQLite databases behind a storage port; `status` and
+`doctor` must continue to report storage and indexing as `not_implemented` until
+those commands are explicitly wired to that adapter and tested.
 
 ## File Discovery Exclusions
 
@@ -136,7 +138,9 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, and `.jsx` files only. It returns repo-relative metadata and skip
-reasons for future storage but does not write SQLite rows or activate an index
+reasons for future storage integration. The SQLite adapter can store
+repo-relative indexed-file records in a prepared generation, but `index` and
+`sync` do not yet connect discovery output to storage or activate a real index
 generation.
 
 ## Project Configuration
@@ -207,8 +211,13 @@ range, generation id, and repository revision metadata.
 
 ## SQLite Responsibilities
 
-RepoGrammar uses one SQLite database per repository state directory. SQLite and
-SQL migration logic belong only in persistence adapters.
+RepoGrammar uses repository-local SQLite databases. SQLite and SQL migration
+logic belong only in persistence adapters. The current substrate creates one
+database per generation under `.repogrammar/generations/<generation>/` and
+records the active generation in `.repogrammar/current-generation`. The
+top-level `.repogrammar/repogrammar.sqlite` active database path remains the
+target read path for later query integration; it must not be exposed by CLI
+commands until activation and read-path semantics are designed and tested.
 
 Required PRAGMAs:
 
@@ -220,13 +229,16 @@ PRAGMA busy_timeout=5000;
 PRAGMA temp_store=MEMORY;
 ```
 
-The database must store schema metadata, tool version, schema version, index
-generation id, repository revision, worktree hash, language adapter versions,
-freshness metadata, code units, source ranges, content hashes, provenance,
-family records, canonical templates, variation points, exceptions, and evidence
-links once implemented. Searchable source evidence may use FTS5 where useful.
+The initial schema stores schema metadata, generation rows, indexed files,
+placeholder code-unit records, IR nodes and edges, semantic facts, families,
+family members, variation slots, and evidence links. It enforces foreign keys,
+repo-relative paths at the Rust port boundary, and validation before activation.
+The database must later store repository revision, worktree hash, language
+adapter versions, freshness metadata, canonical templates, exception records,
+and richer provenance once those producers exist. Searchable source evidence
+may use FTS5 where useful after source-snippet retention rules are finalized.
 
-Future schema work should keep separate tables for:
+Schema work should keep separate tables for:
 
 - `schema_migrations`;
 - `index_generations`;
@@ -238,6 +250,10 @@ Future schema work should keep separate tables for:
 - pattern families and templates;
 - variations, exceptions, and counterexamples;
 - source evidence.
+
+The production SQLite dependency is `rusqlite` with bundled SQLite enabled.
+Only `src/rust/adapters/persistence/` may depend on it directly; application and
+domain code must use RepoGrammar-owned storage port types.
 
 `repogrammar status` must show journal mode. `repogrammar doctor` must run
 SQLite integrity checks, verify schema version, verify active generation

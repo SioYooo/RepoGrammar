@@ -2,6 +2,7 @@
 
 pub mod family_store;
 pub mod file_discovery;
+pub mod index_store;
 pub mod parser;
 pub mod semantic_worker;
 pub mod source_store;

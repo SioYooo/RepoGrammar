@@ -33,6 +33,12 @@ allowed.
   warnings, the inclusive 1 MB size boundary, oversized skips, strict SHA-256
   hash generation, deterministic ordering, symlink escape skips, invalid roots,
   and absence of source snippets or absolute paths in reports.
+- SQLite storage tests must use temporary workspaces and cover idempotent
+  migrations, required-table validation, WAL and foreign-key PRAGMAs,
+  foreign-key enforcement, activation pointer validation, preservation of the
+  previous active generation after failed validation, repository-relative
+  indexed-file paths, and rejection of symlinked or malformed
+  active-generation pointers.
 - Protocol fixture tests must parse fixture lines as JSON before checking
   message types, fallback payloads, evidence fields, and strict content-hash
   formats. Semantic fact target tests must cover invalid blank targets,
@@ -49,5 +55,6 @@ rendering and `WorkUnits` validation, schema coverage, JSON-parsed semantic
 worker fixture coverage, telemetry consent, transport-neutral MCP tool names,
 CLI command surface, missing-index fallback human/JSON output, repo-local
 lifecycle init/status/doctor/uninit/unlock/logs safety behavior, TS/JS file
-discovery filtering/hash/path-safety behavior, installer dry-run parsing, and
+discovery filtering/hash/path-safety behavior, SQLite storage migration and
+generation-activation safety behavior, installer dry-run parsing, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.

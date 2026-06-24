@@ -14,7 +14,9 @@ depend on cloud services, vector databases, or embedding models.
 Use SQLite with FTS5 for the local index once persistence is implemented. The
 database is repository-local: one SQLite database per project state directory,
 not one global database for all repositories. Storage code and SQL migration
-logic must stay in the persistence adapter.
+logic must stay in the persistence adapter. The Rust implementation uses
+`rusqlite` with bundled SQLite so repository-local WAL, foreign-key, and
+migration behavior does not depend on the host operating system's SQLite build.
 
 ## Alternatives considered
 
@@ -27,10 +29,12 @@ logic must stay in the persistence adapter.
 
 Index metadata, provenance, and searchable source evidence can live in one
 repository-local database file. ADR-0008 defines the `.repogrammar/` state
-boundary, global-state limits, and generation/freshness requirements. Schema
-migration design remains future work.
+boundary, global-state limits, and generation/freshness requirements. The first
+storage substrate creates generation-scoped databases and an active-generation
+pointer; wiring that substrate into `index`, `status`, `doctor`, query reads,
+and any top-level active database path remains future work.
 
 ## Follow-up work
 
-Design schema migrations, freshness checks, and FTS5 table boundaries before
-adding a SQLite dependency.
+Wire discovery output into validated generations, then design freshness checks,
+query read paths, and FTS5 table boundaries before storing source evidence.

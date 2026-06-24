@@ -110,6 +110,9 @@ manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
 configuration. Once SQLite exists, it must also check database integrity,
 schema version, journal mode, and active generation consistency.
+During the current storage-substrate phase, the SQLite adapter exists behind a
+port but `doctor` is not yet wired to it; human and JSON output must therefore
+continue to distinguish lifecycle checks from deferred storage health checks.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
@@ -199,9 +202,10 @@ creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
 lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
-repo-local lifecycle information without claiming real indexing or SQLite
-storage. A TS/JS file discovery substrate exists for future indexing, but
-`index` and `sync` still do not create an active generation or store facts.
+repo-local lifecycle information without claiming real indexing. A TS/JS file
+discovery substrate and SQLite generation-storage substrate exist for future
+indexing, but `index` and `sync` still do not connect discovery to storage,
+create an active product index, or store parser/mining facts.
 Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
 not-implemented guidance when no validated index is available, and return a
 structured fallback object when `--json` is present. Commands that install agent

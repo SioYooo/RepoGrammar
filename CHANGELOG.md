@@ -28,6 +28,10 @@
   content hashes, default generated-directory skips, Git ignore checks,
   symlink-escape rejection, size-limit handling, and deterministic skip
   reasons.
+- SQLite storage substrate behind a port, including generation-scoped
+  migrations, WAL and foreign-key PRAGMAs, required-table validation,
+  repository-relative indexed-file records, active-generation pointer
+  activation, and rollback preservation when validation fails.
 - Mirrored `AGENTS.md` and `CLAUDE.md` governance contract.
 - Documentation system covering architecture, specifications, development
   workflow, ADRs, roadmap, skills, and memories.
@@ -53,3 +57,5 @@
   conservative lock/log handling.
 - Documented that discovery is implemented as a substrate while parser,
   storage, generation activation, and query execution remain deferred.
+- Documented `rusqlite` as the first production dependency, constrained to the
+  persistence adapter for repository-local SQLite storage.

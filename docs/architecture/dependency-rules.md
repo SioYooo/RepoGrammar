@@ -58,8 +58,10 @@ another analyzer, or unable to decide a dynamic behavior, the result must be
 ## SQLite boundary
 
 SQLite and migration execution logic belong in `src/rust/adapters/persistence/`.
-Storage use cases depend on `ports::family_store` and `ports::source_store`,
-not direct SQL calls.
+The `rusqlite` production dependency is allowed only at that adapter boundary.
+Storage use cases depend on RepoGrammar-owned ports such as
+`ports::index_store`, `ports::family_store`, and `ports::source_store`, not
+direct SQL calls or SQLite row types.
 
 ## MCP boundary
 

@@ -17,15 +17,18 @@ claim.
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
-discovery substrate, and repository guard checks.
+discovery substrate, a SQLite generation-storage substrate, and repository
+guard checks.
 
-It does not yet implement real pattern mining, indexing, SQLite storage
-migrations, parser-backed code-unit extraction, or a working MCP server.
-`init`, `uninit`, `status`, `doctor`, `unlock`, and `logs` operate only on safe
-repo-local lifecycle state. The discovery layer can enumerate TS/JS source
-metadata for future indexing, but commands that install agent configuration,
-run real index generation, sync indexes, or serve MCP return explicit
-not-implemented errors until those contracts are implemented and tested.
+It does not yet implement real pattern mining, indexing integration,
+parser-backed code-unit extraction, or a working MCP server. `init`, `uninit`,
+`status`, `doctor`, `unlock`, and `logs` operate only on safe repo-local
+lifecycle state. The discovery layer can enumerate TS/JS source metadata for
+future indexing, and the persistence adapter can create and validate
+generation-scoped SQLite databases, but commands that install agent
+configuration, run real index generation, sync indexes, or serve MCP return
+explicit not-implemented errors until those contracts are implemented and
+tested.
 
 ## Why RepoGrammar?
 
@@ -85,7 +88,7 @@ structured object with `implemented: false`.
 | Parsing | Tree-sitter boundary is planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Worker boundary, v1 protocol tokens, schemas, and fixtures exist | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS file discovery substrate is implemented | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite and FTS5 are specified | Local evidence index with migrations and provenance |
+| Storage | SQLite generation schema, PRAGMAs, validation, and activation pointer are implemented behind a port | Local evidence index wired to discovery, parser output, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle is implemented without indexing | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
@@ -171,14 +174,14 @@ The dependency direction and module ownership are documented in:
 
 ## Roadmap
 
-The next implementation phase is repository-local storage substrate:
+The next implementation phase is repository-local indexing integration:
 
-- design SQLite migrations and generation activation before storing indexed
-  facts;
-- connect discovery reports to generation validation without storing source
-  snippets or absolute paths;
+- connect discovery reports to SQLite generation validation without storing
+  source snippets or absolute paths;
+- expose storage health through `status` and `doctor` without claiming parser or
+  mining support;
 - keep parser, semantic-worker execution, and mining deferred until lifecycle,
-  discovery, and storage boundaries are validated.
+  discovery, and storage boundaries are validated together.
 
 See [docs/roadmap.md](docs/roadmap.md) for the staged plan.
 

@@ -59,10 +59,12 @@ machine-level agent integration rather than repository-local index state.
 
 ## Composition root
 
-`src/rust/bin/repogrammar.rs` is the product composition root. It currently only
-wires the CLI boundary and returns stable not-implemented errors for product
-commands. `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
-coupled to product runtime logic.
+`src/rust/bin/repogrammar.rs` is the product composition root. It currently
+wires the CLI boundary and repository-lifecycle surface. Product indexing,
+querying, MCP serving, and storage-health reporting still return stable
+not-implemented or fallback outputs until those adapters are connected through
+application use cases. `src/rust/bin/repo_guard.rs` is a separate governance
+tool and must not be coupled to product runtime logic.
 
 ## External dependency boundaries
 

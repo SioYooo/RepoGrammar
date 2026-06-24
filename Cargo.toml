@@ -18,6 +18,9 @@ path = "src/rust/bin/repo_guard.rs"
 path = "src/rust/lib.rs"
 
 [dependencies]
+# Production: the repository-local storage adapter owns SQLite migrations and
+# generation validation. `bundled` keeps behavior independent of host SQLite.
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
 
 [dev-dependencies]
 # Dev-only: protocol fixture tests must parse NDJSON as JSON without adding
