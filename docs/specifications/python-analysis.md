@@ -173,6 +173,14 @@ The current implementation covers the first structural slice only:
   `Depends(...)`, `HTTPException(...)`, and literal HTTPException status-code
   anchors remain route schema/context/effect metadata and are explicitly
   excluded from membership support derivation.
+- a Rust `ports::python_provider` boundary for future candidate-scoped
+  Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
+  provider cache-key dimensions, and recoverable provider-unavailable
+  `UNKNOWN`s. This boundary is not a provider adapter, does not execute external
+  tools, and does not add production Pyrefly/Pyright/RightTyper support. Future
+  provider adapters must translate accepted provider spans into existing
+  same-code-unit path/hash/range support evidence before EC-MVFI-lite can use
+  them; provider origin alone cannot bypass canonical target compatibility.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and
@@ -193,13 +201,15 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not implement Pyrefly, Pyright, provider cache keys, usage
+This slice does not implement Pyrefly, Pyright, a provider adapter, usage
 propagation, call hierarchy recovery, Tree-sitter fallback, runtime
 observation, broad Python family mining, source snippet retrieval, or
-schema-backed medoid/general-variation/exception evidence links. The only
-current variation evidence is exact-compatible Python framework-anchor target
-diversity inside an already-ready family. Persisted project configuration
-facts are structural context only and remain blocked from family-claim input.
+schema-backed medoid/general-variation/exception evidence links. The provider
+cache-key shape exists only as a Rust port contract for future adapters. The
+only current variation evidence is exact-compatible Python framework-anchor
+target diversity inside an already-ready family. Persisted project
+configuration facts are structural context only and remain blocked from
+family-claim input.
 
 ### Layer 0: Authoritative Frontend
 

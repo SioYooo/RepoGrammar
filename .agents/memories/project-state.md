@@ -38,7 +38,10 @@
   schema/context/effect metadata and are not membership support targets.
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
-  metadata, not family membership support. Pyrefly/Pyright and
+  metadata, not family membership support. A Rust `ports::python_provider`
+  contract now exists for future candidate-scoped provider requests,
+  provenance assumptions, cache-key dimensions, and recoverable
+  provider-unavailable `UNKNOWN`s, but Pyrefly/Pyright/RightTyper execution and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
@@ -195,9 +198,9 @@ framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
 evidence.
 
-Tree-sitter integration, TypeScript compiler API integration, persisted safe
-Python project-configuration facts, Pyrefly/Pyright provider execution,
-provider-backed canonical framework evidence,
+Tree-sitter integration, TypeScript compiler API integration,
+provider-backed Python project-configuration semantics, Pyrefly/Pyright
+provider execution, provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
 beyond the structural bootstrap graph, resolved framework semantics, full
 family mining, broad installer writes, project-local installer writes,

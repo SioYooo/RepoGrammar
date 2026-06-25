@@ -116,8 +116,10 @@ variation/exception.
 
 Current progress: a pre-provider exact-anchor derivation slice is implemented
 for canonical Python framework targets already emitted by the CPython frontend.
-It records `provider_resolved=false` `DATAFLOW_DERIVED` support and keeps the
-Pyrefly/Pyright provider layer deferred.
+It records `provider_resolved=false` `DATAFLOW_DERIVED` support. The Rust ports
+layer also defines future candidate-scoped Python provider request,
+provenance, cache-key, and unavailable-UNKNOWN boundaries. Pyrefly,
+Pyright, and RightTyper adapter execution remain deferred.
 
 Non-goals: Django, plugin execution, runtime DI resolution, whole-project
 dual-provider analysis, private Pyrefly API use, or substring framework

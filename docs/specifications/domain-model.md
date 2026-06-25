@@ -99,6 +99,11 @@ runtime facts require explicit domain/protocol/storage changes before becoming
 public certainty tokens. Until then, cross-check status and observed provenance
 must stay in owned assumptions/provenance and use the current certainty
 vocabulary.
+The current Rust ports layer defines owned Python provider request,
+provenance, cache-key, and unavailable-output types so future Pyrefly, Pyright,
+or RightTyper adapters can translate into `SemanticFact` plus typed
+`UNKNOWN`. These port types are not provider facts by themselves and do not
+change the current family support gate.
 
 ## PatternFamily
 

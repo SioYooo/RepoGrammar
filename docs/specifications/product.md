@@ -67,6 +67,10 @@ slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
 bounded role propagation, target-centered call recovery, richer EC-MVFI-lite
 family induction, and typed `UNKNOWN` governance.
+The current Rust code now has only the owned future Python provider port
+contract for request scope, provenance assumptions, cache keys, and recoverable
+provider-unavailable `UNKNOWN`s. It does not execute provider tools or add
+production provider-backed Python semantics.
 The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 

@@ -136,9 +136,13 @@ ingestion through the storage gate, bounded exact-anchor Python support
 derivation, plus an internal semantic-fact file-hash freshness and claim-input
 readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
-v0.1 TS/JS and Python release fixture smoke gates. Continue one boundary at a time:
+v0.1 TS/JS and Python release fixture smoke gates. The Rust ports layer now also
+has a future Python semantic-provider contract for candidate-scoped requests,
+provider provenance assumptions, cache-key dimensions, and recoverable
+provider-unavailable `UNKNOWN`s, but no provider adapter execution is wired.
+Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
-provenance/cache keys, bounded framework-role propagation, or richer
+adapter execution, bounded framework-role propagation, or richer
 family-claim gates. Keep
 syntax-only code units, structural IR, syntax-origin framework-role facts, and
 weak stored semantic facts out of family claims unless the conservative builder

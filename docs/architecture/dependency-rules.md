@@ -80,6 +80,11 @@ not run during default indexing because it executes user code.
 The current implemented Python slice uses a checked-in CPython `ast` worker for
 structural code-unit extraction only. It does not run Pyrefly, Pyright, mypy,
 `ty`, RightTyper, or repository code.
+The Rust ports layer now defines a RepoGrammar-owned future Python provider
+boundary for candidate-scoped provider requests, provenance assumptions, cache
+key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is
+not an adapter and does not execute Pyrefly, Pyright, RightTyper, or repository
+code by itself.
 
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into

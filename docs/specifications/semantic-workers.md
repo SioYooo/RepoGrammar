@@ -58,6 +58,13 @@ objects must not enter Rust core. Provider provenance and freshness metadata
 must include provider name/version, command or API operation, provider config
 hash, Python version, environment fingerprint, input file hashes, source ranges,
 and query operation.
+The Rust `ports::python_provider` module now defines those future provider
+request, provenance, cache-key, and unavailable-UNKNOWN boundaries as
+RepoGrammar-owned types. It is not an adapter and does not execute Pyrefly,
+Pyright, RightTyper, or repository code. Future provider adapters must still
+translate accepted facts through the existing semantic-worker path and into
+same-unit path/hash/range evidence before those facts can support a family
+claim.
 
 Pyrefly and Pyright agreement may support a future cross-checked certainty tier
 only after Rust domain, protocol schemas, storage, CLI, MCP, and tests define

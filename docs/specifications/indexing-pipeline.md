@@ -234,6 +234,11 @@ hierarchy recovery, and runtime observation remain deferred.
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains
 transitional substrate until a later ADR re-promotes it.
+The current Rust ports layer also defines a future Python semantic-provider
+boundary for candidate-scoped requests, provider provenance assumptions,
+cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. Default
+indexing does not call this port yet, and no Pyrefly, Pyright, RightTyper, or
+runtime-trace adapter is implemented.
 
 ## Optional providers
 

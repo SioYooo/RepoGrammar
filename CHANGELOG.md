@@ -87,6 +87,11 @@
   `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
   calls. These anchors remain structural context and are explicitly excluded
   from family membership support.
+- Rust `ports::python_provider` contract for future candidate-scoped
+  Pyrefly/Pyright/RightTyper provider requests, provenance assumptions,
+  cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. This
+  does not execute provider tools or add production provider-backed Python
+  semantics.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and

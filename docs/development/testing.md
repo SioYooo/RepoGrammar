@@ -87,7 +87,9 @@ allowed.
 - Family builder and query tests must cover framework-heuristic-only groups
   staying `UNKNOWN`, semantic/dataflow-supported repeated candidates becoming
   eligible family records, role-incompatible semantic facts staying
-  insufficient, no-family active generations returning typed
+  insufficient, future Python provider-origin facts staying subject to exact
+  canonical target compatibility and same-code-unit path/hash/range evidence,
+  no-family active generations returning typed
   `InsufficientSupport`, exact family/member lookup versus fuzzy
   find/explain/check lookup, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
@@ -218,6 +220,11 @@ allowed.
 - Optional provider tests, once added, must cover provider absent, present,
   stale, and conflicting states without making CodeGraph or any other provider
   required for default tests.
+- Python provider port tests must cover candidate repo-relative path validation,
+  deterministic candidate ordering, duplicate candidate rejection, required
+  provider provenance/cache-key dimensions, sanitized metadata, and recoverable
+  provider-unavailable `UNKNOWN` output without executing Pyrefly, Pyright,
+  RightTyper, or repository code.
 - UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
   irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
   metrics code.

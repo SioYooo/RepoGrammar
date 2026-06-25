@@ -681,6 +681,40 @@ mod tests {
         }
     }
 
+    fn semantic_support_fact_with_origin(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        engine: &str,
+        method: &str,
+    ) -> SemanticFact {
+        let mut fact = semantic_support_fact_with_target(unit, target);
+        fact.origin.engine = engine.to_string();
+        fact.origin.method = method.to_string();
+        fact
+    }
+
+    fn semantic_support_fact_with_range(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        start_byte: usize,
+        end_byte: usize,
+    ) -> SemanticFact {
+        let mut fact = semantic_support_fact_with_target(unit, target);
+        fact.evidence = Evidence::new(
+            CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+            SourceRange::new(start_byte, end_byte).expect("valid range"),
+            Provenance::new(
+                &unit.path,
+                unit.content_hash.clone(),
+                RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            )
+            .expect("valid provenance"),
+            "semantic support evidence",
+        )
+        .expect("valid evidence");
+        fact
+    }
+
     fn semantic_project_config_fact(unit: &IndexedCodeUnitRecord) -> SemanticFact {
         let mut fact = semantic_support_fact_with_target(unit, "fastapi.APIRouter.get");
         fact.kind = SemanticFactKind::ProjectConfig;
@@ -887,6 +921,71 @@ mod tests {
                 semantic_support_fact_with_target(&first, "myproject.fastapi.APIRouter.get"),
                 semantic_support_fact_with_target(&second, "fastapi.APIRouter.get_extra"),
                 semantic_support_fact_with_target(&third, "notes:fastapi.FastAPI.post"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_provider_origin_still_requires_canonical_support_targets() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_origin(
+                    &first,
+                    "myproject.fastapi.APIRouter.get",
+                    "pyrefly",
+                    "definition",
+                ),
+                semantic_support_fact_with_origin(
+                    &second,
+                    "fastapi.APIRouter.get_extra",
+                    "pyright",
+                    "type_definition",
+                ),
+                semantic_support_fact_with_origin(
+                    &third,
+                    "notes:fastapi.FastAPI.post",
+                    "pyrefly",
+                    "call_hierarchy",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_provider_support_requires_exact_unit_evidence_range() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_range(&first, "fastapi.APIRouter.get", 1, 9),
+                semantic_support_fact_with_range(&second, "fastapi.FastAPI.post", 1, 9),
+                semantic_support_fact_with_range(&third, "fastapi.APIRouter.delete", 1, 9),
             ],
         );
 
