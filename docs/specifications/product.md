@@ -50,16 +50,17 @@ module anchors, CPython `symtable` structural scope anchors, private
 `tomllib` project-config summaries, semantic-worker-compatible project-mode
 module-level repo-local import resolution, default parser-mode repo-local
 import context from discovered `.py` inventory, and framework-role heuristics
-only, plus a narrow bounded exact-anchor derivation step that synthesizes
-separate `DATAFLOW_DERIVED` support facts when validated parser anchors
-exact-match the canonical Python framework compatibility table for a unit with
-one framework role. Product smoke tests now prove low-support and dynamic cases
-remain `UNKNOWN`, while three-member FastAPI, pytest, Pydantic, and SQLAlchemy
-fixtures can produce families without a semantic worker through those derived
-facts. It also persists root `pyproject.toml` only as structural project-config
-context or typed config `UNKNOWN`. Subsequent slices should add selective
-Pyrefly provider queries for plausible family candidates, Pyright cross-checks
-only for claim-upgrading facts, broader bounded role propagation,
+only, plus file-local simple FastAPI router/app alias propagation and a narrow
+bounded exact-anchor derivation step that synthesizes separate
+`DATAFLOW_DERIVED` support facts when validated parser anchors exact-match the
+canonical Python framework compatibility table for a unit with one framework
+role. Product smoke tests now prove low-support and dynamic cases remain
+`UNKNOWN`, while three-member direct FastAPI, FastAPI alias, pytest, Pydantic,
+and SQLAlchemy fixtures can produce families without a semantic worker through
+those derived facts. It also persists root `pyproject.toml` only as structural
+project-config context or typed config `UNKNOWN`. Subsequent slices should add
+selective Pyrefly provider queries for plausible family candidates, Pyright
+cross-checks only for claim-upgrading facts, broader bounded role propagation,
 target-centered call recovery, richer EC-MVFI-lite family induction, and typed
 `UNKNOWN` governance.
 The canonical algorithm contract is

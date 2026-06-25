@@ -1457,6 +1457,68 @@ def test_users(client):
     }
 
     #[test]
+    fn cpython_frontend_propagates_simple_framework_aliases() {
+        let source = r#"
+from fastapi import APIRouter
+
+router = APIRouter()
+api = router
+v1 = api
+
+@v1.get("/users")
+def list_users():
+    return []
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind.as_str() == "fastapi_route"));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter.get")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=decorator_binding")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("@v1.get"));
+    }
+
+    #[test]
+    fn cpython_frontend_does_not_keep_shadowed_framework_aliases() {
+        let source = r#"
+from fastapi import APIRouter
+
+router = APIRouter()
+api = router
+api = object()
+
+@api.get("/users")
+def list_users():
+    return []
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind.as_str() == "fastapi_route"));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter.get")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("@api.get"));
+    }
+
+    #[test]
     fn project_config_frontend_synthesizes_structural_unit_and_facts_without_leaks() {
         let source = r#"
 [project]

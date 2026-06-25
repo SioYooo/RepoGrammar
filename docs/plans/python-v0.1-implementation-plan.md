@@ -83,10 +83,11 @@ as structural parser-origin facts. Default indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
-input. The application layer now also derives separate
-`DATAFLOW_DERIVED` support facts from exact canonical CPython anchors when a
-unit has one Python framework role; raw parser facts and framework heuristics
-still remain blocked from direct claim input.
+input. The worker performs file-local simple FastAPI router/app alias
+propagation with same-name top-level reassignment invalidation, and the
+application layer derives separate `DATAFLOW_DERIVED` support facts from exact
+canonical CPython anchors when a unit has one Python framework role; raw parser
+facts and framework heuristics still remain blocked from direct claim input.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 

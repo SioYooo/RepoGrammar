@@ -68,13 +68,14 @@
   across committed Express, React, Jest/Vitest, mixed JS/TS, low-support, and
   mixed-language fixture shapes while preserving syntax-only `UNKNOWN` query
   behavior by default.
-- Python v0.1 release fixture smoke gate that exercises committed FastAPI,
-  pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support fixture
-  shapes through product CLI JSON paths while preserving low-support/dynamic
-  `UNKNOWN` query behavior.
-- No-worker exact-anchor FastAPI, pytest, Pydantic, and SQLAlchemy family smoke
-  that proves derived support can reach the EC-MVFI-lite family read path
-  without claiming provider-backed Python semantics.
+- Python v0.1 release fixture smoke gate that exercises committed direct
+  FastAPI, FastAPI alias, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown,
+  and low-support fixture shapes through product CLI JSON paths while
+  preserving low-support/dynamic `UNKNOWN` query behavior.
+- No-worker exact-anchor direct FastAPI, FastAPI alias, pytest, Pydantic, and
+  SQLAlchemy family smoke that proves derived support can reach the
+  EC-MVFI-lite family read path without claiming provider-backed Python
+  semantics.
 - Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
   facts through the existing worker boundary to prove family reads, stale
   evidence fallback, and leakage guards without claiming production Python

@@ -1171,6 +1171,13 @@ mod tests {
                 member_role: "framework:fastapi.route",
             },
             ExactAnchorCase {
+                fixture: "fastapi-alias-strong-evidence",
+                family_id: "family:python:fastapi_route:framework_fastapi_route",
+                support_target: "fastapi.APIRouter.get",
+                evidence_path: "routes.py",
+                member_role: "framework:fastapi.route",
+            },
+            ExactAnchorCase {
                 fixture: "pytest-strong-evidence",
                 family_id: "family:python:pytest_test:framework_pytest_test",
                 support_target: "pytest.test",

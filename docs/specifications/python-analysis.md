@@ -109,6 +109,10 @@ The current implementation covers the first structural slice only:
   `project_config` code unit plus `PROJECT_CONFIG`/`STRUCTURAL` facts for
   sanitized project name, safe source roots, recognized tool sections, or typed
   `UNKNOWN` config facts when `tomllib` or valid TOML is unavailable;
+- file-local simple alias propagation for FastAPI router/app objects, such as
+  `router = APIRouter(); api = router`, with same-name top-level reassignment
+  removing that name's role so stale aliases do not produce exact canonical
+  anchors;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -127,10 +131,10 @@ The current implementation covers the first structural slice only:
   low-support, strong-evidence, and stale-evidence smoke coverage;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
-  exact FastAPI, pytest, Pydantic, and SQLAlchemy anchors can produce default
-  families only through separate derived support facts, and keep the
-  test-injected `SEMANTIC` worker fixture as coverage for the explicit worker
-  boundary;
+  exact FastAPI, FastAPI router-alias, pytest, Pydantic, and SQLAlchemy anchors
+  can produce default families only through separate derived support facts, and
+  keep the test-injected `SEMANTIC` worker fixture as coverage for the explicit
+  worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored
   repo-relative evidence metadata under an optional token budget and explicitly

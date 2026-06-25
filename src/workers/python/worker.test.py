@@ -117,6 +117,62 @@ for fact in parse_facts:
 assert "from fastapi" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
 
+alias_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "alias_routes.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+
+router = APIRouter()
+api = router
+v1 = api
+
+@v1.get("/users")
+def list_users():
+    return []
+""",
+    }
+)
+alias_units = alias_parse_messages[0]["units"]
+alias_facts = alias_parse_messages[0]["facts"]
+assert any(unit["kind"] == "fastapi_route" for unit in alias_units)
+assert any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get"
+    for fact in alias_facts
+)
+assert "@v1.get" not in json.dumps(alias_parse_messages)
+
+shadowed_alias_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "shadowed_routes.py",
+        "content_hash": "sha256:" + "b" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+
+router = APIRouter()
+api = router
+api = object()
+
+@api.get("/users")
+def list_users():
+    return []
+""",
+    }
+)
+shadowed_facts = shadowed_alias_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get"
+    for fact in shadowed_facts
+)
+assert "@api.get" not in json.dumps(shadowed_alias_messages)
+
 bad_parse = run_worker(
     {
         "protocol_version": 1,

@@ -728,20 +728,33 @@ def collect_import_aliases(
     return aliases, facts
 
 
+def assignment_role(value: ast.AST, aliases: dict[str, str], assignments: dict[str, str]) -> str | None:
+    if isinstance(value, ast.Call):
+        call_name = dotted_name(value.func)
+        if not call_name:
+            return None
+        canonical = canonical_name(call_name, aliases, {})
+        if canonical in {"fastapi.APIRouter", "fastapi.FastAPI"}:
+            return canonical
+        return None
+    if isinstance(value, ast.Name):
+        return assignments.get(value.id)
+    return None
+
+
 def collect_assignment_roles(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:
     assignments: dict[str, str] = {}
     for node in tree.body:
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+        if not isinstance(node, ast.Assign):
             continue
-        call_name = dotted_name(node.value.func)
-        if not call_name:
-            continue
-        canonical = canonical_name(call_name, aliases, {})
-        if canonical not in {"fastapi.APIRouter", "fastapi.FastAPI"}:
-            continue
+        role = assignment_role(node.value, aliases, assignments)
         for target in node.targets:
-            if isinstance(target, ast.Name):
-                assignments[target.id] = canonical
+            if not isinstance(target, ast.Name):
+                continue
+            if role is None:
+                assignments.pop(target.id, None)
+                continue
+            assignments[target.id] = role
     return assignments
 
 

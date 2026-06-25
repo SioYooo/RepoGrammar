@@ -147,10 +147,11 @@ allowed.
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, semantic-worker-compatible NDJSON
   structural facts plus framework-role output, requested-project `conftest.py`
-  fixture hierarchy edges, typed `UNKNOWN` output for dynamic and unresolved
-  cases, oversized request rejection, unsafe path and symlink-escape rejection, bounded
-  semantic-mode source reads, and absence of source snippets, absolute
-  paths, or unsafe dynamic-import literal targets.
+  fixture hierarchy edges, file-local FastAPI router/app alias propagation with
+  same-name reassignment invalidation, typed `UNKNOWN` output for dynamic and
+  unresolved cases, oversized request rejection, unsafe path and symlink-escape
+  rejection, bounded semantic-mode source reads, and absence of source snippets,
+  absolute paths, or unsafe dynamic-import literal targets.
 - Transitional release fixture smoke tests currently copy committed TS/JS source
   fixtures from `src/fixtures/typescript/release/v0_1/` and Python source
   fixtures from `src/fixtures/python/release/v0_1/` into temporary workspaces and
@@ -177,14 +178,14 @@ allowed.
   facts and typed `UNKNOWN`, persisted project-config facts staying out of
   claim-input readiness, heuristic framework-role facts staying out of family
   claims, raw parser-origin facts staying out of family construction,
-  exact-anchor derived support facts producing no-worker FastAPI, pytest,
-  Pydantic, and SQLAlchemy families only when Python support reaches three
-  members, low-support Python release fixtures preserving `UNKNOWN`, test-only
-  strong support facts proving explicit worker family read paths only when
-  compatible `SEMANTIC` evidence is injected, stale evidence fallback, and
-  typed canonical framework identities rather than framework-name substring
-  matching. Future Python slices must add coverage for default-index import
-  context, Tree-sitter
+  exact-anchor derived support facts producing no-worker direct FastAPI,
+  FastAPI alias, pytest, Pydantic, and SQLAlchemy families only when Python
+  support reaches three members, low-support Python release fixtures preserving
+  `UNKNOWN`, test-only strong support facts proving explicit worker family read
+  paths only when compatible `SEMANTIC` evidence is injected, stale evidence
+  fallback, and typed canonical framework identities rather than framework-name
+  substring matching. Future Python slices must add coverage for default-index
+  import context, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
   `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,
