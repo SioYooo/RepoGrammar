@@ -4186,6 +4186,88 @@ mod tests {
     }
 
     #[test]
+    fn install_dry_run_does_not_create_state_receipts_or_delegate_writes() {
+        struct DryRunRuntime {
+            delegated: std::cell::Cell<bool>,
+        }
+
+        impl CliRuntime for DryRunRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer dry-run test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer dry-run test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer dry-run test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                _command: &str,
+                _request: InstallRequest,
+                _context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.delegated.set(true);
+                Err(RepoGrammarError::InvalidInput(
+                    "dry-run must not delegate native writes".to_string(),
+                ))
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-dry-run-no-side-effects");
+        let install_dir = workspace.path().join("install-data");
+        let env = |key: &str| {
+            if key == "REPOGRAMMAR_INSTALL_DIR" {
+                Some(install_dir.display().to_string())
+            } else {
+                None
+            }
+        };
+        let runtime = DryRunRuntime {
+            delegated: std::cell::Cell::new(false),
+        };
+
+        let output = run_with_context_and_runtime(
+            [
+                "install",
+                "--target",
+                "codex",
+                "--scope",
+                "project",
+                "--dry-run",
+                "--yes",
+                "--print-config",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("install dry-run"));
+        assert!(!runtime.delegated.get());
+        assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
+        assert!(!install_dir.exists());
+        assert!(!install_dir.join("receipts").exists());
+        for instruction_file in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
+            assert!(!workspace.path().join(instruction_file).exists());
+        }
+    }
+
+    #[test]
     fn install_live_writes_require_yes_before_runtime_delegation() {
         let output = run(["install", "--target", "codex"]);
 

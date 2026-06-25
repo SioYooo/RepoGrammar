@@ -106,11 +106,12 @@ allowed.
   selection, missing variation/exception coverage reporting, JSON-RPC
   initialize/tools/list/tools/call/shutdown handling, and absence of source
   snippets or absolute paths.
-- Installer live-write tests must cover `--yes` gating, MCP self-test before
-  native configuration, hanging MCP self-test timeout/kill behavior,
-  unsupported broad `--target all`, unsupported native scopes, receipt writing,
-  receipt-write rollback, receipt-owned uninstall, foreign receipt refusal, and
-  no `.repogrammar/` mutation.
+- Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
+  creation, and no native configuration delegation, plus live-write `--yes`
+  gating, MCP self-test before native configuration, hanging MCP self-test
+  timeout/kill behavior, unsupported broad `--target all`, unsupported native
+  scopes, receipt writing, receipt-write rollback, receipt-owned uninstall,
+  foreign receipt refusal, and no `.repogrammar/` mutation.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
