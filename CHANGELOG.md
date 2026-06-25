@@ -41,9 +41,9 @@
   repo-local import facts and parent-directory pytest fixture-edge facts can be
   persisted without launching a Python semantic worker; oversized context
   payloads fall back to contextless parsing. No-worker release smoke now covers
-  FastAPI, pytest, and Pydantic exact-anchor derived-support family paths
-  without claiming provider-backed Python semantics. Default indexing validates
-  and persists parser-origin
+  FastAPI, pytest, Pydantic, and SQLAlchemy exact-anchor derived-support family
+  paths without claiming provider-backed Python semantics. Default indexing
+  validates and persists parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.
 - Default Python indexing discovers root `pyproject.toml` as `python-config`,

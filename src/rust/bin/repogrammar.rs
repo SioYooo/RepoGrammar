@@ -1184,6 +1184,13 @@ mod tests {
                 evidence_path: "schemas.py",
                 member_role: "framework:pydantic.model",
             },
+            ExactAnchorCase {
+                fixture: "sqlalchemy-strong-evidence",
+                family_id: "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+                support_target: "sqlalchemy.select",
+                evidence_path: "repository.py",
+                member_role: "framework:sqlalchemy.repository_method",
+            },
         ];
 
         for case in CASES {
