@@ -84,7 +84,9 @@ The current implementation covers the first structural slice only:
   class bases, simple call targets, same-file pytest fixture edges, and typed
   dynamic/unresolved `UNKNOWN` facts;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
-  metadata;
+  metadata, plus same-generation storage of CPython `ast` structural and
+  `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
+  note, assumption, and source-snippet validation;
 - syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
   pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy
   model-shaped classes, and SQLAlchemy repository method-shaped functions;
@@ -94,9 +96,10 @@ The current implementation covers the first structural slice only:
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, and `UNKNOWN` with
 `STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative, hash-backed, and
-snippet-free, but they are still worker-local structural anchors; default
-product indexing does not yet persist or expose them as semantic-provider
-claims.
+snippet-free, but they are still worker-local structural anchors. Default
+product indexing persists them only as internal structural/`UNKNOWN` semantic
+fact records. It does not expose them through CLI/MCP query commands, feed them
+to the family builder, or treat them as semantic-provider claims.
 
 This slice does not implement repo-local import resolution, `symtable` scope
 facts, `tomllib` configuration facts, Pyrefly, Pyright, provider cache keys,

@@ -187,9 +187,12 @@ parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. That
 worker pass also produces repo-relative structural fact payloads for imports,
 decorator anchors, class bases, simple calls, same-file pytest fixture edges,
-and typed dynamic/unresolved `UNKNOWN` cases, but the current parser port
-consumes only code units and diagnostics. Its semantic-worker-compatible NDJSON
-mode can emit those structural facts plus conservative
+and typed dynamic/unresolved `UNKNOWN` cases. The Rust parser adapter now
+validates and persists those payloads as internal `STRUCTURAL` or `UNKNOWN`
+semantic fact records tied to the same code-unit evidence. They are not passed
+to the family builder and remain blocked from claim-input readiness as
+insufficient support. Its semantic-worker-compatible NDJSON mode can emit those
+structural facts plus conservative
 `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units,
 but the product indexing path does not launch a Python semantic worker
 separately. Pyrefly, Pyright, repo-local import resolution, usage propagation,

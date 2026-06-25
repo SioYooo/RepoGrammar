@@ -132,7 +132,12 @@ support. Current default TS/JS and Python indexing may populate
 semantic-fact/evidence rows with syntax-origin `FRAMEWORK_ROLE` records for
 recognized framework-shaped code units; those rows use `FRAMEWORK_HEURISTIC`
 certainty and same-generation code-unit evidence, and do not create family rows
-by themselves. The CLI can
+by themselves. Default Python indexing may also populate internal semantic
+fact/evidence rows from CPython `ast` parse-document structural anchors and
+typed `UNKNOWN` facts after Rust-side validation; those rows use `STRUCTURAL`
+or `UNKNOWN` certainty, remain unavailable through CLI/MCP query output, are
+not passed to the current family builder, and do not create family rows by
+themselves. The CLI can
 read the active generation for `files`, `units`, and FamilyStore-backed
 pattern-family commands. Raw structural IR and semantic-fact read paths remain
 internal. Active-generation reads

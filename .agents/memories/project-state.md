@@ -1,7 +1,7 @@
 # Project State
 
 - Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
-  discovery, CPython AST structural indexing slice, worker-local Python
+  discovery, CPython AST structural indexing slice, persisted internal Python
   structural anchors and typed dynamic/unresolved `UNKNOWN` facts, structural IR
   storage, opt-in syntax-origin framework-role fact storage, semantic fact
   ingestion, internal active claim-input snapshot reads, semantic-fact
@@ -9,9 +9,10 @@
   serving, and narrow global explicit-target installer writes. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current
-  Python slice is structural/framework-heuristic only; persisted Python
-  structural facts, repo-local import resolution, Pyrefly/Pyright,
-  provider-backed canonical evidence, and Python family claims remain deferred.
+  Python slice is structural/framework-heuristic only; parser-origin Python
+  facts are persisted but blocked from family construction and claim-input
+  readiness. Repo-local import resolution, Pyrefly/Pyright, provider-backed
+  canonical evidence, and Python family claims remain deferred.
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -34,8 +35,8 @@ virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, same-file pytest fixture edges, and typed dynamic or
-unresolved `UNKNOWN` cases, syntax-origin TS/JS and Python framework-role fact
-storage,
+unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts,
+syntax-origin TS/JS and Python framework-role fact storage,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
 TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
@@ -123,9 +124,9 @@ framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
 evidence.
 
-Tree-sitter integration, TypeScript compiler API integration, persisted Python
-structural-anchor ingestion, Python repo-local import resolution, safe Python
-project-configuration extraction, Pyrefly/Pyright provider execution,
+Tree-sitter integration, TypeScript compiler API integration, Python repo-local
+import resolution, safe Python project-configuration extraction,
+Pyrefly/Pyright provider execution,
 provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
 beyond the structural bootstrap graph, resolved framework semantics, full

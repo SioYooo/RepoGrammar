@@ -534,7 +534,11 @@ fn run_native_agent_command(
 mod tests {
     use super::*;
     use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
-    use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
+    use repogrammar::application::query::{
+        assess_semantic_fact_readiness, list_semantic_facts, SemanticFactReadinessRequest,
+    };
+    use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision, UnknownReasonCode};
+    use repogrammar::core::policy::freshness::ClaimInputReadiness;
     use repogrammar::interfaces::mcp::handle_context_call;
     use repogrammar::ports::file_discovery::{
         DiscoveredLanguage, FileDiscovery, FileDiscoveryRequest,
@@ -1084,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn product_runtime_indexes_python_ast_units_without_query_claims() {
+    fn product_runtime_persists_python_parse_facts_without_query_claims() {
         let workspace = TempWorkspace::new("product-runtime-python");
         fs::write(
             workspace.path().join("app.py"),
@@ -1118,7 +1122,10 @@ def test_users(client):
         assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["indexing"], "syntax_only_code_units");
         assert_eq!(value["semantic_worker"], "deferred");
-        assert_eq!(value["semantic_facts"], 3);
+        assert!(
+            value["semantic_facts"].as_u64().unwrap_or_default() > 3,
+            "Python parse facts should be stored in addition to framework-role heuristics"
+        );
 
         let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
         assert_eq!(units.status, 0);
@@ -1146,6 +1153,91 @@ def test_users(client):
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
 
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_eq!(facts.active_generation, "gen-000001");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "RESOLVED_IMPORT"
+                && fact.target.as_deref() == Some("fastapi.APIRouter")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "TYPE"
+                && fact.target.as_deref() == Some("pydantic.BaseModel")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("fastapi.APIRouter.get")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "RESOLVED_CALL"
+                && fact.target.as_deref() == Some("client.get")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("PytestFixtureInjection")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "UNKNOWN"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "FRAMEWORK_ROLE"
+                && fact.certainty == "FRAMEWORK_HEURISTIC"
+        }));
+        let debug = format!("{:?}", facts.facts);
+        for forbidden in [
+            workspace.path().to_string_lossy().as_ref(),
+            "from fastapi",
+            "@router.get",
+            "assert client.get",
+        ] {
+            assert!(
+                !debug.contains(forbidden),
+                "leaked forbidden text {forbidden}"
+            );
+        }
+
+        let readiness = assess_semantic_fact_readiness(
+            SemanticFactReadinessRequest {
+                repository_root: workspace.path().display().to_string(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &FilesystemSourceStore,
+        )
+        .expect("assess Python fact readiness");
+        assert_eq!(readiness.active_generation, "gen-000001");
+        assert_eq!(readiness.facts.len(), facts.facts.len());
+        for fact in readiness.facts {
+            let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
+                panic!("Python structural facts must not become family claim input");
+            };
+            assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+        }
+
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
             &runtime,
@@ -1154,6 +1246,38 @@ def test_users(client):
         let unknown: Value = serde_json::from_str(families.stdout.trim()).expect("UNKNOWN JSON");
         assert_eq!(unknown["status"], "UNKNOWN");
         assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
+
+        for command in ["find", "family", "explain", "check"] {
+            let output = run_with_runtime(
+                cli_args(command, workspace.path(), &["app.py", "--json"]),
+                &runtime,
+            );
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            let unknown: Value = serde_json::from_str(output.stdout.trim()).expect("UNKNOWN JSON");
+            assert_eq!(unknown["status"], "UNKNOWN");
+            assert_eq!(unknown["command"], command);
+            assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
+        }
+
+        let sync = run_with_runtime(cli_args("sync", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(sync.status, 0);
+        assert!(sync.stderr.is_empty());
+        let value: Value = serde_json::from_str(sync.stdout.trim()).expect("sync JSON");
+        assert_eq!(value["generation_id"], "gen-000002");
+        assert!(
+            value["semantic_facts"].as_u64().unwrap_or_default() > 3,
+            "sync should persist Python parse facts again"
+        );
+
+        let facts = list_semantic_facts(&store).expect("list synced semantic facts");
+        assert_eq!(facts.active_generation, "gen-000002");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("PytestFixtureInjection")
+                && fact.certainty == "UNKNOWN"
+        }));
     }
 
     #[test]

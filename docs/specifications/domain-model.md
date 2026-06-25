@@ -61,9 +61,13 @@ for FastAPI route-shaped units, pytest tests/fixtures, Pydantic models,
 SQLAlchemy models, and SQLAlchemy repository methods. These facts also use
 `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions; they do not
 resolve imports, decorator targets, fixture bindings, SQLAlchemy mappings, or
-family membership. Future Python facts should follow the same owned model for
-FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser, type-checker, LSP,
-or Python runtime objects must not enter the core domain.
+family membership. Current default Python indexing can also persist CPython
+`ast` parse-document structural facts for import bindings, decorator anchors,
+class bases, simple calls, and typed dynamic/unresolved `UNKNOWN` cases. These
+facts remain `STRUCTURAL` or `UNKNOWN`, are blocked from family-claim input, and
+are not fed to the current family builder. Future Python facts should follow the
+same owned model for FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser,
+type-checker, LSP, or Python runtime objects must not enter the core domain.
 
 Python framework compatibility must use typed canonical identities rather than
 free-text matching. Python facts should map provider output into owned records

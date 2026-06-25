@@ -265,7 +265,11 @@ CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, simple call targets, and same-file pytest fixture edges,
 plus typed `UNKNOWN` facts for dynamic import, unresolved import, framework
-magic, and unresolved pytest fixture injection cases. The same Python worker
+magic, and unresolved pytest fixture injection cases. The default product
+indexing path validates and stores those private parse-document payloads as
+internal parser-origin semantic facts with `STRUCTURAL` or `UNKNOWN` certainty,
+but does not expose them through CLI/MCP query commands and does not pass them
+to family construction. The same Python worker
 has a semantic-worker-compatible NDJSON mode that emits those structural facts
 alongside conservative Python framework-role heuristic facts for direct worker
 smoke testing. The product runtime does not separately launch it as a Pyrefly,

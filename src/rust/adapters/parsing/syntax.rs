@@ -74,6 +74,7 @@ impl<'a> SyntaxScanner<'a> {
             units: self.units,
             ir_nodes,
             ir_edges,
+            semantic_facts: Vec::new(),
             diagnostics: self.diagnostics,
         })
     }

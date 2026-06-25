@@ -2,7 +2,8 @@
 
 use crate::application::family::{build_family_claims, family_storage_records};
 use crate::core::model::{
-    CodeUnit, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact, SymbolId,
+    CodeUnit, FactCertainty, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact,
+    SemanticFactKind, SymbolId,
 };
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::FamilyStore;
@@ -315,6 +316,7 @@ fn index_repository_with_optional_semantic_worker(
 
     let mut indexed_units = 0usize;
     let mut indexed_code_units = Vec::new();
+    let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
     for file in &report.files {
@@ -360,11 +362,15 @@ fn index_repository_with_optional_semantic_worker(
         )?;
         indexed_units += parse_outcome.indexed_units;
         indexed_code_units.extend(parse_outcome.code_units);
+        parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
     }
 
+    sort_semantic_facts(&mut parser_semantic_facts);
+    let parser_fact_count = record_semantic_facts(store, &generation, 0, &parser_semantic_facts)?;
     sort_semantic_facts(&mut framework_role_facts);
-    let framework_fact_count = record_semantic_facts(store, &generation, 0, &framework_role_facts)?;
+    let framework_fact_count =
+        record_semantic_facts(store, &generation, parser_fact_count, &framework_role_facts)?;
 
     let (semantic_worker, worker_facts) = record_semantic_worker_facts(
         &request,
@@ -373,7 +379,7 @@ fn index_repository_with_optional_semantic_worker(
         options.semantic_worker,
         store,
         &mut warnings,
-        framework_fact_count,
+        parser_fact_count + framework_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
 
@@ -394,7 +400,7 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        semantic_facts: framework_fact_count + worker_semantic_facts,
+        semantic_facts: parser_fact_count + framework_fact_count + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -413,6 +419,7 @@ struct IndexingPipelineOptions<'a> {
 struct ParseStorageOutcome {
     indexed_units: usize,
     code_units: Vec<IndexedCodeUnitRecord>,
+    semantic_facts: Vec<SemanticFact>,
     framework_role_facts: Vec<SemanticFact>,
 }
 
@@ -458,6 +465,10 @@ fn record_parse_report(
     }
     for edge in &parse_report.ir_edges {
         validate_parser_ir_edge(&parse_report.ir_nodes, edge)?;
+    }
+    sort_semantic_facts(&mut parse_report.semantic_facts);
+    for fact in &parse_report.semantic_facts {
+        validate_parser_semantic_fact(file, text, &parse_report.units, fact)?;
     }
     let framework_role_facts = match framework_roles {
         Some(detector) => detector
@@ -508,6 +519,7 @@ fn record_parse_report(
     Ok(ParseStorageOutcome {
         indexed_units: count,
         code_units,
+        semantic_facts: parse_report.semantic_facts,
         framework_role_facts,
     })
 }
@@ -773,6 +785,60 @@ fn validate_parser_ir_edge(nodes: &[IrNode], edge: &IrEdge) -> Result<(), RepoGr
     Ok(())
 }
 
+fn validate_parser_semantic_fact(
+    file: &DiscoveredFile,
+    text: &str,
+    units: &[CodeUnit],
+    fact: &SemanticFact,
+) -> Result<(), RepoGrammarError> {
+    if !matches!(
+        fact.certainty,
+        FactCertainty::Structural | FactCertainty::Unknown
+    ) {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser semantic facts must stay structural or unknown".to_string(),
+        ));
+    }
+    if fact.kind == SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser UNKNOWN facts must use UNKNOWN certainty".to_string(),
+        ));
+    }
+    if fact.evidence.provenance.path != file.path {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a semantic fact for a different path".to_string(),
+        ));
+    }
+    if fact.evidence.provenance.content_hash != file.content_hash {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a semantic fact with mismatched content hash".to_string(),
+        ));
+    }
+    if fact.evidence.range.end_byte > text.len() {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a semantic fact range outside source bounds".to_string(),
+        ));
+    }
+    let Some(unit) = units
+        .iter()
+        .find(|unit| unit.id.as_str() == fact.evidence.code_unit_id.as_str())
+    else {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a semantic fact for an unknown code unit".to_string(),
+        ));
+    };
+    if fact.evidence.range.start_byte < unit.range.start_byte
+        || fact.evidence.range.end_byte > unit.range.end_byte
+        || fact.evidence.provenance != unit.provenance
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a semantic fact that does not match its code unit evidence"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn sort_ir_nodes(nodes: &mut [IrNode]) {
     nodes.sort_by(|left, right| {
         (
@@ -911,6 +977,7 @@ mod tests {
                 units: vec![unit],
                 ir_nodes: vec![ir_node],
                 ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
                 diagnostics: Vec::new(),
             })
         }
@@ -934,6 +1001,7 @@ mod tests {
                 units: vec![unit],
                 ir_nodes: vec![ir_node],
                 ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
                 diagnostics: Vec::new(),
             })
         }
@@ -1825,6 +1893,7 @@ mod tests {
                     units: vec![unit],
                     ir_nodes: vec![ir_node],
                     ir_edges: Vec::new(),
+                    semantic_facts: Vec::new(),
                     diagnostics: vec![ParseDiagnostic {
                         path: "/tmp/absolute/source.ts".to_string(),
                         range: None,
@@ -1941,6 +2010,7 @@ mod tests {
                     )],
                     ir_nodes: Vec::new(),
                     ir_edges: Vec::new(),
+                    semantic_facts: Vec::new(),
                     diagnostics: Vec::new(),
                 })
             }
@@ -2009,6 +2079,7 @@ mod tests {
                         units: vec![unit],
                         ir_nodes: Vec::new(),
                         ir_edges: Vec::new(),
+                        semantic_facts: Vec::new(),
                         diagnostics: Vec::new(),
                     }),
                     BadIrMode::DifferentPath => {
@@ -2022,6 +2093,7 @@ mod tests {
                             units: vec![unit],
                             ir_nodes: vec![ir_node],
                             ir_edges: Vec::new(),
+                            semantic_facts: Vec::new(),
                             diagnostics: Vec::new(),
                         })
                     }
@@ -2036,6 +2108,7 @@ mod tests {
                             units: vec![unit],
                             ir_nodes: vec![ir_node],
                             ir_edges: vec![edge],
+                            semantic_facts: Vec::new(),
                             diagnostics: Vec::new(),
                         })
                     }
@@ -2105,6 +2178,7 @@ mod tests {
                     ],
                     ir_nodes: Vec::new(),
                     ir_edges: Vec::new(),
+                    semantic_facts: Vec::new(),
                     diagnostics: Vec::new(),
                 })
             }

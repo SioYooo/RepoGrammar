@@ -21,7 +21,8 @@ discovery, Python `.py` discovery, syntax-only code-unit extraction,
 syntax-origin framework-role fact storage, CodeUnit-derived structural IR
 storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
 unavailable stub, a CPython AST-backed Python worker for structural code units,
-worker-local structural anchors, and typed dynamic/unresolved `UNKNOWN` output,
+stored internal structural anchors, and typed dynamic/unresolved `UNKNOWN`
+output,
 repository guard checks, and a read-only MCP `repogrammar_context` stdio
 boundary.
 
@@ -33,8 +34,10 @@ implemented. The first Python slice discovers `.py` files, extracts CPython
 `ast` structural code units for FastAPI route-shaped functions, pytest
 tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
 emits worker-local structural anchors for imports/decorators/class bases/simple
-calls/fixture edges, and stores framework-role heuristic facts without turning
-them into family claims. The Python plan still uses a claim-driven selective
+calls/fixture edges, stores those anchors as internal parser-origin
+`STRUCTURAL`/`UNKNOWN` facts, and stores framework-role heuristic facts without
+turning any of them into family claims. The Python plan still uses a
+claim-driven selective
 cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
 plausible family candidates, Pyright only for claim-upgrading cross-checks, and
 typed `UNKNOWN` when evidence cannot support a claim.

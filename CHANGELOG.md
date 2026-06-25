@@ -27,9 +27,10 @@
   heuristic smoke output, without running repository code or provider tools.
 - Python worker structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, same-file pytest fixture edges, and typed
-  dynamic/unresolved `UNKNOWN` cases. These facts are worker-local structural
-  anchors and are not yet persisted by default indexing or exposed as family
-  evidence.
+  dynamic/unresolved `UNKNOWN` cases. Default indexing now validates and
+  persists those facts as internal parser-origin `STRUCTURAL`/`UNKNOWN`
+  semantic facts while keeping them out of family construction and CLI/MCP
+  family evidence.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.
@@ -78,6 +79,10 @@
   FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes. Stored facts use
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions, and do not
   enable pattern-family query commands.
+- Internal CPython AST parser fact storage for Python import, decorator,
+  class-base, call, fixture-edge, and typed dynamic/unresolved `UNKNOWN`
+  anchors. Stored facts are source-snippet-free, same-generation validated, and
+  blocked from claim-input readiness as insufficient support.
 - Opt-in semantic-worker fact ingestion for `index` and `sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, with
   optional argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted
