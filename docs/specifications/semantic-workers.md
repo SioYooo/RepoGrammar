@@ -273,7 +273,8 @@ returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field
 annotation targets, `model_config`, nested `Config`, `computed_field`,
 validator, and `model_validator` declarations, SQLAlchemy mapped fields,
-`relationship(...)` calls, typed SQLAlchemy session calls including `add` and bounded
+`relationship(...)` calls, typed SQLAlchemy session calls including `add`,
+`execute`, `scalar`, `scalars`, `commit`, and `rollback`, and bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple call targets, bounded
 same-function FastAPI service-call context anchors, FastAPI

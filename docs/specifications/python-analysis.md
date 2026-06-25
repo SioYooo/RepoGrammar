@@ -320,7 +320,8 @@ Compatibility examples:
 - SQLAlchemy repository method: calls on parameters annotated as
   `sqlalchemy.orm.Session` or `sqlalchemy.ext.asyncio.AsyncSession` resolve to
   exact supported session method targets such as
-  `sqlalchemy.orm.Session.execute` or
+  `sqlalchemy.orm.Session.execute`, `sqlalchemy.orm.Session.scalar`,
+  `sqlalchemy.orm.Session.scalars`, or
   `sqlalchemy.ext.asyncio.AsyncSession.commit`.
 
 Unresolved canonical identity blocks only the claim that depends on that
@@ -404,7 +405,8 @@ SQLAlchemy roles:
 
 The first SQLAlchemy slice should prioritize SQLAlchemy 2.0 typed mappings:
 `DeclarativeBase`, `Mapped`, `mapped_column`, `relationship`, `Session` or
-`AsyncSession`, `select(...)`, `session.execute(...)`, `commit`, and
+`AsyncSession`, `select(...)`, `session.execute(...)`, `session.scalar(...)`,
+`session.scalars(...)`, `commit`, and
 rollback/error handling where statically visible. Legacy dynamic
 `declarative_base()` support may be recognized with lower certainty, but the
 deprecated SQLAlchemy mypy plugin must not become a default provider.

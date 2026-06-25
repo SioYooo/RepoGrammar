@@ -47,6 +47,9 @@
   local forms such as `service = UserService(); service.list_users()` and
   `runner = run_query; runner()`. These remain structural handler/service
   context and are not family-support targets.
+- SQLAlchemy repository-method exact anchors now include direct
+  `Session.scalar`/`Session.scalars` and async session equivalents, while
+  relationship and `Session.add` anchors remain context/effect metadata.
 - Narrow Python exact-anchor variation metadata when an already-ready family has
   multiple exact-compatible framework-anchor support targets.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when

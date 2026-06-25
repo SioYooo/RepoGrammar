@@ -1859,8 +1859,20 @@ class UserRepository:
         session.add(User())
         return session.execute("select users")
 
+    def get_user(self, session: Session):
+        return session.scalar("select user")
+
+    def stream_users(self, session: Session):
+        return session.scalars("select users")
+
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
+
+    async def get_account(self, db: AsyncSession):
+        return await db.scalar("select account")
+
+    async def stream_accounts(self, db: AsyncSession):
+        return await db.scalars("select accounts")
 
 class StoredSessionRepository:
     def __init__(self, session: Session, db: AsyncSession):
@@ -1927,7 +1939,43 @@ class StoredSessionRepository:
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.scalar")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.scalars")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
                     == Some("sqlalchemy.ext.asyncio.AsyncSession.execute")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.scalar")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.scalars")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall

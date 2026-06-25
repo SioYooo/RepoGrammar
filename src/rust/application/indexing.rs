@@ -2081,7 +2081,11 @@ mod tests {
         for target in [
             "sqlalchemy.select",
             "sqlalchemy.orm.Session.execute",
+            "sqlalchemy.orm.Session.scalar",
+            "sqlalchemy.orm.Session.scalars",
             "sqlalchemy.ext.asyncio.AsyncSession.commit",
+            "sqlalchemy.ext.asyncio.AsyncSession.scalar",
+            "sqlalchemy.ext.asyncio.AsyncSession.scalars",
         ] {
             let first = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 0);
             let second = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 1);

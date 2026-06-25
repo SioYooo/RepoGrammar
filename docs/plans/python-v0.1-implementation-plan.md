@@ -196,7 +196,9 @@ They cover low-support and dynamic `UNKNOWN` behavior, a no-worker exact-anchor
 FastAPI family path through derived support, and a test-only strong FastAPI
 semantic-support fixture for explicit worker family read and stale-evidence
 smoke coverage. They also include a no-worker FastAPI exact-anchor target
-variation fixture. They are not yet the full Python provider corpus.
+variation fixture and SQLAlchemy session exact-anchor fixtures covering
+`execute` plus direct `scalar`/`scalars` calls. They are not yet the full Python
+provider corpus.
 
 Minimum positive fixture groups:
 

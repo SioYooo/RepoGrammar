@@ -95,8 +95,20 @@ class UserRepository:
         session.add(User())
         return session.execute("select users")
 
+    def get_user(self, session: Session):
+        return session.scalar("select user")
+
+    def stream_users(self, session: Session):
+        return session.scalars("select users")
+
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
+
+    async def get_account(self, db: AsyncSession):
+        return await db.scalar("select account")
+
+    async def stream_accounts(self, db: AsyncSession):
+        return await db.scalars("select accounts")
 
 class StoredSessionRepository:
     def __init__(self, session: Session, db: AsyncSession):
@@ -218,7 +230,31 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.scalar"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.scalars"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.scalar"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.scalars"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
     for fact in parse_facts
 )
 assert any(

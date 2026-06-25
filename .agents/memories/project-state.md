@@ -44,7 +44,8 @@
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
   metadata, not family membership support. SQLAlchemy session call anchors now
-  include bounded propagation from `__init__`-assigned `self.session`/`self.db`
+  include direct `Session.scalar`/`Session.scalars` and async equivalents plus
+  bounded propagation from `__init__`-assigned `self.session`/`self.db`
   attributes, with same-method receiver reassignment blocking
   canonicalization. A Rust `ports::python_provider`
   contract now exists for future candidate-scoped provider requests,
@@ -156,8 +157,8 @@ conservative `UNKNOWN` query results by default. Python release fixtures cover
 direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
 FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
-SQLAlchemy session/repository fixtures now validate the no-worker exact-anchor
-derived-support family path, exact-anchor target variation metadata,
+SQLAlchemy session/repository including scalar/scalars fixtures now validate the
+no-worker exact-anchor derived-support family path, exact-anchor target variation metadata,
 metadata-only evidence modes, MCP parity, and stale-evidence query refusal. A
 separate
 test-only strong FastAPI semantic-support fixture injects compatible `SEMANTIC`

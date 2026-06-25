@@ -95,6 +95,9 @@
   `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
   calls. These anchors remain structural context and are explicitly excluded
   from family membership support.
+- SQLAlchemy repository-method exact anchors now include direct
+  `Session.scalar`/`Session.scalars` and async session equivalents, with a
+  release smoke fixture proving derived family support without source snippets.
 - CPython AST worker Pydantic model-member structural anchors now include
   fields, field annotation targets, `model_config`, nested `Config`,
   `computed_field`, validators, and `model_validator`. These anchors remain

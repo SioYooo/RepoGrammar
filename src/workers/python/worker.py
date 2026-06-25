@@ -34,7 +34,14 @@ MAX_FACT_TARGET_CHARS = 512
 MAX_RUST_PARSE_FACT_TARGET_CHARS = 256
 MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
-SQLALCHEMY_SESSION_METHODS = {"add", "commit", "execute", "rollback"}
+SQLALCHEMY_SESSION_METHODS = {
+    "add",
+    "commit",
+    "execute",
+    "rollback",
+    "scalar",
+    "scalars",
+}
 SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.orm.Session",
     "sqlalchemy.ext.asyncio.AsyncSession",

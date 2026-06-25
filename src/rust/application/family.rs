@@ -492,9 +492,13 @@ pub(crate) fn python_support_target_is_role_compatible(
                 | "sqlalchemy.orm.Session.execute"
                 | "sqlalchemy.orm.Session.commit"
                 | "sqlalchemy.orm.Session.rollback"
+                | "sqlalchemy.orm.Session.scalar"
+                | "sqlalchemy.orm.Session.scalars"
                 | "sqlalchemy.ext.asyncio.AsyncSession.execute"
                 | "sqlalchemy.ext.asyncio.AsyncSession.commit"
                 | "sqlalchemy.ext.asyncio.AsyncSession.rollback"
+                | "sqlalchemy.ext.asyncio.AsyncSession.scalar"
+                | "sqlalchemy.ext.asyncio.AsyncSession.scalars"
         )),
         _ if framework_role.starts_with("framework:fastapi")
             || framework_role.starts_with("framework:pytest")

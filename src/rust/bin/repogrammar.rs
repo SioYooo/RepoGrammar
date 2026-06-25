@@ -790,6 +790,14 @@ mod tests {
             member_role: "framework:sqlalchemy.repository_method",
         },
         PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-session-scalar-strong-evidence",
+            family_id:
+                "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+            support_target: "sqlalchemy.orm.Session.scalars",
+            evidence_path: "repository.py",
+            member_role: "framework:sqlalchemy.repository_method",
+        },
+        PythonExactAnchorSmokeCase {
             fixture: "sqlalchemy-model-strong-evidence",
             family_id: "family:python:sqlalchemy_model:framework_sqlalchemy_model",
             support_target: "sqlalchemy.orm.Mapped",
