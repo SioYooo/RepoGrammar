@@ -1361,7 +1361,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
+        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"locks\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
         matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.status.state_dir),
         repository_status_value(&report.status.status),
@@ -1374,6 +1374,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
             "fail"
         },
         lifecycle_hygiene_check(report),
+        lock_check(report),
         implementation_status(report.status.storage),
         implementation_status(report.status.indexing),
         report
@@ -1399,6 +1400,30 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         ),
         findings
     )
+}
+
+fn lock_check(report: &RepositoryDoctorReport) -> &'static str {
+    if matches!(report.status.status, RepositoryStatus::NotInitialized) {
+        return "not_applicable";
+    }
+    if report.findings.iter().any(|finding| {
+        matches!(
+            finding.code,
+            RepositoryDoctorCode::IndexLockActive
+                | RepositoryDoctorCode::IndexLockUnknown
+                | RepositoryDoctorCode::IndexLockInvalid
+        )
+    }) {
+        "fail"
+    } else if report
+        .findings
+        .iter()
+        .any(|finding| finding.code == RepositoryDoctorCode::IndexLockStale)
+    {
+        "warning"
+    } else {
+        "pass"
+    }
 }
 
 fn lifecycle_hygiene_check(report: &RepositoryDoctorReport) -> &'static str {
@@ -1517,6 +1542,10 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::RootGitignoreMarkerInvalid => "ROOT_GITIGNORE_MARKER_INVALID",
         RepositoryDoctorCode::InitReceiptMissing => "INIT_RECEIPT_MISSING",
         RepositoryDoctorCode::InitReceiptInvalid => "INIT_RECEIPT_INVALID",
+        RepositoryDoctorCode::IndexLockActive => "INDEX_LOCK_ACTIVE",
+        RepositoryDoctorCode::IndexLockStale => "INDEX_LOCK_STALE",
+        RepositoryDoctorCode::IndexLockUnknown => "INDEX_LOCK_UNKNOWN",
+        RepositoryDoctorCode::IndexLockInvalid => "INDEX_LOCK_INVALID",
         RepositoryDoctorCode::StorageNotImplemented => "STORAGE_NOT_IMPLEMENTED",
         RepositoryDoctorCode::StorageReady => "STORAGE_READY",
         RepositoryDoctorCode::StorageInvalid => "STORAGE_INVALID",
@@ -1609,7 +1638,7 @@ mod tests {
         index_repository_with_discovery_parser_and_store, IndexingRequest,
     };
     use crate::application::query::{list_code_units, list_indexed_files};
-    use crate::application::repository::DEFAULT_STATE_DIR;
+    use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
         repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
     };
@@ -1750,6 +1779,7 @@ mod tests {
             index_repository_with_discovery_parser_and_store(
                 IndexingRequest {
                     repository_root: request.repository_root,
+                    state_dir_override: request.state_dir_override,
                     max_file_bytes: request.max_file_bytes,
                 },
                 &FilesystemFileDiscovery,
@@ -2512,6 +2542,11 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("current-generation")
             .is_file());
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks/index.lock")
+            .exists());
     }
 
     #[test]
@@ -2552,6 +2587,11 @@ mod tests {
             .trim(),
             "gen-000002"
         );
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks/index.lock")
+            .exists());
         assert_eq!(indexed_paths(&workspace, "gen-000001"), vec!["a.ts"]);
         assert_eq!(
             indexed_paths(&workspace, "gen-000002"),
@@ -2637,6 +2677,39 @@ mod tests {
             .expect("reason")
             .contains("missing required subdirectories"));
         assert!(!generations.exists());
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .exists());
+    }
+
+    #[test]
+    fn index_and_sync_refuse_live_index_lock() {
+        let workspace = TempWorkspace::new("cli-index-live-lock");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let _guard = acquire_index_lock(workspace.path().to_string_lossy().as_ref(), None)
+            .expect("hold index lock");
+
+        for command in ["index", "sync"] {
+            let output =
+                run_with_context_and_runtime([command, "--json"], workspace.path(), &env, &runtime);
+
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            assert!(!output
+                .stderr
+                .contains(workspace.path().to_string_lossy().as_ref()));
+            let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+            assert_eq!(value["command"], command);
+            assert!(value["reason"]
+                .as_str()
+                .expect("reason")
+                .contains("index lock is held"));
+        }
         assert!(!workspace
             .path()
             .join(DEFAULT_STATE_DIR)
@@ -2760,6 +2833,29 @@ mod tests {
         ] {
             assert!(codes.contains(&code), "missing doctor code {code}");
         }
+    }
+
+    #[test]
+    fn doctor_json_reports_active_index_lock() {
+        let workspace = TempWorkspace::new("cli-doctor-index-lock");
+        let env = |_: &str| None;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let _guard = acquire_index_lock(workspace.path().to_string_lossy().as_ref(), None)
+            .expect("hold index lock");
+
+        let doctor = run_with_context(["doctor", "--json"], workspace.path(), &env);
+
+        assert_eq!(doctor.status, 0);
+        assert!(!doctor
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["locks"], "fail");
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "INDEX_LOCK_ACTIVE"));
     }
 
     #[test]

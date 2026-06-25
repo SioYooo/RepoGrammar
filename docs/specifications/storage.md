@@ -385,19 +385,28 @@ are separate controls.
 ## Locks and Unlock
 
 RepoGrammar uses explicit lock files under `.repogrammar/locks/`. An index lock
-must contain:
+is acquired before generation preparation, so the current lock metadata does
+not include a generation id yet. The lock must contain:
 
 ```json
 {
   "kind": "index",
   "pid": 12345,
-  "hostname_hash": "sha256:...",
+  "host": "workstation-name",
   "os": "darwin",
-  "started_at": "2026-06-24T00:00:00Z",
-  "repogrammar_version": "0.1.0",
-  "generation": "gen-000003"
+  "started_unix_seconds": 1782200000,
+  "repogrammar_version": "0.1.0"
 }
 ```
+
+`host` may be `null` when no local host identifier is available. The current
+`index` and `sync` implementation creates `index.lock` with atomic
+create-new semantics immediately before `prepare_next_generation`, holds it
+through validation and active-generation pointer update, and removes only the
+lock content it wrote. A live same-host lock is refused. A lock whose same-host
+process is confirmed dead may be replaced during acquisition; malformed,
+cross-host, cross-OS, or otherwise unknown locks are refused and surfaced by
+`doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 

@@ -4,8 +4,10 @@ use crate::application::progress::{initialization_stages, ProgressStage};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{IndexStore, StorageInspection};
 use std::fs;
-use std::io::Read;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_STATE_DIR: &str = ".repogrammar";
 
@@ -19,6 +21,7 @@ const STATE_GITIGNORE: &str = "# RepoGrammar local generated state.\n\
 *\n\
 !.gitignore\n";
 const GIT_INFO_EXCLUDE_PATTERNS: [&str; 2] = [".repogrammar/", ".repogrammar-*/"];
+const INDEX_LOCK_FILE: &str = "index.lock";
 const ROOT_GITIGNORE_BEGIN: &str = "# BEGIN RepoGrammar local state";
 const ROOT_GITIGNORE_END: &str = "# END RepoGrammar local state";
 const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
@@ -118,6 +121,13 @@ pub struct RepositoryStateLocation {
     pub root: PathBuf,
     pub state_dir: PathBuf,
     pub state_dir_relative: String,
+}
+
+#[must_use]
+#[derive(Debug)]
+pub struct IndexLockGuard {
+    path: PathBuf,
+    contents: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +263,10 @@ pub enum RepositoryDoctorCode {
     RootGitignoreMarkerInvalid,
     InitReceiptMissing,
     InitReceiptInvalid,
+    IndexLockActive,
+    IndexLockStale,
+    IndexLockUnknown,
+    IndexLockInvalid,
     StorageNotImplemented,
     StorageReady,
     StorageInvalid,
@@ -372,6 +386,74 @@ pub fn repository_state_location(
         state_dir: resolved.absolute,
         state_dir_relative: resolved.relative,
     })
+}
+
+pub fn acquire_index_lock(
+    repository_root: &str,
+    state_dir_override: Option<&str>,
+) -> Result<IndexLockGuard, RepoGrammarError> {
+    let resolved = resolve_state_dir(repository_root, state_dir_override)?;
+    if !resolved.absolute.exists() {
+        return Err(invalid_input(
+            "repository is not initialized; run repogrammar init",
+        ));
+    }
+    ensure_state_path_can_be_directory(&resolved.absolute)?;
+    let locks_dir = require_locks_dir(&resolved.absolute)?;
+    let lock_path = locks_dir.join(INDEX_LOCK_FILE);
+    let contents = current_index_lock_metadata().to_json();
+
+    for _attempt in 0..2 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut file) => {
+                file.write_all(contents.as_bytes())
+                    .map_err(|_| invalid_input("failed to write repository-local index lock"))?;
+                return Ok(IndexLockGuard {
+                    path: lock_path,
+                    contents,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                match inspect_index_lock_path(&lock_path) {
+                    IndexLockState::Stale => {
+                        fs::remove_file(&lock_path).map_err(|_| {
+                            invalid_input("failed to remove stale repository-local index lock")
+                        })?;
+                        continue;
+                    }
+                    IndexLockState::Active => {
+                        return Err(invalid_input(
+                            "index lock is held by another RepoGrammar indexing process; run repogrammar doctor",
+                        ));
+                    }
+                    IndexLockState::Unknown => {
+                        return Err(invalid_input(
+                            "index lock ownership is unknown; run repogrammar doctor",
+                        ));
+                    }
+                    IndexLockState::Invalid => {
+                        return Err(invalid_input(
+                            "index lock metadata is invalid; run repogrammar doctor",
+                        ));
+                    }
+                    IndexLockState::Missing => continue,
+                }
+            }
+            Err(_) => {
+                return Err(invalid_input(
+                    "failed to create repository-local index lock",
+                ));
+            }
+        }
+    }
+
+    Err(invalid_input(
+        "index lock changed during acquisition; retry repogrammar index",
+    ))
 }
 
 pub fn repository_status_with_storage(
@@ -503,9 +585,37 @@ fn lifecycle_hygiene_findings(
     let mut findings = Vec::new();
     inspect_state_gitignore(&resolved.absolute, &mut findings)?;
     inspect_init_receipt(&resolved.absolute, &mut findings)?;
+    inspect_index_lock(&resolved.absolute, &mut findings);
     inspect_git_info_exclude(&resolved.root, &mut findings)?;
     inspect_root_gitignore_marker(&resolved.root, &mut findings)?;
     Ok(findings)
+}
+
+fn inspect_index_lock(state_dir: &Path, findings: &mut Vec<RepositoryDoctorFinding>) {
+    let lock_path = state_dir.join("locks").join(INDEX_LOCK_FILE);
+    match inspect_index_lock_path(&lock_path) {
+        IndexLockState::Missing => {}
+        IndexLockState::Active => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Warning,
+            code: RepositoryDoctorCode::IndexLockActive,
+            detail: "index.lock is held by a live RepoGrammar indexing process".to_string(),
+        }),
+        IndexLockState::Stale => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Warning,
+            code: RepositoryDoctorCode::IndexLockStale,
+            detail: "index.lock is stale and may be replaced by the next index or sync run"
+                .to_string(),
+        }),
+        IndexLockState::Unknown => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Warning,
+            code: RepositoryDoctorCode::IndexLockUnknown,
+            detail: "index.lock ownership cannot be confirmed on this host".to_string(),
+        }),
+        IndexLockState::Invalid => findings.push(doctor_error(
+            RepositoryDoctorCode::IndexLockInvalid,
+            "index.lock metadata is malformed or unreadable",
+        )),
+    }
 }
 
 fn inspect_state_gitignore(
@@ -684,7 +794,7 @@ fn doctor_error(code: RepositoryDoctorCode, detail: impl Into<String>) -> Reposi
 fn read_lifecycle_text(path: &Path) -> Result<String, ()> {
     let mut file = fs::File::open(path).map_err(|_| ())?;
     let mut buffer = Vec::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(LIFECYCLE_TEXT_MAX_BYTES + 1)
         .read_to_end(&mut buffer)
         .map_err(|_| ())?;
@@ -692,6 +802,212 @@ fn read_lifecycle_text(path: &Path) -> Result<String, ()> {
         return Err(());
     }
     String::from_utf8(buffer).map_err(|_| ())
+}
+
+fn require_locks_dir(state_dir: &Path) -> Result<PathBuf, RepoGrammarError> {
+    let locks_dir = state_dir.join("locks");
+    match fs::symlink_metadata(&locks_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(
+            invalid_input("repository-local locks path is not a directory; run repogrammar doctor"),
+        ),
+        Ok(_) => Ok(locks_dir),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(invalid_input(
+            "repository-local state is missing locks directory; run repogrammar doctor",
+        )),
+        Err(_) => Err(invalid_input(
+            "failed to inspect repository-local locks directory",
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexLockState {
+    Missing,
+    Active,
+    Stale,
+    Unknown,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexLockMetadata {
+    pid: u32,
+    host: Option<String>,
+    os: String,
+    started_unix_seconds: u64,
+    repogrammar_version: String,
+}
+
+impl IndexLockMetadata {
+    fn to_json(&self) -> String {
+        let value = serde_json::json!({
+            "kind": "index",
+            "pid": self.pid,
+            "host": self.host,
+            "os": self.os,
+            "started_unix_seconds": self.started_unix_seconds,
+            "repogrammar_version": self.repogrammar_version,
+        });
+        format!("{value}\n")
+    }
+
+    fn parse(contents: &str) -> Option<Self> {
+        let value = serde_json::from_str::<serde_json::Value>(contents).ok()?;
+        let object = value.as_object()?;
+        if object.get("kind").and_then(serde_json::Value::as_str) != Some("index") {
+            return None;
+        }
+        let pid = object.get("pid")?.as_u64()?;
+        let pid = u32::try_from(pid).ok()?;
+        let host = match object.get("host") {
+            Some(value) if value.is_null() => None,
+            Some(value) => {
+                let host = value.as_str()?.trim();
+                if host.is_empty() || !lock_text_field_is_safe(host) {
+                    return None;
+                }
+                Some(host.to_string())
+            }
+            None => None,
+        };
+        let os = object.get("os")?.as_str()?.trim();
+        let repogrammar_version = object.get("repogrammar_version")?.as_str()?.trim();
+        if os.is_empty()
+            || repogrammar_version.is_empty()
+            || !lock_text_field_is_safe(os)
+            || !lock_text_field_is_safe(repogrammar_version)
+        {
+            return None;
+        }
+        Some(Self {
+            pid,
+            host,
+            os: os.to_string(),
+            started_unix_seconds: object.get("started_unix_seconds")?.as_u64()?,
+            repogrammar_version: repogrammar_version.to_string(),
+        })
+    }
+}
+
+impl Drop for IndexLockGuard {
+    fn drop(&mut self) {
+        if fs::read_to_string(&self.path)
+            .map(|current| current == self.contents)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn current_index_lock_metadata() -> IndexLockMetadata {
+    IndexLockMetadata {
+        pid: std::process::id(),
+        host: current_host(),
+        os: std::env::consts::OS.to_string(),
+        started_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+        repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+fn inspect_index_lock_path(path: &Path) -> IndexLockState {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            IndexLockState::Invalid
+        }
+        Ok(_) => {
+            let Ok(contents) = read_lifecycle_text(path) else {
+                return IndexLockState::Invalid;
+            };
+            let Some(lock) = IndexLockMetadata::parse(&contents) else {
+                return IndexLockState::Invalid;
+            };
+            classify_index_lock(&lock)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => IndexLockState::Missing,
+        Err(_) => IndexLockState::Invalid,
+    }
+}
+
+fn classify_index_lock(lock: &IndexLockMetadata) -> IndexLockState {
+    if lock.os != std::env::consts::OS {
+        return IndexLockState::Unknown;
+    }
+    let current_host = current_host();
+    if lock.host != current_host {
+        return IndexLockState::Unknown;
+    }
+    if current_host.is_none() && lock.pid != std::process::id() && lock.pid != 0 {
+        return IndexLockState::Unknown;
+    }
+    match process_state(lock.pid) {
+        LockProcessState::Live => IndexLockState::Active,
+        LockProcessState::Dead => IndexLockState::Stale,
+        LockProcessState::Unknown => IndexLockState::Unknown,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LockProcessState {
+    Live,
+    Dead,
+    Unknown,
+}
+
+#[cfg(unix)]
+fn process_state(pid: u32) -> LockProcessState {
+    if pid == std::process::id() {
+        return LockProcessState::Live;
+    }
+    if pid == 0 {
+        return LockProcessState::Dead;
+    }
+    match std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .output()
+    {
+        Ok(output) if output.status.success() => LockProcessState::Live,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Operation not permitted") || stderr.contains("not permitted") {
+                LockProcessState::Unknown
+            } else {
+                LockProcessState::Dead
+            }
+        }
+        Err(_) => LockProcessState::Unknown,
+    }
+}
+
+#[cfg(not(unix))]
+fn process_state(pid: u32) -> LockProcessState {
+    if pid == std::process::id() {
+        LockProcessState::Live
+    } else if pid == 0 {
+        LockProcessState::Dead
+    } else {
+        LockProcessState::Unknown
+    }
+}
+
+fn current_host() -> Option<String> {
+    ["HOSTNAME", "COMPUTERNAME"].iter().find_map(|key| {
+        std::env::var(key).ok().and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty() && lock_text_field_is_safe(trimmed)).then(|| trimmed.to_string())
+        })
+    })
+}
+
+fn lock_text_field_is_safe(value: &str) -> bool {
+    value.len() <= 255
+        && !value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
 }
 
 pub fn uninit_repository(
@@ -1936,6 +2252,96 @@ mod tests {
         assert_eq!(report.inspected_locks, vec!["index.lock".to_string()]);
         assert!(lock.is_file());
         assert!(!report.message.contains(&root_string(workspace.path())));
+    }
+
+    #[test]
+    fn index_lock_guard_writes_metadata_and_removes_own_lock() {
+        let workspace = TempWorkspace::new("repository-index-lock-guard");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+
+        let guard =
+            acquire_index_lock(&root_string(workspace.path()), None).expect("acquire index lock");
+
+        let contents = fs::read_to_string(&lock_path).expect("read lock");
+        let value: serde_json::Value = serde_json::from_str(&contents).expect("lock JSON");
+        assert_eq!(value["kind"], "index");
+        assert_eq!(value["pid"], std::process::id());
+        assert_eq!(value["os"], std::env::consts::OS);
+        assert!(
+            value["started_unix_seconds"]
+                .as_u64()
+                .expect("started timestamp")
+                > 0
+        );
+        assert!(!value["repogrammar_version"]
+            .as_str()
+            .expect("version")
+            .is_empty());
+
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn index_lock_refuses_live_lock_and_doctor_reports_it() {
+        let workspace = TempWorkspace::new("repository-index-lock-live");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let guard =
+            acquire_index_lock(&root_string(workspace.path()), None).expect("acquire index lock");
+
+        let error = acquire_index_lock(&root_string(workspace.path()), None)
+            .expect_err("live lock must be refused");
+
+        assert!(error.to_string().contains("index lock is held"));
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report.findings.iter().any(|finding| {
+            finding.code == RepositoryDoctorCode::IndexLockActive
+                && finding.severity == RepositoryDoctorSeverity::Warning
+        }));
+
+        drop(guard);
+    }
+
+    #[test]
+    fn index_lock_replaces_confirmed_stale_lock() {
+        let workspace = TempWorkspace::new("repository-index-lock-stale");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        let stale = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        fs::write(&lock_path, stale.to_json()).expect("write stale lock");
+
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockStale));
+
+        let guard =
+            acquire_index_lock(&root_string(workspace.path()), None).expect("replace stale lock");
+
+        let contents = fs::read_to_string(&lock_path).expect("read replacement lock");
+        let value: serde_json::Value = serde_json::from_str(&contents).expect("lock JSON");
+        assert_eq!(value["pid"], std::process::id());
+
+        drop(guard);
+        assert!(!lock_path.exists());
     }
 
     #[test]

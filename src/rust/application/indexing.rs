@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingRequest {
     pub repository_root: String,
+    pub state_dir_override: Option<String>,
     pub max_file_bytes: u64,
 }
 
@@ -27,6 +28,7 @@ impl IndexingRequest {
     pub fn new(repository_root: impl Into<String>) -> Self {
         Self {
             repository_root: repository_root.into(),
+            state_dir_override: None,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         }
     }
@@ -116,7 +118,11 @@ pub fn index_repository_with_discovery_and_store(
     discovery: &impl FileDiscovery,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
-    let report = discover_repository_files(request, discovery)?;
+    let report = discover_repository_files(request.clone(), discovery)?;
+    let _index_lock = crate::application::repository::acquire_index_lock(
+        &request.repository_root,
+        request.state_dir_override.as_deref(),
+    )?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
     for file in &report.files {
         crate::application::storage::record_indexed_file(
@@ -188,6 +194,10 @@ fn index_repository_with_optional_semantic_worker(
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let report = discover_repository_files(request.clone(), discovery)?;
+    let _index_lock = crate::application::repository::acquire_index_lock(
+        &request.repository_root,
+        request.state_dir_override.as_deref(),
+    )?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
     for file in &report.files {
         crate::application::storage::record_indexed_file(
@@ -777,6 +787,12 @@ mod tests {
             .expect("count semantic facts")
     }
 
+    fn create_index_state(state: &Path) {
+        fs::create_dir_all(state.join("generations")).expect("create generations");
+        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        fs::create_dir_all(state.join("locks")).expect("create locks");
+    }
+
     #[test]
     fn discovery_use_case_returns_files_without_claiming_indexed_units() {
         let workspace = TempWorkspace::new("indexing-discovery");
@@ -831,8 +847,7 @@ mod tests {
         )
         .expect("write ignored");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
 
         let outcome = index_repository_with_discovery_and_store(
@@ -904,8 +919,7 @@ mod tests {
         )
         .expect("write routes");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
 
         let outcome = index_repository_with_discovery_parser_and_store(
@@ -1017,8 +1031,7 @@ mod tests {
         let source = "import express from 'express';\n";
         fs::write(workspace.path().join("a.ts"), source).expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let discovered = discover_repository_files(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -1058,8 +1071,7 @@ mod tests {
         )
         .expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let worker = StaticSemanticWorker {
             expected_files: vec!["a.ts".to_string()],
@@ -1105,8 +1117,7 @@ mod tests {
         )
         .expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let first = store.prepare_next_generation().expect("prepare first");
         store.activate_generation(&first).expect("activate first");
@@ -1146,8 +1157,7 @@ mod tests {
         fs::write(workspace.path().join("README.md"), "not a TS/JS source\n")
             .expect("write ignored source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
 
         let outcome = index_repository_with_discovery_parser_semantic_worker_and_store(
@@ -1176,8 +1186,7 @@ mod tests {
         )
         .expect("write broken source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
 
         let outcome = index_repository_with_discovery_parser_and_store(
@@ -1236,8 +1245,7 @@ mod tests {
         let workspace = TempWorkspace::new("indexing-diagnostic-redaction");
         fs::write(workspace.path().join("a.ts"), "x").expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
 
         let outcome = index_repository_with_discovery_parser_and_store(
@@ -1275,8 +1283,7 @@ mod tests {
         let workspace = TempWorkspace::new("indexing-source-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let first = store.prepare_next_generation().expect("prepare first");
         store.activate_generation(&first).expect("activate first");
@@ -1352,8 +1359,7 @@ mod tests {
             fs::write(workspace.path().join("a.ts"), "export const a = 1;\n")
                 .expect("write source");
             let state = workspace.path().join(".repogrammar");
-            fs::create_dir_all(state.join("generations")).expect("create generations");
-            fs::create_dir_all(state.join("tmp")).expect("create tmp");
+            create_index_state(&state);
             let store = SqliteIndexStore::new(&state);
             let first = store.prepare_next_generation().expect("prepare first");
             store.activate_generation(&first).expect("activate first");
@@ -1449,8 +1455,7 @@ mod tests {
             let workspace = TempWorkspace::new("indexing-bad-parser-ir");
             fs::write(workspace.path().join("a.ts"), "x").expect("write source");
             let state = workspace.path().join(".repogrammar");
-            fs::create_dir_all(state.join("generations")).expect("create generations");
-            fs::create_dir_all(state.join("tmp")).expect("create tmp");
+            create_index_state(&state);
             let store = SqliteIndexStore::new(&state);
             let first = store.prepare_next_generation().expect("prepare first");
             store.activate_generation(&first).expect("activate first");
@@ -1512,8 +1517,7 @@ mod tests {
         let workspace = TempWorkspace::new("indexing-code-unit-record-fail");
         fs::write(workspace.path().join("a.ts"), "xy").expect("write source");
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
-        fs::create_dir_all(state.join("tmp")).expect("create tmp");
+        create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let first = store.prepare_next_generation().expect("prepare first");
         store.activate_generation(&first).expect("activate first");
@@ -1631,6 +1635,7 @@ mod tests {
 
         let workspace = TempWorkspace::new("indexing-store-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        create_index_state(&workspace.path().join(".repogrammar"));
 
         let error = index_repository_with_discovery_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -1765,6 +1770,7 @@ mod tests {
 
         let workspace = TempWorkspace::new("indexing-validation-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        create_index_state(&workspace.path().join(".repogrammar"));
         let store = ValidationFailingStore {
             active_generation: RefCell::new("gen-000001".to_string()),
             recorded_generations: RefCell::new(Vec::new()),

@@ -78,6 +78,7 @@ impl CliRuntime for ProductCliRuntime {
 
         let indexing_request = IndexingRequest {
             repository_root: request.repository_root,
+            state_dir_override: request.state_dir_override,
             max_file_bytes: request.max_file_bytes,
         };
         if let Some(executable) = request.semantic_worker_executable {

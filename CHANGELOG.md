@@ -180,6 +180,10 @@
   nodes/edges, and semantic facts can only be recorded while a generation is
   still building, and active generations cannot be downgraded by stale
   validation or activation handles.
+- Hardened `index` and `sync` generation updates with
+  `.repogrammar/locks/index.lock`, including active-lock refusal, confirmed
+  stale-lock replacement during acquisition, cleanup of successful runs, and
+  doctor lock-state reporting.
 - Expanded `repo-guard` required-document coverage to include v0.1 planning
   artifacts, the substrate hardening checkpoint, ADR-0009/ADR-0010, typed
   UNKNOWN governance, and the matching durable memory mirrors.

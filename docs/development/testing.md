@@ -62,11 +62,13 @@ allowed.
   extraction and storage, source ranges, language/kind/content-hash metadata,
   malformed syntax returning partial units plus diagnostics, unsupported or
   invalid source behavior, generation preservation after source/parser/storage
-  failure, status/doctor storage health, corrupt manifests, missing state
-  subdirectories without implicit repair, active `files`/`units` human and JSON
-  output, no-active-generation fallback, broken active-generation pointers,
-  product runtime wiring, and absence of source snippets or absolute paths in CLI
-  output and stored metadata.
+  failure, `index.lock` acquisition before generation preparation, active-lock
+  refusal for both `index` and `sync`, confirmed stale-lock replacement,
+  successful lock cleanup, status/doctor storage and lock health, corrupt
+  manifests, missing state subdirectories without implicit repair, active
+  `files`/`units` human and JSON output, no-active-generation fallback, broken
+  active-generation pointers, product runtime wiring, and absence of source
+  snippets or absolute paths in CLI output and stored metadata.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
@@ -144,4 +146,5 @@ dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory
-projects, and `repo-guard` sync/path/diff/ADR-0008 required document logic.
+projects, index/sync lock acquisition and doctor lock-state reporting, and
+`repo-guard` sync/path/diff/ADR-0008 required document logic.
