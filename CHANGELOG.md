@@ -40,7 +40,9 @@
   `conftest.py` contents into private parse-document requests so source-tied
   repo-local import facts and parent-directory pytest fixture-edge facts can be
   persisted without launching a Python semantic worker; oversized context
-  payloads fall back to contextless parsing. Default indexing validates and
+  payloads fall back to contextless parsing. No-worker release smoke now covers
+  both FastAPI and pytest exact-anchor derived-support family paths without
+  claiming provider-backed Python semantics. Default indexing validates and
   persists parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.

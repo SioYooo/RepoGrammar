@@ -127,9 +127,9 @@ The current implementation covers the first structural slice only:
   low-support, strong-evidence, and stale-evidence smoke coverage;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
-  exact FastAPI anchors can produce a default family only through separate
-  derived support facts, and keep the test-injected `SEMANTIC` worker fixture as
-  coverage for the explicit worker boundary;
+  exact FastAPI and pytest anchors can produce default families only through
+  separate derived support facts, and keep the test-injected `SEMANTIC` worker
+  fixture as coverage for the explicit worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored
   repo-relative evidence metadata under an optional token budget and explicitly

@@ -120,7 +120,7 @@ temporary workspaces and checks product CLI JSON paths, no absolute-path
 leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
 FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support
-examples. The positive FastAPI fixture now also validates the no-worker
+examples. Positive FastAPI and pytest fixtures now validate the no-worker
 exact-anchor derived-support family path. A separate test-only strong FastAPI
 semantic-support fixture injects compatible `SEMANTIC` facts through the
 existing worker boundary to validate family reads and stale-evidence fallback

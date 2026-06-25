@@ -54,14 +54,14 @@ only, plus a narrow bounded exact-anchor derivation step that synthesizes
 separate `DATAFLOW_DERIVED` support facts when validated parser anchors
 exact-match the canonical Python framework compatibility table for a unit with
 one framework role. Product smoke tests now prove low-support and dynamic cases
-remain `UNKNOWN`, while a three-route FastAPI fixture can produce a family
-without a semantic worker through those derived facts. It also persists root
-`pyproject.toml` only as structural project-config context or typed config
-`UNKNOWN`. Subsequent slices should add selective Pyrefly provider queries for
-plausible family candidates, Pyright cross-checks only for claim-upgrading
-facts, broader bounded role propagation, target-centered call recovery, richer
-EC-MVFI-lite family induction, and typed `UNKNOWN` governance. The canonical
-algorithm contract is
+remain `UNKNOWN`, while three-member FastAPI and pytest fixtures can produce
+families without a semantic worker through those derived facts. It also
+persists root `pyproject.toml` only as structural project-config context or
+typed config `UNKNOWN`. Subsequent slices should add selective Pyrefly provider
+queries for plausible family candidates, Pyright cross-checks only for
+claim-upgrading facts, broader bounded role propagation, target-centered call
+recovery, richer EC-MVFI-lite family induction, and typed `UNKNOWN` governance.
+The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 
 Existing TypeScript/JavaScript discovery, syntax extraction, framework-role
