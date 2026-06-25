@@ -1843,6 +1843,65 @@ def decorated(target, method):
     }
 
     #[test]
+    fn cpython_frontend_distinguishes_literal_dynamic_imports_and_plain_getattr() {
+        let source = r#"
+import importlib
+import sys
+
+def load(name, extra_path):
+    sys.path.insert(0, extra_path)
+    safe = importlib.import_module("plugins.safe")
+    importlib.import_module("../secret")
+    importlib.import_module(name)
+    handler = getattr(safe, "handle")
+    return handler
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("RuntimeDependencyInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedImport
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("plugins.safe")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=dynamic_import_literal")
+        }));
+        let dynamic_import_unknowns = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("DynamicImport")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "affected_claim=python_import_resolution")
+            })
+            .count();
+        assert!(dynamic_import_unknowns >= 2);
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_call_target")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("../secret"));
+    }
+
+    #[test]
     fn cpython_frontend_preserves_indirect_parametrize_fixture_unknowns() {
         let source = r#"
 import pytest

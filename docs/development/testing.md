@@ -160,7 +160,10 @@ allowed.
   router/app alias propagation with same-name reassignment invalidation, typed
   same-function FastAPI service-call context anchors with reassignment
   invalidation, typed `UNKNOWN` output for dynamic decorators, monkey patches,
-  dynamic calls, and unresolved cases,
+  dynamic calls, unsafe or nonliteral `importlib.import_module(...)` calls,
+  `sys.path.append`/`sys.path.insert` import-environment mutation, and
+  unresolved cases, plus safe literal dynamic-import anchors and plain
+  `getattr(...)` assignments that do not become dynamic call-target UNKNOWNs,
   oversized request
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, and absence of source snippets, absolute paths, or unsafe

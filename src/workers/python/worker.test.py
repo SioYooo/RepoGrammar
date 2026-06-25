@@ -814,12 +814,64 @@ assert any(
     for fact in unsafe_literal_import[0]["facts"]
 )
 
+dynamic_import_boundary = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dynamic_import_boundary.py",
+        "content_hash": "sha256:" + "4" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+
+def load(name, extra_path):
+    sys.path.insert(0, extra_path)
+    safe = importlib.import_module("plugins.safe")
+    importlib.import_module("../secret")
+    importlib.import_module(name)
+    handler = getattr(safe, "handle")
+    return handler
+""",
+    }
+)
+dynamic_import_boundary_facts = dynamic_import_boundary[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert (
+    sum(
+        1
+        for fact in dynamic_import_boundary_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "DynamicImport"
+        and "affected_claim=python_import_resolution" in fact["assumptions"]
+    )
+    >= 2
+)
+assert not any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert "../secret" not in json.dumps(dynamic_import_boundary)
+
 config_messages = run_worker(
     {
         "protocol_version": 1,
         "mode": "parse_project_config",
         "path": "pyproject.toml",
-        "content_hash": "sha256:" + "4" * 64,
+        "content_hash": "sha256:" + "5" * 64,
         "repository_revision": "UNKNOWN",
         "text": """
 [project]

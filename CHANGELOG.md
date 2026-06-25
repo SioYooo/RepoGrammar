@@ -163,7 +163,10 @@
   positive path without claiming production Python semantic-provider support.
   Dynamic release smoke now asserts each dynamic boundary is persisted as typed
   `UNKNOWN`, blocked from claim-input readiness, and absent from derived
-  support.
+  support. Worker and parser regression tests now also distinguish safe literal
+  `importlib.import_module(...)` anchors from unsafe/nonliteral dynamic imports,
+  cover `sys.path.insert`, and prove plain `getattr(...)` assignments do not
+  become dynamic call-target evidence.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

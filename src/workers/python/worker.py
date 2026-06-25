@@ -115,9 +115,8 @@ def is_safe_fact_target(value: Any) -> bool:
         is_non_blank_string(value)
         and len(value) <= MAX_FACT_TARGET_CHARS
         and not has_control_or_uri_text(value)
-        and not value.startswith("/")
-        and "\\" not in value
         and not has_windows_drive_prefix(value)
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", value) is not None
     )
 
 
