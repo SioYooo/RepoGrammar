@@ -210,6 +210,13 @@ The current implementation covers the first structural slice only:
   provider adapters must translate accepted provider spans into existing
   same-code-unit path/hash/range support evidence before EC-MVFI-lite can use
   them; provider origin alone cannot bypass canonical target compatibility.
+- an application-layer Pyrefly framework-identity request planner for future
+  provider adapters. It groups only plausible Python family candidates that
+  have one supported framework role and enough support under the current
+  Python threshold, then builds validated `ResolveFrameworkIdentity` request
+  scopes. The planner does not execute Pyrefly, write storage rows, emit
+  facts, alter CLI/MCP output, or turn syntax/framework-role evidence into a
+  family claim.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and

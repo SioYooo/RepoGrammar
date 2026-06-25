@@ -59,7 +59,9 @@
   canonicalization. A Rust `ports::python_provider`
   contract now exists for future candidate-scoped provider requests,
   provenance assumptions, cache-key dimensions, and recoverable
-  provider-unavailable `UNKNOWN`s, but Pyrefly/Pyright/RightTyper execution and
+  provider-unavailable `UNKNOWN`s. The application layer can plan validated
+  Pyrefly framework-identity request scopes for plausible Python candidate
+  groups, but Pyrefly/Pyright/RightTyper execution, provider fact storage, and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.

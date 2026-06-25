@@ -126,7 +126,10 @@ for canonical Python framework targets already emitted by the CPython frontend.
 It records `provider_resolved=false` `DATAFLOW_DERIVED` support. The Rust ports
 layer also defines future candidate-scoped Python provider request,
 provenance, cache-key, and unavailable-UNKNOWN boundaries. Pyrefly,
-Pyright, and RightTyper adapter execution remain deferred.
+Pyright, and RightTyper adapter execution remain deferred. The application
+layer can now plan validated Pyrefly framework-identity request scopes for
+plausible Python candidate groups, but those plans are not executed, stored, or
+rendered through CLI/MCP.
 
 Non-goals: Django, plugin execution, runtime DI resolution, whole-project
 dual-provider analysis, private Pyrefly API use, or substring framework

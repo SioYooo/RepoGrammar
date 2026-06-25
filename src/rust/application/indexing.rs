@@ -1,11 +1,13 @@
 //! Indexing use-case boundary.
 
 use crate::application::family::{
-    build_family_claims, family_storage_records, python_support_target_is_role_compatible,
+    build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
+    python_support_target_is_role_compatible,
 };
 use crate::core::model::{
-    CodeUnit, CodeUnitId, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode, Language,
-    Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
+    Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
+    SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
@@ -22,6 +24,9 @@ use crate::ports::index_store::{
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, SourceDocument,
     SourceParser,
+};
+use crate::ports::python_provider::{
+    PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
 };
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
@@ -737,6 +742,108 @@ fn derive_python_framework_support_facts(
     }
 
     Ok(derived)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PythonProviderPlanKey {
+    code_unit_kind: String,
+    framework_role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedPythonProviderRequest {
+    pub code_unit_kind: String,
+    pub framework_role: String,
+    pub request: PythonProviderRequest,
+}
+
+pub fn plan_pyrefly_framework_identity_requests(
+    code_units: &[IndexedCodeUnitRecord],
+    framework_role_facts: &[SemanticFact],
+    python_version: impl Into<String>,
+    provider_config_hash: ContentHash,
+    environment_fingerprint: impl Into<String>,
+) -> Result<Vec<PlannedPythonProviderRequest>, RepoGrammarError> {
+    let python_version = python_version.into();
+    let environment_fingerprint = environment_fingerprint.into();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let mut groups: BTreeMap<PythonProviderPlanKey, Vec<&IndexedCodeUnitRecord>> = BTreeMap::new();
+
+    for unit in code_units {
+        if unit.language != "python" || !family_eligible_kind(&unit.kind) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(unit.id.as_str())
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if !python_provider_kind_role_pair_is_supported(&unit.kind, framework_role) {
+            continue;
+        }
+        groups
+            .entry(PythonProviderPlanKey {
+                code_unit_kind: unit.kind.clone(),
+                framework_role: framework_role.to_string(),
+            })
+            .or_default()
+            .push(unit);
+    }
+
+    let mut requests = Vec::new();
+    for (key, units) in groups {
+        if units.len() < min_family_support("python") {
+            continue;
+        }
+        let candidates = units
+            .iter()
+            .map(|unit| {
+                let code_unit_id =
+                    CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?;
+                let range = SourceRange::new(unit.start_byte, unit.end_byte)
+                    .map_err(RepoGrammarError::InvalidInput)?;
+                PythonProviderCandidate::new(
+                    code_unit_id,
+                    unit.path.clone(),
+                    unit.content_hash.clone(),
+                    range,
+                )
+                .map_err(RepoGrammarError::InvalidInput)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let request = PythonProviderRequest::new(
+            PythonProviderKind::Pyrefly,
+            PythonProviderOperation::ResolveFrameworkIdentity,
+            candidates,
+            python_version.clone(),
+            provider_config_hash.clone(),
+            environment_fingerprint.clone(),
+        )
+        .map_err(RepoGrammarError::InvalidInput)?;
+        requests.push(PlannedPythonProviderRequest {
+            code_unit_kind: key.code_unit_kind,
+            framework_role: key.framework_role,
+            request,
+        });
+    }
+
+    Ok(requests)
+}
+
+fn python_provider_kind_role_pair_is_supported(kind: &str, framework_role: &str) -> bool {
+    matches!(
+        (kind, framework_role),
+        ("fastapi_route", "framework:fastapi.route")
+            | ("pytest_test", "framework:pytest.test")
+            | ("pytest_fixture", "framework:pytest.fixture")
+            | ("pydantic_model", "framework:pydantic.model")
+            | ("sqlalchemy_model", "framework:sqlalchemy.model")
+            | (
+                "sqlalchemy_repository_method",
+                "framework:sqlalchemy.repository_method"
+            )
+    )
 }
 
 fn framework_role_targets_by_unit(facts: &[SemanticFact]) -> BTreeMap<String, BTreeSet<String>> {
@@ -2038,6 +2145,172 @@ mod tests {
         assert_eq!(report.claims[0].language, "python");
         assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
         assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn plans_provider_identity_request_for_same_role_python_candidates() {
+        let first = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let second = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let planned = plan_pyrefly_framework_identity_requests(
+            &units,
+            &role_facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-candidate",
+        )
+        .expect("plan provider requests");
+
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].code_unit_kind, "fastapi_route");
+        assert_eq!(planned[0].framework_role, "framework:fastapi.route");
+        assert_eq!(planned[0].request.provider, PythonProviderKind::Pyrefly);
+        assert_eq!(
+            planned[0].request.operation,
+            PythonProviderOperation::ResolveFrameworkIdentity
+        );
+        assert_eq!(
+            planned[0]
+                .request
+                .candidates
+                .iter()
+                .map(|candidate| candidate.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app/a.py", "app/b.py", "app/c.py"]
+        );
+        assert!(planned[0].request.candidates.iter().all(|candidate| {
+            candidate.range.start_byte == 0 && candidate.range.end_byte == 20
+        }));
+        let family_report = build_family_claims(&units, &role_facts);
+        assert!(family_report.claims.is_empty());
+    }
+
+    #[test]
+    fn provider_identity_planner_skips_low_support_mixed_and_ambiguous_candidates() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let pydantic = indexed_python_unit("app/schema.py", "pydantic_model", 2);
+        let units = vec![first.clone(), second.clone(), pydantic.clone()];
+        let role_facts = vec![
+            framework_role_fact_for_unit(&first, "framework:fastapi.route"),
+            framework_role_fact_for_unit(&second, "framework:fastapi.route"),
+            framework_role_fact_for_unit(&pydantic, "framework:pydantic.model"),
+            framework_role_fact_for_unit(&pydantic, "framework:pytest.test"),
+        ];
+
+        let planned = plan_pyrefly_framework_identity_requests(
+            &units,
+            &role_facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-context",
+        )
+        .expect("plan provider requests");
+
+        assert!(planned.is_empty());
+        let family_report = build_family_claims(&units, &role_facts);
+        assert!(family_report.claims.is_empty());
+    }
+
+    #[test]
+    fn provider_identity_planner_groups_multiple_supported_python_roles() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let fourth = indexed_python_unit("app/models.py", "pydantic_model", 3);
+        let fifth = indexed_python_unit("app/schemas.py", "pydantic_model", 4);
+        let sixth = indexed_python_unit("app/settings.py", "pydantic_model", 5);
+        let units = vec![
+            first.clone(),
+            second.clone(),
+            third.clone(),
+            fourth.clone(),
+            fifth.clone(),
+            sixth.clone(),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| {
+                let role = if unit.kind == "pydantic_model" {
+                    "framework:pydantic.model"
+                } else {
+                    "framework:fastapi.route"
+                };
+                framework_role_fact_for_unit(unit, role)
+            })
+            .collect::<Vec<_>>();
+
+        let planned = plan_pyrefly_framework_identity_requests(
+            &units,
+            &role_facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-supported",
+        )
+        .expect("plan provider requests");
+
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].code_unit_kind, "fastapi_route");
+        assert_eq!(planned[1].code_unit_kind, "pydantic_model");
+        assert!(planned.iter().all(|plan| {
+            plan.request.provider == PythonProviderKind::Pyrefly
+                && plan.request.operation == PythonProviderOperation::ResolveFrameworkIdentity
+        }));
+    }
+
+    #[test]
+    fn provider_identity_planner_rejects_unsafe_candidate_paths_without_panic() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let safe_units = [first.clone(), second.clone(), third.clone()];
+        let role_facts = safe_units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        let mut first = first;
+        first.path = "../escape.py".to_string();
+        let units = vec![first, second, third];
+
+        let error = plan_pyrefly_framework_identity_requests(
+            &units,
+            &role_facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-unsafe",
+        )
+        .expect_err("unsafe path should reject provider request construction");
+
+        assert!(error.to_string().contains("repo-relative"));
+    }
+
+    #[test]
+    fn provider_identity_planner_rejects_invalid_planning_metadata() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let error = plan_pyrefly_framework_identity_requests(
+            &units,
+            &role_facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "file://env",
+        )
+        .expect_err("invalid metadata should bubble");
+
+        assert!(error.to_string().contains("path-like text"));
     }
 
     #[test]

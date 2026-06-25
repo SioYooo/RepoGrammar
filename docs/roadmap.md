@@ -56,6 +56,10 @@
   context/effect metadata.
 - Narrow Python exact-anchor variation metadata when an already-ready family has
   multiple exact-compatible framework-anchor support targets.
+- Internal Pyrefly framework-identity request planning for plausible Python
+  candidate groups. The planner builds validated future-provider request scopes
+  only; it does not execute Pyrefly, persist provider facts, or upgrade family
+  claims.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
   argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
@@ -152,7 +156,8 @@ same query layer, narrow global Codex/Claude MCP installer writes, and the
 v0.1 TS/JS and Python release fixture smoke gates. The Rust ports layer now also
 has a future Python semantic-provider contract for candidate-scoped requests,
 provider provenance assumptions, cache-key dimensions, and recoverable
-provider-unavailable `UNKNOWN`s, but no provider adapter execution is wired.
+provider-unavailable `UNKNOWN`s, plus an internal planner for future Pyrefly
+framework-identity request scopes, but no provider adapter execution is wired.
 Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
 adapter execution, bounded framework-role propagation, or richer

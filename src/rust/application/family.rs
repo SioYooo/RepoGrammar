@@ -500,15 +500,16 @@ pub(crate) fn python_support_target_is_role_compatible(
                 | "sqlalchemy.ext.asyncio.AsyncSession.scalar"
                 | "sqlalchemy.ext.asyncio.AsyncSession.scalars"
         )),
-        _ if framework_role.starts_with("framework:fastapi")
-            || framework_role.starts_with("framework:pytest")
-            || framework_role.starts_with("framework:pydantic")
-            || framework_role.starts_with("framework:sqlalchemy") =>
-        {
-            Some(false)
-        }
+        _ if python_framework_role_is_known(framework_role) => Some(false),
         _ => None,
     }
+}
+
+pub(crate) fn python_framework_role_is_known(framework_role: &str) -> bool {
+    framework_role.starts_with("framework:fastapi")
+        || framework_role.starts_with("framework:pytest")
+        || framework_role.starts_with("framework:pydantic")
+        || framework_role.starts_with("framework:sqlalchemy")
 }
 
 fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
@@ -519,7 +520,7 @@ fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
     }
 }
 
-fn family_eligible_kind(kind: &str) -> bool {
+pub(crate) fn family_eligible_kind(kind: &str) -> bool {
     matches!(
         kind,
         "express_route"
@@ -536,7 +537,7 @@ fn family_eligible_kind(kind: &str) -> bool {
     )
 }
 
-fn min_family_support(language: &str) -> usize {
+pub(crate) fn min_family_support(language: &str) -> usize {
     if language == "python" {
         PYTHON_MIN_FAMILY_SUPPORT
     } else {
