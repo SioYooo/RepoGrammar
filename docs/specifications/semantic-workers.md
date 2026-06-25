@@ -265,10 +265,11 @@ CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, SQLAlchemy mapped fields, `relationship(...)` calls,
 typed SQLAlchemy session calls including `add`, simple call targets, FastAPI
-`Depends`/`HTTPException` calls, `pytest.test`
-test-function anchors, same-file pytest fixture edges, literal pytest
-parametrize argument anchors, Pydantic validator decorators, path-derived module
-names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for
+static `response_model=...` schema slots, `Depends`/`HTTPException` calls,
+`pytest.test` test-function anchors, same-file pytest fixture edges, literal
+pytest parametrize argument anchors, Pydantic validator decorators,
+path-derived module names, and CPython `symtable` scope anchors, plus typed
+`UNKNOWN` facts for
 dynamic import, unresolved import, framework magic, and unresolved pytest
 fixture injection cases. Literal pytest parametrize arguments are structural
 parametrize facts, not unresolved fixture injections. Default indexing passes the

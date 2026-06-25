@@ -32,11 +32,11 @@
   default, evidence/deep use greedy metadata coverage selection, and deep does
   not yet include source snippets. Ready Python exact-anchor families can also
   record metadata-only variation evidence when exact-compatible framework-anchor
-  support targets differ. FastAPI `Depends` and `HTTPException` structural
-  anchors remain auxiliary context/effect metadata and are not membership
-  support targets. SQLAlchemy `relationship` and `Session.add`/`AsyncSession.add`
-  anchors are also structural context/effect metadata, not family membership
-  support. Pyrefly/Pyright and
+  support targets differ. FastAPI static `response_model=...`, `Depends`, and
+  `HTTPException` structural anchors remain auxiliary schema/context/effect
+  metadata and are not membership support targets. SQLAlchemy `relationship` and
+  `Session.add`/`AsyncSession.add` anchors are also structural context/effect
+  metadata, not family membership support. Pyrefly/Pyright and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
@@ -61,10 +61,10 @@ TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, `pytest.test` test-function anchors, same-file pytest
 fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
-internal parser-origin semantic facts. It also labels FastAPI
-`Depends`/`HTTPException`, literal pytest parametrize arguments, and Pydantic
-validator decorators as structural parser-origin anchors without upgrading them
-to provider-backed semantics.
+internal parser-origin semantic facts. It also labels FastAPI route
+`response_model`, `Depends`/`HTTPException`, literal pytest parametrize
+arguments, and Pydantic validator decorators as structural parser-origin
+anchors without upgrading them to provider-backed semantics.
 Default parser-mode indexing now also carries bounded discovered `conftest.py`
 context into the CPython parse-document request so parent-directory pytest
 fixture-edge facts can be persisted structurally; those facts are still not

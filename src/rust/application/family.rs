@@ -910,7 +910,7 @@ mod tests {
                 role_fact(&third, "framework:fastapi.route"),
                 semantic_support_fact_with_target(&first, "fastapi.Depends"),
                 semantic_support_fact_with_target(&second, "fastapi.HTTPException"),
-                semantic_support_fact_with_target(&third, "fastapi.Depends"),
+                semantic_support_fact_with_target(&third, "fastapi.response_model.UserOut"),
             ],
         );
 

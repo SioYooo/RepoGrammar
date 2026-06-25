@@ -204,8 +204,9 @@ parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
 SQLAlchemy mapped field and relationship anchors, typed SQLAlchemy session calls
 including `add`, simple calls, `pytest.test` test-function anchors, same-file
-and parent-directory `conftest.py` pytest fixture edges, path-derived module
-names, CPython `symtable` scope anchors, and typed
+and parent-directory `conftest.py` pytest fixture edges, FastAPI static
+`response_model=...` schema-slot anchors, path-derived module names, CPython
+`symtable` scope anchors, and typed
 dynamic/unresolved/ambiguous `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
@@ -319,6 +320,10 @@ with evidence and freshness checks. The current EC-MVFI-lite implementation can
 produce `DOMINANT_PATTERN` only for repeated compatible candidates backed by
 strong semantic/dataflow support; otherwise query output remains typed
 `UNKNOWN`.
+FastAPI route decorator targets can become derived support only when they
+exact-match the canonical route-method table. Static `response_model=...`,
+`Depends(...)`, and `HTTPException(...)` parser anchors stay schema/context/
+effect metadata and do not prove membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

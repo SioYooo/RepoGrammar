@@ -1231,6 +1231,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "decorator_binding"
             | "fastapi_dependency"
             | "fastapi_http_exception"
+            | "fastapi_response_model"
             | "fastapi_route_decorator"
             | "class_base"
             | "call_target"
@@ -1383,7 +1384,7 @@ class UserOut(BaseModel):
     def validate_id(cls, value):
         return value
 
-@router.get("/users")
+@router.get("/users", response_model=list[UserOut])
 async def list_users(dependency=Depends(lambda: object())):
     raise HTTPException(status_code=404)
 
@@ -1440,6 +1441,16 @@ def test_users(client, status):
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=fastapi_route_decorator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.response_model.UserOut")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_response_model")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
@@ -1517,6 +1528,8 @@ def test_users(client, status):
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("@router.get"));
+        assert!(!debug.contains("response_model="));
+        assert!(!debug.contains("list[UserOut]"));
         assert!(!debug.contains("Depends("));
         assert!(!debug.contains("HTTPException("));
         assert!(!debug.contains("assert client.get"));

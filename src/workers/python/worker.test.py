@@ -83,7 +83,7 @@ class UserRepository:
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
 
-@router.get("/users")
+@router.get("/users", response_model=list[UserOut])
 async def list_users(dependency=Depends(lambda: object())):
     raise HTTPException(status_code=404)
 
@@ -140,6 +140,12 @@ assert any(
     for fact in parse_facts
 )
 assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "fastapi.response_model.UserOut"
+    and "python_anchor_kind=fastapi_response_model" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "fastapi.Depends"
     and "python_anchor_kind=fastapi_dependency" in fact["assumptions"]
@@ -192,6 +198,8 @@ for fact in parse_facts:
     assert "end_byte" in fact["evidence"]
 assert "from fastapi" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
+assert "response_model=" not in json.dumps(parse_messages)
+assert "list[UserOut]" not in json.dumps(parse_messages)
 assert "Depends(" not in json.dumps(parse_messages)
 assert "HTTPException(" not in json.dumps(parse_messages)
 
@@ -288,6 +296,10 @@ v1 = api
 @v1.get("/users")
 def list_users():
     return []
+
+@v1.get("/dynamic", response_model=make_response_model())
+def dynamic_response_model():
+    return []
 """,
     }
 )
@@ -298,7 +310,13 @@ assert any(
     fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get"
     for fact in alias_facts
 )
+assert not any(
+    fact["fact_kind"] == "TYPE"
+    and "python_anchor_kind=fastapi_response_model" in fact["assumptions"]
+    for fact in alias_facts
+)
 assert "@v1.get" not in json.dumps(alias_parse_messages)
+assert "response_model=" not in json.dumps(alias_parse_messages)
 
 shadowed_alias_messages = run_worker(
     {
@@ -775,9 +793,13 @@ with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(
         """
 from fastapi import APIRouter
+from pydantic import BaseModel
 router = APIRouter()
 
-@router.post("/users")
+class UserOut(BaseModel):
+    id: int
+
+@router.post("/users", response_model=UserOut)
 def create_user():
     return {}
 """,
@@ -794,9 +816,16 @@ def create_user():
         message.get("fact_kind") == "SYMBOL" and message.get("target") == "fastapi.APIRouter.post"
         for message in messages
     )
+    assert any(
+        message.get("fact_kind") == "TYPE"
+        and message.get("target") == "fastapi.response_model.UserOut"
+        and "python_anchor_kind=fastapi_response_model" in message.get("assumptions", [])
+        for message in messages
+    )
     serialized = json.dumps(messages)
     assert root not in serialized
     assert "@router.post" not in serialized
+    assert "response_model=" not in serialized
 
 with tempfile.TemporaryDirectory() as root:
     Path(root, "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")

@@ -2180,8 +2180,8 @@ mod tests {
             ),
             parser_structural_anchor_fact(
                 &third,
-                SemanticFactKind::ResolvedCall,
-                "fastapi.Depends",
+                SemanticFactKind::Type,
+                "fastapi.response_model.UserOut",
             ),
         ];
 
@@ -2221,6 +2221,11 @@ mod tests {
                 "fastapi.Depends",
             ),
             parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Type,
+                "fastapi.response_model.UserList",
+            ),
+            parser_structural_anchor_fact(
                 &second,
                 SemanticFactKind::Symbol,
                 "fastapi.FastAPI.post",
@@ -2231,6 +2236,11 @@ mod tests {
                 "fastapi.HTTPException",
             ),
             parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Type,
+                "fastapi.response_model.UserOut",
+            ),
+            parser_structural_anchor_fact(
                 &third,
                 SemanticFactKind::Symbol,
                 "fastapi.APIRouter.delete",
@@ -2239,6 +2249,11 @@ mod tests {
                 &third,
                 SemanticFactKind::ResolvedCall,
                 "fastapi.Depends",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Type,
+                "fastapi.response_model.DeleteResult",
             ),
         ];
 

@@ -688,6 +688,7 @@ mod tests {
             "toBe(true)",
             "from fastapi",
             "@router.",
+            "response_model=",
             "BaseModel",
             "mapped_column",
             "pytest.fixture",
@@ -2116,7 +2117,7 @@ router = APIRouter()
 class UserOut(BaseModel):
     id: int
 
-@router.get("/users")
+@router.get("/users", response_model=UserOut)
 async def list_users():
     return []
 
@@ -2311,6 +2312,18 @@ project_includes = ["src"]
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
+                && fact.kind == "TYPE"
+                && fact.target.as_deref() == Some("fastapi.response_model.UserOut")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_response_model")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
                 && fact.kind == "RESOLVED_CALL"
                 && fact.target.as_deref() == Some("client.get")
                 && fact.origin_engine == "python"
@@ -2395,6 +2408,7 @@ project_includes = ["src"]
             "from fastapi",
             "from acme.services",
             "@router.get",
+            "response_model=",
             "assert client.get",
             "return object",
             "missing_fixture",

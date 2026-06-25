@@ -31,6 +31,7 @@ MAX_PATH_CHARS = 4096
 MAX_SOURCE_BYTES = 1_048_576
 MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
+MAX_RUST_PARSE_FACT_TARGET_CHARS = 256
 MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 SQLALCHEMY_SESSION_METHODS = {"add", "commit", "execute", "rollback"}
@@ -179,6 +180,14 @@ def dotted_name(node: ast.AST) -> str | None:
         return f"{base}.{node.attr}" if base else node.attr
     if isinstance(node, ast.Subscript):
         return dotted_name(node.value)
+    return None
+
+
+def static_type_name(node: ast.AST) -> str | None:
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return dotted_name(node)
+    if isinstance(node, ast.Subscript):
+        return static_type_name(node.slice)
     return None
 
 
@@ -875,6 +884,7 @@ def collect_decorator_facts(
             continue
         start, end = node_range(starts, decorator)
         target = canonical_name(name, aliases, assignments)
+        anchor_kind = decorator_anchor_kind(target)
         add_fact(
             facts,
             structural_fact(
@@ -886,7 +896,55 @@ def collect_decorator_facts(
                 repository_revision=repository_revision,
                 start=start,
                 end=end,
-                anchor_kind=decorator_anchor_kind(target),
+                anchor_kind=anchor_kind,
+            ),
+        )
+        if anchor_kind == "fastapi_route_decorator" and isinstance(decorator, ast.Call):
+            collect_fastapi_response_model_facts(
+                decorator,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                facts,
+            )
+
+
+def collect_fastapi_response_model_facts(
+    decorator: ast.Call,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for keyword in decorator.keywords:
+        if keyword.arg != "response_model":
+            continue
+        name = static_type_name(keyword.value)
+        if not name:
+            continue
+        model_name = canonical_name(name, aliases, {})
+        target = f"fastapi.response_model.{model_name}"
+        if not is_safe_fact_target(target) or len(target) > MAX_RUST_PARSE_FACT_TARGET_CHARS:
+            continue
+        start, end = node_range(starts, keyword.value)
+        add_fact(
+            facts,
+            structural_fact(
+                kind="TYPE",
+                subject_unit_id=subject_unit_id,
+                target=target,
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind="fastapi_response_model",
             ),
         )
 
