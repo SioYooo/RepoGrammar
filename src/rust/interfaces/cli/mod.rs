@@ -1372,7 +1372,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
+        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
         matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.status.state_dir),
         repository_status_value(&report.status.status),
@@ -1384,6 +1384,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         } else {
             "fail"
         },
+        lifecycle_hygiene_check(report),
         implementation_status(report.status.storage),
         implementation_status(report.status.indexing),
         report
@@ -1409,6 +1410,27 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         ),
         findings
     )
+}
+
+fn lifecycle_hygiene_check(report: &RepositoryDoctorReport) -> &'static str {
+    if report.findings.iter().any(|finding| {
+        matches!(
+            finding.code,
+            RepositoryDoctorCode::StateGitignoreMissing
+                | RepositoryDoctorCode::StateGitignoreInvalid
+                | RepositoryDoctorCode::GitInfoExcludeMissing
+                | RepositoryDoctorCode::GitInfoExcludeIncomplete
+                | RepositoryDoctorCode::RootGitignoreMarkerInvalid
+                | RepositoryDoctorCode::InitReceiptMissing
+                | RepositoryDoctorCode::InitReceiptInvalid
+        )
+    }) {
+        "fail"
+    } else if matches!(report.status.status, RepositoryStatus::NotInitialized) {
+        "not_applicable"
+    } else {
+        "pass"
+    }
 }
 
 fn unlock_human(outcome: &RepositoryUnlockReport) -> String {
@@ -1499,6 +1521,13 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::NotInitialized => "NOT_INITIALIZED",
         RepositoryDoctorCode::CorruptedManifest => "CORRUPTED_MANIFEST",
         RepositoryDoctorCode::MissingSubdir => "MISSING_SUBDIR",
+        RepositoryDoctorCode::StateGitignoreMissing => "STATE_GITIGNORE_MISSING",
+        RepositoryDoctorCode::StateGitignoreInvalid => "STATE_GITIGNORE_INVALID",
+        RepositoryDoctorCode::GitInfoExcludeMissing => "GIT_INFO_EXCLUDE_MISSING",
+        RepositoryDoctorCode::GitInfoExcludeIncomplete => "GIT_INFO_EXCLUDE_INCOMPLETE",
+        RepositoryDoctorCode::RootGitignoreMarkerInvalid => "ROOT_GITIGNORE_MARKER_INVALID",
+        RepositoryDoctorCode::InitReceiptMissing => "INIT_RECEIPT_MISSING",
+        RepositoryDoctorCode::InitReceiptInvalid => "INIT_RECEIPT_INVALID",
         RepositoryDoctorCode::StorageNotImplemented => "STORAGE_NOT_IMPLEMENTED",
         RepositoryDoctorCode::StorageReady => "STORAGE_READY",
         RepositoryDoctorCode::StorageInvalid => "STORAGE_INVALID",
@@ -2659,6 +2688,50 @@ mod tests {
             .iter()
             .any(|finding| finding["code"] == "STORAGE_INVALID"));
         assert!(!generations.exists());
+    }
+
+    #[test]
+    fn doctor_json_reports_lifecycle_hygiene_codes() {
+        let workspace = TempWorkspace::new("cli-doctor-lifecycle-hygiene");
+        let env = |_: &str| None;
+        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        fs::write(state.join(".gitignore"), "bad\n").expect("write bad state gitignore");
+        fs::write(state.join("receipts/init.json"), "{}\n").expect("write bad receipt");
+        fs::write(
+            workspace.path().join(".git/info/exclude"),
+            ".repogrammar/\n",
+        )
+        .expect("write incomplete exclude");
+        fs::write(
+            workspace.path().join(".gitignore"),
+            "# BEGIN RepoGrammar local state\n.repogrammar/\n",
+        )
+        .expect("write incomplete root marker");
+
+        let doctor = run_with_context(["doctor", "--json"], workspace.path(), &env);
+
+        assert_eq!(doctor.status, 0);
+        assert!(!doctor
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["lifecycle_hygiene"], "fail");
+        let codes = value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .map(|finding| finding["code"].as_str().expect("finding code"))
+            .collect::<Vec<_>>();
+        for code in [
+            "STATE_GITIGNORE_INVALID",
+            "INIT_RECEIPT_INVALID",
+            "GIT_INFO_EXCLUDE_INCOMPLETE",
+            "ROOT_GITIGNORE_MARKER_INVALID",
+        ] {
+            assert!(codes.contains(&code), "missing doctor code {code}");
+        }
     }
 
     #[test]

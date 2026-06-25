@@ -110,6 +110,11 @@ manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
 configuration. Once SQLite exists, it must also check database integrity,
 schema version, journal mode, and active generation consistency.
+Doctor must validate generated lifecycle hygiene without mutating state:
+`.repogrammar/.gitignore`, `receipts/init.json`, `.git/info/exclude`, and root
+`.gitignore` RepoGrammar marker sections must be reported as missing or invalid
+rather than silently repaired. JSON output must expose this as
+`checks.lifecycle_hygiene`.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.

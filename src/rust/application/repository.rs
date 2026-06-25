@@ -4,6 +4,7 @@ use crate::application::progress::{initialization_stages, ProgressStage};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{IndexStore, StorageInspection};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 pub const DEFAULT_STATE_DIR: &str = ".repogrammar";
@@ -24,6 +25,7 @@ const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
 .repogrammar/\n\
 .repogrammar-*/\n\
 # END RepoGrammar local state\n";
+const LIFECYCLE_TEXT_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryInitRequest {
@@ -240,6 +242,13 @@ pub enum RepositoryDoctorCode {
     NotInitialized,
     CorruptedManifest,
     MissingSubdir,
+    StateGitignoreMissing,
+    StateGitignoreInvalid,
+    GitInfoExcludeMissing,
+    GitInfoExcludeIncomplete,
+    RootGitignoreMarkerInvalid,
+    InitReceiptMissing,
+    InitReceiptInvalid,
     StorageNotImplemented,
     StorageReady,
     StorageInvalid,
@@ -372,31 +381,22 @@ pub fn repository_status_with_storage(
 pub fn repository_doctor(
     request: RepositoryDoctorRequest,
 ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
-    let status = repository_status(RepositoryStatusRequest {
-        path: request.path,
-        state_dir_override: request.state_dir_override,
-    })?;
-    Ok(RepositoryDoctorReport {
-        findings: doctor_findings_for_status(&status),
-        status,
-    })
+    let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
+    let status = status_for_resolved_state(&resolved, None)?;
+    let mut findings = doctor_findings_for_status(&status);
+    findings.extend(lifecycle_hygiene_findings(&resolved)?);
+    Ok(RepositoryDoctorReport { findings, status })
 }
 
 pub fn repository_doctor_with_storage(
     request: RepositoryDoctorRequest,
     store: &impl IndexStore,
 ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
-    let status = repository_status_with_storage(
-        RepositoryStatusRequest {
-            path: request.path,
-            state_dir_override: request.state_dir_override,
-        },
-        store,
-    )?;
-    Ok(RepositoryDoctorReport {
-        findings: doctor_findings_for_status(&status),
-        status,
-    })
+    let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
+    let status = status_for_resolved_state(&resolved, Some(store))?;
+    let mut findings = doctor_findings_for_status(&status);
+    findings.extend(lifecycle_hygiene_findings(&resolved)?);
+    Ok(RepositoryDoctorReport { findings, status })
 }
 
 fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<RepositoryDoctorFinding> {
@@ -487,6 +487,207 @@ fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<Repository
     }
 
     findings
+}
+
+fn lifecycle_hygiene_findings(
+    resolved: &ResolvedStateDir,
+) -> Result<Vec<RepositoryDoctorFinding>, RepoGrammarError> {
+    if !resolved.absolute.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut findings = Vec::new();
+    inspect_state_gitignore(&resolved.absolute, &mut findings)?;
+    inspect_init_receipt(&resolved.absolute, &mut findings)?;
+    inspect_git_info_exclude(&resolved.root, &mut findings)?;
+    inspect_root_gitignore_marker(&resolved.root, &mut findings)?;
+    Ok(findings)
+}
+
+fn inspect_state_gitignore(
+    state_dir: &Path,
+    findings: &mut Vec<RepositoryDoctorFinding>,
+) -> Result<(), RepoGrammarError> {
+    let path = state_dir.join(".gitignore");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::StateGitignoreInvalid,
+                ".repogrammar/.gitignore is not a regular file",
+            ));
+        }
+        Ok(_) => {
+            if read_lifecycle_text(&path).as_deref() != Ok(STATE_GITIGNORE) {
+                findings.push(doctor_error(
+                    RepositoryDoctorCode::StateGitignoreInvalid,
+                    ".repogrammar/.gitignore does not match the required generated-state ignore policy",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::StateGitignoreMissing,
+                ".repogrammar/.gitignore is missing",
+            ));
+        }
+        Err(_) => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::StateGitignoreInvalid,
+                ".repogrammar/.gitignore could not be inspected",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn inspect_init_receipt(
+    state_dir: &Path,
+    findings: &mut Vec<RepositoryDoctorFinding>,
+) -> Result<(), RepoGrammarError> {
+    let path = state_dir.join("receipts").join("init.json");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::InitReceiptInvalid,
+                "receipts/init.json is not a regular file",
+            ));
+        }
+        Ok(_) => {
+            let valid = read_lifecycle_text(&path)
+                .map(|contents| is_valid_init_receipt(&contents))
+                .unwrap_or(false);
+            if !valid {
+                findings.push(doctor_error(
+                    RepositoryDoctorCode::InitReceiptInvalid,
+                    "receipts/init.json does not match the expected init receipt shape",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::InitReceiptMissing,
+                "receipts/init.json is missing",
+            ));
+        }
+        Err(_) => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::InitReceiptInvalid,
+                "receipts/init.json could not be inspected",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn inspect_git_info_exclude(
+    root: &Path,
+    findings: &mut Vec<RepositoryDoctorFinding>,
+) -> Result<(), RepoGrammarError> {
+    let Some(git_dir) = resolve_git_dir(root)? else {
+        return Ok(());
+    };
+    let exclude = git_dir.join("info").join("exclude");
+    match fs::symlink_metadata(&exclude) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::GitInfoExcludeIncomplete,
+                ".git/info/exclude is not a regular file",
+            ));
+        }
+        Ok(_) => match read_lifecycle_text(&exclude) {
+            Ok(contents) => {
+                let lines = contents.lines().collect::<Vec<_>>();
+                let missing = GIT_INFO_EXCLUDE_PATTERNS
+                    .iter()
+                    .any(|pattern| !lines.iter().any(|line| line == pattern));
+                if missing {
+                    findings.push(doctor_error(
+                        RepositoryDoctorCode::GitInfoExcludeIncomplete,
+                        ".git/info/exclude is missing RepoGrammar state patterns",
+                    ));
+                }
+            }
+            Err(_) => {
+                findings.push(doctor_error(
+                    RepositoryDoctorCode::GitInfoExcludeIncomplete,
+                    ".git/info/exclude could not be read as bounded UTF-8 text",
+                ));
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::GitInfoExcludeMissing,
+                ".git/info/exclude is missing",
+            ));
+        }
+        Err(_) => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::GitInfoExcludeIncomplete,
+                ".git/info/exclude could not be inspected",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn inspect_root_gitignore_marker(
+    root: &Path,
+    findings: &mut Vec<RepositoryDoctorFinding>,
+) -> Result<(), RepoGrammarError> {
+    let path = root.join(".gitignore");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::RootGitignoreMarkerInvalid,
+                "root .gitignore is not a regular file",
+            ));
+        }
+        Ok(_) => match read_lifecycle_text(&path) {
+            Ok(contents) => {
+                if root_gitignore_marker_is_invalid(&contents) {
+                    findings.push(doctor_error(
+                        RepositoryDoctorCode::RootGitignoreMarkerInvalid,
+                        "root .gitignore has an invalid RepoGrammar marker section",
+                    ));
+                }
+            }
+            Err(_) => {
+                findings.push(doctor_error(
+                    RepositoryDoctorCode::RootGitignoreMarkerInvalid,
+                    "root .gitignore could not be read as bounded UTF-8 text",
+                ));
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            findings.push(doctor_error(
+                RepositoryDoctorCode::RootGitignoreMarkerInvalid,
+                "root .gitignore could not be inspected",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn doctor_error(code: RepositoryDoctorCode, detail: impl Into<String>) -> RepositoryDoctorFinding {
+    RepositoryDoctorFinding {
+        severity: RepositoryDoctorSeverity::Error,
+        code,
+        detail: detail.into(),
+    }
+}
+
+fn read_lifecycle_text(path: &Path) -> Result<String, ()> {
+    let mut file = fs::File::open(path).map_err(|_| ())?;
+    let mut buffer = Vec::new();
+    file.by_ref()
+        .take(LIFECYCLE_TEXT_MAX_BYTES + 1)
+        .read_to_end(&mut buffer)
+        .map_err(|_| ())?;
+    if buffer.len() as u64 > LIFECYCLE_TEXT_MAX_BYTES {
+        return Err(());
+    }
+    String::from_utf8(buffer).map_err(|_| ())
 }
 
 pub fn uninit_repository(
@@ -1026,6 +1227,31 @@ fn append_missing_lines(path: &Path, lines: &[&str]) -> Result<bool, RepoGrammar
     Ok(true)
 }
 
+fn root_gitignore_marker_is_invalid(contents: &str) -> bool {
+    let begin_count = contents.matches(ROOT_GITIGNORE_BEGIN).count();
+    let end_count = contents.matches(ROOT_GITIGNORE_END).count();
+    match (begin_count, end_count) {
+        (0, 0) => false,
+        (1, 1) => {
+            let Some(begin) = contents.find(ROOT_GITIGNORE_BEGIN) else {
+                return true;
+            };
+            let Some(end) = contents.find(ROOT_GITIGNORE_END) else {
+                return true;
+            };
+            if end <= begin {
+                return true;
+            }
+            let section = &contents[begin..end];
+            let section_lines = section.lines().collect::<Vec<_>>();
+            GIT_INFO_EXCLUDE_PATTERNS
+                .iter()
+                .any(|pattern| !section_lines.iter().any(|line| line == pattern))
+        }
+        _ => true,
+    }
+}
+
 fn missing_subdirs(state_dir: &Path) -> Vec<String> {
     REQUIRED_STATE_SUBDIRS
         .iter()
@@ -1057,6 +1283,25 @@ fn is_valid_bootstrap_manifest(manifest: &str) -> bool {
         && manifest.contains("\"state\": \"initialized\"")
         && manifest.contains("\"storage\": { \"status\": \"not_implemented\" }")
         && manifest.contains("\"indexing\": { \"status\": \"not_implemented\" }")
+}
+
+fn is_valid_init_receipt(receipt: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(receipt) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+        && object
+            .get("repogrammar_version")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|version| !version.trim().is_empty())
+        && object.get("operation").and_then(serde_json::Value::as_str) == Some("init")
+        && object.get("status").and_then(serde_json::Value::as_str) == Some("complete")
 }
 
 fn validate_log_component(component: Option<&str>) -> Result<(), RepoGrammarError> {
@@ -1360,6 +1605,92 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == RepositoryDoctorCode::IndexingNotImplemented));
+    }
+
+    #[test]
+    fn doctor_reports_missing_lifecycle_hygiene_without_repairing() {
+        let workspace = TempWorkspace::new("repository-doctor-missing-hygiene");
+        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        let state_gitignore = state.join(".gitignore");
+        let init_receipt = state.join("receipts").join("init.json");
+        let git_exclude = workspace.path().join(".git/info/exclude");
+        fs::remove_file(&state_gitignore).expect("remove state gitignore");
+        fs::remove_file(&init_receipt).expect("remove init receipt");
+        fs::remove_file(&git_exclude).expect("remove git exclude");
+
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+
+        for code in [
+            RepositoryDoctorCode::StateGitignoreMissing,
+            RepositoryDoctorCode::InitReceiptMissing,
+            RepositoryDoctorCode::GitInfoExcludeMissing,
+        ] {
+            assert!(
+                report.findings.iter().any(|finding| {
+                    finding.code == code && finding.severity == RepositoryDoctorSeverity::Error
+                }),
+                "missing doctor finding for {code:?}"
+            );
+        }
+        assert!(!state_gitignore.exists());
+        assert!(!init_receipt.exists());
+        assert!(!git_exclude.exists());
+    }
+
+    #[test]
+    fn doctor_reports_invalid_lifecycle_hygiene_without_repairing() {
+        let workspace = TempWorkspace::new("repository-doctor-invalid-hygiene");
+        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        let state_gitignore = state.join(".gitignore");
+        let init_receipt = state.join("receipts").join("init.json");
+        let git_exclude = workspace.path().join(".git/info/exclude");
+        let root_gitignore = workspace.path().join(".gitignore");
+        fs::write(&state_gitignore, "bad\n").expect("write bad state gitignore");
+        fs::write(&init_receipt, "{}\n").expect("write bad init receipt");
+        fs::write(&git_exclude, ".repogrammar/\n").expect("write incomplete exclude");
+        fs::write(
+            &root_gitignore,
+            format!("{ROOT_GITIGNORE_BEGIN}\n.repogrammar/\n"),
+        )
+        .expect("write incomplete marker");
+
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+
+        for code in [
+            RepositoryDoctorCode::StateGitignoreInvalid,
+            RepositoryDoctorCode::InitReceiptInvalid,
+            RepositoryDoctorCode::GitInfoExcludeIncomplete,
+            RepositoryDoctorCode::RootGitignoreMarkerInvalid,
+        ] {
+            assert!(
+                report.findings.iter().any(|finding| {
+                    finding.code == code && finding.severity == RepositoryDoctorSeverity::Error
+                }),
+                "missing doctor finding for {code:?}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(&state_gitignore).expect("state gitignore"),
+            "bad\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&init_receipt).expect("init receipt"),
+            "{}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&git_exclude).expect("git exclude"),
+            ".repogrammar/\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&root_gitignore).expect("root gitignore"),
+            format!("{ROOT_GITIGNORE_BEGIN}\n.repogrammar/\n")
+        );
     }
 
     #[test]

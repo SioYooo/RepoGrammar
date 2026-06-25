@@ -169,3 +169,6 @@
 - Expanded `repo-guard` required-document coverage to include v0.1 planning
   artifacts, the substrate hardening checkpoint, ADR-0009/ADR-0010, typed
   UNKNOWN governance, and the matching durable memory mirrors.
+- Hardened `doctor` lifecycle diagnostics so missing or invalid generated state
+  `.gitignore`, Git exclude patterns, init receipts, and root `.gitignore`
+  markers are reported without mutating repository state.

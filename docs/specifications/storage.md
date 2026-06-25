@@ -112,6 +112,9 @@ Root `.gitignore` may be modified only when the user passes
 RepoGrammar modifies root `.gitignore`, it must use a small marker-fenced
 section and avoid duplicate entries. An incomplete RepoGrammar marker section
 must be refused rather than repaired silently.
+`repogrammar doctor` must diagnose missing or invalid generated lifecycle files,
+Git exclude patterns, init receipts, and root marker sections without recreating
+or rewriting them.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 `.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`. The current

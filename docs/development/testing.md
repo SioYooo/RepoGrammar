@@ -26,6 +26,8 @@ allowed.
   layout, idempotent repair, Git exclude hygiene, optional root `.gitignore`
   marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
   human and JSON status/doctor output, corrupted manifests, missing subdirs,
+  diagnostic-only doctor findings for missing or invalid `.repogrammar/.gitignore`,
+  `.git/info/exclude`, root `.gitignore` markers, and `receipts/init.json`,
   `uninit --yes`, conservative unlock behavior, and redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   unsupported module extensions, default dependency/build/generated/state-dir
