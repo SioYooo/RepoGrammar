@@ -134,9 +134,11 @@ dynamic_messages = run_worker(
         "repository_revision": "UNKNOWN",
         "text": """
 import importlib
+import sys
 
 def load(name, obj, method):
     importlib.import_module(name)
+    sys.path.append("/tmp/secret")
     getattr(obj, method)()
     globals()[name]()
 """,
@@ -155,7 +157,14 @@ assert any(
     and "affected_claim=python_call_target" in fact["assumptions"]
     for fact in dynamic_facts
 )
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_facts
+)
 assert "importlib.import_module(name)" not in json.dumps(dynamic_messages)
+assert "/tmp/secret" not in json.dumps(dynamic_messages)
 
 unsafe_literal_import = run_worker(
     {
@@ -240,6 +249,91 @@ else:
         {"reason": "MissingDependency", "affected_claim": "python_project_config"}
     ]
 assert "[project" not in json.dumps(bad_config_messages)
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "pyproject.toml").write_text(
+        """
+[tool.pyright]
+include = ["src", "../secret", "/tmp/secret"]
+extraPaths = ["src/lib", "C:/secret"]
+""",
+        encoding="utf-8",
+    )
+    Path(root, "acme/services").mkdir(parents=True)
+    Path(root, "acme/__init__.py").write_text("", encoding="utf-8")
+    Path(root, "acme/services/__init__.py").write_text("", encoding="utf-8")
+    Path(root, "acme/services/users.py").write_text("def list_users():\n    return []\n", encoding="utf-8")
+    Path(root, "acme/api.py").write_text(
+        """
+from acme.services import users
+from .services import users as relative_users
+import acme.services.users as user_module
+from acme.missing import value
+""",
+        encoding="utf-8",
+    )
+    request = valid_request(root)
+    request["changed_files"] = [
+        "acme/api.py",
+        "acme/services/users.py",
+        "acme/__init__.py",
+        "acme/services/__init__.py",
+    ]
+    messages = run_worker(request)
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    repo_local_imports = [
+        fact
+        for fact in facts
+        if fact.get("fact_kind") == "RESOLVED_IMPORT"
+        and fact.get("target") == "acme.services.users"
+        and "python_anchor_kind=repo_local_import_binding" in fact.get("assumptions", [])
+    ]
+    assert len(repo_local_imports) == 3
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "UnresolvedImport"
+        and "affected_claim=python_import_resolution" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    serialized_module_graph = json.dumps(messages)
+    assert "../secret" not in serialized_module_graph
+    assert "/tmp/secret" not in serialized_module_graph
+    assert "C:/secret" not in serialized_module_graph
+    assert root not in serialized_module_graph
+    assert "from acme.services" not in serialized_module_graph
+
+if sys.version_info >= (3, 11):
+    with tempfile.TemporaryDirectory() as root:
+        Path(root, "pyproject.toml").write_text(
+            """
+[tool.pyright]
+include = ["src", "alt"]
+""",
+            encoding="utf-8",
+        )
+        Path(root, "src/pkg").mkdir(parents=True)
+        Path(root, "alt/pkg").mkdir(parents=True)
+        Path(root, "src/pkg/util.py").write_text("VALUE = 1\n", encoding="utf-8")
+        Path(root, "alt/pkg/util.py").write_text("VALUE = 2\n", encoding="utf-8")
+        Path(root, "src/pkg/api.py").write_text("from pkg import util\n", encoding="utf-8")
+        request = valid_request(root)
+        request["changed_files"] = ["src/pkg/api.py", "src/pkg/util.py", "alt/pkg/util.py"]
+        messages = run_worker(request)
+        facts = [message for message in messages if message.get("message_type") == "fact"]
+        assert_end_of_stream(messages)
+        assert not any(
+            fact.get("fact_kind") == "RESOLVED_IMPORT"
+            and fact.get("target") == "pkg.util"
+            and "python_anchor_kind=repo_local_import_binding" in fact.get("assumptions", [])
+            for fact in facts
+        )
+        assert any(
+            fact.get("fact_kind") == "UNKNOWN"
+            and fact.get("target") == "UnresolvedImport"
+            and "affected_claim=python_import_resolution" in fact.get("assumptions", [])
+            for fact in facts
+        )
 
 with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(

@@ -106,15 +106,17 @@ failing indexing.
 Python discovery currently discovers `.py` files and skips common Python
 virtual-environment, cache, and dependency directories such as `venv`,
 `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
-`site-packages` without executing repository code. Package-root discovery,
-repo-local import resolution, and persisted project-configuration facts remain
-deferred. The implemented Python frontend uses CPython `ast` for code-unit
-extraction, CPython `symtable` for structural scope anchors, and a private
-standard-library `tomllib` parser mode for sanitized `pyproject.toml` summaries
-that are not yet part of default indexing. Future slices should add repo-local
-import resolution and Tree-sitter as tolerant structural fallback only. Python
-syntax-only facts still cannot become semantic claims or family evidence by
-themselves.
+`site-packages` without executing repository code. Package-root discovery and
+persisted project-configuration facts remain deferred. The implemented Python
+frontend uses CPython `ast` for code-unit extraction, CPython `symtable` for
+structural scope anchors, and a private standard-library `tomllib` parser mode
+for sanitized `pyproject.toml` summaries that are not yet part of default
+indexing. Its semantic-worker-compatible project mode now performs a bounded
+module-level repo-local import-resolution pass over requested `.py` files, but
+default parser-mode indexing is not yet import-aware. Future slices should wire
+safe repo-local import context into default indexing and add Tree-sitter as a
+tolerant structural fallback only. Python syntax-only facts still cannot become
+semantic claims or family evidence by themselves.
 
 ## Tree-sitter parsing
 
@@ -198,11 +200,13 @@ builder and remain blocked from claim-input readiness as insufficient support.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available, but those summaries are not yet persisted by
 default indexing. Its semantic-worker-compatible NDJSON mode can emit those
-structural facts plus conservative
-`FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units,
-but the product indexing path does not launch a Python semantic worker
-separately. Pyrefly, Pyright, repo-local import resolution, usage propagation,
-call hierarchy recovery, and runtime observation remain deferred.
+structural facts plus project-scope module-level repo-local import facts for
+unique safe `.py` module matches, typed `UNKNOWN` for ambiguous/missing
+repo-local imports and `sys.path` mutation, and conservative
+`FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units.
+The product indexing path does not launch a Python semantic worker separately.
+Pyrefly, Pyright, default-index import awareness, usage propagation, call
+hierarchy recovery, and runtime observation remain deferred.
 
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains

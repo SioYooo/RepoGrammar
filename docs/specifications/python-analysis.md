@@ -89,6 +89,11 @@ The current implementation covers the first structural slice only:
   summaries, including sanitized project name, safe source roots, recognized
   tool sections, and typed config `UNKNOWN` when parsing support or valid config
   is unavailable;
+- semantic-worker-compatible project-mode module graph construction that uses
+  safe `.py` paths plus sanitized `pyproject.toml` source roots when `tomllib`
+  is available, emits `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
+  repo-local module matches, and emits typed `UNKNOWN` for ambiguous/missing
+  repo-local imports or `sys.path` mutation;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -120,10 +125,11 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not implement repo-local import resolution, persisted project
-configuration facts, Pyrefly, Pyright, provider cache keys, usage propagation,
-call hierarchy recovery, Tree-sitter fallback, runtime observation, Python
-family claims, or source snippet retrieval.
+This slice does not wire repo-local import resolution into default parser-mode
+indexing, does not persist project configuration facts, and does not implement
+Pyrefly, Pyright, provider cache keys, usage propagation, call hierarchy
+recovery, Tree-sitter fallback, runtime observation, Python family claims, or
+source snippet retrieval.
 
 ### Layer 0: Authoritative Frontend
 
@@ -173,6 +179,14 @@ Only unique repo-local matches become resolved import facts. External imports
 may become external dependency context. Ambiguous namespace packages, missing
 project configuration, non-literal `importlib.import_module`, mutated
 `sys.path`, or runtime import hooks must produce typed `UNKNOWN`.
+
+The current implementation performs the first narrow version of this only in
+the semantic-worker-compatible project mode. It builds a module index from the
+requested safe `.py` files, understands package `__init__.py`, applies
+sanitized `pyproject.toml` source roots when the running Python provides
+`tomllib`, and resolves only module-level targets with exactly one repo-local
+file. It does not resolve imported symbols, re-exports, namespace packages, or
+site-packages, and it does not make default indexing import-aware yet.
 
 ### Layer 2: Typed Canonical Framework Identity
 

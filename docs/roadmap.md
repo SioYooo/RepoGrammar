@@ -140,9 +140,9 @@ evidence contracts remain validated together.
 ## Command implementation path
 
 - Add full repository/worktree freshness metadata for stored family evidence.
-- Add Python repo-local import resolution and persisted safe
-  `pyproject.toml`/pytest configuration facts before provider-backed claim
-  upgrades.
+- Wire safe Python repo-local import context into default indexing and add
+  persisted safe `pyproject.toml`/pytest configuration facts before
+  provider-backed claim upgrades.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
 - Extend `find`, `family`, `explain`, and `check` beyond the current
@@ -170,12 +170,17 @@ evidence contracts remain validated together.
   worker-local structural anchors for imports, decorators, class bases, simple
   calls, same-file pytest fixture edges, and typed dynamic/unresolved
   `UNKNOWN`, plus path-derived module names, CPython `symtable` scope anchors,
-  and private `tomllib` project-config summaries. These parser-origin facts are
-  persisted through the Rust storage/readiness gate only where they are tied to
-  source code units; project-config summaries remain private worker output.
-  Next Python slices should add repo-local import resolution and persisted safe
-  project-config facts, then escalate only plausible family candidates to
-  Pyrefly and use Pyright only for claim-upgrading cross-checks.
+  and private `tomllib` project-config summaries. The semantic-worker-compatible
+  project mode now builds a bounded module graph for requested `.py` files and
+  emits structural repo-local import facts only for unique module-level matches,
+  with typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
+  mutation. Parser-origin facts are persisted through the Rust
+  storage/readiness gate only where they are tied to source code units;
+  project-config summaries and project-mode import facts are not yet default
+  indexing claim evidence. Next Python slices should wire safe import context
+  into default indexing and persisted safe project-config facts, then escalate
+  only plausible family candidates to Pyrefly and use Pyright only for
+  claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.

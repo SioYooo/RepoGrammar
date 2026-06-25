@@ -4,7 +4,8 @@
   discovery, CPython AST structural indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, typed dynamic/unresolved `UNKNOWN` facts, private
-  `tomllib` project-config summaries, structural IR storage, opt-in
+  `tomllib` project-config summaries, semantic-worker-compatible project-mode
+  module-level repo-local import resolution, structural IR storage, opt-in
   syntax-origin framework-role fact storage, semantic fact ingestion, internal
   active claim-input snapshot reads, semantic-fact freshness/readiness gating,
   FamilyStore-backed query reads, read-only MCP serving, and narrow global
@@ -13,9 +14,10 @@
   defines the claim-driven selective Python analysis cascade. The current
   Python slice is structural/framework-heuristic only; parser-origin Python
   facts are persisted but blocked from family construction and claim-input
-  readiness. Project-config summaries are private worker output and are not
-  persisted by default indexing. Repo-local import resolution, Pyrefly/Pyright,
-  provider-backed canonical evidence, and Python family claims remain deferred.
+  readiness. Project-config summaries and project-mode repo-local import facts
+  are private worker output and are not persisted by default indexing.
+  Default-index import context, Pyrefly/Pyright, provider-backed canonical
+  evidence, and Python family claims remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -134,7 +136,7 @@ from family-claim input as insufficient support without stronger compatible
 evidence.
 
 Tree-sitter integration, TypeScript compiler API integration, Python repo-local
-import resolution, persisted safe Python project-configuration facts,
+default-index import context, persisted safe Python project-configuration facts,
 Pyrefly/Pyright provider execution,
 provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
@@ -154,7 +156,7 @@ must not be described as query-ready family evidence.
 ## Implications
 
 Future agents must not claim compiler-backed TypeScript analysis,
-provider-backed Python semantic analysis, Python import resolution, full
+provider-backed Python semantic analysis, default-index Python import context, full
 pattern-family mining, freshness-validated semantic claims, installer writes
 beyond explicit Codex/Claude MCP registration, or stable MCP API support until
 those capabilities are implemented and tested.
@@ -167,7 +169,7 @@ canonical specs.
 
 ## Revalidation conditions
 
-Update this memory after Python repo-local import resolution, persisted
+Update this memory after default-index Python import context, persisted
 project-configuration facts, Pyrefly/Pyright provider integration,
 Tree-sitter fallback, TypeScript compiler API integration, full
 family-claim gates, broader installer writes, production

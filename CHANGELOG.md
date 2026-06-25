@@ -29,7 +29,10 @@
   class bases, simple call targets, same-file pytest fixture edges, and typed
   dynamic/unresolved `UNKNOWN` cases, now including path-derived module-name
   anchors, CPython `symtable` structural scope anchors, and a private
-  `tomllib` project-config summary mode. Default indexing validates and
+  `tomllib` project-config summary mode. Its semantic-worker-compatible
+  project mode now resolves only unique repo-local module imports as
+  `STRUCTURAL` facts and reports ambiguous/missing repo-local imports or
+  `sys.path` mutation as typed `UNKNOWN`. Default indexing validates and
   persists source-tied parser-origin `STRUCTURAL`/`UNKNOWN` facts while keeping
   them out of family construction and CLI/MCP family evidence.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,

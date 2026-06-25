@@ -159,15 +159,18 @@ allowed.
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
   path-derived module-name anchors, CPython `symtable` scope anchors, private
-  `tomllib` project-config summaries, persisted parser-origin structural facts
-  and typed `UNKNOWN`, heuristic framework-role facts staying out of family
-  claims, parser-origin facts staying out of family construction, Python
+  `tomllib` project-config summaries, semantic-worker-compatible project-mode
+  repo-local import resolution for unique module-level matches, ambiguous or
+  missing repo-local import `UNKNOWN`, `sys.path` mutation
+  `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
+  facts and typed `UNKNOWN`, heuristic framework-role facts staying out of
+  family claims, parser-origin facts staying out of family construction, Python
   release fixtures preserving
   `UNKNOWN` by default, test-only strong support facts proving family read paths
   only when compatible `SEMANTIC` evidence is injected, stale evidence fallback,
   and typed canonical framework identities rather than framework-name substring
   matching. Future Python slices must add
-  coverage for repo-local import resolution, Tree-sitter
+  coverage for default-index import context, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
   `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,

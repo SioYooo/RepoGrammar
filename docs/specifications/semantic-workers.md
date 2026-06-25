@@ -274,12 +274,15 @@ construction. The worker also has a private `parse_project_config` mode that
 uses standard-library `tomllib` when available to return sanitized
 `pyproject.toml` summaries and typed project-config `UNKNOWN` values; this mode
 is not yet wired into default indexing or family claims. The same Python worker
-has a semantic-worker-compatible NDJSON mode that emits those structural facts
-alongside conservative Python framework-role heuristic facts for direct worker
+has a semantic-worker-compatible NDJSON project mode that builds a bounded
+repo-local module graph from requested `.py` files, applies sanitized
+`pyproject.toml` source roots when `tomllib` is available, emits structural
+repo-local import facts only for unique module-level matches, emits typed
+`UNKNOWN` for ambiguous/missing repo-local imports and `sys.path` mutation, and
+also emits conservative Python framework-role heuristic facts for direct worker
 smoke testing. The product runtime does not separately launch it as a Pyrefly,
-Pyright, repo-local import-resolution, usage-propagation, or call-hierarchy
-provider, and does not expose these worker-local facts through CLI/MCP query
-commands.
+Pyright, usage-propagation, or call-hierarchy provider, and does not expose
+these worker-local facts through CLI/MCP query commands.
 Python worker tests run under `python3` and assert parseable JSON/NDJSON,
 repo-relative paths, strict content hashes, no source snippets, invalid path
 rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,

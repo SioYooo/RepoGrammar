@@ -192,6 +192,32 @@ def module_name_from_path(path: str) -> str | None:
     return ".".join(parts)
 
 
+def module_names_for_path(path: str, source_roots: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for root in source_roots:
+        prefix = f"{root}/"
+        if path.startswith(prefix):
+            candidates.append(path[len(prefix) :])
+    if not candidates:
+        candidates.append(path)
+    result: list[str] = []
+    for candidate in candidates:
+        module_name = module_name_from_path(candidate)
+        if module_name and module_name not in result:
+            result.append(module_name)
+    return result
+
+
+def build_module_index(paths: list[str], source_roots: list[str]) -> dict[str, list[str]]:
+    modules: dict[str, list[str]] = {}
+    for path in sorted(paths):
+        if not path.endswith(".py"):
+            continue
+        for module_name in module_names_for_path(path, source_roots):
+            modules.setdefault(module_name, []).append(path)
+    return {module_name: sorted(module_paths) for module_name, module_paths in sorted(modules.items())}
+
+
 def decorator_names(node: ast.AST) -> list[str]:
     return [name for decorator in getattr(node, "decorator_list", []) if (name := dotted_name(decorator))]
 
@@ -399,6 +425,92 @@ def unknown_fact(
     )
 
 
+def import_fact(
+    *,
+    subject_unit_id: str,
+    target: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+    anchor_kind: str,
+) -> dict[str, Any]:
+    return structural_fact(
+        kind="RESOLVED_IMPORT",
+        subject_unit_id=subject_unit_id,
+        target=target,
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        start=start,
+        end=end,
+        anchor_kind=anchor_kind,
+    )
+
+
+def unresolved_import_fact(
+    *,
+    subject_unit_id: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> dict[str, Any]:
+    return unknown_fact(
+        subject_unit_id=subject_unit_id,
+        reason_code="UnresolvedImport",
+        affected_claim="python_import_resolution",
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        start=start,
+        end=end,
+    )
+
+
+def repo_local_module_resolution(target: str, module_index: dict[str, list[str]] | None) -> str:
+    if module_index is None:
+        return "missing"
+    matches = module_index.get(target, [])
+    if len(matches) == 1:
+        return "resolved"
+    if len(matches) > 1:
+        return "ambiguous"
+    return "missing"
+
+
+def repo_local_prefix_exists(target: str, module_index: dict[str, list[str]] | None) -> bool:
+    if module_index is None:
+        return False
+    parts = target.split(".")
+    for end in range(len(parts) - 1, 0, -1):
+        if ".".join(parts[:end]) in module_index:
+            return True
+    return False
+
+
+def relative_import_base(current_modules: list[str], path: str, level: int, module: str | None) -> str | None:
+    if not current_modules or level < 1:
+        return None
+    bases: list[str] = []
+    is_package_init = path.endswith("/__init__.py") or path == "__init__.py"
+    for current_module in current_modules:
+        parts = current_module.split(".")
+        package_parts = parts if is_package_init else parts[:-1]
+        if level > 1:
+            if len(package_parts) < level - 1:
+                continue
+            package_parts = package_parts[: -(level - 1)]
+        if module:
+            package_parts = [*package_parts, *module.split(".")]
+        base = ".".join(package_parts)
+        if base not in bases:
+            bases.append(base)
+    return bases[0] if len(bases) == 1 else None
+
+
 def collect_import_aliases(
     tree: ast.Module,
     starts: list[int],
@@ -406,6 +518,8 @@ def collect_import_aliases(
     content_hash_value: str,
     repository_revision: str,
     module_unit_id: str,
+    module_index: dict[str, list[str]] | None = None,
+    source_roots: list[str] | None = None,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     aliases: dict[str, str] = {}
     facts: list[dict[str, Any]] = []
@@ -416,10 +530,34 @@ def collect_import_aliases(
         if isinstance(node, ast.Import):
             for alias in node.names:
                 local = alias.asname or alias.name.split(".")[0]
+                repo_resolution = repo_local_module_resolution(alias.name, module_index)
+                if repo_resolution == "ambiguous":
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
+                if repo_resolution == "missing" and repo_local_prefix_exists(alias.name, module_index):
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
                 aliases[local] = alias.name
                 facts.append(
-                    structural_fact(
-                        kind="RESOLVED_IMPORT",
+                    import_fact(
                         subject_unit_id=module_unit_id,
                         target=alias.name,
                         path=path,
@@ -427,30 +565,72 @@ def collect_import_aliases(
                         repository_revision=repository_revision,
                         start=start,
                         end=end,
-                        anchor_kind="import_binding",
+                        anchor_kind="repo_local_import_binding"
+                        if repo_resolution == "resolved"
+                        else "import_binding",
                     )
                 )
         elif node.level:
-            facts.append(
-                unknown_fact(
-                    subject_unit_id=module_unit_id,
-                    reason_code="UnresolvedImport",
-                    affected_claim="python_import_resolution",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
+            current_modules = module_names_for_path(path, source_roots or [])
+            relative_base = relative_import_base(current_modules, path, node.level, node.module)
+            if relative_base is None or not node.names:
+                facts.append(
+                    unresolved_import_fact(
+                        subject_unit_id=module_unit_id,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                    )
                 )
-            )
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
+                target = f"{relative_base}.{alias.name}" if relative_base else alias.name
+                repo_resolution = repo_local_module_resolution(target, module_index)
+                if repo_resolution == "resolved":
+                    aliases[alias.asname or alias.name] = target
+                    facts.append(
+                        import_fact(
+                            subject_unit_id=module_unit_id,
+                            target=target,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                            anchor_kind="repo_local_import_binding",
+                        )
+                    )
+                else:
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
         elif node.module:
             for alias in node.names:
                 if alias.name == "*":
                     facts.append(
-                        unknown_fact(
+                        unresolved_import_fact(
                             subject_unit_id=module_unit_id,
-                            reason_code="UnresolvedImport",
-                            affected_claim="python_import_resolution",
                             path=path,
                             content_hash_value=content_hash_value,
                             repository_revision=repository_revision,
@@ -460,10 +640,34 @@ def collect_import_aliases(
                     )
                     continue
                 target = f"{node.module}.{alias.name}"
+                repo_resolution = repo_local_module_resolution(target, module_index)
+                if repo_resolution == "ambiguous":
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
+                if repo_resolution == "missing" and repo_local_prefix_exists(target, module_index):
+                    facts.append(
+                        unresolved_import_fact(
+                            subject_unit_id=module_unit_id,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
                 aliases[alias.asname or alias.name] = target
                 facts.append(
-                    structural_fact(
-                        kind="RESOLVED_IMPORT",
+                    import_fact(
                         subject_unit_id=module_unit_id,
                         target=target,
                         path=path,
@@ -471,7 +675,9 @@ def collect_import_aliases(
                         repository_revision=repository_revision,
                         start=start,
                         end=end,
-                        anchor_kind="import_binding",
+                        anchor_kind="repo_local_import_binding"
+                        if repo_resolution == "resolved"
+                        else "import_binding",
                     )
                 )
     return aliases, facts
@@ -651,6 +857,21 @@ def collect_call_facts(
         start, end = node_range(starts, call)
         name = dotted_name(call.func)
         canonical = canonical_name(name, aliases, assignments) if name else None
+        if canonical in {"sys.path.append", "sys.path.insert"}:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="RuntimeDependencyInjection",
+                    affected_claim="python_import_resolution",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
         if canonical == "importlib.import_module":
             first_arg = call.args[0] if call.args else None
             if (
@@ -771,6 +992,8 @@ def analyze_source(
     source: str,
     content_hash_value: str,
     repository_revision: str,
+    module_index: dict[str, list[str]] | None = None,
+    source_roots: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     starts = byte_line_starts(source)
     units: list[dict[str, Any]] = []
@@ -802,6 +1025,8 @@ def analyze_source(
         content_hash_value,
         repository_revision,
         module_unit_id,
+        module_index,
+        source_roots or [],
     )
     for item in import_facts:
         add_fact(facts, item)
@@ -988,6 +1213,58 @@ def config_string_list(value: Any) -> list[str]:
     return result
 
 
+def parse_project_config_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    unknowns: list[dict[str, str]] = []
+    config = {
+        "project_name": None,
+        "source_roots": [],
+        "tool_sections": [],
+    }
+    if tomllib is None:
+        unknowns.append(
+            {
+                "reason": "MissingDependency",
+                "affected_claim": "python_project_config",
+            }
+        )
+        return config, unknowns
+
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        unknowns.append(
+            {
+                "reason": "MissingProjectConfig",
+                "affected_claim": "python_project_config",
+            }
+        )
+        return config, unknowns
+
+    project = data.get("project") if isinstance(data, dict) else None
+    if isinstance(project, dict):
+        config["project_name"] = safe_project_name(project.get("name"))
+    tool = data.get("tool") if isinstance(data, dict) else None
+    if isinstance(tool, dict):
+        config["tool_sections"] = sorted(
+            section
+            for section in ["pytest", "pyrefly", "pyright"]
+            if isinstance(tool.get(section), dict)
+        )
+        roots: set[str] = set()
+        pytest_config = tool.get("pytest")
+        if isinstance(pytest_config, dict):
+            ini_options = pytest_config.get("ini_options")
+            if isinstance(ini_options, dict):
+                roots.update(config_string_list(ini_options.get("testpaths")))
+                roots.update(config_string_list(ini_options.get("pythonpath")))
+        pyright_config = tool.get("pyright")
+        if isinstance(pyright_config, dict):
+            roots.update(config_string_list(pyright_config.get("include")))
+            roots.update(config_string_list(pyright_config.get("extraPaths")))
+        config["source_roots"] = sorted(roots)
+    return config, unknowns
+
+
 def parse_project_config(payload: dict[str, Any]) -> int:
     if set(payload) != {
         "protocol_version",
@@ -1005,52 +1282,7 @@ def parse_project_config(payload: dict[str, Any]) -> int:
     text = payload.get("text")
     if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_CONFIG_TEXT_BYTES:
         return 2
-    unknowns: list[dict[str, str]] = []
-    config = {
-        "project_name": None,
-        "source_roots": [],
-        "tool_sections": [],
-    }
-    if tomllib is None:
-        unknowns.append(
-            {
-                "reason": "MissingDependency",
-                "affected_claim": "python_project_config",
-            }
-        )
-    else:
-        try:
-            data = tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            unknowns.append(
-                {
-                    "reason": "MissingProjectConfig",
-                    "affected_claim": "python_project_config",
-                }
-            )
-        else:
-            project = data.get("project") if isinstance(data, dict) else None
-            if isinstance(project, dict):
-                config["project_name"] = safe_project_name(project.get("name"))
-            tool = data.get("tool") if isinstance(data, dict) else None
-            if isinstance(tool, dict):
-                config["tool_sections"] = sorted(
-                    section
-                    for section in ["pytest", "pyrefly", "pyright"]
-                    if isinstance(tool.get(section), dict)
-                )
-                roots: set[str] = set()
-                pytest_config = tool.get("pytest")
-                if isinstance(pytest_config, dict):
-                    ini_options = pytest_config.get("ini_options")
-                    if isinstance(ini_options, dict):
-                        roots.update(config_string_list(ini_options.get("testpaths")))
-                        roots.update(config_string_list(ini_options.get("pythonpath")))
-                pyright_config = tool.get("pyright")
-                if isinstance(pyright_config, dict):
-                    roots.update(config_string_list(pyright_config.get("include")))
-                    roots.update(config_string_list(pyright_config.get("extraPaths")))
-                config["source_roots"] = sorted(roots)
+    config, unknowns = parse_project_config_text(text)
     message(
         {
             "protocol_version": PROTOCOL_VERSION,
@@ -1115,6 +1347,23 @@ def read_source(path: Path) -> tuple[str, str] | None:
     return text, f"sha256:{hashlib.sha256(data).hexdigest()}"
 
 
+def project_source_roots(project_root: Path) -> list[str]:
+    config_path = resolve_under_root(project_root, "pyproject.toml")
+    if config_path is None:
+        return []
+    source_result = read_source(config_path)
+    if source_result is None:
+        return []
+    text, _hash = source_result
+    config, unknowns = parse_project_config_text(text)
+    if unknowns:
+        return []
+    roots = config.get("source_roots")
+    if not isinstance(roots, list):
+        return []
+    return sorted(root for root in roots if isinstance(root, str) and is_safe_repo_relative_path(root))
+
+
 def emit_fact_message(request_id: str, fact_payload: dict[str, Any]) -> None:
     message(
         {
@@ -1171,6 +1420,7 @@ def analyze_project(payload: dict[str, Any]) -> int:
         emit_worker_error(request_id, "SEMANTIC_PROTOCOL_VIOLATION", "semantic worker request is invalid")
         return 0
     project_root = Path(payload["project_root"])
+    file_records: list[tuple[str, str, str]] = []
     for relative_path in sorted(payload["changed_files"]):
         if not relative_path.endswith(".py"):
             continue
@@ -1181,7 +1431,21 @@ def analyze_project(payload: dict[str, Any]) -> int:
         if source_result is None:
             continue
         source, file_hash = source_result
-        units, _diagnostics, facts = analyze_source(relative_path, source, file_hash, "UNKNOWN")
+        file_records.append((relative_path, source, file_hash))
+    source_roots = project_source_roots(project_root)
+    module_index = build_module_index(
+        [relative_path for relative_path, _source, _file_hash in file_records],
+        source_roots,
+    )
+    for relative_path, source, file_hash in file_records:
+        units, _diagnostics, facts = analyze_source(
+            relative_path,
+            source,
+            file_hash,
+            "UNKNOWN",
+            module_index,
+            source_roots,
+        )
         for fact_payload in facts:
             emit_fact_message(request_id, fact_payload)
         for unit_data in units:
