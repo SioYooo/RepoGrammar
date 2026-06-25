@@ -54,7 +54,7 @@ parse_messages = run_worker(
         "text": """
 from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator, validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from typing import Annotated
@@ -72,6 +72,11 @@ class UserOut(BaseModel):
     @field_validator("id")
     @classmethod
     def validate_id(cls, value):
+        return value
+
+    @validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value):
         return value
 
     @computed_field
@@ -446,6 +451,12 @@ assert any(
 assert any(
     fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pydantic.field_validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.validator"
     and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
     for fact in parse_facts
 )

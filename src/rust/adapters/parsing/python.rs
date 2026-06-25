@@ -1394,7 +1394,7 @@ mod tests {
 from fastapi import APIRouter
 from fastapi import Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator, validator
 from typing import Annotated
 import pytest
 import pytest as pt
@@ -1409,6 +1409,11 @@ class UserOut(BaseModel):
     @field_validator("id")
     @classmethod
     def validate_id(cls, value):
+        return value
+
+    @validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value):
         return value
 
     @computed_field
@@ -1699,6 +1704,14 @@ def test_users(client, status, missing_fixture):
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_validator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.validator")
                 && fact
                     .assumptions
                     .iter()

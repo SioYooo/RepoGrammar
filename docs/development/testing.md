@@ -226,8 +226,8 @@ allowed.
   async equivalents becoming exact repository-method anchors, bounded
   SQLAlchemy `self.session`/`self.db` role propagation from `__init__`, and
   reassigned receivers not becoming exact session-call anchors, Pydantic field,
-  field-type, model-config, nested Config,
-  computed-field, and model-validator anchors staying out of support derivation,
+  field-type, model-config, nested Config, computed-field, field-validator,
+  legacy validator, and model-validator anchors staying out of support derivation,
   FastAPI service-call context anchors staying out of support derivation,
   low-support and dynamic Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible

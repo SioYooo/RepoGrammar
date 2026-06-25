@@ -204,9 +204,9 @@ The current implementation covers the first structural slice only:
   anchors, plus FastAPI request body and request-parameter anchors, remain
   route schema/context/effect metadata and are explicitly excluded from
   membership support derivation. Pydantic field, field-type,
-  `model_config`, nested `Config`, `computed_field`, and `model_validator`
-  anchors remain model schema/config/member metadata and are also excluded from
-  membership support derivation.
+  `model_config`, nested `Config`, `computed_field`, `field_validator`, legacy
+  `validator`, and `model_validator` anchors remain model schema/config/member
+  metadata and are also excluded from membership support derivation.
 - a Rust `ports::python_provider` boundary for future candidate-scoped
   Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
   provider cache-key dimensions, and recoverable provider-unavailable
@@ -428,7 +428,7 @@ Required evidence includes `BaseModel` inheritance, field annotations,
 `computed_field` / `@model_validator` declarations. In the current
 implementation slice, fields, field types, config, computed fields, and model
 validators are structural schema/member anchors only; they do not derive family
-support without an exact compatible model/base/validator support target.
+support without an exact compatible model/base support target.
 
 SQLAlchemy roles:
 

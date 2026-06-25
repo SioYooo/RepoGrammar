@@ -357,11 +357,11 @@ static `Depends(get_db)` dependency-target, `Depends(...)`, and
 `HTTPException(...)` parser anchors, including literal status-code effect
 anchors, plus static FastAPI request body and request-parameter anchors, stay
 schema/context/effect metadata and do not prove membership support. Pydantic
-field, field-type, `model_config`, nested `Config`,
-computed-field, and model-validator anchors likewise stay model
-schema/config/member metadata and do not prove membership support. FastAPI
-service-call anchors stay handler/service context metadata and also do not prove
-membership support.
+field, field-type, `model_config`, nested `Config`, computed-field,
+field-validator, legacy validator, and model-validator anchors likewise stay
+model schema/config/member metadata and do not prove membership support.
+FastAPI service-call anchors stay handler/service context metadata and also do
+not prove membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

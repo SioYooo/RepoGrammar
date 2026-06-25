@@ -2932,6 +2932,12 @@ mod tests {
             parser_structural_anchor_fact(
                 &third,
                 SemanticFactKind::Symbol,
+                "pydantic.field_validator",
+            ),
+            parser_structural_anchor_fact(&third, SemanticFactKind::Symbol, "pydantic.validator"),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
                 "pydantic.model_validator",
             ),
         ];

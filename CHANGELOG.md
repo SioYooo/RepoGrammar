@@ -130,7 +130,9 @@
   fields, field annotation targets, `model_config`, nested `Config`,
   `computed_field`, validators, and `model_validator`. These anchors remain
   schema/config/member context and are explicitly excluded from family
-  membership support.
+  membership support. Pydantic validator anchors are no longer accepted as
+  exact-anchor family support; v0.1 Pydantic family support is limited to
+  compatible model/settings base targets.
 - CPython AST worker FastAPI service-call structural anchors now recover only
   bounded same-function static call targets and remain handler/service context,
   explicitly excluded from route-family membership support.
