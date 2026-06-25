@@ -30,6 +30,9 @@ context lives under `.agents/memories/`.
 - Product boundaries: `specifications/product.md`.
 - v0.1 implementation coordination:
   `plans/v0.1-parallel-development-plan.md`.
+- v0.1 substrate hardening before family mining, MCP, installer, Python, or
+  CodeGraph runtime work:
+  `plans/v0.1-substrate-hardening-checkpoint.md`.
 - Experimental Python dogfooding: `decisions/ADR-0009-experimental-python-dogfooding.md`,
   `plans/python-dogfooding-plan.md`, and `specifications/semantic-workers.md`.
 - Optional CodeGraph provider boundary:

@@ -49,8 +49,16 @@
 ## Next implementation plan
 
 RepoGrammar v0.1 now follows a product-first and dogfooding-aware phase plan.
-The detailed coordination artifact is
-`docs/plans/v0.1-parallel-development-plan.md`.
+The detailed coordination artifacts are
+`docs/plans/v0.1-parallel-development-plan.md` and the immediate hardening
+checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
+
+Before new mining, MCP, installer, Python, or CodeGraph runtime feature work,
+complete the hardening checkpoint or record a source-backed blocker. The
+checkpoint covers generation immutability, lifecycle doctor hygiene,
+repo-guard coverage, bounded reads, parent Git ignore behavior, manifest/status
+schema clarity, semantic-worker request limits, and the index-lock release
+gate.
 
 1. Phase 1: repo-local lifecycle.
 2. Phase 1.5: language and provider abstraction.
@@ -74,15 +82,17 @@ claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash
-freshness and claim-input readiness gate. The next implementation slice should
-refine one boundary at a time: family-query contracts, framework role facts,
-full family-claim gates, or TypeScript compiler toolchain preparation. Keep
+freshness and claim-input readiness gate. The next implementation slice is the
+hardening checkpoint, not new product surface. After it passes, continue one
+boundary at a time: family-query contracts, framework role facts, full
+family-claim gates, or TypeScript compiler toolchain preparation. Keep
 syntax-only code units, structural IR, and stored semantic facts out of family
 claims until family-evidence claim builders exist.
 
 Do not advance mining, query execution, or MCP serving until parser output,
 family-evidence read paths, freshness checks, and evidence contracts are
-validated together.
+validated together, and do not begin those paths while checkpoint P1 issues are
+open.
 
 ## Command implementation path
 

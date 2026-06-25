@@ -36,6 +36,11 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/specifications/storage.md",
     "docs/specifications/telemetry.md",
     "docs/specifications/mcp-api.md",
+    "docs/specifications/unknowns.md",
+    "docs/plans/v0.1-parallel-development-plan.md",
+    "docs/plans/python-dogfooding-plan.md",
+    "docs/plans/codegraph-provider-plan.md",
+    "docs/plans/v0.1-substrate-hardening-checkpoint.md",
     "docs/development/agent-workflow.md",
     "docs/development/branching-and-commits.md",
     "docs/development/documentation-policy.md",
@@ -50,11 +55,18 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/decisions/ADR-0006-pattern-family-cli.md",
     "docs/decisions/ADR-0007-safe-install-progress-telemetry.md",
     "docs/decisions/ADR-0008-repo-local-state-boundary.md",
+    "docs/decisions/ADR-0009-experimental-python-dogfooding.md",
+    "docs/decisions/ADR-0010-optional-codegraph-provider.md",
     "docs/roadmap.md",
     ".agents/memories/README.md",
     ".agents/memories/project-state.md",
     ".agents/memories/known-constraints.md",
     ".agents/memories/open-questions.md",
+    ".agents/memories/v0.1-parallel-development-plan.md",
+    ".agents/memories/python-dogfooding-plan.md",
+    ".agents/memories/codegraph-provider-plan.md",
+    ".agents/memories/unknown-governance.md",
+    ".agents/memories/v0.1-substrate-hardening-checkpoint.md",
     ".github/workflows/ci.yml",
     "docs/specifications/semantic-workers.md",
     "src/rust/bin/repo_guard.rs",
@@ -534,6 +546,44 @@ mod tests {
             violation.path == "docs/decisions/ADR-0008-repo-local-state-boundary.md"
                 && violation.rule == "RequiredDocumentMissing"
         }));
+    }
+
+    #[test]
+    fn required_documents_include_v0_1_planning_artifacts() {
+        let root = TempRoot::new("missing-v0-1-planning-docs");
+        let missing_documents = [
+            "docs/plans/v0.1-parallel-development-plan.md",
+            "docs/plans/python-dogfooding-plan.md",
+            "docs/plans/codegraph-provider-plan.md",
+            "docs/plans/v0.1-substrate-hardening-checkpoint.md",
+            "docs/specifications/unknowns.md",
+            "docs/decisions/ADR-0009-experimental-python-dogfooding.md",
+            "docs/decisions/ADR-0010-optional-codegraph-provider.md",
+            ".agents/memories/v0.1-parallel-development-plan.md",
+            ".agents/memories/python-dogfooding-plan.md",
+            ".agents/memories/codegraph-provider-plan.md",
+            ".agents/memories/unknown-governance.md",
+            ".agents/memories/v0.1-substrate-hardening-checkpoint.md",
+        ];
+        for document in REQUIRED_DOCUMENTS
+            .iter()
+            .copied()
+            .filter(|document| !missing_documents.contains(document))
+        {
+            write_file(root.path().join(document), b"present\n");
+        }
+
+        let mut violations = Vec::new();
+        check_required_documents(root.path(), &mut violations);
+
+        for document in missing_documents {
+            assert!(
+                violations.iter().any(|violation| {
+                    violation.path == document && violation.rule == "RequiredDocumentMissing"
+                }),
+                "missing required-document violation for {document}"
+            );
+        }
     }
 
     #[test]
