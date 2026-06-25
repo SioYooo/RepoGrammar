@@ -53,6 +53,7 @@ parse_messages = run_worker(
         "repository_revision": "UNKNOWN",
         "text": """
 from fastapi import APIRouter, Depends, HTTPException
+from app.services import UserService, run_query
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
@@ -112,8 +113,40 @@ class StoredSessionRepository:
 def get_db():
     return object()
 
+def read_users():
+    service = UserService()
+    alias = service
+    return alias.list_users()
+
+def read_products():
+    service = UserService()
+    service = object()
+    return service.list_products()
+
+def run_imported():
+    runner = run_query
+    return runner()
+
 @router.get("/users", response_model=list[UserOut])
 async def list_users(dependency=Depends(get_db)):
+    service = UserService()
+    alias = service
+    getattr(alias, "dynamic_users")()
+    if False:
+        raise HTTPException(status_code=404)
+    return alias.list_users()
+
+@router.get("/products")
+def list_products():
+    return run_query()
+
+@router.get("/orders")
+def list_orders():
+    service = UserService()
+    service = object()
+    return service.list_orders()
+
+def raises_not_found():
     raise HTTPException(status_code=404)
 
 @pytest.mark.parametrize("status", [200])
@@ -198,6 +231,36 @@ assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.rollback"
     and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.UserService.list_users"
+    and "python_anchor_kind=fastapi_service_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.run_query"
+    and "python_anchor_kind=fastapi_service_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.UserService.list_users"
+    and "python_anchor_kind=call_target" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert not any(fact.get("target") == "app.services.UserService.list_orders" for fact in parse_facts)
+assert not any(
+    fact.get("target") == "service.list_orders"
+    and "python_anchor_kind=fastapi_service_call" in fact.get("assumptions", [])
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
     for fact in parse_facts
 )
 assert any(
@@ -290,6 +353,7 @@ for fact in parse_facts:
 assert "from fastapi" not in json.dumps(parse_messages)
 assert "model_config =" not in json.dumps(parse_messages)
 assert "arbitrary_types_allowed" not in json.dumps(parse_messages)
+assert "dynamic_users" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
 assert "response_model=" not in json.dumps(parse_messages)
 assert "list[UserOut]" not in json.dumps(parse_messages)

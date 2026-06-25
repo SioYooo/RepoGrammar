@@ -61,12 +61,14 @@ fixtures can produce families without a semantic worker through those derived
 facts. Ready Python families can also record narrow variation metadata when
 their already-compatible exact framework-anchor support targets differ within
 the same family; this does not imply provider-backed semantics or runtime
-equivalence. It also persists root `pyproject.toml` only as structural
+equivalence. The current Python worker can also emit bounded same-function
+FastAPI route service-call anchors as structural handler/service context; those
+anchors are not membership support. It also persists root `pyproject.toml` only as structural
 project-config context or typed config `UNKNOWN`. Subsequent
 slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
-bounded role propagation, target-centered call recovery, richer EC-MVFI-lite
-family induction, and typed `UNKNOWN` governance.
+bounded role propagation, cross-function target-centered call recovery, richer
+EC-MVFI-lite family induction, and typed `UNKNOWN` governance.
 The current Rust code now has only the owned future Python provider port
 contract for request scope, provenance assumptions, cache keys, and recoverable
 provider-unavailable `UNKNOWN`s. It does not execute provider tools or add

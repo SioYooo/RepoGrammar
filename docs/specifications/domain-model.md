@@ -69,7 +69,8 @@ family membership. Current default Python indexing can also persist CPython
 class bases, simple calls, FastAPI static response-model/dependency-target/error
 anchors including literal HTTPException status-code effect anchors, Pydantic
 field, field-type, `model_config`, nested `Config`, computed-field, validator,
-and model-validator anchors, and typed
+and model-validator anchors, bounded same-function FastAPI service-call anchors,
+and typed
 dynamic/unresolved `UNKNOWN` cases. These facts remain `STRUCTURAL` or
 `UNKNOWN`, are blocked from family-claim input, and are not fed to the current
 family builder as raw facts. A separate
@@ -86,7 +87,9 @@ source roots, and recognized tool sections, or typed config `UNKNOWN`s when
 context only and are blocked from claim-input readiness even if a future bug
 marks them with stronger certainty. Pydantic member/config/computed anchors are
 also structural model metadata only; they do not exact-match the support table
-and cannot prove family membership. Future Python facts should follow the
+and cannot prove family membership. FastAPI service-call anchors are structural
+handler/service context only and also cannot prove route-family membership.
+Future Python facts should follow the
 same owned model for FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser,
 type-checker, LSP, or Python runtime objects must not enter the core domain.
 

@@ -53,6 +53,10 @@
   typed `Session`/`AsyncSession` call targets, and bounded propagation from
   `__init__`-assigned `self.session`/`self.db` attributes into repository
   methods with same-method receiver reassignment invalidation.
+  FastAPI route parser anchors now include bounded same-function service-call
+  context for import-resolved static local forms such as `service = UserService();
+  service.list_users()` and `runner = run_query; runner()`, with reassignment
+  invalidation and dynamic `getattr(...)` calls preserved as typed `UNKNOWN`.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming
@@ -96,6 +100,9 @@
   `computed_field`, validators, and `model_validator`. These anchors remain
   schema/config/member context and are explicitly excluded from family
   membership support.
+- CPython AST worker FastAPI service-call structural anchors now recover only
+  bounded same-function static call targets and remain handler/service context,
+  explicitly excluded from route-family membership support.
 - Rust `ports::python_provider` contract for future candidate-scoped
   Pyrefly/Pyright/RightTyper provider requests, provenance assumptions,
   cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. This

@@ -81,9 +81,10 @@ The current implementation covers the first structural slice only:
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
 - CPython `ast` structural fact output for import bindings, decorator anchors,
-  class bases, simple call targets, pytest test-function anchors, same-file
-  pytest fixture edges, literal pytest parametrize argument anchors, and typed
-  dynamic/unresolved `UNKNOWN` facts;
+  class bases, simple call targets, bounded same-function application call
+  targets, pytest test-function anchors, same-file pytest fixture edges, literal
+  pytest parametrize argument anchors, and typed dynamic/unresolved `UNKNOWN`
+  facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -125,6 +126,13 @@ The current implementation covers the first structural slice only:
   they do not become provider-backed semantic facts, do not make parametrized
   pytest arguments look like unresolved fixture injections, and do not make
   Pydantic member/config metadata into family membership support;
+- bounded same-function application call recovery for import-resolved static forms such as
+  `service = UserService(); service.list_users()` and
+  `runner = run_query; runner()` inside FastAPI route units. These produce
+  `fastapi_service_call` structural context anchors only. Reassignment removes
+  the local role, dynamic forms such as `getattr(service, name)()` remain typed
+  `UNKNOWN`, and service-call anchors do not derive route-family membership
+  support;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
@@ -209,15 +217,15 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not implement Pyrefly, Pyright, a provider adapter, usage
-propagation, call hierarchy recovery, Tree-sitter fallback, runtime
-observation, broad Python family mining, source snippet retrieval, or
-schema-backed medoid/general-variation/exception evidence links. The provider
-cache-key shape exists only as a Rust port contract for future adapters. The
-only current variation evidence is exact-compatible Python framework-anchor
-target diversity inside an already-ready family. Persisted project
-configuration facts are structural context only and remain blocked from
-family-claim input.
+This slice does not implement Pyrefly, Pyright, a provider adapter,
+provider-backed usage propagation, cross-function call hierarchy recovery,
+Tree-sitter fallback, runtime observation, broad Python family mining, source
+snippet retrieval, or schema-backed medoid/general-variation/exception evidence
+links. The provider cache-key shape exists only as a Rust port contract for
+future adapters. The only current variation evidence is exact-compatible Python
+framework-anchor target diversity inside an already-ready family. Persisted
+project configuration facts and FastAPI service-call anchors are structural
+context only and remain blocked from family-claim input.
 
 ### Layer 0: Authoritative Frontend
 
@@ -447,6 +455,10 @@ The JARVIS-lite fallback should support only simple high-value forms:
 - `x = imported_symbol; x(...)`;
 - `return service.method(...)`;
 - `self.service = service; self.service.method(...)`.
+
+The current implemented fallback covers only same-function static local
+assignments for import-resolved FastAPI route context anchors. It is not
+cross-function call hierarchy recovery and does not produce membership support.
 
 If the target comes from dynamic dependency injection, runtime registries,
 monkey patching, plugin hooks, `getattr`, metaclass-generated methods, or

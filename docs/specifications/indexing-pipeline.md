@@ -207,7 +207,8 @@ Pydantic model-member anchors for fields, field annotation targets,
 `model_validator` declarations, SQLAlchemy mapped field and relationship
 anchors, typed SQLAlchemy session calls including `add`, bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
-same-method reassignment invalidation, simple calls,
+same-method reassignment invalidation, simple calls, bounded same-function
+FastAPI service-call context anchors,
 `pytest.test` test-function anchors, same-file
 and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
@@ -221,8 +222,9 @@ parser adapter validates and persists parse-document payloads as internal
 `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same code-unit
 evidence. They are not passed to the family builder and remain blocked from
 claim-input readiness as insufficient support. Pydantic member/config/computed
-anchors are schema/config/member context only and do not synthesize family
-support facts.
+anchors are schema/config/member context only, and FastAPI service-call anchors
+are handler/service context only; neither category synthesizes family support
+facts.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store
@@ -235,8 +237,10 @@ project-scope module-level repo-local import facts for unique safe `.py` module
 matches, typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
 mutation, and conservative `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for
 Python framework-shaped units. The product indexing path does not launch a
-Python semantic worker separately. Pyrefly, Pyright, usage propagation, call
-hierarchy recovery, and runtime observation remain deferred.
+Python semantic worker separately. Pyrefly, Pyright, provider-backed usage
+propagation, cross-function call hierarchy recovery, and runtime observation
+remain deferred beyond the current same-function structural service-call
+context anchors.
 
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains
@@ -341,7 +345,9 @@ static `Depends(get_db)` dependency-target, `Depends(...)`, and
 anchors, stay schema/context/effect metadata and do not prove membership
 support. Pydantic field, field-type, `model_config`, nested `Config`,
 computed-field, and model-validator anchors likewise stay model
-schema/config/member metadata and do not prove membership support.
+schema/config/member metadata and do not prove membership support. FastAPI
+service-call anchors stay handler/service context metadata and also do not prove
+membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

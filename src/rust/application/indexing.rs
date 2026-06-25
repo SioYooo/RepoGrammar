@@ -2259,6 +2259,48 @@ mod tests {
     }
 
     #[test]
+    fn fastapi_service_call_anchors_do_not_derive_family_support() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::ResolvedCall,
+                "app.services.UserService.list_users",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::ResolvedCall,
+                "app.services.UserService.create_user",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::ResolvedCall,
+                "app.repositories.UserRepository.list_users",
+            ),
+        ];
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert!(derived.is_empty());
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn fastapi_context_effect_anchors_do_not_change_support_targets() {
         let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
         let second = indexed_python_unit("app/b.py", "fastapi_route", 1);

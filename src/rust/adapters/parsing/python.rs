@@ -1235,6 +1235,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_http_exception_status"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
+            | "fastapi_service_call"
             | "class_base"
             | "call_target"
             | "pydantic_computed_field"
@@ -1380,6 +1381,7 @@ mod tests {
         let source = r#"
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
+from app.services import UserService, run_query
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 import pytest
 router = APIRouter()
@@ -1411,7 +1413,22 @@ def get_db():
 
 @router.get("/users", response_model=list[UserOut])
 async def list_users(dependency=Depends(get_db)):
-    raise HTTPException(status_code=404)
+    service = UserService()
+    alias = service
+    getattr(alias, "dynamic_users")()
+    if False:
+        raise HTTPException(status_code=404)
+    return alias.list_users()
+
+@router.get("/products")
+def list_products():
+    return run_query()
+
+@router.get("/orders")
+def list_orders():
+    service = UserService()
+    service = object()
+    return service.list_orders()
 
 @pytest.mark.parametrize("status", [200])
 def test_users(client, status):
@@ -1508,6 +1525,45 @@ def test_users(client, status):
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=fastapi_route_decorator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("app.services.UserService.list_users")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("app.services.run_query")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| fact
+            .target
+            .as_ref()
+            .map(SymbolId::as_str)
+            == Some("app.services.UserService.list_orders")));
+        assert!(!report.semantic_facts.iter().any(|fact| fact
+            .target
+            .as_ref()
+            .map(SymbolId::as_str)
+            == Some("service.list_orders")
+            && fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_call_target")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Type
@@ -1630,6 +1686,7 @@ def test_users(client, status):
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("model_config ="));
         assert!(!debug.contains("arbitrary_types_allowed"));
+        assert!(!debug.contains("dynamic_users"));
         assert!(!debug.contains("@router.get"));
         assert!(!debug.contains("response_model="));
         assert!(!debug.contains("list[UserOut]"));

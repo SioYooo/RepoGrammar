@@ -1022,6 +1022,33 @@ mod tests {
     }
 
     #[test]
+    fn python_fastapi_service_call_targets_do_not_prove_route_family() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "app.services.UserService.list_users"),
+                semantic_support_fact_with_target(&second, "app.services.UserService.create_user"),
+                semantic_support_fact_with_target(
+                    &third,
+                    "app.repositories.UserRepository.list_users",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn python_sqlalchemy_auxiliary_targets_do_not_prove_model_or_repository_family() {
         let first = python_unit("models.py", "sqlalchemy_model", 0);
         let second = python_unit("models.py", "sqlalchemy_model", 1);

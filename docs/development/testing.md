@@ -155,7 +155,9 @@ allowed.
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
-  `UNKNOWN` output for dynamic and unresolved cases, oversized request
+  same-function FastAPI service-call context anchors with reassignment
+  invalidation, typed `UNKNOWN` output for dynamic and unresolved cases,
+  oversized request
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, and absence of source snippets, absolute paths, or unsafe
   dynamic-import literal targets.
@@ -206,6 +208,7 @@ allowed.
   role propagation from `__init__`, and reassigned receivers not becoming exact
   session-call anchors, Pydantic field, field-type, model-config, nested Config,
   computed-field, and model-validator anchors staying out of support derivation,
+  FastAPI service-call context anchors staying out of support derivation,
   low-support Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical

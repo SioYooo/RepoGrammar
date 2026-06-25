@@ -43,6 +43,10 @@
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.
+- Bounded same-function FastAPI route service-call context anchors for import-resolved static
+  local forms such as `service = UserService(); service.list_users()` and
+  `runner = run_query; runner()`. These remain structural handler/service
+  context and are not family-support targets.
 - Narrow Python exact-anchor variation metadata when an already-ready family has
   multiple exact-compatible framework-anchor support targets.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
@@ -133,7 +137,8 @@ claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, bounded exact-anchor Python support
-derivation, plus an internal semantic-fact file-hash freshness and claim-input
+derivation, bounded same-function FastAPI service-call context anchors, plus an
+internal semantic-fact file-hash freshness and claim-input
 readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
 v0.1 TS/JS and Python release fixture smoke gates. The Rust ports layer now also
@@ -240,9 +245,9 @@ evidence contracts remain validated together.
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
 - Implement Python structural-anchor persistence, repo-local import resolution,
-  safe project configuration, pytest fixture graph recovery, usage propagation,
-  provider-backed canonical target evidence, and target-centered call recovery
-  in scoped phases.
+  safe project configuration, pytest fixture graph recovery, broader usage
+  propagation, provider-backed canonical target evidence, and cross-function
+  target-centered call recovery in scoped phases.
 - Validate TypeScript worker tooling and package manager before adding
   TypeScript compiler API dependencies or semantic fact emission.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap

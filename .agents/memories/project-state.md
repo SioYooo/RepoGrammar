@@ -39,6 +39,8 @@
   Pydantic field, field-type, `model_config`, nested `Config`,
   computed-field, and model-validator anchors likewise remain schema/config/member
   metadata and are not membership support targets.
+  FastAPI same-function service-call anchors remain handler/service context
+  metadata and are not membership support targets.
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
   metadata, not family membership support. SQLAlchemy session call anchors now
@@ -74,9 +76,10 @@ bases, simple calls, `pytest.test` test-function anchors, same-file pytest
 fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
-HTTPException status codes, literal pytest parametrize arguments, and Pydantic
-field/config/member declarations as structural parser-origin anchors without
-upgrading them to provider-backed semantics.
+HTTPException status codes, literal pytest parametrize arguments, Pydantic
+field/config/member declarations, and bounded FastAPI same-function service
+calls as structural parser-origin anchors without upgrading them to
+provider-backed semantics.
 Default parser-mode indexing now also carries bounded discovered `conftest.py`
 context into the CPython parse-document request so parent-directory pytest
 fixture-edge facts can be persisted structurally; those facts are still not
@@ -129,7 +132,8 @@ test-function anchors, same-file pytest fixture edges, parent-directory
 `conftest.py` fixture hierarchy edges, FastAPI dependency/error anchors, pytest
 parametrize argument anchors that are not treated as fixture injection UNKNOWNs,
 Pydantic field/config/member anchors, and typed dynamic/unresolved `UNKNOWN`
-cases,
+cases, plus bounded same-function FastAPI service-call anchors with reassignment
+invalidation,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,

@@ -275,7 +275,8 @@ annotation targets, `model_config`, nested `Config`, `computed_field`,
 validator, and `model_validator` declarations, SQLAlchemy mapped fields,
 `relationship(...)` calls, typed SQLAlchemy session calls including `add` and bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
-same-method reassignment invalidation, simple call targets, FastAPI
+same-method reassignment invalidation, simple call targets, bounded
+same-function FastAPI service-call context anchors, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, `pytest.test`
@@ -286,7 +287,9 @@ dynamic import, unresolved import, framework magic, and unresolved pytest
 fixture injection cases. Literal pytest parametrize arguments are structural
 parametrize facts, not unresolved fixture injections. Pydantic field,
 field-type, config, computed-field, and model-validator anchors are
-schema/config/member context only, not exact family-support targets. Default indexing passes the
+schema/config/member context only, and FastAPI service-call anchors are
+handler/service context only; neither category is an exact family-support
+target. Default indexing passes the
 discovered repo-relative `.py` inventory plus bounded, hash-checked discovered
 `conftest.py` file contents into that private parse-document request, so unique
 repo-local module imports and parent-directory pytest fixture bindings can be

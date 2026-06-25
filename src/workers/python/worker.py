@@ -391,6 +391,33 @@ def canonical_name(name: str, aliases: dict[str, str], assignments: dict[str, st
     return name
 
 
+def is_constructor_like_target(value: str) -> bool:
+    if not is_safe_fact_target(value):
+        return False
+    leaf = value.rsplit(".", 1)[-1]
+    return "." in value and is_python_identifier(leaf) and leaf[:1].isupper()
+
+
+def is_application_call_target(value: str) -> bool:
+    if "." not in value or not is_safe_fact_target(value):
+        return False
+    root = value.split(".", 1)[0]
+    if root in {"self", "cls"} or not root[:1].islower():
+        return False
+    if value.count(".") < 2:
+        return False
+    framework_prefixes = (
+        "fastapi.",
+        "importlib.",
+        "pydantic.",
+        "pydantic_settings.",
+        "pytest.",
+        "sqlalchemy.",
+        "sys.",
+    )
+    return not value.startswith(framework_prefixes)
+
+
 def evidence(
     path: str,
     content_hash_value: str,
@@ -754,17 +781,21 @@ def collect_import_aliases(
     return aliases, facts
 
 
-def assignment_role(value: ast.AST, aliases: dict[str, str], assignments: dict[str, str]) -> str | None:
+def assignment_role(
+    value: ast.AST,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+) -> str | None:
     if isinstance(value, ast.Call):
         call_name = dotted_name(value.func)
         if not call_name:
             return None
         canonical = canonical_name(call_name, aliases, {})
-        if canonical in {"fastapi.APIRouter", "fastapi.FastAPI"}:
+        if canonical in {"fastapi.APIRouter", "fastapi.FastAPI"} or is_constructor_like_target(canonical):
             return canonical
         return None
     if isinstance(value, ast.Name):
-        return assignments.get(value.id)
+        return assignments.get(value.id) or aliases.get(value.id)
     return None
 
 
@@ -782,6 +813,16 @@ def collect_assignment_roles(tree: ast.Module, aliases: dict[str, str]) -> dict[
                 continue
             assignments[target.id] = role
     return assignments
+
+
+def assignment_target_names(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Assign):
+        targets = list(node.targets)
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        targets = [node.target]
+    else:
+        return []
+    return [target.id for target in targets if isinstance(target, ast.Name)]
 
 
 def collect_parameter_roles(
@@ -1320,6 +1361,7 @@ def is_dynamic_call(node: ast.Call) -> bool:
 
 def collect_call_facts(
     node: ast.AST,
+    unit_kind: str,
     starts: list[int],
     path: str,
     content_hash_value: str,
@@ -1332,12 +1374,30 @@ def collect_call_facts(
 ) -> None:
     parameter_roles = parameter_roles or {}
     shadowed_receivers = assigned_role_receivers(node)
-    calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
-    calls.sort(key=lambda child: node_range(starts, child))
-    for call in calls:
+    events = [
+        child
+        for child in ast.walk(node)
+        if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Call))
+    ]
+    events.sort(key=lambda child: (node_range(starts, child), 0 if not isinstance(child, ast.Call) else 1))
+    local_assignments = dict(assignments)
+    for event in events:
+        if not isinstance(event, ast.Call):
+            role = (
+                assignment_role(event.value, aliases, local_assignments)
+                if isinstance(event, (ast.Assign, ast.AnnAssign)) and isinstance(event.value, ast.AST)
+                else None
+            )
+            for target in assignment_target_names(event):
+                if role is None:
+                    local_assignments.pop(target, None)
+                else:
+                    local_assignments[target] = role
+            continue
+        call = event
         start, end = node_range(starts, call)
         name = dotted_name(call.func)
-        canonical = canonical_name(name, aliases, assignments) if name else None
+        canonical = canonical_name(name, aliases, local_assignments) if name else None
         if canonical:
             parts = canonical.split(".")
             if (
@@ -1426,7 +1486,7 @@ def collect_call_facts(
                     repository_revision=repository_revision,
                     start=start,
                     end=end,
-                    anchor_kind=call_anchor_kind(canonical),
+                    anchor_kind=call_anchor_kind(canonical, unit_kind),
                 ),
             )
             if canonical == "fastapi.Depends":
@@ -1438,7 +1498,7 @@ def collect_call_facts(
                     repository_revision,
                     subject_unit_id,
                     aliases,
-                    assignments,
+                    local_assignments,
                     facts,
                 )
             elif canonical == "fastapi.HTTPException":
@@ -1539,7 +1599,7 @@ def collect_fastapi_http_exception_status_fact(
     )
 
 
-def call_anchor_kind(target: str) -> str:
+def call_anchor_kind(target: str, unit_kind: str) -> str:
     if target == "fastapi.Depends":
         return "fastapi_dependency"
     if target == "fastapi.HTTPException":
@@ -1551,6 +1611,8 @@ def call_anchor_kind(target: str) -> str:
         for session_type in SQLALCHEMY_SESSION_TYPES
     ):
         return "sqlalchemy_session_call"
+    if unit_kind == "fastapi_route" and is_application_call_target(target):
+        return "fastapi_service_call"
     return "call_target"
 
 
@@ -1752,6 +1814,7 @@ def analyze_source(
             )
             collect_call_facts(
                 item,
+                unit_by_node[id(item)]["kind"],
                 starts,
                 path,
                 content_hash_value,
@@ -1827,6 +1890,7 @@ def analyze_source(
                 )
                 collect_call_facts(
                     child,
+                    unit_by_node[id(child)]["kind"],
                     starts,
                     path,
                     content_hash_value,
