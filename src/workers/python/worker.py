@@ -804,6 +804,64 @@ def collect_parameter_roles(
     return roles
 
 
+def assigned_role_receivers(node: ast.AST) -> set[str]:
+    receivers: set[str] = set()
+    for child in ast.walk(node):
+        targets: list[ast.AST] = []
+        if isinstance(child, ast.Assign):
+            targets = list(child.targets)
+        elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
+            targets = [child.target]
+        for target in targets:
+            if name := dotted_name(target):
+                receivers.add(name)
+    return receivers
+
+
+def collect_instance_attribute_roles(
+    node: ast.ClassDef,
+    aliases: dict[str, str],
+) -> dict[str, str]:
+    roles: dict[str, str] = {}
+    for child in node.body:
+        if (
+            not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            or child.name != "__init__"
+        ):
+            continue
+        parameter_roles = collect_parameter_roles(child, aliases)
+        for statement in child.body:
+            targets: list[ast.AST] = []
+            if isinstance(statement, ast.Assign):
+                targets = list(statement.targets)
+            elif isinstance(statement, ast.AnnAssign):
+                targets = [statement.target]
+            else:
+                continue
+            role = None
+            value = getattr(statement, "value", None)
+            if isinstance(value, ast.Name):
+                role = parameter_roles.get(value.id)
+            if (
+                role is None
+                and isinstance(statement, ast.AnnAssign)
+                and isinstance(value, ast.Name)
+            ):
+                annotation = dotted_name(statement.annotation)
+                canonical = canonical_name(annotation, aliases, {}) if annotation else None
+                if canonical in SQLALCHEMY_SESSION_TYPES:
+                    role = canonical
+            for target in targets:
+                target_name = dotted_name(target)
+                if not target_name or not target_name.startswith("self."):
+                    continue
+                if role is None:
+                    roles.pop(target_name, None)
+                else:
+                    roles[target_name] = role
+    return roles
+
+
 def add_fact(facts: list[dict[str, Any]], new_fact: dict[str, Any]) -> None:
     target = new_fact.get("target")
     if target is not None and not is_safe_fact_target(target):
@@ -1151,6 +1209,7 @@ def collect_call_facts(
     facts: list[dict[str, Any]],
 ) -> None:
     parameter_roles = parameter_roles or {}
+    shadowed_receivers = assigned_role_receivers(node)
     calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
     calls.sort(key=lambda child: node_range(starts, child))
     for call in calls:
@@ -1160,11 +1219,13 @@ def collect_call_facts(
         if canonical:
             parts = canonical.split(".")
             if (
-                len(parts) == 2
-                and parts[0] in parameter_roles
-                and parts[1] in SQLALCHEMY_SESSION_METHODS
+                len(parts) >= 2
+                and ".".join(parts[:-1]) in parameter_roles
+                and ".".join(parts[:-1]) not in shadowed_receivers
+                and parts[-1] in SQLALCHEMY_SESSION_METHODS
             ):
-                canonical = f"{parameter_roles[parts[0]]}.{parts[1]}"
+                receiver = ".".join(parts[:-1])
+                canonical = f"{parameter_roles[receiver]}.{parts[-1]}"
         if canonical in {"sys.path.append", "sys.path.insert"}:
             add_fact(
                 facts,
@@ -1612,10 +1673,15 @@ def analyze_source(
                 assignments,
                 facts,
             )
+            instance_attribute_roles = collect_instance_attribute_roles(item, aliases)
             for child in item.body:
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 child_unit_id = unit_id(path, unit_by_node[id(child)])
+                parameter_roles = {
+                    **collect_parameter_roles(child, aliases),
+                    **instance_attribute_roles,
+                }
                 collect_decorator_facts(
                     child,
                     starts,
@@ -1636,7 +1702,7 @@ def analyze_source(
                     child_unit_id,
                     aliases,
                     assignments,
-                    collect_parameter_roles(child, aliases),
+                    parameter_roles,
                     facts,
                 )
 

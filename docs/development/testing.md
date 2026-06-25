@@ -200,7 +200,9 @@ allowed.
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors staying out of support derivation and support-target
   variation metadata, SQLAlchemy relationship and Session.add structural anchors
-  staying out of family support,
+  staying out of family support, bounded SQLAlchemy `self.session`/`self.db`
+  role propagation from `__init__`, and reassigned receivers not becoming exact
+  session-call anchors,
   low-support Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical

@@ -271,7 +271,9 @@ The default Python indexing path can now call the checked-in
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, SQLAlchemy mapped fields, `relationship(...)` calls,
-typed SQLAlchemy session calls including `add`, simple call targets, FastAPI
+typed SQLAlchemy session calls including `add` and bounded
+`__init__`-assigned `self.session`/`self.db` receiver propagation with
+same-method reassignment invalidation, simple call targets, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, `pytest.test`

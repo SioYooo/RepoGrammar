@@ -203,7 +203,9 @@ letting the worker build a bounded module and fixture context for the current
 parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
 SQLAlchemy mapped field and relationship anchors, typed SQLAlchemy session calls
-including `add`, simple calls, `pytest.test` test-function anchors, same-file
+including `add`, bounded `__init__`-assigned `self.session`/`self.db`
+receiver propagation with same-method reassignment invalidation, simple calls,
+`pytest.test` test-function anchors, same-file
 and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`

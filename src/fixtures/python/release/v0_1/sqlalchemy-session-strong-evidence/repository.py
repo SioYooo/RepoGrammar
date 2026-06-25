@@ -2,11 +2,14 @@ from sqlalchemy.orm import Session
 
 
 class UserRepository:
-    def list_users(self, session: Session):
-        return session.execute("select users")
+    def __init__(self, session: Session):
+        self.session = session
 
-    def list_accounts(self, session: Session):
-        return session.execute("select accounts")
+    def list_users(self):
+        return self.session.execute("select users")
 
-    def list_invoices(self, session: Session):
-        return session.execute("select invoices")
+    def list_accounts(self):
+        return self.session.execute("select accounts")
+
+    def list_invoices(self):
+        return self.session.execute("select invoices")

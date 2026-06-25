@@ -127,9 +127,12 @@ The current implementation covers the first structural slice only:
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
   `Session` and `AsyncSession` calls such as `session.execute(...)` and
-  `session.add(...)` to exact SQLAlchemy session targets. Relationship and
-  `add` anchors are effect/context metadata only and are not membership support
-  targets;
+  `session.add(...)` to exact SQLAlchemy session targets. The same bounded pass
+  also propagates `__init__` assignments such as `self.session = session` and
+  `self.db: AsyncSession = db` into later repository methods, while any
+  same-method reassignment of that receiver blocks canonicalization. Relationship
+  and `add` anchors are effect/context metadata only and are not membership
+  support targets;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,

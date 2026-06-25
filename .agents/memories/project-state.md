@@ -38,7 +38,10 @@
   schema/context/effect metadata and are not membership support targets.
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
-  metadata, not family membership support. A Rust `ports::python_provider`
+  metadata, not family membership support. SQLAlchemy session call anchors now
+  include bounded propagation from `__init__`-assigned `self.session`/`self.db`
+  attributes, with same-method receiver reassignment blocking
+  canonicalization. A Rust `ports::python_provider`
   contract now exists for future candidate-scoped provider requests,
   provenance assumptions, cache-key dimensions, and recoverable
   provider-unavailable `UNKNOWN`s, but Pyrefly/Pyright/RightTyper execution and

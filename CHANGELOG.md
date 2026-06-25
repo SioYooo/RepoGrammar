@@ -48,7 +48,9 @@
   `pytest.mark.parametrize` arguments as parametrize facts rather than
   fixture-injection UNKNOWNs, and labels Pydantic validator decorators.
   SQLAlchemy parser anchors now include `Mapped[...]`, `mapped_column(...)`,
-  and typed `Session`/`AsyncSession` call targets.
+  typed `Session`/`AsyncSession` call targets, and bounded propagation from
+  `__init__`-assigned `self.session`/`self.db` attributes into repository
+  methods with same-method receiver reassignment invalidation.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming

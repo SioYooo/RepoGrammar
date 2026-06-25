@@ -1724,6 +1724,18 @@ class UserRepository:
 
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
+
+class StoredSessionRepository:
+    def __init__(self, session: Session, db: AsyncSession):
+        self.session = session
+        self.db: AsyncSession = db
+
+    def commit_users(self):
+        self.session.commit()
+        return self.session.execute("select users")
+
+    async def rollback_accounts(self):
+        await self.db.rollback()
 "#;
         let report = PythonAstParser::default()
             .parse(document(source))
@@ -1780,8 +1792,52 @@ class UserRepository:
                 && fact.target.as_ref().map(SymbolId::as_str)
                     == Some("sqlalchemy.ext.asyncio.AsyncSession.execute")
         }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.commit")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.rollback")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("mapped_column(primary_key=True)"));
+    }
+
+    #[test]
+    fn cpython_frontend_drops_shadowed_sqlalchemy_instance_roles() {
+        let source = r#"
+from sqlalchemy.orm import Session
+
+class UserRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list_users(self):
+        self.session = object()
+        return self.session.execute("select users")
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.execute")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("return self.session.execute"));
     }
 
     #[test]

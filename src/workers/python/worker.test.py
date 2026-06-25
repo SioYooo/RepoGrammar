@@ -83,6 +83,18 @@ class UserRepository:
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
 
+class StoredSessionRepository:
+    def __init__(self, session: Session, db: AsyncSession):
+        self.session = session
+        self.db: AsyncSession = db
+
+    def commit_users(self):
+        self.session.commit()
+        return self.session.execute("select users")
+
+    async def rollback_accounts(self):
+        await self.db.rollback()
+
 def get_db():
     return object()
 
@@ -134,6 +146,18 @@ assert any(
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.commit"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.rollback"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
     for fact in parse_facts
 )
 assert any(
@@ -218,6 +242,34 @@ assert "list[UserOut]" not in json.dumps(parse_messages)
 assert "Depends(" not in json.dumps(parse_messages)
 assert "Depends(get_db" not in json.dumps(parse_messages)
 assert "HTTPException(" not in json.dumps(parse_messages)
+
+shadowed_session_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "repository.py",
+        "content_hash": "sha256:" + "d" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from sqlalchemy.orm import Session
+
+class UserRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list_users(self):
+        self.session = object()
+        return self.session.execute("select users")
+""",
+    }
+)
+shadowed_session_facts = shadowed_session_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.execute"
+    for fact in shadowed_session_facts
+)
+assert "return self.session.execute" not in json.dumps(shadowed_session_messages)
 
 indirect_parametrize_messages = run_worker(
     {
