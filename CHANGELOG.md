@@ -42,8 +42,11 @@
   persisted without launching a Python semantic worker; oversized context
   payloads fall back to contextless parsing. The worker now performs file-local
   simple FastAPI router/app alias propagation with same-name reassignment
-  invalidation. SQLAlchemy parser anchors now include `Mapped[...]`,
-  `mapped_column(...)`, and typed `Session`/`AsyncSession` call targets.
+  invalidation, emits structural FastAPI `Depends`/`HTTPException` anchors,
+  treats literal `pytest.mark.parametrize` arguments as parametrize facts rather
+  than fixture-injection UNKNOWNs, and labels Pydantic validator decorators.
+  SQLAlchemy parser anchors now include `Mapped[...]`, `mapped_column(...)`,
+  and typed `Session`/`AsyncSession` call targets.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming

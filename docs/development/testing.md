@@ -145,13 +145,15 @@ allowed.
   through `python3`, validate private parse-document JSON output, syntax-error
   diagnostics, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
-  `conftest.py` fixture hierarchy context, semantic-worker-compatible NDJSON
-  structural facts plus framework-role output, requested-project `conftest.py`
-  fixture hierarchy edges, file-local FastAPI router/app alias propagation with
-  same-name reassignment invalidation, typed `UNKNOWN` output for dynamic and
-  unresolved cases, oversized request rejection, unsafe path and symlink-escape
-  rejection, bounded semantic-mode source reads, and absence of source snippets,
-  absolute paths, or unsafe dynamic-import literal targets.
+  `conftest.py` fixture hierarchy context, FastAPI route/dependency/error
+  anchors, pytest parametrize decorator and literal argument anchors, Pydantic
+  validator anchors, semantic-worker-compatible NDJSON structural facts plus
+  framework-role output, requested-project `conftest.py` fixture hierarchy
+  edges, file-local FastAPI router/app alias propagation with same-name
+  reassignment invalidation, typed `UNKNOWN` output for dynamic and unresolved
+  cases, oversized request rejection, unsafe path and symlink-escape rejection,
+  bounded semantic-mode source reads, and absence of source snippets, absolute
+  paths, or unsafe dynamic-import literal targets.
 - Transitional release fixture smoke tests currently copy committed TS/JS source
   fixtures from `src/fixtures/typescript/release/v0_1/` and Python source
   fixtures from `src/fixtures/python/release/v0_1/` into temporary workspaces and
@@ -178,7 +180,8 @@ allowed.
   import resolution for unique module-level matches, ambiguous or missing
   repo-local import `UNKNOWN`, `sys.path` mutation
   `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
-  facts and typed `UNKNOWN`, persisted project-config facts staying out of
+  facts including FastAPI dependency/error, pytest parametrize, and Pydantic
+  validator anchors, typed `UNKNOWN`, persisted project-config facts staying out of
   claim-input readiness, heuristic framework-role facts staying out of family
   claims, raw parser-origin facts staying out of family construction,
   exact-anchor derived support facts producing no-worker direct FastAPI,

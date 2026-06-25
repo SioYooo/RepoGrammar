@@ -52,15 +52,21 @@ parse_messages = run_worker(
         "content_hash": "sha256:" + "0" * 64,
         "repository_revision": "UNKNOWN",
         "text": """
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+import pytest
 
 router = APIRouter()
 
 class UserOut(BaseModel):
     id: int
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value):
+        return value
 
 class Base(DeclarativeBase):
     pass
@@ -76,11 +82,12 @@ class UserRepository:
         return await db.execute("select accounts")
 
 @router.get("/users")
-async def list_users():
-    return []
+async def list_users(dependency=Depends(lambda: object())):
+    raise HTTPException(status_code=404)
 
-def test_users(client):
-    assert client.get("/users").status_code == 200
+@pytest.mark.parametrize("status", [200])
+def test_users(client, status):
+    assert client.get("/users").status_code == status
 """,
     }
 )
@@ -114,7 +121,42 @@ assert any(
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
     for fact in parse_facts
 )
-assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "fastapi.Depends"
+    and "python_anchor_kind=fastapi_dependency" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "fastapi.HTTPException"
+    and "python_anchor_kind=fastapi_http_exception" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field_validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.mark.parametrize"
+    and "python_anchor_kind=pytest_parametrize" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.status"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in parse_facts
+)
 assert any(fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "client.get" for fact in parse_facts)
 assert any(
     fact["fact_kind"] == "SYMBOL"
@@ -138,6 +180,50 @@ for fact in parse_facts:
     assert "end_byte" in fact["evidence"]
 assert "from fastapi" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
+assert "Depends(" not in json.dumps(parse_messages)
+assert "HTTPException(" not in json.dumps(parse_messages)
+
+indirect_parametrize_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "test_indirect.py",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import pytest
+
+@pytest.mark.parametrize("client,status", [("api", 200)], indirect=["client"])
+def test_indirect_list(client, status):
+    assert status == 200
+
+@pytest.mark.parametrize("resource", ["db"], indirect=True)
+def test_indirect_all(resource):
+    assert resource
+""",
+    }
+)
+assert len(indirect_parametrize_messages) == 1
+indirect_facts = indirect_parametrize_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.status"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in indirect_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "pytest.parametrize.client"
+    for fact in indirect_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "pytest.parametrize.resource"
+    for fact in indirect_facts
+)
+assert sum(
+    1
+    for fact in indirect_facts
+    if fact["fact_kind"] == "UNKNOWN" and fact["target"] == "PytestFixtureInjection"
+) >= 2
 
 settings_parse_messages = run_worker(
     {

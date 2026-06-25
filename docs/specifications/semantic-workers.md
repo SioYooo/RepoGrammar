@@ -264,10 +264,13 @@ The default Python indexing path can now call the checked-in
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, SQLAlchemy mapped fields, typed SQLAlchemy session calls,
-simple call targets, `pytest.test` test-function anchors, same-file pytest
-fixture edges, path-derived module names, and CPython `symtable` scope anchors,
-plus typed `UNKNOWN` facts for dynamic import, unresolved import, framework
-magic, and unresolved pytest fixture injection cases. Default indexing passes the
+simple call targets, FastAPI `Depends`/`HTTPException` calls, `pytest.test`
+test-function anchors, same-file pytest fixture edges, literal pytest
+parametrize argument anchors, Pydantic validator decorators, path-derived module
+names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for
+dynamic import, unresolved import, framework magic, and unresolved pytest
+fixture injection cases. Literal pytest parametrize arguments are structural
+parametrize facts, not unresolved fixture injections. Default indexing passes the
 discovered repo-relative `.py` inventory plus bounded, hash-checked discovered
 `conftest.py` file contents into that private parse-document request, so unique
 repo-local module imports and parent-directory pytest fixture bindings can be

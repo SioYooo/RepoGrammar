@@ -3,7 +3,9 @@
 - Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
   discovery, CPython AST structural indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
-  structural scope anchors, typed dynamic/unresolved `UNKNOWN` facts, private
+  structural scope anchors, FastAPI dependency/error anchors, pytest
+  parametrize argument anchors, Pydantic validator anchors, typed
+  dynamic/unresolved `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
   import context from discovered `.py` inventory, default-indexed root
@@ -53,7 +55,10 @@ TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, `pytest.test` test-function anchors, same-file pytest
 fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
-internal parser-origin semantic facts.
+internal parser-origin semantic facts. It also labels FastAPI
+`Depends`/`HTTPException`, literal pytest parametrize arguments, and Pydantic
+validator decorators as structural parser-origin anchors without upgrading them
+to provider-backed semantics.
 Default parser-mode indexing now also carries bounded discovered `conftest.py`
 context into the CPython parse-document request so parent-directory pytest
 fixture-edge facts can be persisted structurally; those facts are still not
@@ -103,8 +108,10 @@ code-unit extraction, CPython AST-backed Python structural code-unit
 extraction, worker-local Python structural fact payloads for import bindings,
 decorator anchors, class bases, simple call targets, `pytest.test`
 test-function anchors, same-file pytest fixture edges, parent-directory
-`conftest.py` fixture hierarchy edges, and typed dynamic/unresolved `UNKNOWN`
-cases, syntax-origin
+`conftest.py` fixture hierarchy edges, FastAPI dependency/error anchors, pytest
+parametrize argument anchors that are not treated as fixture injection UNKNOWNs,
+Pydantic validator anchors, and typed dynamic/unresolved `UNKNOWN` cases,
+syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config

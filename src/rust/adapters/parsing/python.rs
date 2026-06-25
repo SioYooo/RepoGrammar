@@ -1229,11 +1229,20 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
         "import_binding"
             | "dynamic_import_literal"
             | "decorator_binding"
+            | "fastapi_dependency"
+            | "fastapi_http_exception"
+            | "fastapi_route_decorator"
             | "class_base"
             | "call_target"
+            | "pydantic_validator"
+            | "pytest_fixture_decorator"
+            | "pytest_parametrize"
+            | "pytest_parametrize_arg"
             | "pytest_test_function"
             | "pytest_fixture_edge"
             | "pytest_conftest_fixture_edge"
+            | "sqlalchemy_select"
+            | "sqlalchemy_session_call"
             | "sqlalchemy_mapped_field"
             | "sqlalchemy_mapped_column"
             | "module_name"
@@ -1360,18 +1369,26 @@ mod tests {
     fn cpython_frontend_extracts_python_units_and_facts_without_snippets() {
         let source = r#"
 from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, field_validator
+import pytest
 router = APIRouter()
 
 class UserOut(BaseModel):
     id: int
 
-@router.get("/users")
-async def list_users():
-    return []
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value):
+        return value
 
-def test_users(client):
-    assert client.get("/users").status_code == 200
+@router.get("/users")
+async def list_users(dependency=Depends(lambda: object())):
+    raise HTTPException(status_code=404)
+
+@pytest.mark.parametrize("status", [200])
+def test_users(client, status):
+    assert client.get("/users").status_code == status
 "#;
         let report = PythonAstParser::default()
             .parse(document(source))
@@ -1418,6 +1435,50 @@ def test_users(client):
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter.get")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_route_decorator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.Depends")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.HTTPException")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_http_exception")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_validator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.mark.parametrize")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_parametrize")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.status")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_parametrize_arg")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
@@ -1455,7 +1516,53 @@ def test_users(client):
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("@router.get"));
+        assert!(!debug.contains("Depends("));
+        assert!(!debug.contains("HTTPException("));
         assert!(!debug.contains("assert client.get"));
+    }
+
+    #[test]
+    fn cpython_frontend_preserves_indirect_parametrize_fixture_unknowns() {
+        let source = r#"
+import pytest
+
+@pytest.mark.parametrize("client,status", [("api", 200)], indirect=["client"])
+def test_indirect_list(client, status):
+    assert status == 200
+
+@pytest.mark.parametrize("resource", ["db"], indirect=True)
+def test_indirect_all(resource):
+    assert resource
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.status")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_parametrize_arg")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.client")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.resource")
+        }));
+        let fixture_unknowns = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+            })
+            .count();
+        assert!(fixture_unknowns >= 2);
     }
 
     #[test]
@@ -1485,7 +1592,7 @@ def list_users():
                 && fact
                     .assumptions
                     .iter()
-                    .any(|assumption| assumption == "python_anchor_kind=decorator_binding")
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_route_decorator")
         }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("@v1.get"));

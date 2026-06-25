@@ -82,7 +82,8 @@ The current implementation covers the first structural slice only:
 - CPython `ast` parse-document worker output for code-unit extraction;
 - CPython `ast` structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, pytest test-function anchors, same-file
-  pytest fixture edges, and typed dynamic/unresolved `UNKNOWN` facts;
+  pytest fixture edges, literal pytest parametrize argument anchors, and typed
+  dynamic/unresolved `UNKNOWN` facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -113,6 +114,12 @@ The current implementation covers the first structural slice only:
   `router = APIRouter(); api = router`, with same-name top-level reassignment
   removing that name's role so stale aliases do not produce exact canonical
   anchors;
+- framework-specific structural anchors for FastAPI route decorators,
+  `Depends(...)`, and `HTTPException(...)`, pytest `fixture` and
+  `mark.parametrize` decorators plus literal parametrize arguments, and
+  Pydantic validator decorators. These remain CPython `ast` structural facts;
+  they do not become provider-backed semantic facts and do not make parametrized
+  pytest arguments look like unresolved fixture injections;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations or `mapped_column(...)` calls, plus bounded
   parameter-role propagation that canonicalizes typed `Session` and

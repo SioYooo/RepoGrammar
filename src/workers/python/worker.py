@@ -38,6 +38,12 @@ SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.orm.Session",
     "sqlalchemy.ext.asyncio.AsyncSession",
 }
+PYDANTIC_VALIDATOR_TARGETS = {
+    "pydantic.computed_field",
+    "pydantic.field_validator",
+    "pydantic.model_validator",
+    "pydantic.validator",
+}
 
 
 def read_stdin() -> str:
@@ -868,20 +874,103 @@ def collect_decorator_facts(
         if not name:
             continue
         start, end = node_range(starts, decorator)
+        target = canonical_name(name, aliases, assignments)
         add_fact(
             facts,
             structural_fact(
                 kind="SYMBOL",
                 subject_unit_id=subject_unit_id,
-                target=canonical_name(name, aliases, assignments),
+                target=target,
                 path=path,
                 content_hash_value=content_hash_value,
                 repository_revision=repository_revision,
                 start=start,
                 end=end,
-                anchor_kind="decorator_binding",
+                anchor_kind=decorator_anchor_kind(target),
             ),
         )
+
+
+def decorator_anchor_kind(target: str) -> str:
+    parts = target.split(".")
+    if target in {"pytest.fixture", "fixture"}:
+        return "pytest_fixture_decorator"
+    if target == "pytest.mark.parametrize":
+        return "pytest_parametrize"
+    if target in PYDANTIC_VALIDATOR_TARGETS:
+        return "pydantic_validator"
+    if (
+        len(parts) >= 3
+        and ".".join(parts[:-1]) in {"fastapi.FastAPI", "fastapi.APIRouter"}
+        and parts[-1] in ROUTE_METHODS
+    ):
+        return "fastapi_route_decorator"
+    return "decorator_binding"
+
+
+def pytest_parametrize_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+) -> set[str]:
+    names: set[str] = set()
+    for decorator in getattr(node, "decorator_list", []):
+        if not isinstance(decorator, ast.Call):
+            continue
+        name = dotted_name(decorator.func)
+        if not name or canonical_name(name, aliases, assignments) != "pytest.mark.parametrize":
+            continue
+        first_arg = decorator.args[0] if decorator.args else None
+        decorator_names = pytest_literal_name_set(first_arg)
+        if not decorator_names:
+            continue
+        indirect_names = pytest_parametrize_indirect_names(decorator, decorator_names)
+        names.update(decorator_names - indirect_names)
+    return names
+
+
+def pytest_literal_name_set(value: ast.AST | None) -> set[str]:
+    names: set[str] = set()
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        names.update(
+            item.strip()
+            for item in value.value.split(",")
+            if is_python_identifier(item.strip())
+        )
+    elif isinstance(value, (ast.Tuple, ast.List)):
+        for item in value.elts:
+            if (
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and is_python_identifier(item.value)
+            ):
+                names.add(item.value)
+    return names
+
+
+def pytest_parametrize_indirect_names(decorator: ast.Call, names: set[str]) -> set[str]:
+    for keyword in decorator.keywords:
+        if keyword.arg != "indirect":
+            continue
+        value = keyword.value
+        if isinstance(value, ast.Constant):
+            if value.value is True:
+                return set(names)
+            if value.value is False or value.value is None:
+                return set()
+            if isinstance(value.value, str):
+                return pytest_literal_name_set(value)
+        if isinstance(value, (ast.Tuple, ast.List)):
+            indirect_names = pytest_literal_name_set(value)
+            if all(
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and is_python_identifier(item.value)
+                for item in value.elts
+            ):
+                return indirect_names
+        return set(names)
+    return set()
 
 
 def collect_class_base_facts(
@@ -1082,9 +1171,24 @@ def collect_call_facts(
                     repository_revision=repository_revision,
                     start=start,
                     end=end,
-                    anchor_kind="call_target",
+                    anchor_kind=call_anchor_kind(canonical),
                 ),
             )
+
+
+def call_anchor_kind(target: str) -> str:
+    if target == "fastapi.Depends":
+        return "fastapi_dependency"
+    if target == "fastapi.HTTPException":
+        return "fastapi_http_exception"
+    if target == "sqlalchemy.select":
+        return "sqlalchemy_select"
+    if any(
+        target.startswith(f"{session_type}.")
+        for session_type in SQLALCHEMY_SESSION_TYPES
+    ):
+        return "sqlalchemy_session_call"
+    return "call_target"
 
 
 def collect_fixture_facts(
@@ -1096,6 +1200,7 @@ def collect_fixture_facts(
     subject_unit_id: str,
     fixture_names: set[str],
     conftest_fixture_names: set[str] | None,
+    parametrize_names: set[str] | None,
     facts: list[dict[str, Any]],
 ) -> None:
     if not node.name.startswith("test_"):
@@ -1116,6 +1221,7 @@ def collect_fixture_facts(
         ),
     )
     conftest_fixture_names = conftest_fixture_names or set()
+    parametrize_names = parametrize_names or set()
     for arg in node.args.args:
         if arg.arg == "self":
             continue
@@ -1148,6 +1254,21 @@ def collect_fixture_facts(
                     start=start,
                     end=end,
                     anchor_kind="pytest_conftest_fixture_edge",
+                ),
+            )
+        elif arg.arg in parametrize_names:
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="SYMBOL",
+                    subject_unit_id=subject_unit_id,
+                    target=f"pytest.parametrize.{arg.arg}",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="pytest_parametrize_arg",
                 ),
             )
         else:
@@ -1263,6 +1384,7 @@ def analyze_source(
                 subject_unit_id,
                 fixture_names,
                 conftest_fixture_names,
+                pytest_parametrize_names(item, aliases, assignments),
                 facts,
             )
             collect_call_facts(
