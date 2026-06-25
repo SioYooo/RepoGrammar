@@ -83,6 +83,12 @@ The current implementation covers the first structural slice only:
 - CPython `ast` structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, same-file pytest fixture edges, and typed
   dynamic/unresolved `UNKNOWN` facts;
+- path-derived module-name anchors and CPython `symtable` structural scope
+  anchors for imported, assigned, and namespace symbols;
+- a private `tomllib` project-config parser mode for safe `pyproject.toml`
+  summaries, including sanitized project name, safe source roots, recognized
+  tool sections, and typed config `UNKNOWN` when parsing support or valid config
+  is unavailable;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -114,10 +120,10 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not implement repo-local import resolution, `symtable` scope
-facts, `tomllib` configuration facts, Pyrefly, Pyright, provider cache keys,
-usage propagation, call hierarchy recovery, Tree-sitter fallback, runtime
-observation, Python family claims, or source snippet retrieval.
+This slice does not implement repo-local import resolution, persisted project
+configuration facts, Pyrefly, Pyright, provider cache keys, usage propagation,
+call hierarchy recovery, Tree-sitter fallback, runtime observation, Python
+family claims, or source snippet retrieval.
 
 ### Layer 0: Authoritative Frontend
 

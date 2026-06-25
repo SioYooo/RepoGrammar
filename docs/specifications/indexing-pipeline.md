@@ -107,11 +107,14 @@ Python discovery currently discovers `.py` files and skips common Python
 virtual-environment, cache, and dependency directories such as `venv`,
 `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
 `site-packages` without executing repository code. Package-root discovery,
-repo-local import resolution, and safe project-configuration extraction remain
-deferred. The implemented Python frontend uses CPython `ast` for the first
-structural slice. Future slices should add `symtable` and `tomllib` facts, plus
-Tree-sitter as tolerant structural fallback only. Python syntax-only facts still
-cannot become semantic claims or family evidence by themselves.
+repo-local import resolution, and persisted project-configuration facts remain
+deferred. The implemented Python frontend uses CPython `ast` for code-unit
+extraction, CPython `symtable` for structural scope anchors, and a private
+standard-library `tomllib` parser mode for sanitized `pyproject.toml` summaries
+that are not yet part of default indexing. Future slices should add repo-local
+import resolution and Tree-sitter as tolerant structural fallback only. Python
+syntax-only facts still cannot become semantic claims or family evidence by
+themselves.
 
 ## Tree-sitter parsing
 
@@ -187,11 +190,14 @@ parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. That
 worker pass also produces repo-relative structural fact payloads for imports,
 decorator anchors, class bases, simple calls, same-file pytest fixture edges,
-and typed dynamic/unresolved `UNKNOWN` cases. The Rust parser adapter now
-validates and persists those payloads as internal `STRUCTURAL` or `UNKNOWN`
-semantic fact records tied to the same code-unit evidence. They are not passed
-to the family builder and remain blocked from claim-input readiness as
-insufficient support. Its semantic-worker-compatible NDJSON mode can emit those
+path-derived module names, CPython `symtable` scope anchors, and typed
+dynamic/unresolved `UNKNOWN` cases. The Rust parser adapter now validates and
+persists those payloads as internal `STRUCTURAL` or `UNKNOWN` semantic fact
+records tied to the same code-unit evidence. They are not passed to the family
+builder and remain blocked from claim-input readiness as insufficient support.
+Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
+with `tomllib` when available, but those summaries are not yet persisted by
+default indexing. Its semantic-worker-compatible NDJSON mode can emit those
 structural facts plus conservative
 `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units,
 but the product indexing path does not launch a Python semantic worker

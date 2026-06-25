@@ -2,18 +2,21 @@
 
 - Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
   discovery, CPython AST structural indexing slice, persisted internal Python
-  structural anchors and typed dynamic/unresolved `UNKNOWN` facts, structural IR
-  storage, opt-in syntax-origin framework-role fact storage, semantic fact
-  ingestion, internal active claim-input snapshot reads, semantic-fact
-  freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
-  serving, and narrow global explicit-target installer writes. ADR-0011 makes
+  structural anchors, path-derived module-name anchors, CPython `symtable`
+  structural scope anchors, typed dynamic/unresolved `UNKNOWN` facts, private
+  `tomllib` project-config summaries, structural IR storage, opt-in
+  syntax-origin framework-role fact storage, semantic fact ingestion, internal
+  active claim-input snapshot reads, semantic-fact freshness/readiness gating,
+  FamilyStore-backed query reads, read-only MCP serving, and narrow global
+  explicit-target installer writes. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current
   Python slice is structural/framework-heuristic only; parser-origin Python
   facts are persisted but blocked from family construction and claim-input
-  readiness. Repo-local import resolution, Pyrefly/Pyright, provider-backed
-  canonical evidence, and Python family claims remain deferred.
-- Last updated: 2026-06-25
+  readiness. Project-config summaries are private worker output and are not
+  persisted by default indexing. Repo-local import resolution, Pyrefly/Pyright,
+  provider-backed canonical evidence, and Python family claims remain deferred.
+- Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
@@ -131,7 +134,7 @@ from family-claim input as insufficient support without stronger compatible
 evidence.
 
 Tree-sitter integration, TypeScript compiler API integration, Python repo-local
-import resolution, safe Python project-configuration extraction,
+import resolution, persisted safe Python project-configuration facts,
 Pyrefly/Pyright provider execution,
 provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
@@ -164,8 +167,8 @@ canonical specs.
 
 ## Revalidation conditions
 
-Update this memory after Python structural-anchor persistence, Python
-import/module graph, `symtable`/`tomllib` configuration facts, Pyrefly/Pyright
-provider integration, Tree-sitter fallback, TypeScript compiler API
-integration, full family-claim gates, broader installer writes, production
+Update this memory after Python repo-local import resolution, persisted
+project-configuration facts, Pyrefly/Pyright provider integration,
+Tree-sitter fallback, TypeScript compiler API integration, full
+family-claim gates, broader installer writes, production
 family evidence, or stable MCP API support lands.

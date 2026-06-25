@@ -86,6 +86,10 @@ assert "sqlalchemy_model" in unit_kinds
 assert "async_function" not in unit_kinds
 parse_facts = parse_messages[0]["facts"]
 assert any(fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "fastapi.APIRouter" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "app" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.imported.APIRouter" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.namespace.UserOut" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.assigned.router" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.DeclarativeBase" for fact in parse_facts)
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get" for fact in parse_facts)
@@ -175,6 +179,68 @@ assert any(
     for fact in unsafe_literal_import[0]["facts"]
 )
 
+config_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "pyproject.toml",
+        "content_hash": "sha256:" + "4" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+[project]
+name = "demo-api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "../secret"]
+pythonpath = ["src", "/tmp/secret"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src/lib", "C:/secret"]
+
+[tool.pyrefly]
+project_includes = ["src"]
+""",
+    }
+)
+assert len(config_messages) == 1
+assert config_messages[0]["mode"] == "parse_project_config"
+assert config_messages[0]["path"] == "pyproject.toml"
+if sys.version_info >= (3, 11):
+    assert config_messages[0]["config"]["project_name"] == "demo-api"
+    assert config_messages[0]["config"]["source_roots"] == ["src", "src/lib", "tests"]
+    assert config_messages[0]["config"]["tool_sections"] == ["pyrefly", "pyright", "pytest"]
+    assert config_messages[0]["unknowns"] == []
+else:
+    assert config_messages[0]["config"]["source_roots"] == []
+    assert config_messages[0]["unknowns"] == [
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+    ]
+serialized_config = json.dumps(config_messages)
+assert "../secret" not in serialized_config
+assert "/tmp/secret" not in serialized_config
+assert "C:/secret" not in serialized_config
+
+bad_config_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "pyproject.toml",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "[project\nname = 'broken'\n",
+    }
+)
+if sys.version_info >= (3, 11):
+    assert bad_config_messages[0]["unknowns"] == [
+        {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
+    ]
+else:
+    assert bad_config_messages[0]["unknowns"] == [
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+    ]
+assert "[project" not in json.dumps(bad_config_messages)
+
 with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(
         """
@@ -201,6 +267,15 @@ def create_user():
     serialized = json.dumps(messages)
     assert root not in serialized
     assert "@router.post" not in serialized
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")
+    Path(root, "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+    first = valid_request(root)
+    first["changed_files"] = ["b.py", "a.py"]
+    second = valid_request(root)
+    second["changed_files"] = ["a.py", "b.py"]
+    assert run_worker(first) == run_worker(second)
 
 if hasattr(os, "symlink"):
     with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:

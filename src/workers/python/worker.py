@@ -13,8 +13,14 @@ import hashlib
 import json
 import re
 import sys
+import symtable
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11.
+    tomllib = None
 
 PROTOCOL_VERSION = 1
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
@@ -25,6 +31,7 @@ MAX_PATH_CHARS = 4096
 MAX_SOURCE_BYTES = 1_048_576
 MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
+MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 
 
@@ -167,6 +174,22 @@ def dotted_name(node: ast.AST) -> str | None:
 def slug(value: str) -> str:
     lowered = value.lower()
     return re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_") or "anonymous"
+
+
+def is_python_identifier(value: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+
+
+def module_name_from_path(path: str) -> str | None:
+    if not path.endswith(".py"):
+        return None
+    without_suffix = path[:-3]
+    parts = without_suffix.split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    if not parts or not all(is_python_identifier(part) for part in parts):
+        return None
+    return ".".join(parts)
 
 
 def decorator_names(node: ast.AST) -> list[str]:
@@ -479,6 +502,67 @@ def add_fact(facts: list[dict[str, Any]], new_fact: dict[str, Any]) -> None:
         facts.append(new_fact)
 
 
+def collect_module_identity_and_scope_facts(
+    tree: ast.Module,
+    path: str,
+    source: str,
+    content_hash_value: str,
+    repository_revision: str,
+    module_unit_id: str,
+    facts: list[dict[str, Any]],
+) -> None:
+    end = len(source.encode("utf-8"))
+    module_name = module_name_from_path(path)
+    if module_name and is_safe_fact_target(module_name):
+        add_fact(
+            facts,
+            structural_fact(
+                kind="SYMBOL",
+                subject_unit_id=module_unit_id,
+                target=module_name,
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=0,
+                end=end,
+                anchor_kind="module_name",
+            ),
+        )
+    try:
+        table = symtable.symtable(source, path, "exec")
+    except (SyntaxError, ValueError, TypeError):
+        return
+    for name in sorted(table.get_identifiers()):
+        if not is_python_identifier(name):
+            continue
+        symbol = table.lookup(name)
+        if symbol.is_imported():
+            scope_kind = "scope_imported"
+            target = f"scope.imported.{name}"
+        elif symbol.is_namespace():
+            scope_kind = "scope_namespace"
+            target = f"scope.namespace.{name}"
+        elif symbol.is_assigned():
+            scope_kind = "scope_assigned"
+            target = f"scope.assigned.{name}"
+        else:
+            continue
+        add_fact(
+            facts,
+            structural_fact(
+                kind="SYMBOL",
+                subject_unit_id=module_unit_id,
+                target=target,
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=0,
+                end=end,
+                anchor_kind=scope_kind,
+            ),
+        )
+
+
 def collect_decorator_facts(
     node: ast.AST,
     starts: list[int],
@@ -721,6 +805,15 @@ def analyze_source(
     )
     for item in import_facts:
         add_fact(facts, item)
+    collect_module_identity_and_scope_facts(
+        tree,
+        path,
+        source,
+        content_hash_value,
+        repository_revision,
+        module_unit_id,
+        facts,
+    )
     assignments = collect_assignment_roles(tree, aliases)
     fixture_names = {
         item.name
@@ -880,6 +973,96 @@ def parse_document(payload: dict[str, Any]) -> int:
     return 0
 
 
+def safe_project_name(value: Any) -> str | None:
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value):
+        return value
+    return None
+
+
+def config_string_list(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    for item in values:
+        if isinstance(item, str) and is_safe_repo_relative_path(item):
+            result.append(item)
+    return result
+
+
+def parse_project_config(payload: dict[str, Any]) -> int:
+    if set(payload) != {
+        "protocol_version",
+        "mode",
+        "path",
+        "content_hash",
+        "repository_revision",
+        "text",
+    }:
+        return 2
+    if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_project_config":
+        return 2
+    if not is_safe_repo_relative_path(payload.get("path")) or not is_strict_content_hash(payload.get("content_hash")):
+        return 2
+    text = payload.get("text")
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_CONFIG_TEXT_BYTES:
+        return 2
+    unknowns: list[dict[str, str]] = []
+    config = {
+        "project_name": None,
+        "source_roots": [],
+        "tool_sections": [],
+    }
+    if tomllib is None:
+        unknowns.append(
+            {
+                "reason": "MissingDependency",
+                "affected_claim": "python_project_config",
+            }
+        )
+    else:
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            unknowns.append(
+                {
+                    "reason": "MissingProjectConfig",
+                    "affected_claim": "python_project_config",
+                }
+            )
+        else:
+            project = data.get("project") if isinstance(data, dict) else None
+            if isinstance(project, dict):
+                config["project_name"] = safe_project_name(project.get("name"))
+            tool = data.get("tool") if isinstance(data, dict) else None
+            if isinstance(tool, dict):
+                config["tool_sections"] = sorted(
+                    section
+                    for section in ["pytest", "pyrefly", "pyright"]
+                    if isinstance(tool.get(section), dict)
+                )
+                roots: set[str] = set()
+                pytest_config = tool.get("pytest")
+                if isinstance(pytest_config, dict):
+                    ini_options = pytest_config.get("ini_options")
+                    if isinstance(ini_options, dict):
+                        roots.update(config_string_list(ini_options.get("testpaths")))
+                        roots.update(config_string_list(ini_options.get("pythonpath")))
+                pyright_config = tool.get("pyright")
+                if isinstance(pyright_config, dict):
+                    roots.update(config_string_list(pyright_config.get("include")))
+                    roots.update(config_string_list(pyright_config.get("extraPaths")))
+                config["source_roots"] = sorted(roots)
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "mode": "parse_project_config",
+            "path": payload["path"],
+            "config": config,
+            "unknowns": unknowns,
+        }
+    )
+    return 0
+
+
 def validate_request(payload: Any) -> bool:
     if not isinstance(payload, dict) or set(payload) != {
         "protocol_version",
@@ -1015,6 +1198,8 @@ def main() -> int:
         return 0
     if isinstance(payload, dict) and payload.get("mode") == "parse_document":
         return parse_document(payload)
+    if isinstance(payload, dict) and payload.get("mode") == "parse_project_config":
+        return parse_project_config(payload)
     return analyze_project(payload)
 
 

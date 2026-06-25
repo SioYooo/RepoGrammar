@@ -24,7 +24,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/test_support/` | Shared deterministic Rust test helpers | `docs/development/testing.md` |
 | `src/rust/integration_tests/` | Crate-level Rust integration-style tests | `docs/development/testing.md` |
 | `src/workers/typescript/` | Transitional TypeScript semantic worker executable stub and future compiler-backed worker | `docs/specifications/semantic-workers.md` |
-| `src/workers/python/` | CPython AST-backed Python worker for private parse-document extraction plus conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
+| `src/workers/python/` | CPython `ast`/`symtable`-backed Python worker for private parse-document extraction, private `tomllib` project-config summaries, and conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
 | `src/fixtures/typescript/` | TypeScript source fixtures | `docs/development/testing.md` |
 | `src/fixtures/python/` | Future Python v0.1 source fixtures | `docs/development/testing.md`, `docs/specifications/python-analysis.md` |

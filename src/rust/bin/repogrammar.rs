@@ -1515,6 +1515,30 @@ def test_users(client):
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "app.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("app")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("scope.imported.APIRouter")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("scope.namespace.UserOut")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "app.py"
                 && fact.kind == "TYPE"
                 && fact.target.as_deref() == Some("pydantic.BaseModel")
                 && fact.origin_engine == "python"

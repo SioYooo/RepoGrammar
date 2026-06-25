@@ -27,10 +27,11 @@
   heuristic smoke output, without running repository code or provider tools.
 - Python worker structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, same-file pytest fixture edges, and typed
-  dynamic/unresolved `UNKNOWN` cases. Default indexing now validates and
-  persists those facts as internal parser-origin `STRUCTURAL`/`UNKNOWN`
-  semantic facts while keeping them out of family construction and CLI/MCP
-  family evidence.
+  dynamic/unresolved `UNKNOWN` cases, now including path-derived module-name
+  anchors, CPython `symtable` structural scope anchors, and a private
+  `tomllib` project-config summary mode. Default indexing validates and
+  persists source-tied parser-origin `STRUCTURAL`/`UNKNOWN` facts while keeping
+  them out of family construction and CLI/MCP family evidence.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

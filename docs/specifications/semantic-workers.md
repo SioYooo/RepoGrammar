@@ -263,18 +263,23 @@ The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
-anchors, class bases, simple call targets, and same-file pytest fixture edges,
-plus typed `UNKNOWN` facts for dynamic import, unresolved import, framework
-magic, and unresolved pytest fixture injection cases. The default product
-indexing path validates and stores those private parse-document payloads as
-internal parser-origin semantic facts with `STRUCTURAL` or `UNKNOWN` certainty,
-but does not expose them through CLI/MCP query commands and does not pass them
-to family construction. The same Python worker
+anchors, class bases, simple call targets, same-file pytest fixture edges,
+path-derived module names, and CPython `symtable` scope anchors, plus typed
+`UNKNOWN` facts for dynamic import, unresolved import, framework magic, and
+unresolved pytest fixture injection cases. The default product indexing path
+validates and stores those private parse-document payloads as internal
+parser-origin semantic facts with `STRUCTURAL` or `UNKNOWN` certainty, but does
+not expose them through CLI/MCP query commands and does not pass them to family
+construction. The worker also has a private `parse_project_config` mode that
+uses standard-library `tomllib` when available to return sanitized
+`pyproject.toml` summaries and typed project-config `UNKNOWN` values; this mode
+is not yet wired into default indexing or family claims. The same Python worker
 has a semantic-worker-compatible NDJSON mode that emits those structural facts
 alongside conservative Python framework-role heuristic facts for direct worker
 smoke testing. The product runtime does not separately launch it as a Pyrefly,
-Pyright, import-resolution, usage-propagation, or call-hierarchy provider, and
-does not expose these worker-local facts through CLI/MCP query commands.
+Pyright, repo-local import-resolution, usage-propagation, or call-hierarchy
+provider, and does not expose these worker-local facts through CLI/MCP query
+commands.
 Python worker tests run under `python3` and assert parseable JSON/NDJSON,
 repo-relative paths, strict content hashes, no source snippets, invalid path
 rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,

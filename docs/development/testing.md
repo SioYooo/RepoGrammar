@@ -158,14 +158,16 @@ allowed.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
-  persisted parser-origin structural facts and typed `UNKNOWN`, heuristic
-  framework-role facts staying out of family claims, parser-origin facts
-  staying out of family construction, Python release fixtures preserving
+  path-derived module-name anchors, CPython `symtable` scope anchors, private
+  `tomllib` project-config summaries, persisted parser-origin structural facts
+  and typed `UNKNOWN`, heuristic framework-role facts staying out of family
+  claims, parser-origin facts staying out of family construction, Python
+  release fixtures preserving
   `UNKNOWN` by default, test-only strong support facts proving family read paths
   only when compatible `SEMANTIC` evidence is injected, stale evidence fallback,
   and typed canonical framework identities rather than framework-name substring
   matching. Future Python slices must add
-  coverage for `symtable`/`tomllib`, Tree-sitter
+  coverage for repo-local import resolution, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
   `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,

@@ -45,15 +45,17 @@ local Python analysis for recurring repository pattern families in:
 
 The first Python implementation phase follows the claim-driven selective
 cascade in `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
-The implemented slice covers CPython `ast` structural candidates and
-framework-role heuristics only, plus committed Python release fixtures and
-product smoke tests that preserve no-claim defaults unless compatible
-test-injected `SEMANTIC` fixture evidence is present. Subsequent slices should
-add `symtable` and `tomllib` facts, selective Pyrefly provider queries for
-plausible family candidates, Pyright cross-checks only for claim-upgrading
-facts, bounded framework-role propagation, target-centered call recovery,
-EC-MVFI-lite family induction, and typed `UNKNOWN` governance. The canonical
-algorithm contract is `docs/specifications/python-analysis.md`.
+The implemented slice covers CPython `ast` structural candidates, path-derived
+module anchors, CPython `symtable` structural scope anchors, private
+`tomllib` project-config summaries, and framework-role heuristics only, plus
+committed Python release fixtures and product smoke tests that preserve
+no-claim defaults unless compatible test-injected `SEMANTIC` fixture evidence is
+present. Subsequent slices should add repo-local import resolution, selective
+Pyrefly provider queries for plausible family candidates, Pyright cross-checks
+only for claim-upgrading facts, bounded framework-role propagation,
+target-centered call recovery, EC-MVFI-lite family induction, and typed
+`UNKNOWN` governance. The canonical algorithm contract is
+`docs/specifications/python-analysis.md`.
 
 Existing TypeScript/JavaScript discovery, syntax extraction, framework-role
 facts, TypeScript worker protocol scaffolding, and release fixtures are

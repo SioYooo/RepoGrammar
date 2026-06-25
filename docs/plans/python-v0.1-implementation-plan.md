@@ -73,6 +73,11 @@ generated/dependency directories, no source snippets or absolute paths, Python
 version recorded in provenance, and malformed Python producing bounded
 diagnostics.
 
+Current progress: `.py` discovery, CPython `ast` code-unit extraction,
+path-derived module-name anchors, CPython `symtable` structural scope anchors,
+and private `tomllib` project-config summaries are implemented. Repo-local
+import resolution and persisted project-config facts remain later P2 work.
+
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 
 Goal: emit RepoGrammar-owned Python code units, structural facts, semantic
@@ -208,6 +213,7 @@ storage, worker, runtime-trace, or mining implementation.
 ## Deferred Work
 
 - TypeScript/JavaScript production-quality family evidence after Python v0.1.
+- Repo-local Python import resolution and persisted safe project-config facts.
 - Django support.
 - C/C++ support.
 - Optional CodeGraph provider runtime integration.

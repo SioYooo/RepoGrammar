@@ -23,6 +23,9 @@
   route-shaped functions, pytest tests/fixtures, Pydantic model-shaped classes,
   SQLAlchemy model-shaped classes, and SQLAlchemy repository method-shaped
   functions, with Python virtualenv/cache/dependency directories skipped.
+- CPython `symtable` structural scope anchors, path-derived Python module-name
+  anchors, and a private `tomllib` parser mode for sanitized `pyproject.toml`
+  summaries; these are structural/context facts and do not prove family claims.
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
   foreign-key enforcement, semantic-fact/evidence and family-evidence write
   validation for building generations, validation before activation, and
@@ -137,8 +140,9 @@ evidence contracts remain validated together.
 ## Command implementation path
 
 - Add full repository/worktree freshness metadata for stored family evidence.
-- Add Python repo-local import/module graph and safe `pyproject.toml`/pytest
-  configuration extraction before provider-backed claim upgrades.
+- Add Python repo-local import resolution and persisted safe
+  `pyproject.toml`/pytest configuration facts before provider-backed claim
+  upgrades.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
 - Extend `find`, `family`, `explain`, and `check` beyond the current
@@ -162,13 +166,16 @@ evidence contracts remain validated together.
 - Python is the v0.1 implementation target.
 - Use the method stack in `docs/specifications/python-analysis.md` and
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
-- The first CPython `ast` structural slice is implemented, including
+- The first CPython structural slice is implemented, including
   worker-local structural anchors for imports, decorators, class bases, simple
   calls, same-file pytest fixture edges, and typed dynamic/unresolved
-  `UNKNOWN`. Next Python slices should persist those anchors through the Rust
-  storage/readiness gate, add `symtable`/`tomllib` facts, add repo-local import
-  resolution, then escalate only plausible family candidates to Pyrefly and use
-  Pyright only for claim-upgrading cross-checks.
+  `UNKNOWN`, plus path-derived module names, CPython `symtable` scope anchors,
+  and private `tomllib` project-config summaries. These parser-origin facts are
+  persisted through the Rust storage/readiness gate only where they are tied to
+  source code units; project-config summaries remain private worker output.
+  Next Python slices should add repo-local import resolution and persisted safe
+  project-config facts, then escalate only plausible family candidates to
+  Pyrefly and use Pyright only for claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.

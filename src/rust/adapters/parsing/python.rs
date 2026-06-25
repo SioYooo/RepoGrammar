@@ -812,6 +812,10 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "class_base"
             | "call_target"
             | "pytest_fixture_edge"
+            | "module_name"
+            | "scope_imported"
+            | "scope_namespace"
+            | "scope_assigned"
     )
 }
 
@@ -942,6 +946,22 @@ def test_users(client):
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedImport
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("app")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("scope.imported.APIRouter")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("scope.namespace.UserOut")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("scope.assigned.router")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Type
