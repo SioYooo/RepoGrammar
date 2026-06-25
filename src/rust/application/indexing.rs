@@ -16,7 +16,9 @@ use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
     IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
-use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParser};
+use crate::ports::parser::{
+    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParser,
+};
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
 use std::collections::BTreeSet;
@@ -319,6 +321,7 @@ fn index_repository_with_optional_semantic_worker(
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
+    let parser_context = parser_project_context(&report);
     for file in &report.files {
         let source = source_store
             .read_source(SourceReadRequest {
@@ -328,14 +331,17 @@ fn index_repository_with_optional_semantic_worker(
                 max_file_bytes: request.max_file_bytes,
             })
             .map_err(source_store_error)?;
-        let parse_report = match parser.parse(SourceDocument {
-            path: &source.path,
-            language: language_from_discovered(file.language),
-            content_hash: source.content_hash.clone(),
-            repository_revision: RepositoryRevision::new("UNKNOWN")
-                .expect("UNKNOWN is a non-empty repository revision marker"),
-            text: &source.text,
-        }) {
+        let parse_report = match parser.parse_with_context(
+            SourceDocument {
+                path: &source.path,
+                language: language_from_discovered(file.language),
+                content_hash: source.content_hash.clone(),
+                repository_revision: RepositoryRevision::new("UNKNOWN")
+                    .expect("UNKNOWN is a non-empty repository revision marker"),
+                text: &source.text,
+            },
+            &parser_context,
+        ) {
             Ok(report) => report,
             Err(ParseError::UnsupportedLanguage) => {
                 warnings.push(format!(
@@ -421,6 +427,21 @@ struct ParseStorageOutcome {
     code_units: Vec<IndexedCodeUnitRecord>,
     semantic_facts: Vec<SemanticFact>,
     framework_role_facts: Vec<SemanticFact>,
+}
+
+fn parser_project_context(report: &FileDiscoveryReport) -> ParserProjectContext {
+    let python_module_paths = report
+        .files
+        .iter()
+        .filter(|file| file.language == DiscoveredLanguage::Python)
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    ParserProjectContext {
+        python_module_paths,
+        python_source_roots: Vec::new(),
+    }
 }
 
 fn record_parse_report(
@@ -927,7 +948,7 @@ mod tests {
         ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
         IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
     };
-    use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
+    use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity, ParserProjectContext};
     use crate::ports::semantic_worker::{
         SemanticWorker, SemanticWorkerError, SemanticWorkerRequest,
     };
@@ -937,6 +958,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
@@ -1050,6 +1072,52 @@ mod tests {
                 semantic_facts: Vec::new(),
                 diagnostics: Vec::new(),
             })
+        }
+    }
+
+    struct RecordingContextParser {
+        contexts: Mutex<Vec<ParserProjectContext>>,
+    }
+
+    impl RecordingContextParser {
+        fn new() -> Self {
+            Self {
+                contexts: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl SourceParser for RecordingContextParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let unit_id = format!("unit:{}#module:0-all", document.path);
+            let unit = parser_unit(
+                &document,
+                &unit_id,
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            Ok(ParseReport {
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        fn parse_with_context(
+            &self,
+            document: SourceDocument<'_>,
+            context: &ParserProjectContext,
+        ) -> Result<ParseReport, ParseError> {
+            self.contexts
+                .lock()
+                .expect("record contexts")
+                .push(context.clone());
+            self.parse(document)
         }
     }
 
@@ -1915,6 +1983,57 @@ mod tests {
         assert_eq!(outcome.semantic_facts, 0);
         assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Deferred);
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+    }
+
+    #[test]
+    fn parser_context_receives_deterministic_python_inventory() {
+        let workspace = TempWorkspace::new("indexing-python-parser-context");
+        fs::create_dir_all(workspace.path().join("src/acme/services")).expect("create package");
+        fs::write(
+            workspace.path().join("src/acme/services/users.py"),
+            "def list_users():\n    return []\n",
+        )
+        .expect("write users module");
+        fs::write(
+            workspace.path().join("src/acme/api.py"),
+            "from acme.services import users\n",
+        )
+        .expect("write api module");
+        fs::write(workspace.path().join("src/acme/__init__.py"), "").expect("write init");
+        fs::write(workspace.path().join("README.md"), "not source\n").expect("write readme");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RecordingContextParser::new();
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &store,
+        )
+        .expect("index with recording parser");
+
+        assert_eq!(outcome.discovered_files, 3);
+        let contexts = parser.contexts.lock().expect("recorded contexts");
+        assert_eq!(contexts.len(), 3);
+        let expected = vec![
+            "src/acme/__init__.py".to_string(),
+            "src/acme/api.py".to_string(),
+            "src/acme/services/users.py".to_string(),
+        ];
+        for context in contexts.iter() {
+            assert_eq!(context.python_module_paths, expected);
+            assert!(context.python_source_roots.is_empty());
+            assert!(context
+                .python_module_paths
+                .iter()
+                .all(|path| path.ends_with(".py")
+                    && !Path::new(path).is_absolute()
+                    && !path.contains("..")
+                    && !path.contains(workspace.path().to_string_lossy().as_ref())));
+        }
     }
 
     #[test]

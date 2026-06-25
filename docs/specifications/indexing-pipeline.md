@@ -111,12 +111,13 @@ persisted project-configuration facts remain deferred. The implemented Python
 frontend uses CPython `ast` for code-unit extraction, CPython `symtable` for
 structural scope anchors, and a private standard-library `tomllib` parser mode
 for sanitized `pyproject.toml` summaries that are not yet part of default
-indexing. Its semantic-worker-compatible project mode now performs a bounded
-module-level repo-local import-resolution pass over requested `.py` files, but
-default parser-mode indexing is not yet import-aware. Future slices should wire
-safe repo-local import context into default indexing and add Tree-sitter as a
-tolerant structural fallback only. Python syntax-only facts still cannot become
-semantic claims or family evidence by themselves.
+indexing. Default parser-mode indexing now passes discovered repo-relative
+`.py` inventory into private parse-document requests, so source-tied unique
+repo-local imports can be persisted as `STRUCTURAL` parser facts and
+ambiguous/missing imports can remain typed `UNKNOWN`s. Future slices should add
+persisted safe project-configuration facts and Tree-sitter as a tolerant
+structural fallback only. Python syntax-only facts still cannot become semantic
+claims or family evidence by themselves.
 
 ## Tree-sitter parsing
 
@@ -189,14 +190,17 @@ with stronger compatible evidence.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
-`ast`-derived code-unit metadata without hand-written Python parsing. That
-worker pass also produces repo-relative structural fact payloads for imports,
-decorator anchors, class bases, simple calls, same-file pytest fixture edges,
-path-derived module names, CPython `symtable` scope anchors, and typed
-dynamic/unresolved `UNKNOWN` cases. The Rust parser adapter now validates and
-persists those payloads as internal `STRUCTURAL` or `UNKNOWN` semantic fact
-records tied to the same code-unit evidence. They are not passed to the family
-builder and remain blocked from claim-input readiness as insufficient support.
+`ast`-derived code-unit metadata without hand-written Python parsing. Default
+indexing now passes the discovered repo-relative `.py` inventory into that
+private mode, letting the worker build a bounded module index for the current
+parse request. That worker pass produces repo-relative structural fact payloads
+for imports, unique repo-local import bindings, decorator anchors, class bases,
+simple calls, same-file pytest fixture edges, path-derived module names,
+CPython `symtable` scope anchors, and typed dynamic/unresolved/ambiguous
+`UNKNOWN` cases. The Rust parser adapter validates and persists those payloads
+as internal `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same
+code-unit evidence. They are not passed to the family builder and remain
+blocked from claim-input readiness as insufficient support.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available, but those summaries are not yet persisted by
 default indexing. Its semantic-worker-compatible NDJSON mode can emit those
@@ -205,8 +209,8 @@ unique safe `.py` module matches, typed `UNKNOWN` for ambiguous/missing
 repo-local imports and `sys.path` mutation, and conservative
 `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units.
 The product indexing path does not launch a Python semantic worker separately.
-Pyrefly, Pyright, default-index import awareness, usage propagation, call
-hierarchy recovery, and runtime observation remain deferred.
+Pyrefly, Pyright, usage propagation, call hierarchy recovery, persisted
+project-config facts, and runtime observation remain deferred.
 
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains

@@ -140,9 +140,9 @@ evidence contracts remain validated together.
 ## Command implementation path
 
 - Add full repository/worktree freshness metadata for stored family evidence.
-- Wire safe Python repo-local import context into default indexing and add
-  persisted safe `pyproject.toml`/pytest configuration facts before
-  provider-backed claim upgrades.
+- Persist safe `pyproject.toml`/pytest configuration facts before
+  provider-backed claim upgrades; default indexing already passes discovered
+  `.py` inventory to the parser for source-tied repo-local import facts.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
 - Extend `find`, `family`, `explain`, and `check` beyond the current
@@ -174,12 +174,12 @@ evidence contracts remain validated together.
   project mode now builds a bounded module graph for requested `.py` files and
   emits structural repo-local import facts only for unique module-level matches,
   with typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
-  mutation. Parser-origin facts are persisted through the Rust
-  storage/readiness gate only where they are tied to source code units;
-  project-config summaries and project-mode import facts are not yet default
-  indexing claim evidence. Next Python slices should wire safe import context
-  into default indexing and persisted safe project-config facts, then escalate
-  only plausible family candidates to Pyrefly and use Pyright only for
+  mutation. Default indexing now passes discovered `.py` inventory to the
+  private parser request so source-tied repo-local import facts can be
+  persisted through the Rust storage/readiness gate. Project-config summaries
+  are not yet default indexing claim evidence. Next Python slices should persist
+  safe project-config facts, then escalate only plausible family candidates to
+  Pyrefly and use Pyright only for
   claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the

@@ -76,8 +76,10 @@ diagnostics.
 Current progress: `.py` discovery, CPython `ast` code-unit extraction,
 path-derived module-name anchors, CPython `symtable` structural scope anchors,
 private `tomllib` project-config summaries, and semantic-worker-compatible
-project-mode module-level repo-local import resolution are implemented.
-Default-index import awareness and persisted project-config facts remain later
+project-mode module-level repo-local import resolution are implemented. Default
+indexing now passes discovered repo-relative `.py` inventory into private
+parse-document requests so source-tied repo-local import facts can be persisted
+as structural parser-origin facts. Persisted project-config facts remain later
 P2 work.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
@@ -215,7 +217,7 @@ storage, worker, runtime-trace, or mining implementation.
 ## Deferred Work
 
 - TypeScript/JavaScript production-quality family evidence after Python v0.1.
-- Default-index Python import context and persisted safe project-config facts.
+- Persisted safe Python project-config facts.
 - Django support.
 - C/C++ support.
 - Optional CodeGraph provider runtime integration.

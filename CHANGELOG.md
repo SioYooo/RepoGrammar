@@ -32,9 +32,13 @@
   `tomllib` project-config summary mode. Its semantic-worker-compatible
   project mode now resolves only unique repo-local module imports as
   `STRUCTURAL` facts and reports ambiguous/missing repo-local imports or
-  `sys.path` mutation as typed `UNKNOWN`. Default indexing validates and
-  persists source-tied parser-origin `STRUCTURAL`/`UNKNOWN` facts while keeping
-  them out of family construction and CLI/MCP family evidence.
+  `sys.path` mutation as typed `UNKNOWN`. Default parser-mode indexing now
+  passes discovered repo-relative `.py` inventory into private parse-document
+  requests so source-tied repo-local import facts can be persisted without
+  launching a Python semantic worker; oversized context payloads fall back to
+  contextless parsing. Default indexing validates and persists parser-origin
+  `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
+  and CLI/MCP family evidence.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

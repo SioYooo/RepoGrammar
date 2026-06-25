@@ -1433,11 +1433,23 @@ mod tests {
     #[test]
     fn product_runtime_persists_python_parse_facts_without_query_claims() {
         let workspace = TempWorkspace::new("product-runtime-python");
+        fs::create_dir_all(workspace.path().join("src/acme/services")).expect("create package");
+        fs::write(workspace.path().join("src/acme/__init__.py"), "").expect("write init");
+        fs::write(workspace.path().join("src/acme/services/__init__.py"), "")
+            .expect("write services init");
         fs::write(
-            workspace.path().join("app.py"),
+            workspace.path().join("src/acme/services/users.py"),
+            "def list_users():\n    return []\n",
+        )
+        .expect("write users module");
+        fs::write(
+            workspace.path().join("src/acme/api.py"),
             r#"
 from fastapi import APIRouter
 from pydantic import BaseModel
+from acme.services import users
+from .services import users as relative_users
+from acme.missing import value
 
 router = APIRouter()
 
@@ -1479,7 +1491,7 @@ def test_users(client):
             .expect("units")
             .iter()
             .any(|unit| {
-                unit["path"] == "app.py"
+                unit["path"] == "src/acme/api.py"
                     && unit["language"] == "python"
                     && unit["kind"] == "fastapi_route"
             }));
@@ -1488,7 +1500,7 @@ def test_users(client):
             .expect("units")
             .iter()
             .any(|unit| {
-                unit["path"] == "app.py"
+                unit["path"] == "src/acme/api.py"
                     && unit["language"] == "python"
                     && unit["kind"] == "pydantic_model"
             }));
@@ -1506,23 +1518,58 @@ def test_users(client):
         let facts = list_semantic_facts(&store).expect("list semantic facts");
         assert_eq!(facts.active_generation, "gen-000001");
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "RESOLVED_IMPORT"
                 && fact.target.as_deref() == Some("fastapi.APIRouter")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
                 && fact.certainty == "STRUCTURAL"
         }));
+        let repo_local_imports = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.path == "src/acme/api.py"
+                    && fact.kind == "RESOLVED_IMPORT"
+                    && fact.target.as_deref() == Some("acme.services.users")
+                    && fact.certainty == "STRUCTURAL"
+                    && fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "python_anchor_kind=repo_local_import_binding"
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(repo_local_imports.len(), 2);
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact.certainty == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "reason_code=UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        assert!(facts
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "python")
+            .all(|fact| fact.certainty != "SEMANTIC"));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
-                && fact.target.as_deref() == Some("app")
+                && fact.target.as_deref() == Some("src.acme.api")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("scope.imported.APIRouter")
                 && fact.origin_engine == "python"
@@ -1530,7 +1577,7 @@ def test_users(client):
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("scope.namespace.UserOut")
                 && fact.origin_engine == "python"
@@ -1538,7 +1585,7 @@ def test_users(client):
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "TYPE"
                 && fact.target.as_deref() == Some("pydantic.BaseModel")
                 && fact.origin_engine == "python"
@@ -1546,7 +1593,7 @@ def test_users(client):
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("fastapi.APIRouter.get")
                 && fact.origin_engine == "python"
@@ -1554,7 +1601,7 @@ def test_users(client):
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "RESOLVED_CALL"
                 && fact.target.as_deref() == Some("client.get")
                 && fact.origin_engine == "python"
@@ -1562,7 +1609,7 @@ def test_users(client):
                 && fact.certainty == "STRUCTURAL"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "UNKNOWN"
                 && fact.target.as_deref() == Some("PytestFixtureInjection")
                 && fact.origin_engine == "python"
@@ -1570,7 +1617,7 @@ def test_users(client):
                 && fact.certainty == "UNKNOWN"
         }));
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "FRAMEWORK_ROLE"
                 && fact.certainty == "FRAMEWORK_HEURISTIC"
         }));
@@ -1578,6 +1625,7 @@ def test_users(client):
         for forbidden in [
             workspace.path().to_string_lossy().as_ref(),
             "from fastapi",
+            "from acme.services",
             "@router.get",
             "assert client.get",
         ] {
@@ -1614,9 +1662,9 @@ def test_users(client):
         assert_eq!(unknown["status"], "UNKNOWN");
         assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
 
-        for command in ["find", "family", "explain", "check"] {
+        for command in ["find", "family", "member", "explain", "check"] {
             let output = run_with_runtime(
-                cli_args(command, workspace.path(), &["app.py", "--json"]),
+                cli_args(command, workspace.path(), &["src/acme/api.py", "--json"]),
                 &runtime,
             );
             assert_eq!(output.status, 0);
@@ -1640,7 +1688,7 @@ def test_users(client):
         let facts = list_semantic_facts(&store).expect("list synced semantic facts");
         assert_eq!(facts.active_generation, "gen-000002");
         assert!(facts.facts.iter().any(|fact| {
-            fact.path == "app.py"
+            fact.path == "src/acme/api.py"
                 && fact.kind == "UNKNOWN"
                 && fact.target.as_deref() == Some("PytestFixtureInjection")
                 && fact.certainty == "UNKNOWN"

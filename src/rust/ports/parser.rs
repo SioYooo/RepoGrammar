@@ -14,6 +14,12 @@ pub struct SourceDocument<'a> {
     pub text: &'a str,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParserProjectContext {
+    pub python_module_paths: Vec<String>,
+    pub python_source_roots: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseReport {
     pub units: Vec<CodeUnit>,
@@ -45,4 +51,12 @@ pub enum ParseError {
 
 pub trait SourceParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError>;
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        self.parse(document)
+    }
 }

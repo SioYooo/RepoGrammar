@@ -1,7 +1,9 @@
 //! Parsing adapters. Tree-sitter types must not cross this module boundary.
 
 use crate::core::model::{CodeUnit, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId};
-use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParser};
+use crate::ports::parser::{
+    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParser,
+};
 use std::collections::BTreeSet;
 
 pub mod python;
@@ -21,6 +23,22 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.syntax.parse(document)
             }
             crate::core::model::Language::Python => self.python.parse(document),
+            crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
+        }
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        match document.language {
+            crate::core::model::Language::TypeScript | crate::core::model::Language::JavaScript => {
+                self.syntax.parse(document)
+            }
+            crate::core::model::Language::Python => {
+                self.python.parse_with_context(document, context)
+            }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
         }
     }

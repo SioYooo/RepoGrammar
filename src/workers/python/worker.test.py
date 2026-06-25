@@ -250,6 +250,114 @@ else:
     ]
 assert "[project" not in json.dumps(bad_config_messages)
 
+parse_context_hash = "sha256:" + "6" * 64
+parse_context_payload = {
+    "protocol_version": 1,
+    "mode": "parse_document",
+    "path": "src/acme/api.py",
+    "content_hash": parse_context_hash,
+    "repository_revision": "UNKNOWN",
+    "module_paths": [
+        "src/acme/api.py",
+        "src/acme/__init__.py",
+        "src/acme/services/__init__.py",
+        "src/acme/services/users.py",
+    ],
+    "source_roots": [],
+    "text": """
+from acme.services import users
+from .services import users as relative_users
+from acme.missing import value
+""",
+}
+parse_context_messages = run_worker(parse_context_payload)
+parse_context_reordered = dict(parse_context_payload)
+parse_context_reordered["module_paths"] = list(reversed(parse_context_payload["module_paths"]))
+assert parse_context_messages == run_worker(parse_context_reordered)
+parse_context_facts = parse_context_messages[0]["facts"]
+repo_local_import_facts = [
+        fact
+        for fact in parse_context_facts
+        if fact["fact_kind"] == "RESOLVED_IMPORT"
+        and fact["target"] == "acme.services.users"
+        and "python_anchor_kind=repo_local_import_binding" in fact["assumptions"]
+]
+assert len(repo_local_import_facts) == 2
+for fact in repo_local_import_facts:
+    assert fact["certainty"] == "STRUCTURAL"
+    assert fact["origin"]["method"] == "cpython_ast"
+    assert fact["evidence"]["path"] == "src/acme/api.py"
+    assert fact["evidence"]["content_hash"] == parse_context_hash
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "acme.missing.value"
+    for fact in parse_context_facts
+)
+unresolved_import_facts = [
+    fact
+    for fact in parse_context_facts
+    if fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "reason_code=UnresolvedImport" in fact["assumptions"]
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+]
+assert len(unresolved_import_facts) == 1
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in parse_context_facts
+)
+serialized_parse_context = json.dumps(parse_context_messages)
+assert "from acme.services" not in serialized_parse_context
+assert "src/acme/services/users.py" not in serialized_parse_context
+
+ambiguous_context_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "src/pkg/api.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["src/pkg/api.py", "src/pkg/util.py", "alt/pkg/util.py"],
+        "source_roots": ["src", "alt"],
+        "text": "from pkg import util\n",
+    }
+)
+ambiguous_context_facts = ambiguous_context_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "pkg.util"
+    and "python_anchor_kind=repo_local_import_binding" in fact["assumptions"]
+    for fact in ambiguous_context_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "reason_code=UnresolvedImport" in fact["assumptions"]
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in ambiguous_context_facts
+)
+
+bad_parse_context_payload = {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "app.py",
+        "content_hash": "sha256:" + "7" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["../secret.py"],
+        "text": "import secret\n",
+}
+bad_parse_context = subprocess.run(
+    [sys.executable, str(WORKER)],
+    input=json.dumps(bad_parse_context_payload) + "\n",
+    text=True,
+    capture_output=True,
+    check=False,
+)
+assert bad_parse_context.returncode == 2
+assert bad_parse_context.stdout == ""
+assert "secret" not in bad_parse_context.stderr
+
 with tempfile.TemporaryDirectory() as root:
     Path(root, "pyproject.toml").write_text(
         """

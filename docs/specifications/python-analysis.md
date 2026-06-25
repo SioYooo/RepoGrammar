@@ -94,6 +94,11 @@ The current implementation covers the first structural slice only:
   is available, emits `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
   repo-local module matches, and emits typed `UNKNOWN` for ambiguous/missing
   repo-local imports or `sys.path` mutation;
+- default parser-mode indexing now passes the discovered repo-relative `.py`
+  inventory into the private CPython parse-document request so the same
+  source-tied parse pass can emit unique repo-local import facts and typed
+  unresolved/ambiguous import `UNKNOWN`s without launching a separate Python
+  semantic worker;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -125,8 +130,7 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not wire repo-local import resolution into default parser-mode
-indexing, does not persist project configuration facts, and does not implement
+This slice does not persist project configuration facts and does not implement
 Pyrefly, Pyright, provider cache keys, usage propagation, call hierarchy
 recovery, Tree-sitter fallback, runtime observation, Python family claims, or
 source snippet retrieval.

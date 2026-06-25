@@ -9,7 +9,8 @@ use crate::core::model::{
     RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::ports::parser::{
-    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, SourceDocument, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParser,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -18,6 +19,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_PYTHON_FRONTEND_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_PYTHON_FRONTEND_FACTS: usize = 2_000;
 const MAX_PYTHON_FACT_TEXT_BYTES: usize = 2_048;
 const MAX_PYTHON_FACT_TARGET_BYTES: usize = 256;
@@ -56,21 +58,40 @@ impl SourceParser for PythonAstParser {
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
         }
-        let response = self.parse_document(&document)?;
-        parse_worker_response(&document, &response)
+        let output = self.parse_document(&document, None)?;
+        parse_worker_response(&document, &output.response)
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        if document.language != Language::Python {
+            return Err(ParseError::UnsupportedLanguage);
+        }
+        let output = self.parse_document(&document, Some(context))?;
+        let mut report = parse_worker_response(&document, &output.response)?;
+        if output.context_omitted {
+            report.diagnostics.push(ParseDiagnostic {
+                path: document.path.to_string(),
+                range: None,
+                severity: ParseDiagnosticSeverity::Warning,
+                message: "python parse context omitted because request exceeded size limit"
+                    .to_string(),
+            });
+        }
+        Ok(report)
     }
 }
 
 impl PythonAstParser {
-    fn parse_document(&self, document: &SourceDocument<'_>) -> Result<String, ParseError> {
-        let payload = json!({
-            "protocol_version": 1,
-            "mode": "parse_document",
-            "path": document.path,
-            "content_hash": document.content_hash.as_str(),
-            "repository_revision": document.repository_revision.as_str(),
-            "text": document.text,
-        });
+    fn parse_document(
+        &self,
+        document: &SourceDocument<'_>,
+        context: Option<&ParserProjectContext>,
+    ) -> Result<PythonParseOutput, ParseError> {
+        let (serialized, context_omitted) = serialize_parse_request(document, context)?;
         let mut child = Command::new(&self.executable)
             .arg(&self.worker_script)
             .stdin(Stdio::piped())
@@ -83,7 +104,7 @@ impl PythonAstParser {
             .take()
             .ok_or_else(|| ParseError::Internal("python ast frontend stdin unavailable".into()))?;
         stdin
-            .write_all(payload.to_string().as_bytes())
+            .write_all(serialized.as_bytes())
             .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
         stdin
             .write_all(b"\n")
@@ -102,9 +123,66 @@ impl PythonAstParser {
                 "python ast frontend output exceeded size limit".to_string(),
             ));
         }
-        String::from_utf8(output.stdout)
-            .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))
+        let response = String::from_utf8(output.stdout)
+            .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))?;
+        Ok(PythonParseOutput {
+            response,
+            context_omitted,
+        })
     }
+}
+
+struct PythonParseOutput {
+    response: String,
+    context_omitted: bool,
+}
+
+fn serialize_parse_request(
+    document: &SourceDocument<'_>,
+    context: Option<&ParserProjectContext>,
+) -> Result<(String, bool), ParseError> {
+    let payload = parse_document_payload(document, context);
+    let serialized = payload.to_string();
+    if serialized.len() <= MAX_PYTHON_FRONTEND_INPUT_BYTES {
+        return Ok((serialized, false));
+    }
+    if context.is_some() {
+        let fallback = parse_document_payload(document, None).to_string();
+        if fallback.len() <= MAX_PYTHON_FRONTEND_INPUT_BYTES {
+            return Ok((fallback, true));
+        }
+    }
+    Err(ParseError::Internal(
+        "python ast frontend request exceeded size limit".to_string(),
+    ))
+}
+
+fn parse_document_payload(
+    document: &SourceDocument<'_>,
+    context: Option<&ParserProjectContext>,
+) -> Value {
+    let mut payload = json!({
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": document.path,
+        "content_hash": document.content_hash.as_str(),
+        "repository_revision": document.repository_revision.as_str(),
+        "text": document.text,
+    });
+    if let Some(context) = context {
+        let object = payload
+            .as_object_mut()
+            .expect("parse document payload must be an object");
+        object.insert(
+            "module_paths".to_string(),
+            json!(context.python_module_paths),
+        );
+        object.insert(
+            "source_roots".to_string(),
+            json!(context.python_source_roots),
+        );
+    }
+    payload
 }
 
 fn parse_worker_response(
@@ -816,6 +894,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "scope_imported"
             | "scope_namespace"
             | "scope_assigned"
+            | "repo_local_import_binding"
     )
 }
 
@@ -896,8 +975,12 @@ mod tests {
     use crate::core::model::{ContentHash, RepositoryRevision};
 
     fn document(text: &str) -> SourceDocument<'_> {
+        document_at("app.py", text)
+    }
+
+    fn document_at<'a>(path: &'a str, text: &'a str) -> SourceDocument<'a> {
         SourceDocument {
-            path: "app.py",
+            path,
             language: Language::Python,
             content_hash: ContentHash::new(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -1000,6 +1083,78 @@ def test_users(client):
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("@router.get"));
         assert!(!debug.contains("assert client.get"));
+    }
+
+    #[test]
+    fn parse_with_context_accepts_repo_local_import_binding_without_claim_upgrade() {
+        let source = "\
+from acme.services import users\n\
+from .services import users as relative_users\n\
+from acme.missing import value\n";
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "src/acme/api.py".to_string(),
+                "src/acme/__init__.py".to_string(),
+                "src/acme/services/__init__.py".to_string(),
+                "src/acme/services/users.py".to_string(),
+            ],
+            python_source_roots: Vec::new(),
+        };
+        let parser = PythonAstParser::default();
+        let report = parser
+            .parse_with_context(document_at("src/acme/api.py", source), &context)
+            .expect("parse with repo-local context");
+        let mut reversed_context = context.clone();
+        reversed_context.python_module_paths.reverse();
+        let reversed_report = parser
+            .parse_with_context(document_at("src/acme/api.py", source), &reversed_context)
+            .expect("parse with reordered repo-local context");
+        assert_eq!(report.semantic_facts, reversed_report.semantic_facts);
+
+        let repo_local_imports = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::ResolvedImport
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("acme.services.users")
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "python_anchor_kind=repo_local_import_binding"
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(repo_local_imports.len(), 2);
+        assert!(repo_local_imports.iter().all(|fact| {
+            fact.certainty == FactCertainty::Structural
+                && fact.origin.engine == "python"
+                && fact.origin.method == "cpython_ast"
+                && fact.evidence.provenance.path == "src/acme/api.py"
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.certainty == FactCertainty::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "reason_code=UnresolvedImport")
+        }));
+        assert!(report.semantic_facts.iter().all(|fact| {
+            matches!(
+                fact.certainty,
+                FactCertainty::Structural | FactCertainty::Unknown
+            )
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        for forbidden in [
+            "from acme.services",
+            "from .services",
+            "src/acme/services/users.py",
+        ] {
+            assert!(
+                !debug.contains(forbidden),
+                "parser facts leaked forbidden text {forbidden}"
+            );
+        }
     }
 
     #[test]

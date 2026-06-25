@@ -218,6 +218,43 @@ def build_module_index(paths: list[str], source_roots: list[str]) -> dict[str, l
     return {module_name: sorted(module_paths) for module_name, module_paths in sorted(modules.items())}
 
 
+def parent_path(path: str) -> str:
+    parts = path.split("/")
+    return "/".join(parts[:-1])
+
+
+def infer_source_roots(paths: list[str]) -> list[str]:
+    package_dirs = {parent_path(path) for path in paths if path.endswith("/__init__.py") or path == "__init__.py"}
+    roots: set[str] = set()
+    for package_dir in sorted(package_dirs):
+        if not package_dir:
+            continue
+        top = package_dir
+        while (parent := parent_path(top)) in package_dirs:
+            top = parent
+        root = parent_path(top)
+        if root and is_safe_repo_relative_path(root):
+            roots.add(root)
+    return sorted(roots)
+
+
+def safe_path_list(value: Any, *, require_python: bool = False) -> list[str] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_CHANGED_FILES:
+        return None
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not is_safe_repo_relative_path(item) or item in seen:
+            return None
+        if require_python and not item.endswith(".py"):
+            return None
+        seen.add(item)
+        result.append(item)
+    return sorted(result)
+
+
 def decorator_names(node: ast.AST) -> list[str]:
     return [name for decorator in getattr(node, "decorator_list", []) if (name := dotted_name(decorator))]
 
@@ -1163,14 +1200,16 @@ def analyze_source(
 
 
 def parse_document(payload: dict[str, Any]) -> int:
-    if set(payload) != {
+    required_fields = {
         "protocol_version",
         "mode",
         "path",
         "content_hash",
         "repository_revision",
         "text",
-    }:
+    }
+    allowed_fields = {*required_fields, "module_paths", "source_roots"}
+    if not isinstance(payload, dict) or not required_fields.issubset(payload) or set(payload) - allowed_fields:
         return 2
     if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_document":
         return 2
@@ -1179,11 +1218,19 @@ def parse_document(payload: dict[str, Any]) -> int:
     text = payload.get("text")
     if not isinstance(text, str):
         return 2
+    module_paths = safe_path_list(payload.get("module_paths"), require_python=True)
+    source_roots = safe_path_list(payload.get("source_roots"), require_python=False)
+    if module_paths is None or source_roots is None:
+        return 2
+    source_roots = sorted(set([*source_roots, *infer_source_roots(module_paths)]))
+    module_index = build_module_index(module_paths, source_roots)
     units, diagnostics, facts = analyze_source(
         payload["path"],
         text,
         payload["content_hash"],
         payload["repository_revision"],
+        module_index if module_paths else None,
+        source_roots,
     )
     message(
         {
