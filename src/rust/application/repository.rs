@@ -7,6 +7,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_STATE_DIR: &str = ".repogrammar";
@@ -22,6 +23,7 @@ const STATE_GITIGNORE: &str = "# RepoGrammar local generated state.\n\
 !.gitignore\n";
 const GIT_INFO_EXCLUDE_PATTERNS: [&str; 2] = [".repogrammar/", ".repogrammar-*/"];
 const INDEX_LOCK_FILE: &str = "index.lock";
+static INDEX_LOCK_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const ROOT_GITIGNORE_BEGIN: &str = "# BEGIN RepoGrammar local state";
 const ROOT_GITIGNORE_END: &str = "# END RepoGrammar local state";
 const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
@@ -418,11 +420,17 @@ pub fn acquire_index_lock(
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                match inspect_index_lock_path(&lock_path) {
+                let inspection = inspect_index_lock_path_with_contents(&lock_path);
+                match inspection.state {
                     IndexLockState::Stale => {
-                        fs::remove_file(&lock_path).map_err(|_| {
-                            invalid_input("failed to remove stale repository-local index lock")
-                        })?;
+                        let Some(stale_contents) = inspection.contents else {
+                            return Err(invalid_input(
+                                "index lock metadata is invalid; run repogrammar doctor",
+                            ));
+                        };
+                        if !remove_index_lock_if_contents_match(&lock_path, &stale_contents)? {
+                            continue;
+                        }
                         continue;
                     }
                     IndexLockState::Active => {
@@ -836,6 +844,7 @@ struct IndexLockMetadata {
     os: String,
     started_unix_seconds: u64,
     repogrammar_version: String,
+    token: String,
 }
 
 impl IndexLockMetadata {
@@ -847,6 +856,7 @@ impl IndexLockMetadata {
             "os": self.os,
             "started_unix_seconds": self.started_unix_seconds,
             "repogrammar_version": self.repogrammar_version,
+            "token": self.token,
         });
         format!("{value}\n")
     }
@@ -872,10 +882,13 @@ impl IndexLockMetadata {
         };
         let os = object.get("os")?.as_str()?.trim();
         let repogrammar_version = object.get("repogrammar_version")?.as_str()?.trim();
+        let token = object.get("token")?.as_str()?.trim();
         if os.is_empty()
             || repogrammar_version.is_empty()
+            || token.is_empty()
             || !lock_text_field_is_safe(os)
             || !lock_text_field_is_safe(repogrammar_version)
+            || !lock_text_field_is_safe(token)
         {
             return None;
         }
@@ -885,13 +898,14 @@ impl IndexLockMetadata {
             os: os.to_string(),
             started_unix_seconds: object.get("started_unix_seconds")?.as_u64()?,
             repogrammar_version: repogrammar_version.to_string(),
+            token: token.to_string(),
         })
     }
 }
 
 impl Drop for IndexLockGuard {
     fn drop(&mut self) {
-        if fs::read_to_string(&self.path)
+        if read_lifecycle_text(&self.path)
             .map(|current| current == self.contents)
             .unwrap_or(false)
         {
@@ -901,34 +915,81 @@ impl Drop for IndexLockGuard {
 }
 
 fn current_index_lock_metadata() -> IndexLockMetadata {
+    let pid = std::process::id();
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let sequence = INDEX_LOCK_TOKEN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     IndexLockMetadata {
-        pid: std::process::id(),
+        pid,
         host: current_host(),
         os: std::env::consts::OS.to_string(),
-        started_unix_seconds: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0),
+        started_unix_seconds: duration.as_secs(),
         repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+        token: format!("{pid}-{}-{sequence}", duration.as_nanos()),
     }
 }
 
 fn inspect_index_lock_path(path: &Path) -> IndexLockState {
+    inspect_index_lock_path_with_contents(path).state
+}
+
+struct IndexLockInspection {
+    state: IndexLockState,
+    contents: Option<String>,
+}
+
+fn inspect_index_lock_path_with_contents(path: &Path) -> IndexLockInspection {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            IndexLockState::Invalid
+            IndexLockInspection {
+                state: IndexLockState::Invalid,
+                contents: None,
+            }
         }
         Ok(_) => {
             let Ok(contents) = read_lifecycle_text(path) else {
-                return IndexLockState::Invalid;
+                return IndexLockInspection {
+                    state: IndexLockState::Invalid,
+                    contents: None,
+                };
             };
             let Some(lock) = IndexLockMetadata::parse(&contents) else {
-                return IndexLockState::Invalid;
+                return IndexLockInspection {
+                    state: IndexLockState::Invalid,
+                    contents: Some(contents),
+                };
             };
-            classify_index_lock(&lock)
+            IndexLockInspection {
+                state: classify_index_lock(&lock),
+                contents: Some(contents),
+            }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => IndexLockState::Missing,
-        Err(_) => IndexLockState::Invalid,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => IndexLockInspection {
+            state: IndexLockState::Missing,
+            contents: None,
+        },
+        Err(_) => IndexLockInspection {
+            state: IndexLockState::Invalid,
+            contents: None,
+        },
+    }
+}
+
+fn remove_index_lock_if_contents_match(
+    path: &Path,
+    expected_contents: &str,
+) -> Result<bool, RepoGrammarError> {
+    match read_lifecycle_text(path) {
+        Ok(current) if current == expected_contents => match fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(invalid_input(
+                "failed to remove stale repository-local index lock",
+            )),
+        },
+        Ok(_) => Ok(false),
+        Err(()) => Ok(false),
     }
 }
 
@@ -2282,9 +2343,80 @@ mod tests {
             .as_str()
             .expect("version")
             .is_empty());
+        assert!(!value["token"].as_str().expect("token").is_empty());
 
         drop(guard);
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn index_lock_guard_does_not_remove_replaced_lock() {
+        let workspace = TempWorkspace::new("repository-index-lock-replaced");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+
+        let guard =
+            acquire_index_lock(&root_string(workspace.path()), None).expect("acquire index lock");
+        let replacement = IndexLockMetadata {
+            pid: std::process::id(),
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "replacement-token".to_string(),
+        }
+        .to_json();
+        fs::write(&lock_path, &replacement).expect("replace lock");
+
+        drop(guard);
+
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("replacement lock remains"),
+            replacement
+        );
+    }
+
+    #[test]
+    fn stale_index_lock_removal_requires_matching_contents() {
+        let workspace = TempWorkspace::new("repository-index-lock-content-match");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        let stale = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "stale-token".to_string(),
+        }
+        .to_json();
+        let replacement = IndexLockMetadata {
+            pid: std::process::id(),
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 2,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "replacement-token".to_string(),
+        }
+        .to_json();
+        fs::write(&lock_path, &replacement).expect("write replacement lock");
+
+        let removed =
+            remove_index_lock_if_contents_match(&lock_path, &stale).expect("remove if matched");
+
+        assert!(!removed);
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("replacement lock remains"),
+            replacement
+        );
     }
 
     #[test]
@@ -2323,6 +2455,7 @@ mod tests {
             os: std::env::consts::OS.to_string(),
             started_unix_seconds: 1,
             repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "stale-token".to_string(),
         };
         fs::write(&lock_path, stale.to_json()).expect("write stale lock");
 

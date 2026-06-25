@@ -395,7 +395,8 @@ not include a generation id yet. The lock must contain:
   "host": "workstation-name",
   "os": "darwin",
   "started_unix_seconds": 1782200000,
-  "repogrammar_version": "0.1.0"
+  "repogrammar_version": "0.1.0",
+  "token": "12345-1782200000000000000-1"
 }
 ```
 
@@ -403,10 +404,12 @@ not include a generation id yet. The lock must contain:
 `index` and `sync` implementation creates `index.lock` with atomic
 create-new semantics immediately before `prepare_next_generation`, holds it
 through validation and active-generation pointer update, and removes only the
-lock content it wrote. A live same-host lock is refused. A lock whose same-host
-process is confirmed dead may be replaced during acquisition; malformed,
-cross-host, cross-OS, or otherwise unknown locks are refused and surfaced by
-`doctor`.
+lock content it wrote. Stale-lock replacement also requires the lock bytes to
+match the inspected stale bytes before deletion, so a concurrently replaced lock
+is rechecked instead of removed. A live same-host lock is refused. A lock whose
+same-host process is confirmed dead may be replaced during acquisition;
+malformed, cross-host, cross-OS, or otherwise unknown locks are refused and
+surfaced by `doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 
