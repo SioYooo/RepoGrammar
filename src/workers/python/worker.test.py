@@ -444,6 +444,47 @@ include = ["src", "alt"]
         )
 
 with tempfile.TemporaryDirectory() as root:
+    Path(root, "tests/sub").mkdir(parents=True)
+    Path(root, "tests/conftest.py").write_text(
+        """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+        encoding="utf-8",
+    )
+    Path(root, "tests/sub/test_api.py").write_text(
+        """
+def test_users(client, missing_fixture):
+    assert client is not None
+""",
+        encoding="utf-8",
+    )
+    request = valid_request(root)
+    request["changed_files"] = ["tests/sub/test_api.py", "tests/conftest.py"]
+    messages = run_worker(request)
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    assert any(
+        fact.get("fact_kind") == "SYMBOL"
+        and fact.get("target") == "fixture:client"
+        and "python_anchor_kind=pytest_conftest_fixture_edge" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "PytestFixtureInjection"
+        and "affected_claim=pytest_fixture_binding" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    serialized_conftest = json.dumps(messages)
+    assert root not in serialized_conftest
+    assert "return object" not in serialized_conftest
+    assert "missing_fixture" not in serialized_conftest
+
+with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(
         """
 from fastapi import APIRouter

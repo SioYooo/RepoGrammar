@@ -92,8 +92,10 @@ The current implementation covers the first structural slice only:
 - semantic-worker-compatible project-mode module graph construction that uses
   safe `.py` paths plus sanitized `pyproject.toml` source roots when `tomllib`
   is available, emits `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
-  repo-local module matches, and emits typed `UNKNOWN` for ambiguous/missing
-  repo-local imports or `sys.path` mutation;
+  repo-local module matches, resolves requested-project `conftest.py` fixture
+  names through pytest's directory hierarchy as structural fixture-edge facts,
+  and emits typed `UNKNOWN` for ambiguous/missing repo-local imports or
+  `sys.path` mutation;
 - default parser-mode indexing now passes the discovered repo-relative `.py`
   inventory into the private CPython parse-document request so the same
   source-tied parse pass can emit unique repo-local import facts and typed

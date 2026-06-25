@@ -203,10 +203,13 @@ parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
 simple calls, same-file pytest fixture edges, path-derived module names,
 CPython `symtable` scope anchors, and typed dynamic/unresolved/ambiguous
-`UNKNOWN` cases. The Rust parser adapter validates and persists those payloads
-as internal `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same
-code-unit evidence. They are not passed to the family builder and remain
-blocked from claim-input readiness as insufficient support.
+`UNKNOWN` cases. The semantic-worker-compatible project mode can additionally
+resolve requested-project `conftest.py` fixture names through pytest's directory
+hierarchy as structural fixture-edge facts. The Rust parser adapter validates
+and persists parse-document payloads as internal `STRUCTURAL` or `UNKNOWN`
+semantic fact records tied to the same code-unit evidence. They are not passed
+to the family builder and remain blocked from claim-input readiness as
+insufficient support.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store

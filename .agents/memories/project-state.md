@@ -48,9 +48,12 @@ virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, same-file pytest fixture edges, and typed dynamic or
-unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts,
-root `pyproject.toml` persisted as a `python-config` file and `project_config`
-unit with sanitized structural config metadata or typed config `UNKNOWN`,
+unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts.
+The semantic-worker-compatible Python project mode can additionally output
+`conftest.py` fixture hierarchy edges, but those are not default family
+evidence. Root `pyproject.toml` is persisted as a `python-config` file and
+`project_config` unit with sanitized structural config metadata or typed config
+`UNKNOWN`,
 syntax-origin TS/JS and Python framework-role fact storage, bounded exact-anchor
 Python support derivation,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
@@ -91,7 +94,8 @@ discovery, hash-checked source reads, dependency-free TS/JS syntax-only
 code-unit extraction, CPython AST-backed Python structural code-unit
 extraction, worker-local Python structural fact payloads for import bindings,
 decorator anchors, class bases, simple call targets, same-file pytest fixture
-edges, and typed dynamic/unresolved `UNKNOWN` cases, syntax-origin
+edges, and typed dynamic/unresolved `UNKNOWN` cases, semantic-worker-compatible
+project-mode `conftest.py` fixture hierarchy edges, syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config

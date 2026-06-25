@@ -271,6 +271,14 @@ def has_pytest_fixture_decorator(node: ast.AST) -> bool:
     return any(name in {"fixture", "pytest.fixture"} for name in decorator_names(node))
 
 
+def pytest_fixture_names_from_tree(tree: ast.Module) -> set[str]:
+    return {
+        item.name
+        for item in tree.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(item)
+    }
+
+
 def base_names(node: ast.ClassDef) -> list[str]:
     return [name for base in node.bases if (name := dotted_name(base))]
 
@@ -985,10 +993,12 @@ def collect_fixture_facts(
     repository_revision: str,
     subject_unit_id: str,
     fixture_names: set[str],
+    conftest_fixture_names: set[str] | None,
     facts: list[dict[str, Any]],
 ) -> None:
     if not node.name.startswith("test_"):
         return
+    conftest_fixture_names = conftest_fixture_names or set()
     for arg in node.args.args:
         if arg.arg == "self":
             continue
@@ -1006,6 +1016,21 @@ def collect_fixture_facts(
                     start=start,
                     end=end,
                     anchor_kind="pytest_fixture_edge",
+                ),
+            )
+        elif arg.arg in conftest_fixture_names:
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="SYMBOL",
+                    subject_unit_id=subject_unit_id,
+                    target=f"fixture:{arg.arg}",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="pytest_conftest_fixture_edge",
                 ),
             )
         else:
@@ -1031,6 +1056,7 @@ def analyze_source(
     repository_revision: str,
     module_index: dict[str, list[str]] | None = None,
     source_roots: list[str] | None = None,
+    conftest_fixture_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     starts = byte_line_starts(source)
     units: list[dict[str, Any]] = []
@@ -1077,11 +1103,7 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
-    fixture_names = {
-        item.name
-        for item in tree.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(item)
-    }
+    fixture_names = pytest_fixture_names_from_tree(tree)
 
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1123,6 +1145,7 @@ def analyze_source(
                 repository_revision,
                 subject_unit_id,
                 fixture_names,
+                conftest_fixture_names,
                 facts,
             )
             collect_call_facts(
@@ -1411,6 +1434,36 @@ def project_source_roots(project_root: Path) -> list[str]:
     return sorted(root for root in roots if isinstance(root, str) and is_safe_repo_relative_path(root))
 
 
+def pytest_fixture_names(source: str) -> set[str]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return pytest_fixture_names_from_tree(tree)
+
+
+def conftest_fixture_index(file_records: list[tuple[str, str, str]]) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for relative_path, source, _file_hash in file_records:
+        if relative_path == "conftest.py" or relative_path.endswith("/conftest.py"):
+            names = pytest_fixture_names(source)
+            if names:
+                result[relative_path] = names
+    return result
+
+
+def applicable_conftest_fixture_names(path: str, fixture_index: dict[str, set[str]]) -> set[str]:
+    names: set[str] = set()
+    current_dir = parent_path(path)
+    while True:
+        conftest_path = f"{current_dir}/conftest.py" if current_dir else "conftest.py"
+        names.update(fixture_index.get(conftest_path, set()))
+        if not current_dir:
+            break
+        current_dir = parent_path(current_dir)
+    return names
+
+
 def emit_fact_message(request_id: str, fact_payload: dict[str, Any]) -> None:
     message(
         {
@@ -1484,6 +1537,7 @@ def analyze_project(payload: dict[str, Any]) -> int:
         [relative_path for relative_path, _source, _file_hash in file_records],
         source_roots,
     )
+    fixture_index = conftest_fixture_index(file_records)
     for relative_path, source, file_hash in file_records:
         units, _diagnostics, facts = analyze_source(
             relative_path,
@@ -1492,6 +1546,7 @@ def analyze_project(payload: dict[str, Any]) -> int:
             "UNKNOWN",
             module_index,
             source_roots,
+            applicable_conftest_fixture_names(relative_path, fixture_index),
         )
         for fact_payload in facts:
             emit_fact_message(request_id, fact_payload)

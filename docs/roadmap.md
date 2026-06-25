@@ -180,8 +180,10 @@ evidence contracts remain validated together.
   and private `tomllib` project-config summaries. The semantic-worker-compatible
   project mode now builds a bounded module graph for requested `.py` files and
   emits structural repo-local import facts only for unique module-level matches,
-  with typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
-  mutation. Default indexing now passes discovered `.py` inventory to the
+  resolves requested-project `conftest.py` fixture names through pytest's
+  directory hierarchy, and emits typed `UNKNOWN` for ambiguous/missing
+  repo-local imports and `sys.path` mutation. Default indexing now passes
+  discovered `.py` inventory to the
   private parser request so source-tied repo-local import facts can be
   persisted through the Rust storage/readiness gate. Project-config summaries
   are default indexing structural context but not claim evidence. The current

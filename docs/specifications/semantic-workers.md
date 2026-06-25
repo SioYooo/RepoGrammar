@@ -270,7 +270,10 @@ unresolved pytest fixture injection cases. Default indexing passes the
 discovered repo-relative `.py` inventory into that private parse-document
 request, so unique repo-local module imports can be recorded as
 `STRUCTURAL` source-tied parser facts and ambiguous/missing imports can remain
-typed `UNKNOWN`s. The default product indexing path validates and stores those
+typed `UNKNOWN`s. The semantic-worker-compatible Python project mode can also
+resolve requested `conftest.py` fixture names through pytest's parent-directory
+hierarchy as structural fixture-edge facts without returning source snippets or
+absolute paths. The default product indexing path validates and stores those
 private parse-document payloads as internal parser-origin semantic facts with
 `STRUCTURAL` or `UNKNOWN` certainty, but does not expose raw facts through
 CLI/MCP query commands and does not pass raw facts to family construction. The

@@ -145,9 +145,10 @@ allowed.
   through `python3`, validate private parse-document JSON output, syntax-error
   diagnostics, parse-document structural facts for imports/decorators/class
   bases/calls/fixture edges, semantic-worker-compatible NDJSON structural facts
-  plus framework-role output, typed `UNKNOWN` output for dynamic and unresolved
-  cases, oversized request rejection, unsafe path and symlink-escape rejection,
-  bounded semantic-mode source reads, and absence of source snippets, absolute
+  plus framework-role output, requested-project `conftest.py` fixture hierarchy
+  edges, typed `UNKNOWN` output for dynamic and unresolved cases, oversized
+  request rejection, unsafe path and symlink-escape rejection, bounded
+  semantic-mode source reads, and absence of source snippets, absolute
   paths, or unsafe dynamic-import literal targets.
 - Transitional release fixture smoke tests currently copy committed TS/JS source
   fixtures from `src/fixtures/typescript/release/v0_1/` and Python source

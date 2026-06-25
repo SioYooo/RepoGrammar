@@ -31,8 +31,10 @@
   anchors, CPython `symtable` structural scope anchors, and a private
   `tomllib` project-config summary mode. Its semantic-worker-compatible
   project mode now resolves only unique repo-local module imports as
-  `STRUCTURAL` facts and reports ambiguous/missing repo-local imports or
-  `sys.path` mutation as typed `UNKNOWN`. Default parser-mode indexing now
+  `STRUCTURAL` facts, resolves requested-project `conftest.py` fixture names
+  through pytest's directory hierarchy as structural fixture-edge facts, and
+  reports ambiguous/missing repo-local imports or `sys.path` mutation as typed
+  `UNKNOWN`. Default parser-mode indexing now
   passes discovered repo-relative `.py` inventory into private parse-document
   requests so source-tied repo-local import facts can be persisted without
   launching a Python semantic worker; oversized context payloads fall back to
