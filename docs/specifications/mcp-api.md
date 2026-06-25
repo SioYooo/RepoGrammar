@@ -79,10 +79,12 @@ query execution exists, MCP responses must preserve `UNKNOWN` class, reason
 code, affected claim, provenance, freshness status, and suggested recovery
 action where available.
 The current Rust storage/query boundary has an internal active-generation
-claim-input snapshot plus semantic-fact freshness/readiness gate for future
-claim builders. MCP responses must not expose semantic-worker facts, raw
-snapshot contents, or treat them as family evidence until query execution
-consumes that gate and family-evidence claim builders exist.
+claim-input snapshot, semantic-fact freshness/readiness gate, and conservative
+EC-MVFI-lite family read model. MCP responses must not expose semantic-worker
+facts, raw snapshot contents, or treat framework heuristics as family evidence.
+When MCP transport is implemented, it must reuse the CLI query layer's typed
+`UNKNOWN` and family-evidence boundaries rather than inventing a parallel
+contract.
 
 ## Serving mode
 

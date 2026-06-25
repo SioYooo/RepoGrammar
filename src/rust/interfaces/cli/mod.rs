@@ -3,7 +3,8 @@
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{plan_install, AgentTarget, InstallRequest, InstallScope};
 use crate::application::query::{
-    query_preflight, repository_status_unavailable_fallback, IndexedCodeUnitsReport,
+    query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyListReport,
+    FamilyLookupReport, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
     IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{
@@ -57,6 +58,21 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<IndexedCodeUnitsReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("units"))
+    }
+
+    fn families(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<FamilyListReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("families"))
+    }
+
+    fn family_lookup(
+        &self,
+        _request: RepositoryStatusRequest,
+        _target: Option<&str>,
+    ) -> Result<FamilyLookupReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("family"))
     }
 }
 
@@ -339,13 +355,41 @@ where
         };
     }
 
-    query_fallback(
-        command,
-        options.json,
-        "query execution requires pattern-family evidence",
-        "run repogrammar index after pattern-family indexing is implemented",
-        false,
-    )
+    match command {
+        "families" => match runtime.families(request) {
+            Ok(report) if options.json => CliOutput::success(families_json(command, &report)),
+            Ok(report) => CliOutput::success(families_human(&report)),
+            Err(_) => query_fallback(
+                command,
+                options.json,
+                "repository status is unavailable",
+                "run repogrammar doctor",
+                false,
+            ),
+        },
+        "family" | "member" | "find" | "explain" | "check" => {
+            match runtime.family_lookup(request, options.target.as_deref()) {
+                Ok(report) if options.json => {
+                    CliOutput::success(family_lookup_json(command, &report))
+                }
+                Ok(report) => CliOutput::success(family_lookup_human(command, &report)),
+                Err(_) => query_fallback(
+                    command,
+                    options.json,
+                    "repository status is unavailable",
+                    "run repogrammar doctor",
+                    false,
+                ),
+            }
+        }
+        _ => query_fallback(
+            command,
+            options.json,
+            "query execution requires pattern-family evidence",
+            "run repogrammar index after pattern-family indexing is implemented",
+            false,
+        ),
+    }
 }
 
 fn query_fallback(
@@ -475,6 +519,190 @@ fn indexed_units_json(report: &IndexedCodeUnitsReport) -> String {
         "mining": "deferred",
         "units": units,
     }))
+}
+
+fn families_human(report: &FamilyListReport) -> String {
+    if report.families.is_empty() {
+        return format!(
+            "families: UNKNOWN\nactive_generation: {}\nunknown: InsufficientSupport\nrecovery: run repogrammar index after adding compatible implementations\n",
+            report.active_generation
+        );
+    }
+    let mut output = format!(
+        "families: evidence-backed pattern families\nactive_generation: {}\ncount: {}\n",
+        report.active_generation,
+        report.families.len()
+    );
+    for family in &report.families {
+        output.push_str(&format!(
+            "family: {}\tclassification: {}\tsupport: {}\n",
+            family.family_id, family.classification, family.support
+        ));
+    }
+    output
+}
+
+fn families_json(command: &str, report: &FamilyListReport) -> String {
+    json_line(json!({
+        "command": command,
+        "status": if report.families.is_empty() { "UNKNOWN" } else { "ok" },
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "families": report.families.iter().map(|family| {
+            json!({
+                "family_id": family.family_id,
+                "classification": family.classification,
+                "support": family.support,
+            })
+        }).collect::<Vec<_>>(),
+        "unknowns": unknowns_json(&report.unknowns),
+    }))
+}
+
+fn family_lookup_human(command: &str, report: &FamilyLookupReport) -> String {
+    match report {
+        FamilyLookupReport::Found(family) => {
+            let mut output = format!(
+                "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
+                family.active_generation, family.family_id, family.classification, family.support
+            );
+            if command == "check" {
+                output.push_str("advisory_status: UNKNOWN\n");
+                output.push_str("reason: runtime equivalence remains unproven\n");
+            }
+            for member in &family.members {
+                output.push_str(&format!(
+                    "member: {}\trole: {}\n",
+                    member.code_unit_id, member.role
+                ));
+            }
+            for evidence in &family.evidence {
+                output.push_str(&format!(
+                    "evidence: {}\tpath: {}\trange: {}-{}\tcontent_hash: {}\n",
+                    evidence.evidence_id,
+                    evidence.path,
+                    evidence.start_byte,
+                    evidence.end_byte,
+                    evidence.content_hash.as_str()
+                ));
+            }
+            for slot in &family.variation_slots {
+                output.push_str(&format!(
+                    "variation_slot: {}\tdescription: {}\n",
+                    slot.slot_id, slot.description
+                ));
+            }
+            for unknown in &family.unknowns {
+                output.push_str(&format!(
+                    "unknown: {}:{} affected_claim: {}\n",
+                    unknown.class.as_protocol_str(),
+                    unknown.reason.as_protocol_str(),
+                    unknown.affected_claim
+                ));
+            }
+            output
+        }
+        FamilyLookupReport::Unknown(report) => family_unknown_human(command, report),
+    }
+}
+
+fn family_unknown_human(command: &str, report: &FamilyUnknownReport) -> String {
+    let mut output = format!(
+        "{command}: UNKNOWN\nactive_generation: {}\n",
+        report.active_generation
+    );
+    for unknown in &report.unknowns {
+        output.push_str(&format!(
+            "unknown: {}:{} affected_claim: {}\n",
+            unknown.class.as_protocol_str(),
+            unknown.reason.as_protocol_str(),
+            unknown.affected_claim
+        ));
+        if let Some(recovery) = &unknown.recovery {
+            output.push_str("recovery: ");
+            output.push_str(recovery);
+            output.push('\n');
+        }
+    }
+    output
+}
+
+fn family_lookup_json(command: &str, report: &FamilyLookupReport) -> String {
+    match report {
+        FamilyLookupReport::Found(family) => family_detail_json(command, family),
+        FamilyLookupReport::Unknown(report) => json_line(json!({
+            "command": command,
+            "status": "UNKNOWN",
+            "implemented": true,
+            "active_generation": report.active_generation,
+            "unknowns": unknowns_json(&report.unknowns),
+        })),
+    }
+}
+
+fn family_detail_json(command: &str, family: &FamilyDetailReport) -> String {
+    let check = if command == "check" {
+        Some(json!({
+            "advisory_status": "UNKNOWN",
+            "reason": "runtime equivalence remains unproven",
+            "fail_on": "none",
+        }))
+    } else {
+        None
+    };
+    json_line(json!({
+        "command": command,
+        "status": "ok",
+        "implemented": true,
+        "active_generation": family.active_generation,
+        "family": {
+            "family_id": family.family_id,
+            "classification": family.classification,
+            "support": family.support,
+        },
+        "members": family.members.iter().map(|member| {
+            json!({
+                "family_id": member.family_id,
+                "code_unit_id": member.code_unit_id,
+                "role": member.role,
+            })
+        }).collect::<Vec<_>>(),
+        "variation_slots": family.variation_slots.iter().map(|slot| {
+            json!({
+                "family_id": slot.family_id,
+                "slot_id": slot.slot_id,
+                "description": slot.description,
+            })
+        }).collect::<Vec<_>>(),
+        "evidence": family.evidence.iter().map(|evidence| {
+            json!({
+                "evidence_id": evidence.evidence_id,
+                "family_id": evidence.family_id,
+                "code_unit_id": evidence.code_unit_id,
+                "path": evidence.path,
+                "content_hash": evidence.content_hash.as_str(),
+                "start_byte": evidence.start_byte,
+                "end_byte": evidence.end_byte,
+                "note": evidence.note,
+            })
+        }).collect::<Vec<_>>(),
+        "unknowns": unknowns_json(&family.unknowns),
+        "check": check,
+    }))
+}
+
+fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
+    unknowns
+        .iter()
+        .map(|unknown| {
+            json!({
+                "class": unknown.class.as_protocol_str(),
+                "reason": unknown.reason.as_protocol_str(),
+                "affected_claim": unknown.affected_claim,
+                "recovery": unknown.recovery,
+            })
+        })
+        .collect()
 }
 
 fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
@@ -804,6 +1032,7 @@ fn handle_deferred_long_running(command: &str, options: &LifecycleOptions) -> Cl
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct QueryOptions {
     project_path: Option<String>,
+    target: Option<String>,
     json: bool,
 }
 
@@ -1037,7 +1266,12 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 index += 1;
             }
             "--include-variations" | "--include-exceptions" => index += 1,
-            value if !value.starts_with('-') => index += 1,
+            value if !value.starts_with('-') => {
+                if options.target.is_none() {
+                    options.target = Some(value.to_string());
+                }
+                index += 1;
+            }
             other => return Err(format!("unknown query option: {other}")),
         }
     }
@@ -1582,7 +1816,9 @@ mod tests {
     use crate::application::indexing::{
         index_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
-    use crate::application::query::{list_code_units, list_indexed_files};
+    use crate::application::query::{
+        list_code_units, list_families, list_indexed_files, lookup_family, FamilySummary,
+    };
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
         repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -1722,6 +1958,129 @@ mod tests {
         }
     }
 
+    struct FamilyQueryRuntime;
+
+    impl FamilyQueryRuntime {
+        fn status_report() -> RepositoryStatusReport {
+            RepositoryStatusReport {
+                state_dir: DEFAULT_STATE_DIR.to_string(),
+                status: RepositoryStatus::Initialized {
+                    active_generation: "gen-000001".to_string(),
+                },
+                manifest: RepositoryManifestStatus::Valid,
+                manifest_schema_version: Some(1),
+                missing_subdirs: Vec::new(),
+                storage: RepositoryImplementationStatus::Available,
+                indexing: RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+                storage_inspection: None,
+                storage_error: None,
+            }
+        }
+
+        fn detail() -> FamilyDetailReport {
+            let hash = crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid content hash");
+            FamilyDetailReport {
+                active_generation: "gen-000001".to_string(),
+                family_id: "family:typescript:express_route:express".to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+                support: 2,
+                members: vec![crate::ports::family_store::IndexedFamilyMemberRecord {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
+                    role: "framework:express.route_handler".to_string(),
+                }],
+                variation_slots: vec![crate::ports::family_store::IndexedVariationSlotRecord {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    slot_id: "slot:runtime_unknown".to_string(),
+                    description:
+                        "non_blocking_unknown:FrameworkMagic:runtime equivalence remains unproven"
+                            .to_string(),
+                }],
+                evidence: vec![crate::ports::family_store::IndexedFamilyEvidenceRecord {
+                    evidence_id: "family-evidence:000000".to_string(),
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
+                    path: "src/routes/a.ts".to_string(),
+                    content_hash: hash,
+                    start_byte: 0,
+                    end_byte: 20,
+                    note: "DOMINANT_PATTERN support evidence".to_string(),
+                }],
+                unknowns: vec![FamilyQueryUnknown {
+                    class: crate::core::model::UnknownClass::NonBlocking,
+                    reason: crate::core::model::UnknownReasonCode::FrameworkMagic,
+                    affected_claim: "runtime_equivalence".to_string(),
+                    recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+                }],
+            }
+        }
+    }
+
+    impl CliRuntime for FamilyQueryRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            unreachable!("family query tests do not index")
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            Ok(Self::status_report())
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("family query tests do not call doctor")
+        }
+
+        fn families(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<FamilyListReport, RepoGrammarError> {
+            Ok(FamilyListReport {
+                active_generation: "gen-000001".to_string(),
+                families: vec![FamilySummary {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                    support: 2,
+                }],
+                unknowns: Vec::new(),
+            })
+        }
+
+        fn family_lookup(
+            &self,
+            _request: RepositoryStatusRequest,
+            target: Option<&str>,
+        ) -> Result<FamilyLookupReport, RepoGrammarError> {
+            if target == Some("src/routes/a.ts") {
+                Ok(FamilyLookupReport::Found(Self::detail()))
+            } else {
+                Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+                    active_generation: "gen-000001".to_string(),
+                    unknowns: vec![FamilyQueryUnknown {
+                        class: crate::core::model::UnknownClass::Blocking,
+                        reason: crate::core::model::UnknownReasonCode::InsufficientSupport,
+                        affected_claim: "query target".to_string(),
+                        recovery: Some(
+                            "run repogrammar index after adding compatible implementations"
+                                .to_string(),
+                        ),
+                    }],
+                }))
+            }
+        }
+    }
+
     impl CliRuntime for TestRuntime {
         fn index_repository(
             &self,
@@ -1808,6 +2167,23 @@ mod tests {
         ) -> Result<IndexedCodeUnitsReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
             list_code_units(&store)
+        }
+
+        fn families(
+            &self,
+            request: RepositoryStatusRequest,
+        ) -> Result<FamilyListReport, RepoGrammarError> {
+            let store = self.store_for_status_request(&request)?;
+            list_families(&store)
+        }
+
+        fn family_lookup(
+            &self,
+            request: RepositoryStatusRequest,
+            target: Option<&str>,
+        ) -> Result<FamilyLookupReport, RepoGrammarError> {
+            let store = self.store_for_status_request(&request)?;
+            lookup_family(&store, target)
         }
     }
 
@@ -2134,20 +2510,71 @@ mod tests {
         let output =
             run_with_context_and_runtime(["find", "--json"], workspace.path(), &env, &runtime);
 
-        assert_eq!(output.status, 2);
-        assert!(output.stdout.is_empty());
-        let fallback: Value =
-            serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
-        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
-        assert_eq!(
-            fallback["reason"],
-            "query execution requires pattern-family evidence"
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let unknown: Value =
+            serde_json::from_str(output.stdout.trim()).expect("query UNKNOWN must be JSON");
+        assert_eq!(unknown["command"], "find");
+        assert_eq!(unknown["status"], "UNKNOWN");
+        assert_eq!(unknown["implemented"], true);
+        assert_eq!(unknown["active_generation"], "gen-000001");
+        assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
+    }
+
+    #[test]
+    fn family_query_json_returns_active_family_detail_without_source_leakage() {
+        let workspace = TempWorkspace::new("cli-family-query-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
         );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!output.stdout.contains("res.json"));
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+        assert_eq!(value["command"], "find");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["implemented"], true);
         assert_eq!(
-            fallback["guidance"],
-            "run repogrammar index after pattern-family indexing is implemented"
+            value["family"]["family_id"],
+            "family:typescript:express_route:express"
         );
-        assert_eq!(fallback["implemented"], false);
+        assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(value["unknowns"][0]["reason"], "FrameworkMagic");
+    }
+
+    #[test]
+    fn family_check_human_remains_advisory_when_runtime_equivalence_is_unknown() {
+        let workspace = TempWorkspace::new("cli-family-check-human");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            ["check", "src/routes/a.ts"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(output.stdout.contains("check: evidence-backed family"));
+        assert!(output.stdout.contains("advisory_status: UNKNOWN"));
+        assert!(output
+            .stdout
+            .contains("runtime equivalence remains unproven"));
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -2564,17 +2991,15 @@ mod tests {
         for command in ["find", "families", "family", "member", "explain", "check"] {
             let output =
                 run_with_context_and_runtime([command, "--json"], workspace.path(), &env, &runtime);
-            assert_eq!(output.status, 2);
-            assert!(output.stdout.is_empty());
-            let fallback: Value =
-                serde_json::from_str(output.stderr.trim()).expect("query fallback JSON");
-            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
-            assert_eq!(
-                fallback["reason"],
-                "query execution requires pattern-family evidence"
-            );
-            assert_eq!(fallback["command"], command);
-            assert_eq!(fallback["implemented"], false);
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            let unknown: Value =
+                serde_json::from_str(output.stdout.trim()).expect("query UNKNOWN JSON");
+            assert_eq!(unknown["status"], "UNKNOWN");
+            assert_eq!(unknown["command"], command);
+            assert_eq!(unknown["implemented"], true);
+            assert_eq!(unknown["active_generation"], "gen-000001");
+            assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
         }
     }
 

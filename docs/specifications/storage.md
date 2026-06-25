@@ -124,16 +124,17 @@ conservative IR containment edges, then activates
 `.repogrammar/current-generation` after validation. It does not yet create a
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, freshness
 manifests, or family-evidence query execution. The current storage adapter has
-generation-scoped family tables and a FamilyStore port for future claim
-builders, but `index` and `sync` do not populate families. Current TS/JS
-indexing may populate semantic-fact/evidence rows with syntax-origin
-`FRAMEWORK_ROLE` records for recognized framework-shaped code units; those rows
-use `FRAMEWORK_HEURISTIC` certainty and same-generation code-unit evidence. The
-CLI can read the active generation for `files` and `units` inventory/debugging
-output only. The storage port can also list the active structural IR graph and
-load an internal active-generation claim-input snapshot containing files, code
-units, IR nodes/edges, and semantic facts for future claim builders. These paths
-are internal and are not family-query or MCP surfaces. Active-generation reads
+generation-scoped family tables and a FamilyStore port. The product `index` and
+`sync` path now invokes a conservative EC-MVFI-lite builder before activation,
+but that builder writes family rows only when compatible framework-role
+candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
+support. Current default TS/JS indexing may populate semantic-fact/evidence rows
+with syntax-origin `FRAMEWORK_ROLE` records for recognized framework-shaped code
+units; those rows use `FRAMEWORK_HEURISTIC` certainty and same-generation
+code-unit evidence, and do not create family rows by themselves. The CLI can
+read the active generation for `files`, `units`, and FamilyStore-backed
+pattern-family commands. Raw structural IR and semantic-fact read paths remain
+internal. Active-generation reads
 open one generation read-only, require a regular `current-generation` pointer,
 validate the generation schema and health, and recheck stored repo-relative
 paths, strict content hashes, languages, unit ids, byte ranges, IR node/edge
@@ -194,11 +195,13 @@ reasons, and `index`/`sync` store the discovered file manifest in a
 generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
-families, and pattern-family evidence are not stored by `index`/`sync`.
+families, and pattern-family evidence are not stored by default syntax-only
+`index`/`sync` runs.
 Syntax-origin framework-role facts may be stored in semantic-fact/evidence rows
 for the same generation, but they remain internal framework-heuristic facts and
 must not create family rows, family-bound evidence, or query success by
-themselves.
+themselves. Family rows may be created only when the family builder receives
+stronger compatible semantic/dataflow support.
 File metadata size checks are an optimization, not the safety boundary:
 discovery hashing and transient source-store reads must open regular files and
 read at most `max_file_bytes + 1` bytes, accepting exactly `max_file_bytes` and
@@ -208,7 +211,7 @@ Semantic-worker-produced facts are stored only when an explicit worker is
 configured and the facts pass same-generation evidence validation. Syntax-origin
 framework-role facts use the same storage validation path but do not imply that
 a TypeScript compiler worker ran.
-The active indexed-file and code-unit rows are exposed only through the limited
+The active indexed-file and code-unit rows are exposed through the limited
 `files`/`units` CLI read path and must not be treated as family evidence. Active
 `units` reads must revalidate stored code-unit ids against their repo-relative
 paths before rendering output so tampered generation databases cannot smuggle

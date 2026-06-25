@@ -75,7 +75,7 @@ pub fn record_semantic_fact(
 }
 
 pub fn record_family(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + ?Sized),
     generation: &GenerationHandle,
     family: &IndexedFamilyRecord,
 ) -> Result<(), RepoGrammarError> {
@@ -86,7 +86,7 @@ pub fn record_family(
 }
 
 pub fn record_family_member(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + ?Sized),
     generation: &GenerationHandle,
     member: &IndexedFamilyMemberRecord,
 ) -> Result<(), RepoGrammarError> {
@@ -97,7 +97,7 @@ pub fn record_family_member(
 }
 
 pub fn record_variation_slot(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + ?Sized),
     generation: &GenerationHandle,
     slot: &IndexedVariationSlotRecord,
 ) -> Result<(), RepoGrammarError> {
@@ -108,7 +108,7 @@ pub fn record_variation_slot(
 }
 
 pub fn record_family_evidence(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + ?Sized),
     generation: &GenerationHandle,
     evidence: &IndexedFamilyEvidenceRecord,
 ) -> Result<(), RepoGrammarError> {

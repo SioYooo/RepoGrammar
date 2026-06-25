@@ -83,6 +83,11 @@ family claim builders. A fresh supported fact kind is still only eligible input;
 it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result
 until EC-MVFI support, compatibility, and contrastive evidence checks are
 implemented.
+The current EC-MVFI-lite implementation is deliberately narrow: it can only
+store a `DOMINANT_PATTERN` family when repeated compatible framework-role
+candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
+non-framework evidence. Otherwise family queries must return typed `UNKNOWN`
+rather than upgrading syntax/framework heuristics into claims.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

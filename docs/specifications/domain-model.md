@@ -57,8 +57,11 @@ framework runtime behavior, or family membership.
 
 A `PatternFamily` will group related code units that share an implementation
 pattern. The current storage substrate can persist generation-scoped family
-records, family members, variation slots, and family-bound evidence for future
-claim builders. It does not yet mine families or make CLI/MCP family claims.
+records, family members, variation slots, and family-bound evidence. The
+current EC-MVFI-lite builder can populate those records only for repeated
+compatible candidates backed by strong semantic/dataflow support; syntax-only
+framework-role facts produce typed `UNKNOWN` instead of a family claim. Full
+template induction, exception mining, and MCP family responses remain deferred.
 
 ## CanonicalTemplate
 

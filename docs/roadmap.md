@@ -43,8 +43,12 @@
   `UNKNOWN` fact kinds with typed `UNKNOWN` before any future family claim
   builder can consume them.
 - FamilyStore substrate for generation-scoped family records, members,
-  variation slots, and family-bound evidence. It is not yet populated by
-  `index`/`sync` and does not make pattern-family query commands implemented.
+  variation slots, and family-bound evidence, plus a conservative EC-MVFI-lite
+  builder that only populates family rows from repeated compatible candidates
+  with strong semantic/dataflow support.
+- FamilyStore-backed `families`, `family`, `member`, `find`, `explain`, and
+  `check` CLI read paths that return stored family detail or typed
+  `UNKNOWN`; missing active indexes still use fallback guidance.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -85,31 +89,31 @@ The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
 indexing, syntax-origin framework-role fact storage, CodeUnit-derived IR
 node/containment-edge storage, active
-file-manifest-only or syntax-only files/units inventory reads, internal active
+file-manifest-only or syntax-only files/units inventory reads, FamilyStore-backed
+pattern-family query read paths with typed `UNKNOWN`, internal active
 claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash
-freshness and claim-input readiness gate. The next implementation slice is the
-hardening checkpoint, not new product surface. After it passes, continue one
-boundary at a time: family-query contracts, full family-claim gates, or
-TypeScript compiler toolchain preparation. Keep syntax-only code units,
-structural IR, syntax-origin framework-role facts, and stored semantic facts out
-of family claims until family-evidence claim builders exist.
+freshness and claim-input readiness gate. Continue one boundary at a time:
+read-only MCP serving over the query layer, TypeScript compiler toolchain
+preparation, or richer family-claim gates. Keep syntax-only code units,
+structural IR, syntax-origin framework-role facts, and weak stored semantic
+facts out of family claims unless the conservative builder has stronger
+compatible support.
 
-Do not advance mining, query execution, or MCP serving until parser output,
-family-evidence read paths, freshness checks, and evidence contracts are
-validated together, and do not begin those paths while checkpoint P1 issues are
-open.
+Do not advance full mining or MCP serving until parser output,
+family-evidence read paths, freshness checks, and evidence contracts remain
+validated together.
 
 ## Command implementation path
 
-- Add full repository/worktree freshness metadata and family-claim gates for
-  stored semantic facts before they can influence pattern-family evidence.
+- Add full repository/worktree freshness metadata for stored family evidence.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
-- Implement `find`, `family`, `explain`, and `check` against real stored
-  pattern-family evidence.
+- Extend `find`, `family`, `explain`, and `check` beyond the current
+  EC-MVFI-lite/typed-UNKNOWN slice as stronger semantic evidence becomes
+  available.
 - Implement read-only `serve` for MCP with the default `repogrammar_context`
   tool and missing/stale-index fallback semantics.
 - Implement safe installer writes only after native agent detection, backups,

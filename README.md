@@ -22,19 +22,18 @@ storage, CodeUnit-derived structural IR storage, SQLite generation-storage
 wiring, a dependency-free TypeScript worker unavailable stub, and repository
 guard checks.
 
-It does not yet implement pattern mining, TypeScript compiler analysis, query
-execution, or a working MCP server. The Rust-side TypeScript semantic-worker
-adapter can execute a configured process, send the v1 request payload, and
-validate NDJSON v1 facts. A checked-in worker stub can validate stdin and report
-semantic analysis as unavailable. `index` and `sync` do not launch a worker by
-default; when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, they
-may run that worker with optional argv from
+It does not yet implement TypeScript compiler analysis, MCP serving, installer
+writes, or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
+can execute a configured process, send the v1 request payload, and validate
+NDJSON v1 facts. A checked-in worker stub can validate stdin and report semantic
+analysis as unavailable. `index` and `sync` do not launch a worker by default;
+when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, they may run
+that worker with optional argv from
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store only facts that pass the
-building generation's path/hash/range evidence gate. Stored semantic facts are
-not family evidence and do not enable query or MCP claims. The storage/query
-boundary can load an internal read-only claim-input snapshot from one active
-generation, then run a file-hash freshness and readiness gate for future claim
-builders; that gate does not classify families.
+building generation's path/hash/range evidence gate. The current EC-MVFI-lite
+builder may write family records only when compatible framework-role candidates
+also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support;
+syntax-only framework heuristics remain insufficient support.
 `init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
 state. `index` and `sync` now create a SQLite generation from TS/JS discovery
 metadata plus syntax-only `code_units` records and structural IR records:
@@ -43,10 +42,13 @@ per code unit, and conservative containment edges. They may also store
 syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
 recognized Express, React, and Jest/Vitest code-unit shapes, without launching a
 semantic worker. They do not store source snippets, absolute paths, families, or
-pattern-family evidence. `files` and `units` can read the active
-file-manifest-only or syntax-only generation for inventory/debugging, but they
-do not return pattern-family evidence. `status` and `doctor` can distinguish
-file-manifest-only generations from syntax-only code-unit/IR generations.
+pattern-family evidence by default. `files` and `units` can read the active
+file-manifest-only or syntax-only generation for inventory/debugging. Pattern
+family query commands are wired to the active FamilyStore read path: with no
+active index they still return fallback guidance, and with an active index but
+insufficient family evidence they return typed `UNKNOWN` instead of pretending a
+family was proven. `status` and `doctor` can distinguish file-manifest-only
+generations from syntax-only code-unit/IR generations.
 Commands that install agent configuration or serve MCP return explicit
 not-implemented errors until those contracts are implemented and tested.
 
@@ -98,10 +100,11 @@ cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <ta
 
 The lifecycle surface is intentionally present before the full engine exists so
 repo-local state boundaries, command contracts, tests, and documentation can
-stabilize before mining begins. Pattern-family query commands currently return
-explicit missing-index or missing-family-evidence fallback guidance; with
-`--json`, that fallback is a structured object. `files` and `units` are limited
-to active file-manifest-only or syntax-only index metadata.
+stabilize before full mining begins. Pattern-family query commands currently
+return explicit missing-index fallback guidance before `index`; after an active
+index exists, they return typed `UNKNOWN` when family evidence is insufficient.
+With `--json`, both states are parseable. `files` and `units` are limited to
+active file-manifest-only or syntax-only index metadata.
 
 ## Product Shape
 
@@ -112,7 +115,7 @@ to active file-manifest-only or syntax-only index metadata.
 | Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active file-manifest-only or syntax-only files/units read path, validated semantic-fact/evidence write/read substrate, internal active-generation claim-input snapshot, semantic-fact freshness/readiness gate, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, family read paths, migrations, and provenance |
+| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
@@ -205,10 +208,9 @@ v0.1 parallel development plan:
 - keep syntax-only code units structural and non-semantic;
 - keep syntax-origin framework-role facts framework-heuristic and out of family
   claims until stronger evidence and claim builders exist;
-- keep TypeScript compiler API integration, freshness-validated semantic
-  claims, mining, pattern-family query execution, and MCP transport deferred
-  until parser output, storage, and semantic-worker boundaries are validated
-  together.
+- keep TypeScript compiler API integration, full mining, MCP transport, and
+  installer writes deferred until parser output, storage, and semantic-worker
+  boundaries are validated together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 

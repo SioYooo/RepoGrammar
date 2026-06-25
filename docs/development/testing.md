@@ -80,6 +80,11 @@ allowed.
   family validation requiring evidence, active-generation list/show reads,
   tampered family/evidence row rejection, and no source snippet or absolute path
   leakage.
+- Family builder and query tests must cover framework-heuristic-only groups
+  staying `UNKNOWN`, semantic/dataflow-supported repeated candidates becoming
+  eligible family records, no-family active generations returning typed
+  `InsufficientSupport`, family id/path lookup, JSON/human CLI output, advisory
+  `check` behavior, and absence of source snippets or absolute paths.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
@@ -153,7 +158,8 @@ active semantic-fact/evidence read-path validation plus internal active
 claim-input snapshot validation for future claim builders, typed UNKNOWN
 class/reason token validation, internal semantic-fact freshness/readiness gating
 for fresh supported facts, stale evidence, missing source, weak certainty,
-conflicting facts, and `UNKNOWN` fact kind,
+conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
+builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store

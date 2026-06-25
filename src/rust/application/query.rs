@@ -3,11 +3,17 @@
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
-use crate::core::model::{FactCertainty, PatternClassification, SemanticFactKind};
+use crate::core::model::{
+    FactCertainty, PatternClassification, SemanticFactKind, UnknownClass, UnknownReasonCode,
+};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
 use crate::error::RepoGrammarError;
+use crate::ports::family_store::{
+    ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedVariationSlotRecord, StoreError,
+};
 use crate::ports::index_store::{
     IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedSemanticFactRecord,
@@ -94,11 +100,14 @@ pub fn query_preflight(
                     fallback("no active index generation", "run repogrammar index", true)
                 }
                 QueryPreflightOperation::ActiveIndexInventory => QueryPreflightReport::Ready,
-                QueryPreflightOperation::PatternFamilyQuery => fallback(
-                    "query execution requires pattern-family evidence",
-                    "run repogrammar index after pattern-family indexing is implemented",
-                    false,
-                ),
+                QueryPreflightOperation::PatternFamilyQuery
+                    if active_generation == "none"
+                        || active_generation == "not implemented"
+                        || !inventory_indexing_is_readable(status_report.indexing) =>
+                {
+                    fallback("no active index generation", "run repogrammar index", false)
+                }
+                QueryPreflightOperation::PatternFamilyQuery => QueryPreflightReport::Ready,
             }
         }
     }
@@ -153,6 +162,52 @@ pub struct IndexedSemanticFactsReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilySummary {
+    pub family_id: String,
+    pub classification: String,
+    pub support: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyListReport {
+    pub active_generation: String,
+    pub families: Vec<FamilySummary>,
+    pub unknowns: Vec<FamilyQueryUnknown>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyDetailReport {
+    pub active_generation: String,
+    pub family_id: String,
+    pub classification: String,
+    pub support: usize,
+    pub members: Vec<IndexedFamilyMemberRecord>,
+    pub variation_slots: Vec<IndexedVariationSlotRecord>,
+    pub evidence: Vec<IndexedFamilyEvidenceRecord>,
+    pub unknowns: Vec<FamilyQueryUnknown>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyUnknownReport {
+    pub active_generation: String,
+    pub unknowns: Vec<FamilyQueryUnknown>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FamilyLookupReport {
+    Found(FamilyDetailReport),
+    Unknown(FamilyUnknownReport),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyQueryUnknown {
+    pub class: UnknownClass,
+    pub reason: UnknownReasonCode,
+    pub affected_claim: String,
+    pub recovery: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticFactReadinessRequest {
     pub repository_root: String,
     pub max_file_bytes: u64,
@@ -204,6 +259,62 @@ pub fn list_semantic_facts(
         active_generation: snapshot.generation_id,
         facts: snapshot.semantic_facts,
     })
+}
+
+pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoGrammarError> {
+    let active = store.list_active_families().map_err(family_store_error)?;
+    let mut families = Vec::with_capacity(active.families.len());
+    for family in &active.families {
+        let support = store
+            .show_family(&family.family_id)
+            .map_err(family_store_error)?
+            .map(|family| family.members.len())
+            .unwrap_or(0);
+        families.push(FamilySummary {
+            family_id: family.family_id.clone(),
+            classification: family.classification.clone(),
+            support,
+        });
+    }
+    families.sort_by(|left, right| left.family_id.cmp(&right.family_id));
+    let unknowns = if families.is_empty() {
+        vec![insufficient_support_unknown("repository pattern families")]
+    } else {
+        Vec::new()
+    };
+    Ok(FamilyListReport {
+        active_generation: active.generation_id,
+        families,
+        unknowns,
+    })
+}
+
+pub fn lookup_family(
+    store: &impl FamilyStore,
+    target: Option<&str>,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let active = store.list_active_families().map_err(family_store_error)?;
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: active.generation_id,
+            unknowns: vec![insufficient_support_unknown("query target")],
+        }));
+    };
+    for family in active.families {
+        let Some(active_family) = store
+            .show_family(&family.family_id)
+            .map_err(family_store_error)?
+        else {
+            continue;
+        };
+        if family_matches_target(&active_family, target) {
+            return Ok(FamilyLookupReport::Found(family_detail(active_family)));
+        }
+    }
+    Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation: active.generation_id,
+        unknowns: vec![insufficient_support_unknown("query target")],
+    }))
 }
 
 pub fn assess_semantic_fact_readiness(
@@ -263,11 +374,62 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     }
 }
 
+fn family_store_error(error: StoreError) -> RepoGrammarError {
+    match error {
+        StoreError::Unavailable(message)
+        | StoreError::InvalidState(message)
+        | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
+    }
+}
+
+fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
+    FamilyDetailReport {
+        active_generation: family.generation_id,
+        family_id: family.family.family_id,
+        classification: family.family.classification,
+        support: family.members.len(),
+        members: family.members,
+        variation_slots: family.variation_slots,
+        evidence: family.evidence,
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::NonBlocking,
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "runtime_equivalence".to_string(),
+            recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+        }],
+    }
+}
+
+fn family_matches_target(family: &ActiveFamily, target: &str) -> bool {
+    family.family.family_id == target
+        || family.family.classification == target
+        || family
+            .members
+            .iter()
+            .any(|member| member.code_unit_id.contains(target) || member.role.contains(target))
+        || family
+            .evidence
+            .iter()
+            .any(|evidence| evidence.path == target || evidence.path.contains(target))
+}
+
+fn insufficient_support_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnknown {
+    FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::InsufficientSupport,
+        affected_claim: affected_claim.into(),
+        recovery: Some("run repogrammar index after adding compatible implementations".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::application::repository::RepositoryManifestStatus;
     use crate::core::model::{ContentHash, UnknownClass, UnknownReasonCode};
+    use crate::ports::family_store::{
+        ActiveFamilies, IndexedFamilyRecord, IndexedVariationSlotRecord,
+    };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
         ActiveSemanticFacts, GenerationHandle, IndexedIrEdgeRecord, IndexedIrNodeRecord,
@@ -404,6 +566,108 @@ mod tests {
 
         fn inspect(&self) -> Result<StorageInspection, IndexStoreError> {
             panic!("query read tests must not inspect storage")
+        }
+    }
+
+    struct FakeFamilyStore {
+        active: ActiveFamilies,
+        family: Option<ActiveFamily>,
+    }
+
+    impl FakeFamilyStore {
+        fn empty() -> Self {
+            Self {
+                active: ActiveFamilies {
+                    generation_id: "gen-000001".to_string(),
+                    families: Vec::new(),
+                },
+                family: None,
+            }
+        }
+
+        fn with_family() -> Self {
+            let family = ActiveFamily {
+                generation_id: "gen-000001".to_string(),
+                family: IndexedFamilyRecord {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                },
+                members: vec![IndexedFamilyMemberRecord {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    code_unit_id: "unit:src/routes/a.ts#express_route:0-20".to_string(),
+                    role: "framework:express.route_handler".to_string(),
+                }],
+                variation_slots: vec![IndexedVariationSlotRecord {
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    slot_id: "slot:runtime_unknown".to_string(),
+                    description:
+                        "non_blocking_unknown:FrameworkMagic:runtime equivalence remains unproven"
+                            .to_string(),
+                }],
+                evidence: vec![IndexedFamilyEvidenceRecord {
+                    evidence_id: "family-evidence:000000".to_string(),
+                    family_id: "family:typescript:express_route:express".to_string(),
+                    code_unit_id: "unit:src/routes/a.ts#express_route:0-20".to_string(),
+                    path: "src/routes/a.ts".to_string(),
+                    content_hash: semantic_fact().content_hash,
+                    start_byte: 0,
+                    end_byte: 20,
+                    note: "DOMINANT_PATTERN support evidence".to_string(),
+                }],
+            };
+            Self {
+                active: ActiveFamilies {
+                    generation_id: family.generation_id.clone(),
+                    families: vec![family.family.clone()],
+                },
+                family: Some(family),
+            }
+        }
+    }
+
+    impl FamilyStore for FakeFamilyStore {
+        fn record_family(
+            &self,
+            _generation: &GenerationHandle,
+            _family: &IndexedFamilyRecord,
+        ) -> Result<(), StoreError> {
+            panic!("query read tests must not write families")
+        }
+
+        fn record_family_member(
+            &self,
+            _generation: &GenerationHandle,
+            _member: &IndexedFamilyMemberRecord,
+        ) -> Result<(), StoreError> {
+            panic!("query read tests must not write family members")
+        }
+
+        fn record_variation_slot(
+            &self,
+            _generation: &GenerationHandle,
+            _slot: &IndexedVariationSlotRecord,
+        ) -> Result<(), StoreError> {
+            panic!("query read tests must not write variation slots")
+        }
+
+        fn record_family_evidence(
+            &self,
+            _generation: &GenerationHandle,
+            _evidence: &IndexedFamilyEvidenceRecord,
+        ) -> Result<(), StoreError> {
+            panic!("query read tests must not write family evidence")
+        }
+
+        fn list_active_families(&self) -> Result<ActiveFamilies, StoreError> {
+            Ok(self.active.clone())
+        }
+
+        fn show_family(&self, family_id: &str) -> Result<Option<ActiveFamily>, StoreError> {
+            Ok(self
+                .family
+                .as_ref()
+                .filter(|family| family.family.family_id == family_id)
+                .cloned())
         }
     }
 
@@ -633,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn query_preflight_keeps_pattern_queries_fallback_only_without_family_evidence() {
+    fn query_preflight_allows_pattern_queries_for_active_generation() {
         let status = status_report(
             RepositoryStatus::Initialized {
                 active_generation: "gen-000001".to_string(),
@@ -643,20 +907,10 @@ mod tests {
             Vec::new(),
         );
 
-        let fallback = fallback_report(query_preflight(
-            QueryPreflightOperation::PatternFamilyQuery,
-            &status,
-        ));
-
         assert_eq!(
-            fallback.reason,
-            "query execution requires pattern-family evidence"
+            query_preflight(QueryPreflightOperation::PatternFamilyQuery, &status),
+            QueryPreflightReport::Ready
         );
-        assert_eq!(
-            fallback.guidance,
-            "run repogrammar index after pattern-family indexing is implemented"
-        );
-        assert!(!fallback.implemented);
     }
 
     #[test]
@@ -692,6 +946,55 @@ mod tests {
                 units: vec![indexed_unit("src/a.ts")],
             }
         );
+    }
+
+    #[test]
+    fn family_queries_return_typed_unknown_when_no_family_evidence_exists() {
+        let store = FakeFamilyStore::empty();
+
+        let families = list_families(&store).expect("list families");
+        assert_eq!(families.active_generation, "gen-000001");
+        assert!(families.families.is_empty());
+        assert_eq!(families.unknowns[0].class, UnknownClass::Blocking);
+        assert_eq!(
+            families.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+
+        let lookup = lookup_family(&store, Some("/repo/secret.ts")).expect("lookup family");
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("missing family evidence must be UNKNOWN");
+        };
+        assert_eq!(report.active_generation, "gen-000001");
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+        assert_eq!(report.unknowns[0].affected_claim, "query target");
+        let debug = format!("{report:?}");
+        assert!(!debug.contains("/repo/secret.ts"));
+    }
+
+    #[test]
+    fn family_lookup_matches_id_and_evidence_path_without_source_leakage() {
+        let store = FakeFamilyStore::with_family();
+
+        let families = list_families(&store).expect("list families");
+        assert_eq!(families.families.len(), 1);
+        assert_eq!(families.families[0].support, 1);
+
+        for target in ["family:typescript:express_route:express", "src/routes/a.ts"] {
+            let lookup = lookup_family(&store, Some(target)).expect("lookup family");
+            let FamilyLookupReport::Found(report) = lookup else {
+                panic!("expected family detail");
+            };
+            assert_eq!(report.family_id, "family:typescript:express_route:express");
+            assert_eq!(report.support, 1);
+            assert_eq!(report.evidence[0].path, "src/routes/a.ts");
+            let debug = format!("{report:?}");
+            assert!(!debug.contains("/repo"));
+            assert!(!debug.contains("function"));
+        }
     }
 
     #[test]

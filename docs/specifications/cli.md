@@ -240,27 +240,25 @@ reason: repository is not initialized
 guidance: run repogrammar init
 ```
 
-During the bootstrap, pattern-family query commands use this fallback shape and
-append explicit deferred-status text that query execution still requires stored
-pattern-family evidence. `status` and `doctor` may report a clean
-not-initialized state without opening storage. Stored syntax-only code units are
-not family evidence; stored semantic facts are not family evidence until
-freshness gates and family-evidence claim builders exist. Query commands must
-not imply that TypeScript compiler analysis, mining, family-query execution, or
-MCP serving has run. The
+During the bootstrap, pattern-family query commands use this fallback shape only
+when repository state or an active index generation is missing or unreadable.
+`status` and `doctor` may report a clean not-initialized state without opening
+storage. Stored syntax-only code units are not family evidence; stored
+syntax-origin framework-role facts remain insufficient support unless stronger
+compatible semantic/dataflow evidence exists. Query commands must not imply that
+TypeScript compiler analysis, full mining, or MCP serving has run. The
 `files` and `units` commands are a limited exception: when an active
 file-manifest-only or syntax-only generation exists, they may read and return
 repo-relative indexed-file metadata and code-unit records for inventory/debugging
 only.
 The query application layer now owns a shared preflight contract so pattern
-family commands remain fallback-only until family evidence exists, while
-`files` and `units` are treated as implemented inventory commands whose fallback
-means an active inventory index precondition is missing or unreadable.
-Semantic-fact freshness/readiness checks remain internal and must not introduce
-semantic-fact CLI output before family claim builders exist. The presence of
-FamilyStore tables or stored family records is not by itself a CLI success
-contract; pattern-family commands become implemented only after the query layer
-applies freshness, support, compatibility, and evidence selection rules.
+family commands enter the active FamilyStore read path once a readable active
+generation exists, while `files` and `units` are implemented inventory commands
+whose fallback means an active inventory index precondition is missing or
+unreadable. Semantic-fact freshness/readiness checks remain internal and must
+not introduce semantic-fact CLI output. The presence of FamilyStore tables is
+not by itself a strong claim: the query layer must return typed `UNKNOWN` when
+support, compatibility, or evidence is insufficient.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -277,8 +275,10 @@ stable JSON object to `stderr` rather than the human text block:
 
 For `files` and `units`, the command itself is implemented even when its active
 index precondition is not met. Their missing/unreadable-index JSON fallback must
-therefore set `implemented: true`; pattern-family query commands that still lack
-family evidence must set `implemented: false`.
+therefore set `implemented: true`; pattern-family query commands set
+`implemented: false` only for missing/unreadable active index fallback and set
+`implemented: true` when they return typed `UNKNOWN` from a readable active
+generation.
 
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
@@ -288,10 +288,12 @@ Once query execution exists, analysis uncertainty must be reported as typed
 not-yet-implemented query execution, stale-index refusal, and typed `UNKNOWN`
 are separate states and must not be collapsed into one error string.
 
-If repository-local state exists but pattern-family query execution is still
-unimplemented or no family evidence has been built, query commands must keep the
-same `FALLBACK_TO_CODE_SEARCH` marker but use a reason such as `query execution
-requires pattern-family evidence`, not `repository is not initialized`.
+If repository-local state exists but no active generation exists, query commands
+must keep the same `FALLBACK_TO_CODE_SEARCH` marker with `reason: no active
+index generation`, not `repository is not initialized`. If a readable active
+generation exists but no supported family evidence has been built, query
+commands must return typed `UNKNOWN` with `InsufficientSupport` instead of the
+fallback marker.
 If repository status cannot be read safely, the fallback must direct the user to
 `repogrammar doctor` instead of masking corrupted state as an uninitialized
 repository.
@@ -307,6 +309,16 @@ must return the active generation, the same `indexing` contract,
 `semantic_worker: deferred`, `mining: deferred`, and a `units` array of
 repo-relative unit ids, paths, languages, kinds, byte ranges, and strict content
 hashes. Neither command may include source snippets or absolute paths.
+
+For active pattern-family commands, `families --json` returns `status: ok` and a
+`families` array when family rows exist; otherwise it returns `status: UNKNOWN`,
+`implemented: true`, and a typed `InsufficientSupport` unknown on stdout.
+`family`, `member`, `find`, `explain`, and `check` accept the first positional
+operand as their target. A matched family response includes family id,
+classification, support, members, variation slots, evidence ranges, content
+hashes, and typed unknowns, without source snippets or absolute paths. `check`
+is advisory in this slice and reports runtime-equivalence uncertainty instead
+of a hard conformance claim.
 
 ## Current implementation status
 
@@ -331,12 +343,15 @@ a semantic worker and report `semantic_worker: deferred`. When
 commands pass the discovered repo-relative TS/JS file set to that worker, record
 only worker facts that match the active building-generation code-unit
 path/hash/range gate, and still make no family or query claims.
-They do not store source snippets, absolute paths, families, or pattern-family
-evidence.
+They do not store source snippets or absolute paths. The product indexing path
+now runs a conservative EC-MVFI-lite family builder before activation. That
+builder can write family records only when compatible framework-role candidates
+also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support; the
+default syntax-origin framework-role facts alone still produce no family rows.
 `files` and `units` now read only active file-manifest-only or syntax-only index
 metadata and, when present, code-unit records. Pattern-family query commands
-return `FALLBACK_TO_CODE_SEARCH` plus not-implemented guidance when no family
-evidence is available, and return a structured fallback object when `--json` is
-present. Commands that install agent configuration or serve MCP return explicit
-not-implemented or deferred-write errors until those implementations are
-designed and tested.
+return missing-index fallback before an active generation exists, typed
+`UNKNOWN` when active family evidence is insufficient, and stored family detail
+when EC-MVFI-lite has written supported family rows. Commands that install agent
+configuration or serve MCP return explicit not-implemented or deferred-write
+errors until those implementations are designed and tested.

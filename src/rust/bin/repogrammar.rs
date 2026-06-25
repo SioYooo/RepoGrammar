@@ -5,12 +5,13 @@ use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::indexing::{
-    index_repository_with_discovery_parser_frameworks_and_store,
-    index_repository_with_discovery_parser_frameworks_semantic_worker_and_store, IndexingOutcome,
-    IndexingRequest,
+    index_repository_with_discovery_parser_frameworks_families_and_store,
+    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store,
+    IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::query::{
-    list_code_units, list_indexed_files, IndexedCodeUnitsReport, IndexedFilesReport,
+    list_code_units, list_families, list_indexed_files, lookup_family, FamilyListReport,
+    FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -86,7 +87,7 @@ impl CliRuntime for ProductCliRuntime {
         if let Some(executable) = request.semantic_worker_executable {
             let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                 .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_frameworks_semantic_worker_and_store(
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
@@ -96,7 +97,7 @@ impl CliRuntime for ProductCliRuntime {
                 &store,
             )
         } else {
-            index_repository_with_discovery_parser_frameworks_and_store(
+            index_repository_with_discovery_parser_frameworks_families_and_store(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
@@ -141,6 +142,23 @@ impl CliRuntime for ProductCliRuntime {
     ) -> Result<IndexedCodeUnitsReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
         list_code_units(&store)
+    }
+
+    fn families(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<FamilyListReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        list_families(&store)
+    }
+
+    fn family_lookup(
+        &self,
+        request: RepositoryStatusRequest,
+        target: Option<&str>,
+    ) -> Result<FamilyLookupReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        lookup_family(&store, target)
     }
 }
 
@@ -281,19 +299,16 @@ mod tests {
         for command in ["find", "families", "family", "explain", "check"] {
             let output =
                 run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime);
-            assert_eq!(output.status, 2);
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
             assert!(!output
-                .stderr
+                .stdout
                 .contains(workspace.path().to_string_lossy().as_ref()));
-            let fallback: Value =
-                serde_json::from_str(output.stderr.trim()).expect("fallback JSON");
-            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
-            assert_eq!(
-                fallback["reason"],
-                "query execution requires pattern-family evidence"
-            );
-            assert_eq!(fallback["implemented"], false);
+            let unknown: Value = serde_json::from_str(output.stdout.trim()).expect("UNKNOWN JSON");
+            assert_eq!(unknown["status"], "UNKNOWN");
+            assert_eq!(unknown["command"], command);
+            assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
+            assert_eq!(unknown["implemented"], true);
         }
     }
 

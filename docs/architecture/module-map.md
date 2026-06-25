@@ -9,6 +9,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/core/policy/` | Compatibility, abstention, and freshness policy | `docs/specifications/domain-model.md`, `docs/specifications/product.md` |
 | `src/rust/ports/` | Traits for parser, semantic worker, index store, family store, source store, and telemetry | `docs/architecture/dependency-rules.md`, related specifications |
 | `src/rust/application/` | Indexing, query, conformance, install planning, progress, repository lifecycle, storage, telemetry, and metrics use-case boundaries | `docs/architecture/overview.md`, this file, relevant specifications |
+| `src/rust/application/family.rs` | Conservative EC-MVFI-lite family claim construction from validated application inputs | `docs/specifications/indexing-pipeline.md`, `docs/specifications/product.md`, `docs/specifications/unknowns.md` |
 | `src/rust/adapters/filesystem/` | Filesystem and Git-backed discovery boundaries | `docs/specifications/indexing-pipeline.md`, `docs/specifications/storage.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/parsing/` | Tree-sitter parser boundary | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |

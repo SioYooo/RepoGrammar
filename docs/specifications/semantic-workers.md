@@ -167,10 +167,11 @@ generation instead of becoming stale or partial semantic evidence.
 Recorded semantic facts are not pattern-family evidence by themselves. The
 storage/query boundary can load an internal active-generation claim-input
 snapshot and run file-hash freshness plus readiness checks over its semantic
-facts, but that only decides whether supported fact kinds may be considered by
-future claim builders. Query, MCP,
-conformance, and family membership claims remain deferred until family-evidence
-claim builders are implemented.
+facts. The current EC-MVFI-lite builder may consider strong same-generation
+`SEMANTIC` or `DATAFLOW_DERIVED` non-framework facts as support when compatible
+framework-role candidates exist. Raw semantic facts remain internal, and
+syntax-origin `FRAMEWORK_HEURISTIC` facts alone must still yield typed
+`UNKNOWN`.
 
 Not every stored semantic fact is emitted by a semantic worker. The current
 TS/JS indexing path may store syntax-origin framework-role facts produced by a
@@ -224,13 +225,12 @@ nodes/edges, stored fact tokens, assumptions JSON, repo-relative evidence paths,
 strict content hashes, and byte ranges. The query application layer can
 additionally check snapshot semantic facts against current source hashes and
 block stale facts, unsupported fact kinds, weak certainty, or conflicting facts
-with typed `UNKNOWN` readiness outcomes, but this is still an internal substrate
-for future claim builders. The default TS/JS indexing path can also store
+with typed `UNKNOWN` readiness outcomes. The default TS/JS indexing path can also store
 syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
 recognized framework-shaped code units; these records are not worker facts and
 remain blocked from family claims as insufficient support.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
-compiler APIs, use worker facts for family claims, expose semantic facts through
-query/MCP commands, or treat stored semantic facts as freshness-validated
-pattern-family evidence.
+compiler APIs, expose semantic facts through query/MCP commands, or treat stored
+semantic facts as pattern-family evidence without the family builder's
+compatibility and support checks.

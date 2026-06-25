@@ -1,9 +1,11 @@
 //! Indexing use-case boundary.
 
+use crate::application::family::{build_family_claims, family_storage_records};
 use crate::core::model::{
     CodeUnit, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact, SymbolId,
 };
 use crate::error::RepoGrammarError;
+use crate::ports::family_store::FamilyStore;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
@@ -163,8 +165,11 @@ pub fn index_repository_with_discovery_parser_and_store(
         discovery,
         source_store,
         parser,
-        None,
-        None,
+        IndexingPipelineOptions {
+            framework_roles: None,
+            semantic_worker: None,
+            family_store: None,
+        },
         store,
     )
 }
@@ -182,8 +187,33 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
         discovery,
         source_store,
         parser,
-        Some(framework_roles),
-        None,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            semantic_worker: None,
+            family_store: None,
+        },
+        store,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    store: &(impl IndexStore + FamilyStore),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            semantic_worker: None,
+            family_store: Some(store),
+        },
         store,
     )
 }
@@ -201,8 +231,11 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
         discovery,
         source_store,
         parser,
-        None,
-        Some(semantic_worker),
+        IndexingPipelineOptions {
+            framework_roles: None,
+            semantic_worker: Some(semantic_worker),
+            family_store: None,
+        },
         store,
     )
 }
@@ -221,8 +254,34 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
         discovery,
         source_store,
         parser,
-        Some(framework_roles),
-        Some(semantic_worker),
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            semantic_worker: Some(semantic_worker),
+            family_store: None,
+        },
+        store,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    semantic_worker: &dyn SemanticWorker,
+    store: &(impl IndexStore + FamilyStore),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            semantic_worker: Some(semantic_worker),
+            family_store: Some(store),
+        },
         store,
     )
 }
@@ -232,8 +291,7 @@ fn index_repository_with_optional_semantic_worker(
     discovery: &impl FileDiscovery,
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
-    framework_roles: Option<&dyn FrameworkRoleDetector>,
-    semantic_worker: Option<&dyn SemanticWorker>,
+    options: IndexingPipelineOptions<'_>,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let _index_lock = crate::application::repository::acquire_index_lock(
@@ -256,6 +314,7 @@ fn index_repository_with_optional_semantic_worker(
     }
 
     let mut indexed_units = 0usize;
+    let mut indexed_code_units = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
     for file in &report.files {
@@ -296,25 +355,39 @@ fn index_repository_with_optional_semantic_worker(
             file,
             &source.text,
             parse_report,
-            framework_roles,
+            options.framework_roles,
             &mut warnings,
         )?;
         indexed_units += parse_outcome.indexed_units;
+        indexed_code_units.extend(parse_outcome.code_units);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
     }
 
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count = record_semantic_facts(store, &generation, 0, &framework_role_facts)?;
 
-    let (semantic_worker, worker_semantic_facts) = record_semantic_worker_facts(
+    let (semantic_worker, worker_facts) = record_semantic_worker_facts(
         &request,
         &report,
         &generation,
-        semantic_worker,
+        options.semantic_worker,
         store,
         &mut warnings,
         framework_fact_count,
     )?;
+    let worker_semantic_facts = worker_facts.len();
+
+    if let Some(family_store) = options.family_store {
+        let mut family_facts = Vec::with_capacity(framework_role_facts.len() + worker_facts.len());
+        family_facts.extend(framework_role_facts.iter().cloned());
+        family_facts.extend(worker_facts);
+        record_family_claims(
+            family_store,
+            &generation,
+            &indexed_code_units,
+            &family_facts,
+        )?;
+    }
 
     crate::application::storage::validate_index_generation(store, &generation)?;
     crate::application::storage::activate_index_generation(store, &generation)?;
@@ -330,8 +403,16 @@ fn index_repository_with_optional_semantic_worker(
     })
 }
 
+#[derive(Clone, Copy)]
+struct IndexingPipelineOptions<'a> {
+    framework_roles: Option<&'a dyn FrameworkRoleDetector>,
+    semantic_worker: Option<&'a dyn SemanticWorker>,
+    family_store: Option<&'a dyn FamilyStore>,
+}
+
 struct ParseStorageOutcome {
     indexed_units: usize,
+    code_units: Vec<IndexedCodeUnitRecord>,
     framework_role_facts: Vec<SemanticFact>,
 }
 
@@ -386,20 +467,19 @@ fn record_parse_report(
     };
 
     let mut count = 0usize;
+    let mut code_units = Vec::with_capacity(parse_report.units.len());
     for unit in &parse_report.units {
-        crate::application::storage::record_code_unit(
-            store,
-            generation,
-            &IndexedCodeUnitRecord {
-                id: unit.id.as_str().to_string(),
-                path: unit.provenance.path.clone(),
-                language: unit.language.as_str().to_string(),
-                kind: unit.kind.as_str().to_string(),
-                start_byte: unit.range.start_byte,
-                end_byte: unit.range.end_byte,
-                content_hash: unit.provenance.content_hash.clone(),
-            },
-        )?;
+        let record = IndexedCodeUnitRecord {
+            id: unit.id.as_str().to_string(),
+            path: unit.provenance.path.clone(),
+            language: unit.language.as_str().to_string(),
+            kind: unit.kind.as_str().to_string(),
+            start_byte: unit.range.start_byte,
+            end_byte: unit.range.end_byte,
+            content_hash: unit.provenance.content_hash.clone(),
+        };
+        crate::application::storage::record_code_unit(store, generation, &record)?;
+        code_units.push(record);
         count += 1;
     }
     for node in &parse_report.ir_nodes {
@@ -427,8 +507,32 @@ fn record_parse_report(
     }
     Ok(ParseStorageOutcome {
         indexed_units: count,
+        code_units,
         framework_role_facts,
     })
+}
+
+fn record_family_claims(
+    store: &dyn FamilyStore,
+    generation: &GenerationHandle,
+    code_units: &[IndexedCodeUnitRecord],
+    framework_role_facts: &[SemanticFact],
+) -> Result<usize, RepoGrammarError> {
+    let report = build_family_claims(code_units, framework_role_facts);
+    for claim in &report.claims {
+        let records = family_storage_records(claim);
+        crate::application::storage::record_family(store, generation, &records.family)?;
+        for member in &records.members {
+            crate::application::storage::record_family_member(store, generation, member)?;
+        }
+        for slot in &records.variation_slots {
+            crate::application::storage::record_variation_slot(store, generation, slot)?;
+        }
+        for evidence in &records.evidence {
+            crate::application::storage::record_family_evidence(store, generation, evidence)?;
+        }
+    }
+    Ok(report.claims.len())
 }
 
 fn record_semantic_worker_facts(
@@ -439,13 +543,13 @@ fn record_semantic_worker_facts(
     store: &impl IndexStore,
     warnings: &mut Vec<String>,
     fact_id_offset: usize,
-) -> Result<(SemanticWorkerRunStatus, usize), RepoGrammarError> {
+) -> Result<(SemanticWorkerRunStatus, Vec<SemanticFact>), RepoGrammarError> {
     let Some(semantic_worker) = semantic_worker else {
-        return Ok((SemanticWorkerRunStatus::Deferred, 0));
+        return Ok((SemanticWorkerRunStatus::Deferred, Vec::new()));
     };
 
     if discovery_report.files.is_empty() {
-        return Ok((SemanticWorkerRunStatus::Deferred, 0));
+        return Ok((SemanticWorkerRunStatus::Deferred, Vec::new()));
     }
 
     let changed_files = discovery_report
@@ -463,13 +567,13 @@ fn record_semantic_worker_facts(
             if let Some(token) = status.warning_token() {
                 warnings.push(format!("semantic worker fallback: {token}"));
             }
-            return Ok((status, 0));
+            return Ok((status, Vec::new()));
         }
     };
 
     sort_semantic_facts(&mut facts);
-    let count = record_semantic_facts(store, generation, fact_id_offset, &facts)?;
-    Ok((SemanticWorkerRunStatus::Complete, count))
+    record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    Ok((SemanticWorkerRunStatus::Complete, facts))
 }
 
 fn record_semantic_facts(
@@ -749,6 +853,7 @@ mod tests {
         UnknownReasonCode,
     };
     use crate::core::policy::freshness::ClaimInputReadiness;
+    use crate::ports::family_store::FamilyStore;
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -759,7 +864,7 @@ mod tests {
     use crate::ports::semantic_worker::{
         SemanticWorker, SemanticWorkerError, SemanticWorkerRequest,
     };
-    use crate::ports::source_store::{SourceStore, SourceText};
+    use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceText};
     use crate::test_support::TempWorkspace;
     use rusqlite::Connection;
     use std::fs;
@@ -918,6 +1023,52 @@ mod tests {
             .expect("valid evidence"),
             assumptions: Vec::new(),
         }
+    }
+
+    fn semantic_support_facts_for_express_routes(
+        workspace: &TempWorkspace,
+    ) -> (Vec<String>, Vec<SemanticFact>) {
+        let request = IndexingRequest::new(workspace.path().display().to_string());
+        let report = discover_repository_files(request.clone(), &FilesystemFileDiscovery)
+            .expect("discover files for semantic support");
+        let parser = SyntaxCodeUnitParser;
+        let mut facts = Vec::new();
+        for file in &report.files {
+            let source = FilesystemSourceStore
+                .read_source(SourceReadRequest {
+                    repository_root: request.repository_root.clone(),
+                    path: file.path.clone(),
+                    expected_content_hash: file.content_hash.clone(),
+                    max_file_bytes: request.max_file_bytes,
+                })
+                .expect("read source for semantic support");
+            let parse_report = parser
+                .parse(SourceDocument {
+                    path: &source.path,
+                    language: language_from_discovered(file.language),
+                    content_hash: source.content_hash.clone(),
+                    repository_revision: RepositoryRevision::new("UNKNOWN")
+                        .expect("valid revision"),
+                    text: &source.text,
+                })
+                .expect("parse source for semantic support");
+            for unit in parse_report
+                .units
+                .into_iter()
+                .filter(|unit| unit.kind == CodeUnitKind::ExpressRoute)
+            {
+                facts.push(semantic_fact_for_unit(
+                    unit.provenance.content_hash,
+                    unit.id.as_str(),
+                    &unit.provenance.path,
+                    unit.range.end_byte,
+                ));
+            }
+        }
+        (
+            report.files.iter().map(|file| file.path.clone()).collect(),
+            facts,
+        )
     }
 
     fn semantic_fact_count(state: &Path, generation_id: &str) -> u32 {
@@ -1345,6 +1496,63 @@ mod tests {
             };
             assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
         }
+    }
+
+    #[test]
+    fn semantic_supported_framework_groups_are_stored_as_family_records() {
+        let workspace = TempWorkspace::new("indexing-family-builder");
+        fs::write(
+            workspace.path().join("users.ts"),
+            "app.get('/users', (req, res) => { res.json([]); });\n",
+        )
+        .expect("write users route");
+        fs::write(
+            workspace.path().join("accounts.ts"),
+            "app.get('/accounts', (req, res) => { res.json([]); });\n",
+        )
+        .expect("write accounts route");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let (expected_files, facts) = semantic_support_facts_for_express_routes(&workspace);
+        assert_eq!(facts.len(), 2);
+        let worker = StaticSemanticWorker {
+            expected_files,
+            result: Ok(facts),
+        };
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &detector,
+                &worker,
+                &store,
+            )
+            .expect("index semantic-supported family");
+
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(outcome.semantic_facts, 4);
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.generation_id, "gen-000001");
+        assert_eq!(families.families.len(), 1);
+        assert_eq!(families.families[0].classification, "DOMINANT_PATTERN");
+        let family = store
+            .show_family(&families.families[0].family_id)
+            .expect("show family")
+            .expect("family exists");
+        assert_eq!(family.members.len(), 2);
+        assert_eq!(family.evidence.len(), 2);
+        assert!(family
+            .members
+            .iter()
+            .all(|member| member.role == "framework:express.route_handler"));
+        let debug = format!("{family:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("res.json"));
     }
 
     #[test]

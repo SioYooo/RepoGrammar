@@ -87,9 +87,17 @@
   missing evidence with typed `StaleEvidence` `UNKNOWN`, and keeps structural,
   framework-heuristic, conflicting, or unknown certainty and `UNKNOWN` fact kind
   out of future family claim inputs.
+- Conservative EC-MVFI-lite family builder that groups compatible
+  framework-role candidates but writes `DOMINANT_PATTERN` family records only
+  when each supporting member has strong same-generation `SEMANTIC` or
+  `DATAFLOW_DERIVED` non-framework support.
+- FamilyStore-backed query read path for `families`, `family`, `member`,
+  `find`, `explain`, and `check`, including stable typed `UNKNOWN` output when
+  a readable active generation lacks sufficient family evidence.
 - Application-level query preflight contract that keeps pattern-family query
-  commands in fallback until family evidence exists while treating `files` and
-  `units` as implemented inventory commands whose missing-index fallback is an
+  commands in fallback until a readable active generation exists, then lets the
+  query layer return family evidence or typed `UNKNOWN`; `files` and `units`
+  remain implemented inventory commands whose missing-index fallback is an
   active-index precondition failure.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
