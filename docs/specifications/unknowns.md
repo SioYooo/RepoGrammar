@@ -85,6 +85,11 @@ Some unknowns block only specific claims:
 - Python fixture injection may block test-behavior equivalence
   while still allowing structural pytest test discovery.
 
+When a family is emitted with a non-blocking unknown, the affected claim should
+name the concrete family and claim whenever possible, such as
+`<family_id>:runtime_equivalence`, so downstream agents do not treat the
+unknown as repository-global.
+
 ## Recovery Actions
 
 Recovery suggestions may include:

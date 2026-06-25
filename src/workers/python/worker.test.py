@@ -55,7 +55,7 @@ parse_messages = run_worker(
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 import pytest
 
 router = APIRouter()
@@ -73,9 +73,11 @@ class Base(DeclarativeBase):
 
 class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
+    accounts = relationship("Account")
 
 class UserRepository:
     def list_users(self, session: Session):
+        session.add(User())
         return session.execute("select users")
 
     async def list_accounts(self, db: AsyncSession):
@@ -110,6 +112,16 @@ assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Dec
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped" for fact in parse_facts)
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.mapped_column"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.relationship"
+    and "python_anchor_kind=sqlalchemy_relationship" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.Session.add"
     for fact in parse_facts
 )
 assert any(

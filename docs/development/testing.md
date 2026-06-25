@@ -192,10 +192,16 @@ allowed.
   SQLAlchemy session/repository families only when Python support reaches three
   members, their CLI/MCP metadata-only compact/evidence/deep query paths,
   exact-anchor target variation coverage only for already-ready Python families,
+  FastAPI dependency/error context anchors staying out of support derivation and
+  support-target variation metadata, SQLAlchemy relationship and Session.add
+  structural anchors staying out of family support,
   low-support Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical
-  framework identities rather than framework-name substring matching. Future
+  framework identities rather than framework-name substring matching. Human
+  family query output must preserve typed stale `UNKNOWN` reason, affected
+  claim, and recovery text rather than replacing it with generic insufficient
+  support. Future
   Python slices must add coverage for
   default-index import context, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming

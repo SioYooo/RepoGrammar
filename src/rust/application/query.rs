@@ -692,9 +692,10 @@ fn family_store_error(error: StoreError) -> RepoGrammarError {
 }
 
 fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
+    let family_id = family.family.family_id;
     FamilyDetailReport {
         active_generation: family.generation_id,
-        family_id: family.family.family_id,
+        family_id: family_id.clone(),
         classification: family.family.classification,
         support: family.members.len(),
         members: family.members,
@@ -703,7 +704,7 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         unknowns: vec![FamilyQueryUnknown {
             class: UnknownClass::NonBlocking,
             reason: UnknownReasonCode::FrameworkMagic,
-            affected_claim: "runtime_equivalence".to_string(),
+            affected_claim: format!("{family_id}:runtime_equivalence"),
             recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
         }],
     }
@@ -1423,6 +1424,10 @@ mod tests {
             assert_eq!(report.family_id, "family:typescript:express_route:express");
             assert_eq!(report.support, 1);
             assert_eq!(report.evidence[0].path, "src/routes/a.ts");
+            assert_eq!(
+                report.unknowns[0].affected_claim,
+                "family:typescript:express_route:express:runtime_equivalence"
+            );
             let debug = format!("{report:?}");
             assert!(!debug.contains("/repo"));
             assert!(!debug.contains("function"));

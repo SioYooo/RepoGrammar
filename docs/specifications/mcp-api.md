@@ -122,7 +122,9 @@ builder emits `canonical` and `support`, plus a narrow Python `variation` label
 when an already-ready family has multiple exact-compatible framework-anchor
 support targets. Requested exception coverage and broader variation coverage
 must be reported as missing until later builders explicitly link evidence to
-those claims. MCP responses must report whether source snippets were included;
+those claims. Family detail unknowns identify runtime-equivalence gaps with
+the concrete `<family_id>:runtime_equivalence` affected claim. MCP responses
+must report whether source snippets were included;
 the current implementation always reports
 `source_snippets_included: false`.
 

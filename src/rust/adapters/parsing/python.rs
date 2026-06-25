@@ -1245,6 +1245,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "sqlalchemy_session_call"
             | "sqlalchemy_mapped_field"
             | "sqlalchemy_mapped_column"
+            | "sqlalchemy_relationship"
             | "module_name"
             | "scope_imported"
             | "scope_namespace"
@@ -1668,11 +1669,12 @@ class AppSettings(BaseSettings):
     fn cpython_frontend_extracts_sqlalchemy_model_field_anchors() {
         let source = r#"
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 class User:
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
+    accounts = relationship("Account")
 
 class Account:
     __tablename__ = "accounts"
@@ -1680,6 +1682,7 @@ class Account:
 
 class UserRepository:
     def list_users(self, session: Session):
+        session.add(User())
         return session.execute("select users")
 
     async def list_accounts(self, db: AsyncSession):
@@ -1713,6 +1716,22 @@ class UserRepository:
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_mapped_column")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.relationship")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_relationship")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.Session.add")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall

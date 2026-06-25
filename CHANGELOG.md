@@ -75,6 +75,15 @@
   family builder records a dedicated variation slot and one metadata-only
   `variation` evidence label. This does not add provider-backed semantics,
   source snippets, exception mining, or runtime-equivalence claims.
+- Python family claim-boundary regression coverage now proves FastAPI
+  `Depends` and `HTTPException` structural anchors do not create membership
+  support or alter exact-anchor support targets. Family detail UNKNOWN output
+  now scopes runtime-equivalence gaps to the concrete family id, and human
+  `families` output preserves typed stale-evidence UNKNOWN details.
+- CPython AST worker SQLAlchemy structural anchors now include
+  `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
+  calls. These anchors remain structural context and are explicitly excluded
+  from family membership support.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and

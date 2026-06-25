@@ -32,7 +32,11 @@
   default, evidence/deep use greedy metadata coverage selection, and deep does
   not yet include source snippets. Ready Python exact-anchor families can also
   record metadata-only variation evidence when exact-compatible framework-anchor
-  support targets differ. Pyrefly/Pyright and
+  support targets differ. FastAPI `Depends` and `HTTPException` structural
+  anchors remain auxiliary context/effect metadata and are not membership
+  support targets. SQLAlchemy `relationship` and `Session.add`/`AsyncSession.add`
+  anchors are also structural context/effect metadata, not family membership
+  support. Pyrefly/Pyright and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.

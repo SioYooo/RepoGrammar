@@ -2158,6 +2158,119 @@ mod tests {
     }
 
     #[test]
+    fn fastapi_context_effect_anchors_do_not_derive_family_support() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.Depends",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.HTTPException",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.Depends",
+            ),
+        ];
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert!(derived.is_empty());
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn fastapi_context_effect_anchors_do_not_change_support_targets() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.get",
+            ),
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.Depends",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.FastAPI.post",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.HTTPException",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.delete",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::ResolvedCall,
+                "fastapi.Depends",
+            ),
+        ];
+
+        let mut derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+        derived.sort_by(|left, right| {
+            left.target
+                .as_ref()
+                .map(SymbolId::as_str)
+                .cmp(&right.target.as_ref().map(SymbolId::as_str))
+        });
+        let targets = derived
+            .iter()
+            .map(|fact| fact.target.as_ref().map(SymbolId::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            targets,
+            vec![
+                Some("fastapi.APIRouter.delete"),
+                Some("fastapi.APIRouter.get"),
+                Some("fastapi.FastAPI.post")
+            ]
+        );
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+        }));
+    }
+
+    #[test]
     fn python_parser_anchor_derivation_requires_single_framework_role() {
         let unit = indexed_python_unit("app/a.py", "fastapi_route", 0);
         let parser_facts = vec![parser_structural_anchor_fact(

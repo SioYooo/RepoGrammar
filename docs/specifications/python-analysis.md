@@ -121,10 +121,12 @@ The current implementation covers the first structural slice only:
   they do not become provider-backed semantic facts and do not make parametrized
   pytest arguments look like unresolved fixture injections;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
-  `Mapped[...]` annotations or `mapped_column(...)` calls, plus bounded
-  parameter-role propagation that canonicalizes typed `Session` and
-  `AsyncSession` calls such as `session.execute(...)` to exact SQLAlchemy
-  session targets;
+  `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
+  calls, plus bounded parameter-role propagation that canonicalizes typed
+  `Session` and `AsyncSession` calls such as `session.execute(...)` and
+  `session.add(...)` to exact SQLAlchemy session targets. Relationship and
+  `add` anchors are effect/context metadata only and are not membership support
+  targets;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -163,7 +165,9 @@ The current implementation covers the first structural slice only:
   broader variation coverage is reported as missing until storage/model records
   explicitly link evidence to those roles;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
-  gate for derived and future provider-backed strong facts.
+  gate for derived and future provider-backed strong facts. FastAPI
+  `Depends(...)` and `HTTPException(...)` anchors remain route context/effect
+  metadata and are explicitly excluded from membership support derivation.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and

@@ -263,8 +263,9 @@ The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
-anchors, class bases, SQLAlchemy mapped fields, typed SQLAlchemy session calls,
-simple call targets, FastAPI `Depends`/`HTTPException` calls, `pytest.test`
+anchors, class bases, SQLAlchemy mapped fields, `relationship(...)` calls,
+typed SQLAlchemy session calls including `add`, simple call targets, FastAPI
+`Depends`/`HTTPException` calls, `pytest.test`
 test-function anchors, same-file pytest fixture edges, literal pytest
 parametrize argument anchors, Pydantic validator decorators, path-derived module
 names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for

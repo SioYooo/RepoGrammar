@@ -33,7 +33,7 @@ MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
 MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
-SQLALCHEMY_SESSION_METHODS = {"commit", "execute", "rollback"}
+SQLALCHEMY_SESSION_METHODS = {"add", "commit", "execute", "rollback"}
 SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.orm.Session",
     "sqlalchemy.ext.asyncio.AsyncSession",
@@ -1040,8 +1040,16 @@ def collect_sqlalchemy_model_field_facts(
                 )
         if value_name:
             canonical_value = canonical_name(value_name, aliases, {})
-            if canonical_value == "sqlalchemy.orm.mapped_column":
+            if canonical_value in {
+                "sqlalchemy.orm.mapped_column",
+                "sqlalchemy.orm.relationship",
+            }:
                 start, end = node_range(starts, value if isinstance(value, ast.AST) else item)
+                anchor_kind = (
+                    "sqlalchemy_relationship"
+                    if canonical_value == "sqlalchemy.orm.relationship"
+                    else "sqlalchemy_mapped_column"
+                )
                 add_fact(
                     facts,
                     structural_fact(
@@ -1053,7 +1061,7 @@ def collect_sqlalchemy_model_field_facts(
                         repository_revision=repository_revision,
                         start=start,
                         end=end,
-                        anchor_kind="sqlalchemy_mapped_column",
+                        anchor_kind=anchor_kind,
                     ),
                 )
 

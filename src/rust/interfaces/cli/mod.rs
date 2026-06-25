@@ -558,10 +558,21 @@ fn indexed_units_json(report: &IndexedCodeUnitsReport) -> String {
 
 fn families_human(report: &FamilyListReport) -> String {
     if report.families.is_empty() {
-        return format!(
-            "families: UNKNOWN\nactive_generation: {}\nunknown: InsufficientSupport\nrecovery: run repogrammar index after adding compatible implementations\n",
+        let mut output = format!(
+            "families: UNKNOWN\nactive_generation: {}\n",
             report.active_generation
         );
+        if report.unknowns.is_empty() {
+            output.push_str("unknown: blocking_unknown:InsufficientSupport affected_claim: repository pattern families\n");
+            output.push_str(
+                "recovery: run repogrammar index after adding compatible implementations\n",
+            );
+        } else {
+            for unknown in &report.unknowns {
+                push_unknown_human(&mut output, unknown);
+            }
+        }
+        return output;
     }
     let mut output = format!(
         "families: evidence-backed pattern families\nactive_generation: {}\ncount: {}\n",
@@ -680,12 +691,7 @@ fn family_lookup_human(
                 ));
             }
             for unknown in &family.unknowns {
-                output.push_str(&format!(
-                    "unknown: {}:{} affected_claim: {}\n",
-                    unknown.class.as_protocol_str(),
-                    unknown.reason.as_protocol_str(),
-                    unknown.affected_claim
-                ));
+                push_unknown_human(&mut output, unknown);
             }
             output
         }
@@ -699,19 +705,23 @@ fn family_unknown_human(command: &str, report: &FamilyUnknownReport) -> String {
         report.active_generation
     );
     for unknown in &report.unknowns {
-        output.push_str(&format!(
-            "unknown: {}:{} affected_claim: {}\n",
-            unknown.class.as_protocol_str(),
-            unknown.reason.as_protocol_str(),
-            unknown.affected_claim
-        ));
-        if let Some(recovery) = &unknown.recovery {
-            output.push_str("recovery: ");
-            output.push_str(recovery);
-            output.push('\n');
-        }
+        push_unknown_human(&mut output, unknown);
     }
     output
+}
+
+fn push_unknown_human(output: &mut String, unknown: &FamilyQueryUnknown) {
+    output.push_str(&format!(
+        "unknown: {}:{} affected_claim: {}\n",
+        unknown.class.as_protocol_str(),
+        unknown.reason.as_protocol_str(),
+        unknown.affected_claim
+    ));
+    if let Some(recovery) = &unknown.recovery {
+        output.push_str("recovery: ");
+        output.push_str(recovery);
+        output.push('\n');
+    }
 }
 
 fn family_lookup_json(
@@ -2503,6 +2513,52 @@ mod tests {
             assert!(!output.stderr.contains("not implemented yet"));
             assert!(output.stdout.is_empty());
         }
+    }
+
+    #[test]
+    fn families_human_preserves_typed_stale_unknowns() {
+        let report = FamilyListReport {
+            active_generation: "gen-000001".to_string(),
+            families: Vec::new(),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::StaleEvidence,
+                affected_claim:
+                    "family:python:fastapi_route:framework_fastapi_route:evidence_freshness"
+                        .to_string(),
+                recovery: Some("run repogrammar sync".to_string()),
+            }],
+        };
+
+        let output = families_human(&report);
+
+        assert!(output.starts_with("families: UNKNOWN\nactive_generation: gen-000001\n"));
+        assert!(output.contains(
+            "unknown: blocking_unknown:StaleEvidence affected_claim: family:python:fastapi_route:framework_fastapi_route:evidence_freshness\n"
+        ));
+        assert!(output.contains("recovery: run repogrammar sync\n"));
+        assert!(!output.contains("InsufficientSupport"));
+        assert!(!output.contains("adding compatible implementations"));
+    }
+
+    #[test]
+    fn family_unknown_human_formats_recovery_as_separate_line() {
+        let report = FamilyUnknownReport {
+            active_generation: "gen-000001".to_string(),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::StaleEvidence,
+                affected_claim:
+                    "family:python:pytest_test:framework_pytest_test:evidence_freshness".to_string(),
+                recovery: Some("run repogrammar sync".to_string()),
+            }],
+        };
+
+        let output = family_unknown_human("family", &report);
+
+        assert!(output.contains(
+            "unknown: blocking_unknown:StaleEvidence affected_claim: family:python:pytest_test:framework_pytest_test:evidence_freshness\nrecovery: run repogrammar sync\n"
+        ));
     }
 
     #[test]

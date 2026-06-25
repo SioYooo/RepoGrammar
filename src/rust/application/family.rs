@@ -898,6 +898,75 @@ mod tests {
     }
 
     #[test]
+    fn python_fastapi_auxiliary_context_effect_targets_do_not_prove_route_family() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.Depends"),
+                semantic_support_fact_with_target(&second, "fastapi.HTTPException"),
+                semantic_support_fact_with_target(&third, "fastapi.Depends"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_sqlalchemy_auxiliary_targets_do_not_prove_model_or_repository_family() {
+        let first = python_unit("models.py", "sqlalchemy_model", 0);
+        let second = python_unit("models.py", "sqlalchemy_model", 1);
+        let third = python_unit("models.py", "sqlalchemy_model", 2);
+        let model_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:sqlalchemy.model"),
+                role_fact(&second, "framework:sqlalchemy.model"),
+                role_fact(&third, "framework:sqlalchemy.model"),
+                semantic_support_fact_with_target(&first, "sqlalchemy.orm.relationship"),
+                semantic_support_fact_with_target(&second, "sqlalchemy.orm.relationship"),
+                semantic_support_fact_with_target(&third, "sqlalchemy.orm.relationship"),
+            ],
+        );
+
+        assert!(model_report.claims.is_empty());
+        assert!(model_report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+
+        let first = python_unit("repository.py", "sqlalchemy_repository_method", 0);
+        let second = python_unit("repository.py", "sqlalchemy_repository_method", 1);
+        let third = python_unit("repository.py", "sqlalchemy_repository_method", 2);
+        let repository_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:sqlalchemy.repository_method"),
+                role_fact(&second, "framework:sqlalchemy.repository_method"),
+                role_fact(&third, "framework:sqlalchemy.repository_method"),
+                semantic_support_fact_with_target(&first, "sqlalchemy.orm.Session.add"),
+                semantic_support_fact_with_target(&second, "sqlalchemy.orm.Session.add"),
+                semantic_support_fact_with_target(&third, "sqlalchemy.orm.Session.add"),
+            ],
+        );
+
+        assert!(repository_report.claims.is_empty());
+        assert!(repository_report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn project_config_facts_never_prove_family_membership() {
         let first = python_unit("app/a.py", "fastapi_route", 0);
         let second = python_unit("app/b.py", "fastapi_route", 1);

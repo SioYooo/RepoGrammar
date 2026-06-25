@@ -361,14 +361,17 @@ it remains metadata-only and must report `source_snippets_included: false`.
 None of these modes may include absolute paths or source snippets. `check` is
 advisory in this slice: it may return matched family context as
 `CONTEXT_ONLY`, but the check-specific conformance status remains `UNKNOWN`
-with reason `runtime equivalence remains unproven`.
+with reason `runtime equivalence remains unproven`. Matched family detail
+unknowns scope the runtime-equivalence gap to the concrete family id, for
+example `<family_id>:runtime_equivalence`.
 
 Before public pattern-family output is returned, stored family evidence must be
 fresh against the current repository source hashes. If an evidence source is
 missing or its content hash no longer matches the active generation, public
 `families`, `family`, `member`, `find`, `explain`, and `check` output must
 refuse or omit the stale claim and return typed `StaleEvidence` `UNKNOWN`
-guidance instead of rendering stale family detail.
+guidance instead of rendering stale family detail. Human and JSON output must
+preserve the stale reason, affected claim, and recovery guidance.
 
 ## Current implementation status
 
