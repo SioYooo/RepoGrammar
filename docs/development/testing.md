@@ -233,9 +233,9 @@ allowed.
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical
   framework identities rather than framework-name substring matching. Human
-  family query output must preserve typed stale `UNKNOWN` reason, affected
-  claim, and recovery text rather than replacing it with generic insufficient
-  support. Future
+  family query output and MCP JSON-RPC serve output must preserve typed stale
+  `UNKNOWN` reason, affected claim, and recovery text rather than replacing it
+  with generic insufficient support. Future
   Python slices must add coverage for
   Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming

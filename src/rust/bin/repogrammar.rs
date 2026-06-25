@@ -3436,6 +3436,54 @@ def create_user(
             );
             assert_python_stale_unknown(command, &stale, case.family_id);
         }
+
+        let stale_input = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "stale-family",
+                "method": "tools/call",
+                "params": {
+                    "name": McpToolName::Context.as_str(),
+                    "arguments": {
+                        "operation": "show_family",
+                        "target": case.family_id,
+                    },
+                },
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "shutdown",
+                "method": "shutdown",
+            })
+        );
+        let mut stale_output = Vec::new();
+        serve_json_lines(
+            &runtime,
+            &context,
+            stale_input.as_bytes(),
+            &mut stale_output,
+        )
+        .expect("serve stale MCP lines");
+        let stale_output = String::from_utf8(stale_output).expect("utf8 stale MCP output");
+        assert_no_output_leakage("mcp-jsonrpc-stale", &stale_output, &workspace);
+        let stale_lines = stale_output.lines().collect::<Vec<_>>();
+        assert_eq!(stale_lines.len(), 2);
+        let stale_response: Value =
+            serde_json::from_str(stale_lines[0]).expect("stale tools/call response");
+        assert_eq!(stale_response["id"], "stale-family");
+        assert_eq!(stale_response["result"]["isError"], false);
+        let stale_payload_text = stale_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("stale tool payload text");
+        assert_no_output_leakage("mcp-jsonrpc-stale-payload", stale_payload_text, &workspace);
+        let stale_payload: Value =
+            serde_json::from_str(stale_payload_text).expect("stale tool payload JSON");
+        assert_python_stale_unknown("family", &stale_payload, case.family_id);
+        let shutdown_response: Value =
+            serde_json::from_str(stale_lines[1]).expect("shutdown response");
+        assert_eq!(shutdown_response["id"], "shutdown");
+        assert!(shutdown_response["result"].is_null());
     }
 
     #[test]
