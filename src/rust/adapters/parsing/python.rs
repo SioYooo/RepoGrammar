@@ -441,6 +441,7 @@ fn project_config_facts(
             unit,
             "project.name",
             &project_config_target("project_name", name),
+            Vec::new(),
         )?);
     }
     for root in project_config_string_array(config.get("source_roots"), "source_roots")? {
@@ -452,6 +453,7 @@ fn project_config_facts(
             unit,
             "source_roots",
             &project_config_target("source_root", &root.replace('/', ".")),
+            vec![format!("python_config_source_root={root}")],
         )?);
     }
     for section in project_config_string_array(config.get("tool_sections"), "tool_sections")? {
@@ -465,6 +467,7 @@ fn project_config_facts(
             unit,
             "tool_sections",
             &project_config_target("tool_section", section),
+            Vec::new(),
         )?);
     }
     let unknowns = object
@@ -522,7 +525,14 @@ fn project_config_structural_fact(
     unit: &CodeUnit,
     field: &str,
     target: &str,
+    extra_assumptions: Vec<String>,
 ) -> Result<SemanticFact, ParseError> {
+    let mut assumptions = vec![
+        format!("python_config_field={field}"),
+        "parsed_with=tomllib".to_string(),
+        "not_family_claim_input".to_string(),
+    ];
+    assumptions.extend(extra_assumptions);
     Ok(SemanticFact {
         kind: SemanticFactKind::ProjectConfig,
         subject: unit.id.as_str().to_string(),
@@ -534,11 +544,7 @@ fn project_config_structural_fact(
         },
         certainty: FactCertainty::Structural,
         evidence: project_config_evidence(document, unit, "Python project config structural fact")?,
-        assumptions: vec![
-            format!("python_config_field={field}"),
-            "parsed_with=tomllib".to_string(),
-            "not_family_claim_input".to_string(),
-        ],
+        assumptions,
     })
 }
 
@@ -2217,6 +2223,10 @@ project_includes = ["src"]
         assert!(targets.contains(&Some("python.project_config.project_name.demo-api")));
         assert!(targets.contains(&Some("python.project_config.source_root.src.lib")));
         assert!(targets.contains(&Some("python.project_config.tool_section.pyright")));
+        assert!(report.semantic_facts.iter().any(|fact| fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "python_config_source_root=src/lib")));
         assert!(report.semantic_facts.iter().all(|fact| {
             fact.kind == SemanticFactKind::ProjectConfig
                 && fact.certainty == FactCertainty::Structural

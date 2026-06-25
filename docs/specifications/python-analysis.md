@@ -99,12 +99,13 @@ The current implementation covers the first structural slice only:
   and emits typed `UNKNOWN` for ambiguous/missing repo-local imports or
   `sys.path` mutation;
 - default parser-mode indexing now passes the discovered repo-relative `.py`
-  inventory plus bounded, hash-checked discovered `conftest.py` file contents
-  into the private CPython parse-document request so the same source-tied parse
-  pass can emit unique repo-local import facts, `pytest.test` anchors,
-  pytest parent-directory `conftest.py` fixture-edge facts, and typed
-  unresolved/ambiguous import or fixture `UNKNOWN`s without launching a
-  separate Python semantic worker;
+  inventory, sanitized root `pyproject.toml` source roots from the existing
+  `tomllib` project-config parser output, and bounded, hash-checked discovered
+  `conftest.py` file contents into the private CPython parse-document request
+  so the same source-tied parse pass can emit unique repo-local import facts,
+  `pytest.test` anchors, pytest parent-directory `conftest.py` fixture-edge
+  facts, and typed unresolved/ambiguous import or fixture `UNKNOWN`s without
+  launching a separate Python semantic worker;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a
@@ -284,11 +285,13 @@ project configuration, non-literal `importlib.import_module`, mutated
 
 The current implementation performs the first narrow version in both private
 parse-document and semantic-worker-compatible project modes. Default indexing
-passes discovered safe `.py` inventory into private parse-document requests and
-persists unique module-level repo-local import anchors as structural facts.
-Project mode additionally applies sanitized `pyproject.toml` source roots when
-the running Python provides `tomllib`. Neither path resolves imported symbols,
-re-exports, namespace packages, or site-packages.
+passes discovered safe `.py` inventory and sanitized source roots extracted
+from the existing `tomllib` project-config parse report into private
+parse-document requests, then persists unique module-level repo-local import
+anchors as structural facts. Project mode also applies sanitized
+`pyproject.toml` source roots when the running Python provides `tomllib`.
+Neither path resolves imported symbols, re-exports, namespace packages, or
+site-packages.
 
 ### Layer 2: Typed Canonical Framework Identity
 

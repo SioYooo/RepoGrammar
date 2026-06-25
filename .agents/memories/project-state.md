@@ -8,8 +8,9 @@
   dynamic/unresolved `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
-  import context from discovered `.py` inventory, default-indexed root
-  `pyproject.toml` structural project-config records, structural IR storage,
+  import context from discovered `.py` inventory and sanitized root
+  `pyproject.toml` source roots, default-indexed root `pyproject.toml`
+  structural project-config records, structural IR storage,
   opt-in syntax-origin framework-role fact storage, semantic fact ingestion,
   bounded exact-anchor Python `DATAFLOW_DERIVED` support derivation,
   internal active claim-input snapshot reads, semantic-fact
@@ -88,12 +89,14 @@ HTTPException status codes, literal pytest parametrize arguments, Pydantic
 field/config/member declarations, and bounded FastAPI same-function service
 calls as structural parser-origin anchors without upgrading them to
 provider-backed semantics.
-Default parser-mode indexing now also carries bounded discovered `conftest.py`
-context into the CPython parse-document request so parent-directory pytest
-fixture-edge facts can be persisted structurally; those facts are still not
-default family evidence. The semantic-worker-compatible Python project mode can
-also output requested `conftest.py` fixture hierarchy edges. Root
-`pyproject.toml` is persisted as a `python-config` file and
+Default parser-mode indexing now also carries sanitized root `pyproject.toml`
+source roots from parser/tomllib project-config facts plus bounded discovered
+`conftest.py` context into the CPython parse-document request so source-rooted
+repo-local import facts and parent-directory pytest fixture-edge facts can be
+persisted structurally; those facts are still not default family evidence. The
+semantic-worker-compatible Python project mode can also output requested
+`conftest.py` fixture hierarchy edges. Root `pyproject.toml` is persisted as a
+`python-config` file and
 `project_config` unit with sanitized structural config metadata or typed config
 `UNKNOWN`,
 syntax-origin TS/JS and Python framework-role fact storage, bounded exact-anchor
@@ -147,7 +150,7 @@ syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config
-records,
+records, sanitized project-config source roots reused as default parser context,
 bounded `DATAFLOW_DERIVED` support facts derived only from exact canonical
 Python parser anchors and a single framework role,
 CodeUnit-derived structural IR nodes and

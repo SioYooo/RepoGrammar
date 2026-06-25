@@ -73,6 +73,11 @@
   `project_config` unit with sanitized `PROJECT_CONFIG`/`STRUCTURAL` metadata
   or typed config `UNKNOWN` facts; these records stay out of family construction
   and claim-input readiness.
+- Default Python parser context now reuses sanitized root `pyproject.toml`
+  source roots from the existing parser/tomllib project-config facts, alongside
+  discovered `.py` inventory and bounded `conftest.py` context, so repo-local
+  import facts can reflect configured source roots without adding a second TOML
+  parser or provider-backed semantics.
 - Bounded Python exact-anchor support derivation: validated CPython structural
   anchors can now produce separate `DATAFLOW_DERIVED` support facts when their
   target exact-matches the Python framework compatibility table for a unit with

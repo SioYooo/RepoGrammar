@@ -7,6 +7,7 @@ use crate::core::model::{
     CodeUnit, CodeUnitId, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode, Language,
     Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
+use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::FamilyStore;
 use crate::ports::file_discovery::{
@@ -324,7 +325,7 @@ fn index_repository_with_optional_semantic_worker(
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
-    let parser_context = parser_project_context(&request, &report, source_store)?;
+    let parser_context = parser_project_context(&request, &report, source_store, parser)?;
     for file in &report.files {
         let source = source_store
             .read_source(SourceReadRequest {
@@ -454,6 +455,7 @@ fn parser_project_context(
     request: &IndexingRequest,
     report: &FileDiscoveryReport,
     source_store: &impl SourceStore,
+    parser: &impl SourceParser,
 ) -> Result<ParserProjectContext, RepoGrammarError> {
     let python_module_paths = report
         .files
@@ -463,6 +465,8 @@ fn parser_project_context(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let python_source_roots =
+        python_source_roots_from_project_config(request, report, source_store, parser)?;
     let mut python_conftest_files = Vec::new();
     for file in &report.files {
         if file.language != DiscoveredLanguage::Python || !is_python_conftest_path(&file.path) {
@@ -484,13 +488,80 @@ fn parser_project_context(
     python_conftest_files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(ParserProjectContext {
         python_module_paths,
-        python_source_roots: Vec::new(),
+        python_source_roots,
         python_conftest_files,
     })
 }
 
 fn is_python_conftest_path(path: &str) -> bool {
     path == "conftest.py" || path.ends_with("/conftest.py")
+}
+
+fn python_source_roots_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+) -> Result<Vec<String>, RepoGrammarError> {
+    let Some(file) = report.files.iter().find(|file| {
+        file.language == DiscoveredLanguage::PythonConfig && file.path == "pyproject.toml"
+    }) else {
+        return Ok(Vec::new());
+    };
+    let source = source_store
+        .read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: file.path.clone(),
+            expected_content_hash: file.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        })
+        .map_err(source_store_error)?;
+    let parse_report = match parser.parse(SourceDocument {
+        path: &source.path,
+        language: Language::PythonConfig,
+        content_hash: source.content_hash.clone(),
+        repository_revision: RepositoryRevision::new("UNKNOWN")
+            .expect("UNKNOWN is a non-empty repository revision marker"),
+        text: &source.text,
+    }) {
+        Ok(report) => report,
+        Err(ParseError::UnsupportedLanguage) => return Ok(Vec::new()),
+        Err(ParseError::Internal(_)) => {
+            return Err(RepoGrammarError::InvalidInput(
+                "parser failed for pyproject.toml source-root context: internal parser error"
+                    .to_string(),
+            ));
+        }
+    };
+    Ok(extract_python_source_roots_from_project_config_facts(
+        &parse_report.semantic_facts,
+    ))
+}
+
+fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact]) -> Vec<String> {
+    let mut roots = BTreeSet::new();
+    for fact in facts {
+        if fact.kind != SemanticFactKind::ProjectConfig
+            || fact.certainty != FactCertainty::Structural
+            || fact.origin.engine != "python"
+            || fact.origin.method != "tomllib"
+            || !fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == "python_config_field=source_roots")
+        {
+            continue;
+        }
+        for assumption in &fact.assumptions {
+            let Some(root) = assumption.strip_prefix("python_config_source_root=") else {
+                continue;
+            };
+            if validate_repo_relative_path(root).is_ok() {
+                roots.insert(root.to_string());
+            }
+        }
+    }
+    roots.into_iter().collect()
 }
 
 fn record_parse_report(
@@ -1168,6 +1239,48 @@ mod tests {
         }
     }
 
+    fn project_config_source_root_fact(
+        document: &SourceDocument<'_>,
+        unit: &CodeUnit,
+        root: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::ProjectConfig,
+            subject: unit.id.as_str().to_string(),
+            target: Some(
+                SymbolId::new(format!(
+                    "python.project_config.source_root.{}",
+                    root.replace('/', ".")
+                ))
+                .expect("valid source-root target"),
+            ),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "UNKNOWN".to_string(),
+                method: "tomllib".to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                unit.id.clone(),
+                unit.range.clone(),
+                Provenance::new(
+                    document.path,
+                    document.content_hash.clone(),
+                    document.repository_revision.clone(),
+                )
+                .expect("valid provenance"),
+                "Python project config structural fact",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "python_config_field=source_roots".to_string(),
+                format!("python_config_source_root={root}"),
+                "parsed_with=tomllib".to_string(),
+                "not_family_claim_input".to_string(),
+            ],
+        }
+    }
+
     struct SingleUnitParser;
 
     impl SourceParser for SingleUnitParser {
@@ -1285,11 +1398,19 @@ mod tests {
                 document.text.len(),
             );
             let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            let mut semantic_facts = Vec::new();
+            if document.language == Language::PythonConfig && document.path == "pyproject.toml" {
+                semantic_facts.extend(
+                    ["src", "src/lib", "tests"]
+                        .into_iter()
+                        .map(|root| project_config_source_root_fact(&document, &unit, root)),
+                );
+            }
             Ok(ParseReport {
                 units: vec![unit],
                 ir_nodes: vec![ir_node],
                 ir_edges: Vec::new(),
-                semantic_facts: Vec::new(),
+                semantic_facts,
                 diagnostics: Vec::new(),
             })
         }
@@ -2920,6 +3041,19 @@ mod tests {
         .expect("write api module");
         fs::write(workspace.path().join("src/acme/__init__.py"), "").expect("write init");
         fs::write(
+            workspace.path().join("pyproject.toml"),
+            r#"
+[tool.pytest.ini_options]
+testpaths = ["tests", "../secret"]
+pythonpath = ["src", "/tmp/secret"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src/lib", "C:/secret"]
+"#,
+        )
+        .expect("write pyproject");
+        fs::write(
             workspace.path().join("tests/conftest.py"),
             "import pytest\n\n@pytest.fixture\ndef client():\n    return object()\n",
         )
@@ -2939,9 +3073,9 @@ mod tests {
         )
         .expect("index with recording parser");
 
-        assert_eq!(outcome.discovered_files, 4);
+        assert_eq!(outcome.discovered_files, 5);
         let contexts = parser.contexts.lock().expect("recorded contexts");
-        assert_eq!(contexts.len(), 4);
+        assert_eq!(contexts.len(), 5);
         let expected = vec![
             "src/acme/__init__.py".to_string(),
             "src/acme/api.py".to_string(),
@@ -2950,7 +3084,7 @@ mod tests {
         ];
         for context in contexts.iter() {
             assert_eq!(context.python_module_paths, expected);
-            assert!(context.python_source_roots.is_empty());
+            assert_eq!(context.python_source_roots, ["src", "src/lib", "tests"]);
             assert_eq!(context.python_conftest_files.len(), 1);
             assert_eq!(context.python_conftest_files[0].path, "tests/conftest.py");
             assert!(context.python_conftest_files[0]
@@ -2967,6 +3101,50 @@ mod tests {
                     && !path.contains("..")
                     && !path.contains(workspace.path().to_string_lossy().as_ref())));
         }
+    }
+
+    #[test]
+    fn python_source_root_context_uses_only_safe_project_config_facts() {
+        let content_hash =
+            strict_hash("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let revision = RepositoryRevision::new("UNKNOWN").expect("valid revision");
+        let document = SourceDocument {
+            path: "pyproject.toml",
+            language: Language::PythonConfig,
+            content_hash,
+            repository_revision: revision,
+            text: "[tool.pyright]\ninclude = ['src']\n",
+        };
+        let unit = parser_unit(
+            &document,
+            "unit:pyproject.toml#project_config:0-all",
+            document.path,
+            document.content_hash.clone(),
+            0,
+            document.text.len(),
+        );
+        let safe = project_config_source_root_fact(&document, &unit, "src");
+        let mut unsafe_root = project_config_source_root_fact(&document, &unit, "tests");
+        unsafe_root.assumptions = vec![
+            "python_config_field=source_roots".to_string(),
+            "python_config_source_root=../secret".to_string(),
+            "parsed_with=tomllib".to_string(),
+        ];
+        let mut wrong_field = project_config_source_root_fact(&document, &unit, "src/lib");
+        wrong_field.assumptions = vec![
+            "python_config_field=tool_sections".to_string(),
+            "python_config_source_root=src/lib".to_string(),
+            "parsed_with=tomllib".to_string(),
+        ];
+
+        assert_eq!(
+            extract_python_source_roots_from_project_config_facts(&[
+                unsafe_root,
+                wrong_field,
+                safe
+            ]),
+            ["src"]
+        );
     }
 
     #[test]

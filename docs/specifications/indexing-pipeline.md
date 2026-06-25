@@ -116,14 +116,15 @@ implemented Python frontend uses CPython `ast` for code-unit extraction,
 CPython `symtable` for structural scope anchors, and a private standard-library
 `tomllib` parser mode for sanitized `pyproject.toml` summaries that default
 indexing persists only as structural config context or typed config `UNKNOWN`.
-Default parser-mode indexing now passes discovered repo-relative
-`.py` inventory into private parse-document requests, so source-tied unique
-repo-local imports can be persisted as `STRUCTURAL` parser facts and
-ambiguous/missing imports can remain typed `UNKNOWN`s. Future slices should add
-Tree-sitter as a tolerant structural fallback only. Python syntax-only facts
-still cannot become semantic claims or family evidence by themselves; only
-separately synthesized exact-anchor `DATAFLOW_DERIVED` support facts or future
-provider-backed facts may enter the EC-MVFI-lite support gate.
+Default parser-mode indexing now passes discovered repo-relative `.py`
+inventory and sanitized root `pyproject.toml` source roots from the existing
+`tomllib` project-config parse report into private parse-document requests, so
+source-tied unique repo-local imports can be persisted as `STRUCTURAL` parser
+facts and ambiguous/missing imports can remain typed `UNKNOWN`s. Future slices
+should add Tree-sitter as a tolerant structural fallback only. Python
+syntax-only facts still cannot become semantic claims or family evidence by
+themselves; only separately synthesized exact-anchor `DATAFLOW_DERIVED` support
+facts or future provider-backed facts may enter the EC-MVFI-lite support gate.
 
 ## Tree-sitter parsing
 
@@ -197,10 +198,12 @@ with stronger compatible evidence.
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. Default
-indexing now passes the discovered repo-relative `.py` inventory and bounded,
-hash-checked discovered `conftest.py` file contents into that private mode,
-letting the worker build a bounded module and fixture context for the current
-parse request. That worker pass produces repo-relative structural fact payloads
+indexing now passes the discovered repo-relative `.py` inventory, sanitized
+root `pyproject.toml` source roots from the same parser/tomllib project-config
+path, and bounded, hash-checked discovered `conftest.py` file contents into
+that private mode, letting the worker build a bounded module and fixture
+context for the current parse request. That worker pass produces
+repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
 Pydantic model-member anchors for fields, field annotation targets,
 `model_config`, nested `Config`, `computed_field`, validator, and

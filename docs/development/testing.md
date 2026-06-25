@@ -203,6 +203,9 @@ allowed.
   SQLAlchemy model-field, and SQLAlchemy session/repository families only when
   Python support reaches three members, their CLI/MCP metadata-only
   compact/evidence/deep query paths,
+  default-index parser context receiving discovered `.py` inventory, sanitized
+  root `pyproject.toml` source roots from parser/tomllib project-config facts,
+  and bounded discovered `conftest.py` contents,
   exact-anchor target variation coverage only for already-ready Python families,
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors staying out of support derivation and support-target
@@ -224,7 +227,7 @@ allowed.
   claim, and recovery text rather than replacing it with generic insufficient
   support. Future
   Python slices must add coverage for
-  default-index import context, Tree-sitter
+  Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
   `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,
