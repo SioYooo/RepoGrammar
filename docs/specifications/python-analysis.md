@@ -80,6 +80,9 @@ The current implementation covers the first structural slice only:
 
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
+- CPython `ast` structural fact output for import bindings, decorator anchors,
+  class bases, simple call targets, same-file pytest fixture edges, and typed
+  dynamic/unresolved `UNKNOWN` facts;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata;
 - syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
@@ -87,6 +90,13 @@ The current implementation covers the first structural slice only:
   model-shaped classes, and SQLAlchemy repository method-shaped functions;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for future strong facts.
+
+These worker facts use current protocol fact and certainty tokens only:
+`RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, and `UNKNOWN` with
+`STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative, hash-backed, and
+snippet-free, but they are still worker-local structural anchors; default
+product indexing does not yet persist or expose them as semantic-provider
+claims.
 
 This slice does not implement repo-local import resolution, `symtable` scope
 facts, `tomllib` configuration facts, Pyrefly, Pyright, provider cache keys,

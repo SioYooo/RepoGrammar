@@ -261,14 +261,20 @@ certainty for recognized framework-shaped code units; these records are not
 worker facts and remain blocked from family claims as insufficient support.
 The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
-CPython `ast` code-unit metadata for `.py` files. The same Python worker also
-has a semantic-worker-compatible NDJSON mode that emits conservative Python
-framework-role heuristic facts for direct worker smoke testing, but the product
-runtime does not separately launch it as a Pyrefly, Pyright, import-resolution,
-usage-propagation, or call-hierarchy provider. Python worker tests run under
-`python3` and assert parseable JSON/NDJSON, repo-relative paths, no source
-snippets, invalid path rejection, syntax diagnostics, and framework-role
-heuristic output.
+CPython `ast` code-unit metadata for `.py` files. That private mode now also
+returns worker-local structural fact payloads for import bindings, decorator
+anchors, class bases, simple call targets, and same-file pytest fixture edges,
+plus typed `UNKNOWN` facts for dynamic import, unresolved import, framework
+magic, and unresolved pytest fixture injection cases. The same Python worker
+has a semantic-worker-compatible NDJSON mode that emits those structural facts
+alongside conservative Python framework-role heuristic facts for direct worker
+smoke testing. The product runtime does not separately launch it as a Pyrefly,
+Pyright, import-resolution, usage-propagation, or call-hierarchy provider, and
+does not expose these worker-local facts through CLI/MCP query commands.
+Python worker tests run under `python3` and assert parseable JSON/NDJSON,
+repo-relative paths, strict content hashes, no source snippets, invalid path
+rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,
+bounded semantic-mode file reads, and framework-role heuristic output.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
 compiler APIs, run Pyrefly/Pyright, expose semantic facts through query/MCP

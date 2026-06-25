@@ -20,8 +20,9 @@ pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
 discovery, Python `.py` discovery, syntax-only code-unit extraction,
 syntax-origin framework-role fact storage, CodeUnit-derived structural IR
 storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
-unavailable stub, a CPython AST-backed Python worker for the first structural
-slice, repository guard checks, and a read-only MCP `repogrammar_context` stdio
+unavailable stub, a CPython AST-backed Python worker for structural code units,
+worker-local structural anchors, and typed dynamic/unresolved `UNKNOWN` output,
+repository guard checks, and a read-only MCP `repogrammar_context` stdio
 boundary.
 
 The official v0.1 implementation target has pivoted to Python-first analysis
@@ -31,11 +32,12 @@ parser, framework-role, import-resolution, and family-evidence work is
 implemented. The first Python slice discovers `.py` files, extracts CPython
 `ast` structural code units for FastAPI route-shaped functions, pytest
 tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
-and stores framework-role heuristic facts without turning them into family
-claims. The Python plan still uses a claim-driven selective cascade: cheap
-CPython syntax/scope/config facts first, Pyrefly only for plausible family
-candidates, Pyright only for claim-upgrading cross-checks, and typed `UNKNOWN`
-when evidence cannot support a claim.
+emits worker-local structural anchors for imports/decorators/class bases/simple
+calls/fixture edges, and stores framework-role heuristic facts without turning
+them into family claims. The Python plan still uses a claim-driven selective
+cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
+plausible family candidates, Pyright only for claim-upgrading cross-checks, and
+typed `UNKNOWN` when evidence cannot support a claim.
 
 It does not yet implement TypeScript compiler analysis, broad installer writes,
 or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter

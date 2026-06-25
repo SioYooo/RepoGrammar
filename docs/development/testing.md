@@ -139,9 +139,12 @@ allowed.
   paths are not echoed in errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output, syntax-error
-  diagnostics, semantic-worker-compatible NDJSON framework-role output,
-  oversized request rejection, unsafe path and symlink-escape rejection, and
-  absence of source snippets or absolute paths.
+  diagnostics, parse-document structural facts for imports/decorators/class
+  bases/calls/fixture edges, semantic-worker-compatible NDJSON structural facts
+  plus framework-role output, typed `UNKNOWN` output for dynamic and unresolved
+  cases, oversized request rejection, unsafe path and symlink-escape rejection,
+  bounded semantic-mode source reads, and absence of source snippets, absolute
+  paths, or unsafe dynamic-import literal targets.
 - Transitional release fixture smoke tests currently copy committed TS/JS source fixtures from
   `src/fixtures/typescript/release/v0_1/` into temporary workspaces and run the
   product CLI through `init`, `index`, `files`, `units`, `families`, `family`,
@@ -153,9 +156,10 @@ allowed.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
-  heuristic framework-role facts staying out of family claims, and typed
-  canonical framework identities rather than framework-name substring matching.
-  Future Python slices must add coverage for `symtable`/`tomllib`, Tree-sitter
+  worker-local structural facts and typed `UNKNOWN`, heuristic framework-role
+  facts staying out of family claims, and typed canonical framework identities
+  rather than framework-name substring matching. Future Python slices must add
+  coverage for persisted Python semantic facts, `symtable`/`tomllib`, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
   `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,

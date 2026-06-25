@@ -154,10 +154,13 @@ evidence contracts remain validated together.
 - Python is the v0.1 implementation target.
 - Use the method stack in `docs/specifications/python-analysis.md` and
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
-- The first CPython `ast` structural slice is implemented. Next Python slices
-  should add `symtable`/`tomllib` facts, repo-local import resolution, then
-  escalate only plausible family candidates to Pyrefly and use Pyright only for
-  claim-upgrading cross-checks.
+- The first CPython `ast` structural slice is implemented, including
+  worker-local structural anchors for imports, decorators, class bases, simple
+  calls, same-file pytest fixture edges, and typed dynamic/unresolved
+  `UNKNOWN`. Next Python slices should persist those anchors through the Rust
+  storage/readiness gate, add `symtable`/`tomllib` facts, add repo-local import
+  resolution, then escalate only plausible family candidates to Pyrefly and use
+  Pyright only for claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.
@@ -196,9 +199,10 @@ evidence contracts remain validated together.
 
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
-- Implement Python repo-local import resolution, safe project configuration,
-  pytest fixture graph recovery, usage propagation, provider-backed canonical
-  target evidence, and target-centered call recovery in scoped phases.
+- Implement Python structural-anchor persistence, repo-local import resolution,
+  safe project configuration, pytest fixture graph recovery, usage propagation,
+  provider-backed canonical target evidence, and target-centered call recovery
+  in scoped phases.
 - Validate TypeScript worker tooling and package manager before adding
   TypeScript compiler API dependencies or semantic fact emission.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap

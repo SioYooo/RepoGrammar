@@ -25,6 +25,11 @@
 - CPython AST Python worker with private parse-document JSON output for the
   Rust parser adapter and semantic-worker-compatible NDJSON framework-role
   heuristic smoke output, without running repository code or provider tools.
+- Python worker structural fact output for import bindings, decorator anchors,
+  class bases, simple call targets, same-file pytest fixture edges, and typed
+  dynamic/unresolved `UNKNOWN` cases. These facts are worker-local structural
+  anchors and are not yet persisted by default indexing or exposed as family
+  evidence.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

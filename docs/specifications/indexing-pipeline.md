@@ -184,8 +184,12 @@ with stronger compatible evidence.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
-`ast`-derived code-unit metadata without hand-written Python parsing. Its
-semantic-worker-compatible NDJSON mode can emit conservative
+`ast`-derived code-unit metadata without hand-written Python parsing. That
+worker pass also produces repo-relative structural fact payloads for imports,
+decorator anchors, class bases, simple calls, same-file pytest fixture edges,
+and typed dynamic/unresolved `UNKNOWN` cases, but the current parser port
+consumes only code units and diagnostics. Its semantic-worker-compatible NDJSON
+mode can emit those structural facts plus conservative
 `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units,
 but the product indexing path does not launch a Python semantic worker
 separately. Pyrefly, Pyright, repo-local import resolution, usage propagation,

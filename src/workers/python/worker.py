@@ -22,6 +22,9 @@ MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
 MAX_CHANGED_FILES = 10_000
 MAX_PATH_CHARS = 4096
+MAX_SOURCE_BYTES = 1_048_576
+MAX_FACTS_PER_FILE = 2_000
+MAX_FACT_TARGET_CHARS = 512
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 
 
@@ -72,6 +75,17 @@ def is_safe_repo_relative_path(value: Any) -> bool:
 
 def is_strict_content_hash(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"sha256:[0-9A-Fa-f]{64}", value) is not None
+
+
+def is_safe_fact_target(value: Any) -> bool:
+    return (
+        is_non_blank_string(value)
+        and len(value) <= MAX_FACT_TARGET_CHARS
+        and not has_control_or_uri_text(value)
+        and not value.startswith("/")
+        and "\\" not in value
+        and not has_windows_drive_prefix(value)
+    )
 
 
 def message(payload: dict[str, Any]) -> None:
@@ -128,6 +142,13 @@ def node_range(starts: list[int], node: ast.AST) -> tuple[int, int]:
     end_line = getattr(node, "end_lineno", start_line)
     end_col = getattr(node, "end_col_offset", start_col)
     return byte_offset(starts, start_line, start_col), byte_offset(starts, end_line, end_col)
+
+
+def unit_id(path: str, unit_data: dict[str, Any]) -> str:
+    return (
+        f"unit:{path}#{unit_data['kind']}:{slug(unit_data['name'])}:"
+        f"{unit_data['start_byte']}-{unit_data['end_byte']}:{unit_data['ordinal']}"
+    )
 
 
 def dotted_name(node: ast.AST) -> str | None:
@@ -239,10 +260,438 @@ def unit(name: str, kind: str, start: int, end: int, ordinal: int) -> dict[str, 
     }
 
 
-def analyze_source(path: str, source: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def canonical_name(name: str, aliases: dict[str, str], assignments: dict[str, str]) -> str:
+    parts = name.split(".")
+    if not parts:
+        return name
+    if parts[0] in assignments:
+        return ".".join([assignments[parts[0]], *parts[1:]])
+    if parts[0] in aliases:
+        return ".".join([aliases[parts[0]], *parts[1:]])
+    return name
+
+
+def evidence(
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    start: int,
+    end: int,
+    note: str,
+) -> dict[str, Any]:
+    return {
+        "code_unit_id": subject_unit_id,
+        "path": path,
+        "content_hash": content_hash_value,
+        "repository_revision": repository_revision,
+        "start_byte": start,
+        "end_byte": end,
+        "note": note,
+    }
+
+
+def fact(
+    *,
+    kind: str,
+    subject: str,
+    target: str | None,
+    certainty: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    start: int,
+    end: int,
+    note: str,
+    assumptions: list[str],
+) -> dict[str, Any]:
+    return {
+        "fact_kind": kind,
+        "subject": subject,
+        "target": target,
+        "origin": {
+            "engine": "python",
+            "engine_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "method": "cpython_ast",
+        },
+        "certainty": certainty,
+        "evidence": evidence(path, content_hash_value, repository_revision, subject_unit_id, start, end, note),
+        "assumptions": assumptions,
+    }
+
+
+def structural_fact(
+    *,
+    kind: str,
+    subject_unit_id: str,
+    target: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+    anchor_kind: str,
+) -> dict[str, Any]:
+    return fact(
+        kind=kind,
+        subject=subject_unit_id,
+        target=target,
+        certainty="STRUCTURAL",
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        subject_unit_id=subject_unit_id,
+        start=start,
+        end=end,
+        note=f"CPython ast structural {anchor_kind}",
+        assumptions=[f"python_anchor_kind={anchor_kind}", "binding unresolved without provider"],
+    )
+
+
+def unknown_fact(
+    *,
+    subject_unit_id: str,
+    reason_code: str,
+    affected_claim: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> dict[str, Any]:
+    return fact(
+        kind="UNKNOWN",
+        subject=subject_unit_id,
+        target=reason_code,
+        certainty="UNKNOWN",
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        subject_unit_id=subject_unit_id,
+        start=start,
+        end=end,
+        note=f"typed UNKNOWN {reason_code} for {affected_claim}",
+        assumptions=[f"reason_code={reason_code}", f"affected_claim={affected_claim}"],
+    )
+
+
+def collect_import_aliases(
+    tree: ast.Module,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    module_unit_id: str,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    aliases: dict[str, str] = {}
+    facts: list[dict[str, Any]] = []
+    imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    imports.sort(key=lambda node: node_range(starts, node))
+    for node in imports:
+        start, end = node_range(starts, node)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = alias.asname or alias.name.split(".")[0]
+                aliases[local] = alias.name
+                facts.append(
+                    structural_fact(
+                        kind="RESOLVED_IMPORT",
+                        subject_unit_id=module_unit_id,
+                        target=alias.name,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="import_binding",
+                    )
+                )
+        elif node.level:
+            facts.append(
+                unknown_fact(
+                    subject_unit_id=module_unit_id,
+                    reason_code="UnresolvedImport",
+                    affected_claim="python_import_resolution",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                )
+            )
+        elif node.module:
+            for alias in node.names:
+                if alias.name == "*":
+                    facts.append(
+                        unknown_fact(
+                            subject_unit_id=module_unit_id,
+                            reason_code="UnresolvedImport",
+                            affected_claim="python_import_resolution",
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
+                    )
+                    continue
+                target = f"{node.module}.{alias.name}"
+                aliases[alias.asname or alias.name] = target
+                facts.append(
+                    structural_fact(
+                        kind="RESOLVED_IMPORT",
+                        subject_unit_id=module_unit_id,
+                        target=target,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="import_binding",
+                    )
+                )
+    return aliases, facts
+
+
+def collect_assignment_roles(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        call_name = dotted_name(node.value.func)
+        if not call_name:
+            continue
+        canonical = canonical_name(call_name, aliases, {})
+        if canonical not in {"fastapi.APIRouter", "fastapi.FastAPI"}:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                assignments[target.id] = canonical
+    return assignments
+
+
+def add_fact(facts: list[dict[str, Any]], new_fact: dict[str, Any]) -> None:
+    target = new_fact.get("target")
+    if target is not None and not is_safe_fact_target(target):
+        return
+    if len(facts) < MAX_FACTS_PER_FILE:
+        facts.append(new_fact)
+
+
+def collect_decorator_facts(
+    node: ast.AST,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for decorator in getattr(node, "decorator_list", []):
+        name = dotted_name(decorator)
+        if not name:
+            continue
+        start, end = node_range(starts, decorator)
+        add_fact(
+            facts,
+            structural_fact(
+                kind="SYMBOL",
+                subject_unit_id=subject_unit_id,
+                target=canonical_name(name, aliases, assignments),
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind="decorator_binding",
+            ),
+        )
+
+
+def collect_class_base_facts(
+    node: ast.ClassDef,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for base in node.bases:
+        name = dotted_name(base)
+        if not name:
+            continue
+        start, end = node_range(starts, base)
+        add_fact(
+            facts,
+            structural_fact(
+                kind="TYPE",
+                subject_unit_id=subject_unit_id,
+                target=canonical_name(name, aliases, {}),
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind="class_base",
+            ),
+        )
+
+
+def is_dynamic_call(node: ast.Call) -> bool:
+    if isinstance(node.func, ast.Call) and dotted_name(node.func) == "getattr":
+        return True
+    if isinstance(node.func, ast.Subscript) and dotted_name(node.func) == "globals":
+        return True
+    return False
+
+
+def collect_call_facts(
+    node: ast.AST,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
+    calls.sort(key=lambda child: node_range(starts, child))
+    for call in calls:
+        start, end = node_range(starts, call)
+        name = dotted_name(call.func)
+        canonical = canonical_name(name, aliases, assignments) if name else None
+        if canonical == "importlib.import_module":
+            first_arg = call.args[0] if call.args else None
+            if (
+                isinstance(first_arg, ast.Constant)
+                and isinstance(first_arg.value, str)
+                and is_safe_fact_target(first_arg.value)
+            ):
+                add_fact(
+                    facts,
+                    structural_fact(
+                        kind="RESOLVED_IMPORT",
+                        subject_unit_id=subject_unit_id,
+                        target=first_arg.value,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="dynamic_import_literal",
+                    ),
+                )
+            else:
+                add_fact(
+                    facts,
+                    unknown_fact(
+                        subject_unit_id=subject_unit_id,
+                        reason_code="DynamicImport",
+                        affected_claim="python_import_resolution",
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                    ),
+                )
+            continue
+        if is_dynamic_call(call):
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_call_target",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
+        if canonical:
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="RESOLVED_CALL",
+                    subject_unit_id=subject_unit_id,
+                    target=canonical,
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="call_target",
+                ),
+            )
+
+
+def collect_fixture_facts(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    fixture_names: set[str],
+    facts: list[dict[str, Any]],
+) -> None:
+    if not node.name.startswith("test_"):
+        return
+    for arg in node.args.args:
+        if arg.arg == "self":
+            continue
+        start, end = node_range(starts, arg)
+        if arg.arg in fixture_names:
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="SYMBOL",
+                    subject_unit_id=subject_unit_id,
+                    target=f"fixture:{arg.arg}",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="pytest_fixture_edge",
+                ),
+            )
+        else:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="PytestFixtureInjection",
+                    affected_claim="pytest_fixture_binding",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+
+
+def analyze_source(
+    path: str,
+    source: str,
+    content_hash_value: str,
+    repository_revision: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     starts = byte_line_starts(source)
     units: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
+    facts: list[dict[str, Any]] = []
 
     try:
         tree = ast.parse(source, filename=path)
@@ -255,29 +704,144 @@ def analyze_source(path: str, source: str) -> tuple[list[dict[str, Any]], list[d
                 "end_byte": byte_offset(starts, error.lineno, error.offset if error.offset else 0),
             }
         )
-        return units, diagnostics
+        return units, diagnostics, facts
 
     ordinal = 0
     units.append(unit("module", "module", 0, len(source.encode("utf-8")), ordinal))
+    module_unit_id = unit_id(path, units[0])
     ordinal += 1
+    unit_by_node: dict[int, dict[str, Any]] = {}
+    aliases, import_facts = collect_import_aliases(
+        tree,
+        starts,
+        path,
+        content_hash_value,
+        repository_revision,
+        module_unit_id,
+    )
+    for item in import_facts:
+        add_fact(facts, item)
+    assignments = collect_assignment_roles(tree, aliases)
+    fixture_names = {
+        item.name
+        for item in tree.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(item)
+    }
 
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             start, end = node_range(starts, item)
             units.append(unit(item.name, function_kind(item, None), start, end, ordinal))
+            unit_by_node[id(item)] = units[-1]
             ordinal += 1
         elif isinstance(item, ast.ClassDef):
             start, end = node_range(starts, item)
             units.append(unit(item.name, class_kind(item), start, end, ordinal))
+            unit_by_node[id(item)] = units[-1]
             ordinal += 1
             for child in item.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     start, end = node_range(starts, child)
                     units.append(unit(child.name, function_kind(child, item.name), start, end, ordinal))
+                    unit_by_node[id(child)] = units[-1]
                     ordinal += 1
 
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            subject_unit_id = unit_id(path, unit_by_node[id(item)])
+            collect_decorator_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                assignments,
+                facts,
+            )
+            collect_fixture_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                fixture_names,
+                facts,
+            )
+            collect_call_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                assignments,
+                facts,
+            )
+        elif isinstance(item, ast.ClassDef):
+            subject_unit_id = unit_id(path, unit_by_node[id(item)])
+            collect_class_base_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                facts,
+            )
+            collect_decorator_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                assignments,
+                facts,
+            )
+            for child in item.body:
+                if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                child_unit_id = unit_id(path, unit_by_node[id(child)])
+                collect_decorator_facts(
+                    child,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    child_unit_id,
+                    aliases,
+                    assignments,
+                    facts,
+                )
+                collect_call_facts(
+                    child,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    child_unit_id,
+                    aliases,
+                    assignments,
+                    facts,
+                )
+
     units.sort(key=lambda item: (item["start_byte"], item["end_byte"], item["kind"], item["name"]))
-    return units, diagnostics
+    facts.sort(
+        key=lambda item: (
+            item["evidence"]["start_byte"],
+            item["evidence"]["end_byte"],
+            item["fact_kind"],
+            item["target"] or "",
+            item["subject"],
+        )
+    )
+    return units, diagnostics, facts
 
 
 def parse_document(payload: dict[str, Any]) -> int:
@@ -297,13 +861,19 @@ def parse_document(payload: dict[str, Any]) -> int:
     text = payload.get("text")
     if not isinstance(text, str):
         return 2
-    units, diagnostics = analyze_source(payload["path"], text)
+    units, diagnostics, facts = analyze_source(
+        payload["path"],
+        text,
+        payload["content_hash"],
+        payload["repository_revision"],
+    )
     message(
         {
             "protocol_version": PROTOCOL_VERSION,
             "mode": "parse_document",
             "path": payload["path"],
             "units": units,
+            "facts": facts,
             "diagnostics": diagnostics,
         }
     )
@@ -347,11 +917,38 @@ def resolve_under_root(project_root: Path, relative_path: str) -> Path | None:
     return target
 
 
-def content_hash(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+def read_source(path: Path) -> tuple[str, str] | None:
+    try:
+        with path.open("rb") as source_file:
+            data = source_file.read(MAX_SOURCE_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > MAX_SOURCE_BYTES:
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text, f"sha256:{hashlib.sha256(data).hexdigest()}"
 
 
-def emit_framework_role_fact(request_id: str, project_root: Path, relative_path: str, unit_data: dict[str, Any]) -> None:
+def emit_fact_message(request_id: str, fact_payload: dict[str, Any]) -> None:
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "message_type": "fact",
+            "request_id": request_id,
+            **fact_payload,
+        }
+    )
+
+
+def emit_framework_role_fact(
+    request_id: str,
+    relative_path: str,
+    file_hash: str,
+    unit_data: dict[str, Any],
+) -> None:
     role_by_kind = {
         "fastapi_route": "framework:fastapi.route",
         "pytest_test": "framework:pytest.test",
@@ -363,34 +960,23 @@ def emit_framework_role_fact(request_id: str, project_root: Path, relative_path:
     role = role_by_kind.get(unit_data["kind"])
     if role is None:
         return
-    file_path = resolve_under_root(project_root, relative_path)
-    if file_path is None:
-        return
-    message(
-        {
-            "protocol_version": PROTOCOL_VERSION,
-            "message_type": "fact",
-            "request_id": request_id,
-            "fact_kind": "FRAMEWORK_ROLE",
-            "subject": f"unit:{relative_path}#{unit_data['kind']}:{slug(unit_data['name'])}:{unit_data['start_byte']}-{unit_data['end_byte']}:{unit_data['ordinal']}",
-            "target": role,
-            "origin": {
-                "engine": "python",
-                "engine_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-                "method": "cpython_ast",
-            },
-            "certainty": "FRAMEWORK_HEURISTIC",
-            "evidence": {
-                "code_unit_id": f"unit:{relative_path}#{unit_data['kind']}:{slug(unit_data['name'])}:{unit_data['start_byte']}-{unit_data['end_byte']}:{unit_data['ordinal']}",
-                "path": relative_path,
-                "content_hash": content_hash(file_path),
-                "repository_revision": "UNKNOWN",
-                "start_byte": unit_data["start_byte"],
-                "end_byte": unit_data["end_byte"],
-                "note": f"CPython ast recognized {role}",
-            },
-            "assumptions": ["binding unresolved without provider"],
-        }
+    subject_unit_id = unit_id(relative_path, unit_data)
+    emit_fact_message(
+        request_id,
+        fact(
+            kind="FRAMEWORK_ROLE",
+            subject=subject_unit_id,
+            target=role,
+            certainty="FRAMEWORK_HEURISTIC",
+            path=relative_path,
+            content_hash_value=file_hash,
+            repository_revision="UNKNOWN",
+            subject_unit_id=subject_unit_id,
+            start=unit_data["start_byte"],
+            end=unit_data["end_byte"],
+            note=f"CPython ast recognized {role}",
+            assumptions=["binding unresolved without provider"],
+        ),
     )
 
 
@@ -408,13 +994,15 @@ def analyze_project(payload: dict[str, Any]) -> int:
         file_path = resolve_under_root(project_root, relative_path)
         if file_path is None:
             continue
-        try:
-            source = file_path.read_text(encoding="utf-8")
-        except OSError:
+        source_result = read_source(file_path)
+        if source_result is None:
             continue
-        units, _diagnostics = analyze_source(relative_path, source)
+        source, file_hash = source_result
+        units, _diagnostics, facts = analyze_source(relative_path, source, file_hash, "UNKNOWN")
+        for fact_payload in facts:
+            emit_fact_message(request_id, fact_payload)
         for unit_data in units:
-            emit_framework_role_fact(request_id, project_root, relative_path, unit_data)
+            emit_framework_role_fact(request_id, relative_path, file_hash, unit_data)
     message({"protocol_version": PROTOCOL_VERSION, "message_type": "end_of_stream", "request_id": request_id})
     return 0
 

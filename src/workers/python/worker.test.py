@@ -84,7 +84,28 @@ assert "pytest_test" in unit_kinds
 assert "pydantic_model" in unit_kinds
 assert "sqlalchemy_model" in unit_kinds
 assert "async_function" not in unit_kinds
+parse_facts = parse_messages[0]["facts"]
+assert any(fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "fastapi.APIRouter" for fact in parse_facts)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel" for fact in parse_facts)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.DeclarativeBase" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get" for fact in parse_facts)
+assert any(fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "client.get" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in parse_facts
+)
+for fact in parse_facts:
+    assert fact["origin"]["engine"] == "python"
+    assert fact["origin"]["method"] == "cpython_ast"
+    assert fact["certainty"] in {"STRUCTURAL", "UNKNOWN"}
+    assert fact["evidence"]["path"] == "app.py"
+    assert fact["evidence"]["content_hash"] == "sha256:" + "0" * 64
+    assert "start_byte" in fact["evidence"]
+    assert "end_byte" in fact["evidence"]
 assert "from fastapi" not in json.dumps(parse_messages)
+assert "@router.get" not in json.dumps(parse_messages)
 
 bad_parse = run_worker(
     {
@@ -98,6 +119,61 @@ bad_parse = run_worker(
 )
 assert bad_parse[0]["units"] == []
 assert bad_parse[0]["diagnostics"][0]["message"] == "python ast parse failed"
+assert bad_parse[0]["facts"] == []
+
+dynamic_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dynamic.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+
+def load(name, obj, method):
+    importlib.import_module(name)
+    getattr(obj, method)()
+    globals()[name]()
+""",
+    }
+)
+dynamic_facts = dynamic_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert "importlib.import_module(name)" not in json.dumps(dynamic_messages)
+
+unsafe_literal_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "unsafe_import.py",
+        "content_hash": "sha256:" + "3" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+
+def load():
+    importlib.import_module("/tmp/secret")
+""",
+    }
+)
+serialized_unsafe_import = json.dumps(unsafe_literal_import)
+assert "/tmp/secret" not in serialized_unsafe_import
+assert any(
+    fact["fact_kind"] == "UNKNOWN" and fact["target"] == "DynamicImport"
+    for fact in unsafe_literal_import[0]["facts"]
+)
 
 with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(
@@ -114,6 +190,14 @@ def create_user():
     messages = run_worker(valid_request(root))
     assert_end_of_stream(messages)
     assert any(message.get("fact_kind") == "FRAMEWORK_ROLE" for message in messages)
+    assert any(
+        message.get("fact_kind") == "RESOLVED_IMPORT" and message.get("target") == "fastapi.APIRouter"
+        for message in messages
+    )
+    assert any(
+        message.get("fact_kind") == "SYMBOL" and message.get("target") == "fastapi.APIRouter.post"
+        for message in messages
+    )
     serialized = json.dumps(messages)
     assert root not in serialized
     assert "@router.post" not in serialized
