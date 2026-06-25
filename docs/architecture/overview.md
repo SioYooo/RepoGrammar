@@ -77,7 +77,7 @@ syntax-only parser adapter, filesystem source reader, SQLite generation store
 for `index` and `sync`, optional semantic-worker ingestion when an explicit
 worker executable and optional argv vector are configured, FamilyStore-backed
 query reads, and read-only MCP serving through the same query layer. Full
-family mining, TypeScript compiler analysis, installer writes, and stable
+family mining, TypeScript compiler analysis, broad installer writes, and stable
 production family-evidence claims remain later boundaries.
 `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
 coupled to product runtime logic.

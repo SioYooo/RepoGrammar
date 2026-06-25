@@ -22,8 +22,8 @@ storage, CodeUnit-derived structural IR storage, SQLite generation-storage
 wiring, a dependency-free TypeScript worker unavailable stub, and repository
 guard checks, and a read-only MCP `repogrammar_context` stdio boundary.
 
-It does not yet implement TypeScript compiler analysis, installer writes, or
-full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
+It does not yet implement TypeScript compiler analysis, broad installer writes,
+or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
 can execute a configured process, send the v1 request payload, and validate
 NDJSON v1 facts. A checked-in worker stub can validate stdin and report semantic
 analysis as unavailable. `index` and `sync` do not launch a worker by default;
@@ -50,8 +50,10 @@ insufficient family evidence they return typed `UNKNOWN` instead of pretending a
 family was proven. `status` and `doctor` can distinguish file-manifest-only
 generations from syntax-only code-unit/IR generations. `serve` exposes the same
 conservative query path through the single default MCP tool
-`repogrammar_context`. Commands that install agent configuration still return
-explicit deferred-write errors until those contracts are implemented and tested.
+`repogrammar_context`. `install` and `uninstall` support narrow explicit-target
+Codex/Claude Code MCP configuration through native agent CLIs after a read-only
+MCP self-test; broad `--target all`, unsupported native scopes, executable
+copying, and instruction-file edits remain deferred.
 
 ## Why RepoGrammar?
 
@@ -118,7 +120,7 @@ active file-manifest-only or syntax-only index metadata.
 | Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
-| MCP | Tool contracts are specified | Read-only agent tools backed by stored family evidence |
+| MCP | Read-only `repogrammar_context` serve boundary is implemented | Stable agent-tool API after more compatibility testing |
 | Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
 | Optional providers | No provider dependency | CodeGraph may be considered only as an optional lower-layer evidence provider, not a required runtime |
 
@@ -209,9 +211,9 @@ v0.1 parallel development plan:
 - keep syntax-only code units structural and non-semantic;
 - keep syntax-origin framework-role facts framework-heuristic and out of family
   claims until stronger evidence and claim builders exist;
-- keep TypeScript compiler API integration, full mining, MCP transport, and
-  installer writes deferred until parser output, storage, and semantic-worker
-  boundaries are validated together.
+- keep TypeScript compiler API integration, full mining, broad installer writes,
+  and instruction-file integration deferred until parser output, storage,
+  semantic-worker, MCP self-test, and receipt boundaries are validated together.
 - keep experimental Python dogfooding, optional CodeGraph provider work, and
   typed `UNKNOWN` governance explicitly scoped before implementation.
 

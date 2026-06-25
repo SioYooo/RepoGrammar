@@ -1,7 +1,10 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
 use crate::application::indexing::IndexingOutcome;
-use crate::application::install::{plan_install, AgentTarget, InstallRequest, InstallScope};
+use crate::application::install::{
+    plan_install, AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
+    InstallScope,
+};
 use crate::application::query::{
     query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyListReport,
     FamilyLookupReport, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
@@ -73,6 +76,15 @@ pub trait CliRuntime {
         _target: Option<&str>,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
+    }
+
+    fn install_agent_integration(
+        &self,
+        _command: &str,
+        _request: InstallRequest,
+        _context: InstallExecutionContext,
+    ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("install"))
     }
 }
 
@@ -192,7 +204,9 @@ where
         [command, rest @ ..] if is_query_command(command) => {
             handle_query(command, rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if is_installer_command(command) => handle_installer(command, rest),
+        [command, rest @ ..] if is_installer_command(command) => {
+            handle_installer(command, rest, current_dir, env_lookup, runtime)
+        }
         [command, rest @ ..] if command == "stats" => handle_stats(rest),
         [command, rest @ ..] if command == "telemetry" => handle_telemetry(rest),
         [command] if is_forbidden_graph_command(command) => CliOutput::failure(
@@ -705,7 +719,16 @@ fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
+fn handle_installer<F>(
+    command: &str,
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
     if command == "serve" {
         if let Err(error) = parse_serve_options(rest) {
             return CliOutput::failure(2, format!("{error}\n"));
@@ -734,13 +757,82 @@ fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
         }
         CliOutput::success(output)
     } else {
-        CliOutput::failure(
-            2,
-            format!(
-                "repogrammar {command} writes are not implemented yet; rerun with --dry-run to inspect the safe integration plan\n"
-            ),
-        )
+        if !request.assume_yes {
+            return CliOutput::failure(
+                2,
+                format!("{command} live writes require --yes; rerun with --dry-run to inspect the safe integration plan\n"),
+            );
+        }
+        let context = match install_execution_context(current_dir, env_lookup) {
+            Ok(context) => context,
+            Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+        };
+        match runtime.install_agent_integration(command, request, context) {
+            Ok(outcome) => CliOutput::success(install_outcome_human(&outcome)),
+            Err(error) => CliOutput::failure(2, format!("{error}\n")),
+        }
     }
+}
+
+fn install_execution_context<F>(
+    current_dir: &Path,
+    env_lookup: &F,
+) -> Result<InstallExecutionContext, String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let executable_path = match env_lookup("REPOGRAMMAR_EXECUTABLE") {
+        Some(path) => path,
+        None => std::env::current_exe()
+            .map_err(|error| format!("failed to resolve current executable: {error}"))?
+            .display()
+            .to_string(),
+    };
+    let data_dir = match env_lookup("REPOGRAMMAR_INSTALL_DIR") {
+        Some(path) => path,
+        None => default_install_data_dir(env_lookup)?,
+    };
+    Ok(InstallExecutionContext {
+        executable_path,
+        data_dir,
+        current_dir: current_dir.display().to_string(),
+    })
+}
+
+fn default_install_data_dir<F>(env_lookup: &F) -> Result<String, String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(value) = env_lookup("XDG_DATA_HOME").filter(|value| !value.trim().is_empty()) {
+        return Ok(Path::new(&value).join("repogrammar").display().to_string());
+    }
+    let home = env_lookup("HOME")
+        .or_else(|| env_lookup("USERPROFILE"))
+        .ok_or_else(|| "HOME is required for live install/uninstall writes".to_string())?;
+    Ok(Path::new(&home)
+        .join(".local")
+        .join("share")
+        .join("repogrammar")
+        .display()
+        .to_string())
+}
+
+fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
+    let targets = outcome
+        .configured_targets
+        .iter()
+        .map(|target| target.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}: {}\ntarget={}\nscope={}\nconfigured_targets={}\nreceipts={}\n",
+        outcome.command,
+        outcome.message,
+        outcome.target.as_str(),
+        outcome.scope.as_str(),
+        if targets.is_empty() { "none" } else { &targets },
+        outcome.receipt_paths.len()
+    )
 }
 
 fn handle_stats(rest: &[String]) -> CliOutput {
@@ -3680,6 +3772,87 @@ mod tests {
         assert_eq!(output.status, 0);
         assert!(output.stdout.contains("target=codex"));
         assert!(output.stdout.contains("telemetry=off"));
+    }
+
+    #[test]
+    fn install_live_writes_require_yes_before_runtime_delegation() {
+        let output = run(["install", "--target", "codex"]);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stderr.contains("live writes require --yes"));
+        assert!(!output.stderr.contains("not implemented"));
+    }
+
+    #[test]
+    fn install_live_writes_delegate_to_runtime_after_yes() {
+        struct InstallRuntime;
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                assert_eq!(request.target, AgentTarget::Codex);
+                assert_eq!(request.scope, InstallScope::Global);
+                assert!(context.data_dir.ends_with("repogrammar"));
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: vec![AgentTarget::Codex],
+                    receipt_paths: vec![context.data_dir],
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-runtime");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let output = run_with_context_and_runtime(
+            ["install", "--target", "codex", "--yes"],
+            workspace.path(),
+            &env,
+            &InstallRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output
+            .stdout
+            .contains("install: agent MCP integration installed"));
+        assert!(output.stdout.contains("configured_targets=codex"));
     }
 
     #[test]

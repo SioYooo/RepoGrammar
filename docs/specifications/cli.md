@@ -195,7 +195,14 @@ snippets or absolute paths.
 - `--no-permissions`
 
 Installer commands configure agents and machine-level integration only. They do
-not create, delete, or rewrite `.repogrammar/`.
+not create, delete, or rewrite `.repogrammar/`. Live writes require `--yes`.
+The current implementation supports explicit `--target codex --scope global`
+through the native Codex MCP CLI and explicit
+`--target claude-code --scope global` through the native Claude Code MCP CLI.
+Live `--target all` and all project-local writes remain deferred to avoid
+partial or unsupported agent configuration. `install` runs a read-only MCP
+self-test before native configuration and writes a managed receipt after native
+configuration succeeds; `uninstall` removes only receipt-owned managed entries.
 
 ## Metrics commands
 
@@ -356,5 +363,6 @@ return missing-index fallback before an active generation exists, typed
 when EC-MVFI-lite has written supported family rows. `serve` runs the read-only
 MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
-configuration still return deferred-write errors until those implementations are
-designed and tested with MCP self-tests and reversible receipts.
+configuration now support narrow explicit-target live writes after MCP
+self-test. Unsupported live target/scope combinations return explicit deferred
+errors; dry-run planning remains available for all targets and scopes.

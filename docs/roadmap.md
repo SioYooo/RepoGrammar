@@ -103,7 +103,7 @@ syntax-only code units, structural IR, syntax-origin framework-role facts, and
 weak stored semantic facts out of family claims unless the conservative builder
 has stronger compatible support.
 
-Do not advance full mining or installer writes until parser output,
+Do not advance full mining or broad installer writes until parser output,
 family-evidence read paths, freshness checks, MCP self-tests, and evidence
 contracts remain validated together.
 
@@ -117,8 +117,9 @@ contracts remain validated together.
   available.
 - Harden read-only MCP self-tests for the default `repogrammar_context` tool and
   missing/stale-index fallback semantics.
-- Implement safe installer writes only after native agent detection, backups,
-  receipts, and MCP self-tests are validated.
+- Broaden safe installer writes beyond explicit global Codex/Claude MCP
+  registration only after native agent detection, backups, receipts, and MCP
+  self-tests are validated for the expanded scope.
 
 ## v0.1 language scope
 

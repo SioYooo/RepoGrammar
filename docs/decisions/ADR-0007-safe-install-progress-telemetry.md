@@ -44,11 +44,14 @@ Metrics must be classified as `MEASURED`, `DERIVED`, `ESTIMATED`, or
 
 The CLI has explicit `install` and repository lifecycle commands. Repository
 lifecycle and syntax-only indexing write paths now operate on repo-local state.
-Agent integration writes and telemetry network transport remain deferred until
-their safety contracts are implemented.
+Narrow global Codex and Claude Code MCP registration writes are allowed only
+after `--yes`, a read-only MCP self-test, native agent CLI execution, and
+RepoGrammar-owned receipt creation. Broader agent integration writes and
+telemetry network transport remain deferred until their safety contracts are
+implemented.
 
 ## Follow-up work
 
-Implement native agent detection, MCP self-tests, reversible installer receipts,
-local telemetry storage, and telemetry export behavior with tests before
-enabling those write paths.
+Broaden native agent detection, project-local writes, instruction-file
+integration, local telemetry storage, and telemetry export behavior with tests
+before enabling those write paths.

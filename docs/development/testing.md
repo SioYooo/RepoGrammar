@@ -91,6 +91,10 @@ allowed.
   no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
   `check_conformance`, JSON-RPC initialize/tools/list/tools/call/shutdown
   handling, and absence of source snippets or absolute paths.
+- Installer live-write tests must cover `--yes` gating, MCP self-test before
+  native configuration, unsupported broad `--target all`, unsupported native
+  scopes, receipt writing, receipt-write rollback, receipt-owned uninstall,
+  foreign receipt refusal, and no `.repogrammar/` mutation.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
@@ -167,6 +171,7 @@ for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
 read-only MCP `repogrammar_context` schema/JSON-RPC serving,
+installer live-write gating through native MCP CLIs and managed receipts,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store

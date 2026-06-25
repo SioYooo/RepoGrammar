@@ -9,6 +9,11 @@ use repogrammar::application::indexing::{
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store,
     IndexingOutcome, IndexingRequest,
 };
+use repogrammar::application::install::{
+    execute_install, execute_uninstall, AgentTarget, InstallExecutionContext,
+    InstallExecutionOutcome, InstallRequest, InstallScope, McpSelfTestRunner, NativeAgentAction,
+    NativeAgentConfigurator, MCP_SERVER_NAME,
+};
 use repogrammar::application::query::{
     list_code_units, list_families, list_indexed_files, lookup_family, FamilyListReport,
     FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport,
@@ -23,7 +28,11 @@ use repogrammar::interfaces::cli::{
     parse_serve_options, repository_root, run_with_runtime, state_dir_override, CliIndexRequest,
     CliRuntime,
 };
-use repogrammar::interfaces::mcp::{serve_json_lines, McpReadOnlyRuntime, McpServeContext};
+use repogrammar::interfaces::mcp::{
+    serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
+};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -169,6 +178,23 @@ impl CliRuntime for ProductCliRuntime {
         let store = self.store_for_status_request(&request)?;
         lookup_family(&store, target)
     }
+
+    fn install_agent_integration(
+        &self,
+        command: &str,
+        request: InstallRequest,
+        context: InstallExecutionContext,
+    ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+        let configurator = ProductNativeAgentConfigurator;
+        let self_tester = ProductMcpSelfTester;
+        match command {
+            "install" => execute_install(&request, &context, &configurator, &self_tester),
+            "uninstall" => execute_uninstall(&request, &context, &configurator),
+            _ => Err(RepoGrammarError::InvalidInput(
+                "unknown installer command".to_string(),
+            )),
+        }
+    }
 }
 
 impl McpReadOnlyRuntime for ProductCliRuntime {
@@ -216,6 +242,226 @@ fn run_serve_command(rest: &[String], runtime: &impl McpReadOnlyRuntime) -> i32 
             eprintln!("{error}");
             2
         }
+    }
+}
+
+struct ProductNativeAgentConfigurator;
+
+impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
+    fn add_mcp_server(
+        &self,
+        target: AgentTarget,
+        scope: InstallScope,
+        executable_path: &str,
+        current_dir: &str,
+    ) -> Result<NativeAgentAction, RepoGrammarError> {
+        let (program, args) = native_add_command(target, scope, executable_path)?;
+        run_native_agent_command(&program, &args, current_dir)?;
+        Ok(NativeAgentAction {
+            target,
+            program,
+            args,
+        })
+    }
+
+    fn remove_mcp_server(
+        &self,
+        target: AgentTarget,
+        scope: InstallScope,
+        current_dir: &str,
+    ) -> Result<NativeAgentAction, RepoGrammarError> {
+        let (program, args) = native_remove_command(target, scope)?;
+        run_native_agent_command(&program, &args, current_dir)?;
+        Ok(NativeAgentAction {
+            target,
+            program,
+            args,
+        })
+    }
+}
+
+struct ProductMcpSelfTester;
+
+impl McpSelfTestRunner for ProductMcpSelfTester {
+    fn self_test(&self, executable_path: &str, current_dir: &str) -> Result<(), RepoGrammarError> {
+        let mut child = Command::new(executable_path)
+            .args(["serve", "--project", current_dir])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| {
+                RepoGrammarError::InvalidInput("failed to launch MCP self-test".to_string())
+            })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})
+            )
+            .map_err(|_| {
+                RepoGrammarError::InvalidInput("failed to write MCP self-test request".to_string())
+            })?;
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"shutdown"})
+            )
+            .map_err(|_| {
+                RepoGrammarError::InvalidInput("failed to write MCP self-test shutdown".to_string())
+            })?;
+        }
+        let output = child.wait_with_output().map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to read MCP self-test output".to_string())
+        })?;
+        if !output.status.success() {
+            return Err(RepoGrammarError::InvalidInput(
+                "MCP self-test failed".to_string(),
+            ));
+        }
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            RepoGrammarError::InvalidInput("MCP self-test output was not UTF-8".to_string())
+        })?;
+        let first = stdout.lines().next().ok_or_else(|| {
+            RepoGrammarError::InvalidInput("MCP self-test returned no output".to_string())
+        })?;
+        let value: serde_json::Value = serde_json::from_str(first).map_err(|_| {
+            RepoGrammarError::InvalidInput("MCP self-test output was not JSON".to_string())
+        })?;
+        if value["result"]["tools"][0]["name"] == McpToolName::Context.as_str() {
+            Ok(())
+        } else {
+            Err(RepoGrammarError::InvalidInput(
+                "MCP self-test did not expose repogrammar_context".to_string(),
+            ))
+        }
+    }
+}
+
+fn native_add_command(
+    target: AgentTarget,
+    scope: InstallScope,
+    executable_path: &str,
+) -> Result<(String, Vec<String>), RepoGrammarError> {
+    match target {
+        AgentTarget::Codex => {
+            if scope == InstallScope::ProjectLocal {
+                return Err(RepoGrammarError::InvalidInput(
+                    "codex project-local install is unsupported by the native codex mcp CLI"
+                        .to_string(),
+                ));
+            }
+            Ok((
+                "codex".to_string(),
+                vec![
+                    "mcp".to_string(),
+                    "add".to_string(),
+                    MCP_SERVER_NAME.to_string(),
+                    "--".to_string(),
+                    executable_path.to_string(),
+                    "serve".to_string(),
+                ],
+            ))
+        }
+        AgentTarget::ClaudeCode => {
+            if scope == InstallScope::ProjectLocal {
+                return Err(RepoGrammarError::InvalidInput(
+                    "claude-code project-local install is deferred".to_string(),
+                ));
+            }
+            let scope = claude_scope(scope);
+            Ok((
+                "claude".to_string(),
+                vec![
+                    "mcp".to_string(),
+                    "add".to_string(),
+                    "--scope".to_string(),
+                    scope.to_string(),
+                    MCP_SERVER_NAME.to_string(),
+                    "--".to_string(),
+                    executable_path.to_string(),
+                    "serve".to_string(),
+                ],
+            ))
+        }
+        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+            "native command requires a concrete agent target".to_string(),
+        )),
+    }
+}
+
+fn native_remove_command(
+    target: AgentTarget,
+    scope: InstallScope,
+) -> Result<(String, Vec<String>), RepoGrammarError> {
+    match target {
+        AgentTarget::Codex => {
+            if scope == InstallScope::ProjectLocal {
+                return Err(RepoGrammarError::InvalidInput(
+                    "codex project-local uninstall is unsupported by the native codex mcp CLI"
+                        .to_string(),
+                ));
+            }
+            Ok((
+                "codex".to_string(),
+                vec![
+                    "mcp".to_string(),
+                    "remove".to_string(),
+                    MCP_SERVER_NAME.to_string(),
+                ],
+            ))
+        }
+        AgentTarget::ClaudeCode => {
+            if scope == InstallScope::ProjectLocal {
+                return Err(RepoGrammarError::InvalidInput(
+                    "claude-code project-local uninstall is deferred".to_string(),
+                ));
+            }
+            Ok((
+                "claude".to_string(),
+                vec![
+                    "mcp".to_string(),
+                    "remove".to_string(),
+                    "--scope".to_string(),
+                    claude_scope(scope).to_string(),
+                    MCP_SERVER_NAME.to_string(),
+                ],
+            ))
+        }
+        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+            "native command requires a concrete agent target".to_string(),
+        )),
+    }
+}
+
+fn claude_scope(scope: InstallScope) -> &'static str {
+    match scope {
+        InstallScope::Global => "user",
+        InstallScope::ProjectLocal => "project",
+    }
+}
+
+fn run_native_agent_command(
+    program: &str,
+    args: &[String],
+    current_dir: &str,
+) -> Result<(), RepoGrammarError> {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(current_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput(format!("native {program} CLI is unavailable"))
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(format!(
+            "native {program} MCP command failed"
+        )))
     }
 }
 
@@ -528,6 +774,61 @@ mod tests {
         assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
         assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!payload_text.contains("export function"));
+    }
+
+    #[test]
+    fn native_agent_commands_use_public_mcp_cli_shapes() {
+        let (_program, codex_args) =
+            native_add_command(AgentTarget::Codex, InstallScope::Global, "/opt/repogrammar")
+                .expect("codex add");
+        assert_eq!(
+            codex_args,
+            vec![
+                "mcp",
+                "add",
+                "repogrammar",
+                "--",
+                "/opt/repogrammar",
+                "serve"
+            ]
+        );
+        assert!(native_add_command(
+            AgentTarget::Codex,
+            InstallScope::ProjectLocal,
+            "/opt/repogrammar"
+        )
+        .is_err());
+
+        let (_program, claude_args) =
+            native_add_command(AgentTarget::ClaudeCode, InstallScope::Global, "/opt/rg")
+                .expect("claude add");
+        assert_eq!(
+            claude_args,
+            vec![
+                "mcp",
+                "add",
+                "--scope",
+                "user",
+                "repogrammar",
+                "--",
+                "/opt/rg",
+                "serve"
+            ]
+        );
+        assert!(native_add_command(
+            AgentTarget::ClaudeCode,
+            InstallScope::ProjectLocal,
+            "/opt/rg"
+        )
+        .is_err());
+
+        let (_program, remove_args) =
+            native_remove_command(AgentTarget::ClaudeCode, InstallScope::Global)
+                .expect("claude remove");
+        assert_eq!(
+            remove_args,
+            vec!["mcp", "remove", "--scope", "user", "repogrammar"]
+        );
     }
 
     #[cfg(unix)]

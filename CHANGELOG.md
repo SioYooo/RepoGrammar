@@ -103,6 +103,10 @@
   `tools/list`, `tools/call`, and `shutdown`, reusing the same pattern-family
   query preflight and FamilyStore-backed lookup path without enabling installer
   writes.
+- Narrow live `install`/`uninstall` execution for explicit Codex and Claude Code
+  MCP targets through native agent CLIs, gated by `--yes`, MCP self-test, and
+  RepoGrammar-owned receipts while keeping broad target and unsupported scope
+  writes deferred.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.

@@ -79,6 +79,22 @@ Consuming repositories must not be forced to mirror RepoGrammar's own
 
 ## Current implementation status
 
-The bootstrap implements deterministic dry-run planning and option parsing. It
-does not yet write agent configuration, install executables, run self-tests, or
-write receipts.
+The bootstrap implements deterministic dry-run planning and option parsing.
+Live `install` and `uninstall` writes are intentionally narrow:
+
+- live writes require `--yes`;
+- live `--target all` is deferred to avoid partial multi-agent writes;
+- `--target codex --scope global` uses the native `codex mcp add/remove`
+  commands;
+- `--target claude-code --scope global` uses the native `claude mcp add/remove`
+  commands with `user` scope;
+- live project-local writes remain deferred until ownership, receipt, and native
+  config semantics are specified for each supported agent;
+- install runs a read-only MCP self-test before native agent configuration;
+- install writes a RepoGrammar-owned receipt under the user install data
+  directory after native configuration succeeds and rolls back the native entry
+  if receipt writing fails;
+- uninstall removes only targets with a matching RepoGrammar receipt.
+
+The installer still does not copy executables, edit instruction files, repair
+malformed native agent config, or touch `.repogrammar/`.
