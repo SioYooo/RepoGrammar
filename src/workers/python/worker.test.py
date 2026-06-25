@@ -83,8 +83,11 @@ class UserRepository:
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
 
+def get_db():
+    return object()
+
 @router.get("/users", response_model=list[UserOut])
-async def list_users(dependency=Depends(lambda: object())):
+async def list_users(dependency=Depends(get_db)):
     raise HTTPException(status_code=404)
 
 @pytest.mark.parametrize("status", [200])
@@ -152,6 +155,12 @@ assert any(
     for fact in parse_facts
 )
 assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.dependency.get_db"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "fastapi.HTTPException"
     and "python_anchor_kind=fastapi_http_exception" in fact["assumptions"]
@@ -201,6 +210,7 @@ assert "@router.get" not in json.dumps(parse_messages)
 assert "response_model=" not in json.dumps(parse_messages)
 assert "list[UserOut]" not in json.dumps(parse_messages)
 assert "Depends(" not in json.dumps(parse_messages)
+assert "Depends(get_db" not in json.dumps(parse_messages)
 assert "HTTPException(" not in json.dumps(parse_messages)
 
 indirect_parametrize_messages = run_worker(
@@ -287,7 +297,7 @@ alias_parse_messages = run_worker(
         "content_hash": "sha256:" + "a" * 64,
         "repository_revision": "UNKNOWN",
         "text": """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 router = APIRouter()
 api = router
@@ -298,7 +308,7 @@ def list_users():
     return []
 
 @v1.get("/dynamic", response_model=make_response_model())
-def dynamic_response_model():
+def dynamic_response_model(dependency=Depends(make_dependency())):
     return []
 """,
     }
@@ -315,8 +325,14 @@ assert not any(
     and "python_anchor_kind=fastapi_response_model" in fact["assumptions"]
     for fact in alias_facts
 )
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in alias_facts
+)
 assert "@v1.get" not in json.dumps(alias_parse_messages)
 assert "response_model=" not in json.dumps(alias_parse_messages)
+assert "Depends(make_dependency" not in json.dumps(alias_parse_messages)
 
 shadowed_alias_messages = run_worker(
     {
@@ -793,14 +809,18 @@ with tempfile.TemporaryDirectory() as root:
     Path(root, "app.py").write_text(
         """
 from fastapi import APIRouter
+from fastapi import Depends
 from pydantic import BaseModel
 router = APIRouter()
 
 class UserOut(BaseModel):
     id: int
 
+def get_user():
+    return object()
+
 @router.post("/users", response_model=UserOut)
-def create_user():
+def create_user(current_user=Depends(dependency=get_user)):
     return {}
 """,
         encoding="utf-8",
@@ -822,10 +842,17 @@ def create_user():
         and "python_anchor_kind=fastapi_response_model" in message.get("assumptions", [])
         for message in messages
     )
+    assert any(
+        message.get("fact_kind") == "SYMBOL"
+        and message.get("target") == "fastapi.dependency.get_user"
+        and "python_anchor_kind=fastapi_dependency_target" in message.get("assumptions", [])
+        for message in messages
+    )
     serialized = json.dumps(messages)
     assert root not in serialized
     assert "@router.post" not in serialized
     assert "response_model=" not in serialized
+    assert "Depends(" not in serialized
 
 with tempfile.TemporaryDirectory() as root:
     Path(root, "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")

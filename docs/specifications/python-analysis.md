@@ -116,11 +116,12 @@ The current implementation covers the first structural slice only:
   anchors;
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
-  `HTTPException(...)`, pytest `fixture` and `mark.parametrize` decorators plus
-  literal parametrize arguments, and Pydantic validator decorators. These remain
-  CPython `ast` structural facts; they do not become provider-backed semantic
-  facts and do not make parametrized pytest arguments look like unresolved
-  fixture injections;
+  static `Depends(get_db)` dependency target slots, and `HTTPException(...)`,
+  pytest `fixture` and `mark.parametrize` decorators plus literal parametrize
+  arguments, and Pydantic validator decorators. These remain CPython `ast`
+  structural facts; they do not become provider-backed semantic facts and do
+  not make parametrized pytest arguments look like unresolved fixture
+  injections;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
@@ -167,9 +168,10 @@ The current implementation covers the first structural slice only:
   explicitly link evidence to those roles;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for derived and future provider-backed strong facts. FastAPI
-  `response_model=...`, `Depends(...)`, and `HTTPException(...)` anchors remain
-  route schema/context/effect metadata and are explicitly excluded from
-  membership support derivation.
+  `response_model=...`, static `Depends(get_db)` dependency-target,
+  `Depends(...)`, and `HTTPException(...)` anchors remain route
+  schema/context/effect metadata and are explicitly excluded from membership
+  support derivation.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and

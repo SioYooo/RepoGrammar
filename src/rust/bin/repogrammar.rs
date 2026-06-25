@@ -2106,7 +2106,7 @@ mod tests {
         fs::write(
             workspace.path().join("src/acme/api.py"),
             r#"
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from acme.services import users
 from .services import users as relative_users
@@ -2117,8 +2117,11 @@ router = APIRouter()
 class UserOut(BaseModel):
     id: int
 
+def get_db():
+    return object()
+
 @router.get("/users", response_model=UserOut)
-async def list_users():
+async def list_users(dependency=Depends(get_db)):
     return []
 
 def test_users(client, missing_fixture):
@@ -2333,6 +2336,18 @@ project_includes = ["src"]
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("fastapi.dependency.get_db")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency_target")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
+                && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("pytest.test")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
@@ -2409,6 +2424,7 @@ project_includes = ["src"]
             "from acme.services",
             "@router.get",
             "response_model=",
+            "Depends(get_db",
             "assert client.get",
             "return object",
             "missing_fixture",

@@ -2175,6 +2175,11 @@ mod tests {
             ),
             parser_structural_anchor_fact(
                 &second,
+                SemanticFactKind::Symbol,
+                "fastapi.dependency.get_db",
+            ),
+            parser_structural_anchor_fact(
+                &third,
                 SemanticFactKind::ResolvedCall,
                 "fastapi.HTTPException",
             ),
@@ -2222,6 +2227,11 @@ mod tests {
             ),
             parser_structural_anchor_fact(
                 &first,
+                SemanticFactKind::Symbol,
+                "fastapi.dependency.get_db",
+            ),
+            parser_structural_anchor_fact(
+                &first,
                 SemanticFactKind::Type,
                 "fastapi.response_model.UserList",
             ),
@@ -2249,6 +2259,11 @@ mod tests {
                 &third,
                 SemanticFactKind::ResolvedCall,
                 "fastapi.Depends",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.dependency.delete_db",
             ),
             parser_structural_anchor_fact(
                 &third,

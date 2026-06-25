@@ -66,9 +66,10 @@ SQLAlchemy models, and SQLAlchemy repository methods. These facts also use
 resolve imports, decorator targets, fixture bindings, SQLAlchemy mappings, or
 family membership. Current default Python indexing can also persist CPython
 `ast` parse-document structural facts for import bindings, decorator anchors,
-class bases, simple calls, and typed dynamic/unresolved `UNKNOWN` cases. These
-facts remain `STRUCTURAL` or `UNKNOWN`, are blocked from family-claim input, and
-are not fed to the current family builder as raw facts. A separate
+class bases, simple calls, FastAPI static response-model/dependency-target/error
+anchors, and typed dynamic/unresolved `UNKNOWN` cases. These facts remain
+`STRUCTURAL` or `UNKNOWN`, are blocked from family-claim input, and are not fed
+to the current family builder as raw facts. A separate
 application-layer derivation step may synthesize `DATAFLOW_DERIVED` support
 facts from those validated structural anchors only when the unit has exactly
 one Python framework role, evidence stays in the same code-unit path/hash/range,

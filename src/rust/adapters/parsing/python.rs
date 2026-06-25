@@ -1230,6 +1230,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "dynamic_import_literal"
             | "decorator_binding"
             | "fastapi_dependency"
+            | "fastapi_dependency_target"
             | "fastapi_http_exception"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
@@ -1384,8 +1385,11 @@ class UserOut(BaseModel):
     def validate_id(cls, value):
         return value
 
+def get_db():
+    return object()
+
 @router.get("/users", response_model=list[UserOut])
-async def list_users(dependency=Depends(lambda: object())):
+async def list_users(dependency=Depends(get_db)):
     raise HTTPException(status_code=404)
 
 @pytest.mark.parametrize("status", [200])
@@ -1461,6 +1465,15 @@ def test_users(client, status):
                     .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.dependency.get_db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency_target")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.HTTPException")
                 && fact
@@ -1531,6 +1544,7 @@ def test_users(client, status):
         assert!(!debug.contains("response_model="));
         assert!(!debug.contains("list[UserOut]"));
         assert!(!debug.contains("Depends("));
+        assert!(!debug.contains("Depends(get_db"));
         assert!(!debug.contains("HTTPException("));
         assert!(!debug.contains("assert client.get"));
     }

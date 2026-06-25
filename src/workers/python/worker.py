@@ -184,10 +184,16 @@ def dotted_name(node: ast.AST) -> str | None:
 
 
 def static_type_name(node: ast.AST) -> str | None:
-    if isinstance(node, (ast.Name, ast.Attribute)):
-        return dotted_name(node)
+    if name := static_reference_name(node):
+        return name
     if isinstance(node, ast.Subscript):
         return static_type_name(node.slice)
+    return None
+
+
+def static_reference_name(node: ast.AST) -> str | None:
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return dotted_name(node)
     return None
 
 
@@ -1240,6 +1246,61 @@ def collect_call_facts(
                     anchor_kind=call_anchor_kind(canonical),
                 ),
             )
+            if canonical == "fastapi.Depends":
+                collect_fastapi_dependency_target_fact(
+                    call,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    subject_unit_id,
+                    aliases,
+                    assignments,
+                    facts,
+                )
+
+
+def collect_fastapi_dependency_target_fact(
+    call: ast.Call,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    dependency = call.args[0] if call.args else None
+    if dependency is None:
+        for keyword in call.keywords:
+            if keyword.arg == "dependency":
+                dependency = keyword.value
+                break
+    if dependency is None:
+        return
+    name = static_reference_name(dependency)
+    if not name:
+        return
+    target_name = canonical_name(name, aliases, assignments)
+    target = f"fastapi.dependency.{target_name}"
+    if not is_safe_fact_target(target) or len(target) > MAX_RUST_PARSE_FACT_TARGET_CHARS:
+        return
+    start, end = node_range(starts, dependency)
+    add_fact(
+        facts,
+        structural_fact(
+            kind="SYMBOL",
+            subject_unit_id=subject_unit_id,
+            target=target,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind="fastapi_dependency_target",
+        ),
+    )
 
 
 def call_anchor_kind(target: str) -> str:
