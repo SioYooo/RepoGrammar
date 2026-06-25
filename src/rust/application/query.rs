@@ -3,7 +3,7 @@
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
-use crate::core::model::{FactCertainty, PatternClassification};
+use crate::core::model::{FactCertainty, PatternClassification, SemanticFactKind};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
@@ -89,8 +89,7 @@ pub fn query_preflight(
                 QueryPreflightOperation::ActiveIndexInventory
                     if active_generation == "none"
                         || active_generation == "not implemented"
-                        || status_report.indexing
-                            != RepositoryImplementationStatus::SyntaxOnlyCodeUnits =>
+                        || !inventory_indexing_is_readable(status_report.indexing) =>
                 {
                     fallback("no active index generation", "run repogrammar index", true)
                 }
@@ -117,15 +116,33 @@ fn fallback(
     })
 }
 
+fn inventory_indexing_is_readable(status: RepositoryImplementationStatus) -> bool {
+    matches!(
+        status,
+        RepositoryImplementationStatus::FileManifestOnly
+            | RepositoryImplementationStatus::SyntaxOnlyCodeUnits
+    )
+}
+
+fn inventory_indexing_for_unit_count(unit_count: usize) -> &'static str {
+    if unit_count == 0 {
+        "file_manifest_only"
+    } else {
+        "syntax_only_code_units"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedFilesReport {
     pub active_generation: String,
+    pub indexing: String,
     pub files: Vec<IndexedFileRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedCodeUnitsReport {
     pub active_generation: String,
+    pub indexing: String,
     pub units: Vec<IndexedCodeUnitRecord>,
 }
 
@@ -155,10 +172,11 @@ pub struct SemanticFactReadinessRecord {
 
 pub fn list_indexed_files(store: &impl IndexStore) -> Result<IndexedFilesReport, RepoGrammarError> {
     let snapshot = store
-        .list_active_indexed_files()
+        .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
     Ok(IndexedFilesReport {
         active_generation: snapshot.generation_id,
+        indexing: inventory_indexing_for_unit_count(snapshot.units.len()).to_string(),
         files: snapshot.files,
     })
 }
@@ -166,9 +184,12 @@ pub fn list_indexed_files(store: &impl IndexStore) -> Result<IndexedFilesReport,
 pub fn list_code_units(
     store: &impl IndexStore,
 ) -> Result<IndexedCodeUnitsReport, RepoGrammarError> {
-    let snapshot = store.list_active_code_units().map_err(index_store_error)?;
+    let snapshot = store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
     Ok(IndexedCodeUnitsReport {
         active_generation: snapshot.generation_id,
+        indexing: inventory_indexing_for_unit_count(snapshot.units.len()).to_string(),
         units: snapshot.units,
     })
 }
@@ -177,11 +198,11 @@ pub fn list_semantic_facts(
     store: &impl IndexStore,
 ) -> Result<IndexedSemanticFactsReport, RepoGrammarError> {
     let snapshot = store
-        .list_active_semantic_facts()
+        .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
     Ok(IndexedSemanticFactsReport {
         active_generation: snapshot.generation_id,
-        facts: snapshot.facts,
+        facts: snapshot.semantic_facts,
     })
 }
 
@@ -191,10 +212,10 @@ pub fn assess_semantic_fact_readiness(
     source_store: &impl SourceStore,
 ) -> Result<SemanticFactReadinessReport, RepoGrammarError> {
     let snapshot = store
-        .list_active_semantic_facts()
+        .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
-    let mut facts = Vec::with_capacity(snapshot.facts.len());
-    for fact in snapshot.facts {
+    let mut facts = Vec::with_capacity(snapshot.semantic_facts.len());
+    for fact in snapshot.semantic_facts {
         let fact_path = fact.path;
         let source = source_store.read_source(SourceReadRequest {
             repository_root: request.repository_root.clone(),
@@ -217,12 +238,15 @@ pub fn assess_semantic_fact_readiness(
             Err(_) => None,
         };
         let freshness = content_hash_freshness(&fact.content_hash, current_hash.as_ref());
+        let kind = SemanticFactKind::parse_protocol_str(&fact.kind).map_err(|_| {
+            RepoGrammarError::InvalidInput("stored semantic fact kind is invalid".to_string())
+        })?;
         let certainty = FactCertainty::parse_protocol_str(&fact.certainty).map_err(|_| {
             RepoGrammarError::InvalidInput("stored semantic fact certainty is invalid".to_string())
         })?;
         facts.push(SemanticFactReadinessRecord {
             fact_id: fact.fact_id,
-            readiness: semantic_fact_claim_input_readiness(certainty, freshness),
+            readiness: semantic_fact_claim_input_readiness(kind, certainty, freshness),
         });
     }
     Ok(SemanticFactReadinessReport {
@@ -245,18 +269,35 @@ mod tests {
     use crate::application::repository::RepositoryManifestStatus;
     use crate::core::model::{ContentHash, UnknownClass, UnknownReasonCode};
     use crate::ports::index_store::{
-        ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
-        IndexedIrEdgeRecord, IndexedIrNodeRecord, StorageInspection,
+        ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
+        ActiveSemanticFacts, GenerationHandle, IndexedIrEdgeRecord, IndexedIrNodeRecord,
+        StorageInspection,
     };
     use crate::ports::source_store::SourceText;
 
     struct FakeStore {
         facts: Vec<IndexedSemanticFactRecord>,
+        files: Vec<IndexedFileRecord>,
+        units: Vec<IndexedCodeUnitRecord>,
     }
 
     impl FakeStore {
         fn new(facts: Vec<IndexedSemanticFactRecord>) -> Self {
-            Self { facts }
+            Self {
+                facts,
+                files: Vec::new(),
+                units: Vec::new(),
+            }
+        }
+
+        fn with_files(mut self, files: Vec<IndexedFileRecord>) -> Self {
+            self.files = files;
+            self
+        }
+
+        fn with_units(mut self, units: Vec<IndexedCodeUnitRecord>) -> Self {
+            self.units = units;
+            self
         }
     }
 
@@ -308,14 +349,14 @@ mod tests {
         fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
             Ok(ActiveIndexedFiles {
                 generation_id: "gen-000001".to_string(),
-                files: Vec::new(),
+                files: self.files.clone(),
             })
         }
 
         fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
             Ok(ActiveCodeUnits {
                 generation_id: "gen-000001".to_string(),
-                units: Vec::new(),
+                units: self.units.clone(),
             })
         }
 
@@ -331,6 +372,19 @@ mod tests {
                 generation_id: "gen-000001".to_string(),
                 nodes: Vec::new(),
                 edges: Vec::new(),
+            })
+        }
+
+        fn load_active_claim_input_snapshot(
+            &self,
+        ) -> Result<ActiveClaimInputSnapshot, IndexStoreError> {
+            Ok(ActiveClaimInputSnapshot {
+                generation_id: "gen-000001".to_string(),
+                files: self.files.clone(),
+                units: self.units.clone(),
+                ir_nodes: Vec::new(),
+                ir_edges: Vec::new(),
+                semantic_facts: self.facts.clone(),
             })
         }
 
@@ -378,6 +432,27 @@ mod tests {
             start_byte: 0,
             end_byte: 10,
             note: "compiler resolved import target".to_string(),
+        }
+    }
+
+    fn indexed_file(path: &str) -> IndexedFileRecord {
+        IndexedFileRecord {
+            path: path.to_string(),
+            content_hash: semantic_fact().content_hash,
+            size_bytes: 10,
+            language: "typescript".to_string(),
+        }
+    }
+
+    fn indexed_unit(path: &str) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#module:0-10"),
+            path: path.to_string(),
+            language: "typescript".to_string(),
+            kind: "module".to_string(),
+            start_byte: 0,
+            end_byte: 10,
+            content_hash: semantic_fact().content_hash,
         }
     }
 
@@ -532,39 +607,28 @@ mod tests {
             assert_eq!(fallback.guidance, "run repogrammar index");
             assert!(fallback.implemented);
         }
-
-        let file_manifest_only = status_report(
-            RepositoryStatus::Initialized {
-                active_generation: "gen-000001".to_string(),
-            },
-            RepositoryImplementationStatus::Available,
-            RepositoryImplementationStatus::FileManifestOnly,
-            Vec::new(),
-        );
-        let fallback = fallback_report(query_preflight(
-            QueryPreflightOperation::ActiveIndexInventory,
-            &file_manifest_only,
-        ));
-        assert_eq!(fallback.reason, "no active index generation");
-        assert_eq!(fallback.guidance, "run repogrammar index");
-        assert!(fallback.implemented);
     }
 
     #[test]
     fn query_preflight_allows_inventory_reads_for_active_generation() {
-        let status = status_report(
-            RepositoryStatus::Initialized {
-                active_generation: "gen-000001".to_string(),
-            },
-            RepositoryImplementationStatus::Available,
+        for indexing in [
+            RepositoryImplementationStatus::FileManifestOnly,
             RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
-            Vec::new(),
-        );
+        ] {
+            let status = status_report(
+                RepositoryStatus::Initialized {
+                    active_generation: "gen-000001".to_string(),
+                },
+                RepositoryImplementationStatus::Available,
+                indexing,
+                Vec::new(),
+            );
 
-        assert_eq!(
-            query_preflight(QueryPreflightOperation::ActiveIndexInventory, &status),
-            QueryPreflightReport::Ready
-        );
+            assert_eq!(
+                query_preflight(QueryPreflightOperation::ActiveIndexInventory, &status),
+                QueryPreflightReport::Ready
+            );
+        }
     }
 
     #[test]
@@ -601,6 +665,32 @@ mod tests {
 
         assert_eq!(report.active_generation, "gen-000001");
         assert_eq!(report.facts, vec![semantic_fact()]);
+    }
+
+    #[test]
+    fn inventory_reports_are_derived_from_active_claim_input_snapshot() {
+        let store = FakeStore::new(Vec::new()).with_files(vec![indexed_file("src/a.ts")]);
+
+        let report = list_indexed_files(&store).expect("list indexed files");
+        assert_eq!(
+            report,
+            IndexedFilesReport {
+                active_generation: "gen-000001".to_string(),
+                indexing: "file_manifest_only".to_string(),
+                files: vec![indexed_file("src/a.ts")],
+            }
+        );
+
+        let store = FakeStore::new(Vec::new()).with_units(vec![indexed_unit("src/a.ts")]);
+        let report = list_code_units(&store).expect("list code units");
+        assert_eq!(
+            report,
+            IndexedCodeUnitsReport {
+                active_generation: "gen-000001".to_string(),
+                indexing: "syntax_only_code_units".to_string(),
+                units: vec![indexed_unit("src/a.ts")],
+            }
+        );
     }
 
     #[test]
@@ -764,5 +854,23 @@ mod tests {
             assert_eq!(unknown.class, UnknownClass::Blocking);
             assert_eq!(unknown.reason, reason);
         }
+    }
+
+    #[test]
+    fn unknown_fact_kind_is_not_claim_input_even_with_semantic_certainty() {
+        let mut fact = semantic_fact();
+        fact.kind = "UNKNOWN".to_string();
+        let report = assess_semantic_fact_readiness(
+            readiness_request(),
+            &FakeStore::new(vec![fact.clone()]),
+            &source_store_with_hash(fact.content_hash),
+        )
+        .expect("assess readiness");
+
+        let ClaimInputReadiness::Blocked { unknown } = &report.facts[0].readiness else {
+            panic!("UNKNOWN fact kind must not become eligible claim input");
+        };
+        assert_eq!(unknown.class, UnknownClass::Blocking);
+        assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
     }
 }

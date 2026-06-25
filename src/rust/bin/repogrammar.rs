@@ -248,6 +248,48 @@ mod tests {
     }
 
     #[test]
+    fn product_runtime_inventory_reads_file_manifest_only_generation() {
+        let workspace = TempWorkspace::new("product-runtime-empty-index");
+        fs::write(workspace.path().join("README.txt"), "not a TS/JS source\n")
+            .expect("write ignored source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0);
+        assert!(index.stderr.is_empty());
+        let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["indexed_units"], 0);
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["indexing"], "file_manifest_only");
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(files.status, 0);
+        assert!(files.stderr.is_empty());
+        let value: Value = serde_json::from_str(files.stdout.trim()).expect("files JSON");
+        assert_eq!(value["command"], "files");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["files"].as_array().expect("files array").len(), 0);
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(units.status, 0);
+        assert!(units.stderr.is_empty());
+        let value: Value = serde_json::from_str(units.stdout.trim()).expect("units JSON");
+        assert_eq!(value["command"], "units");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["units"].as_array().expect("units array").len(), 0);
+    }
+
+    #[test]
     fn product_runtime_missing_semantic_worker_falls_back_to_syntax_only() {
         let workspace = TempWorkspace::new("product-runtime-worker-missing");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");

@@ -221,13 +221,14 @@ not family evidence; stored semantic facts are not family evidence until
 freshness gates and family-evidence claim builders exist. Query commands must
 not imply that TypeScript compiler analysis, mining, family-query execution, or
 MCP serving has run. The
-`files` and `units` commands are a limited exception: when an active syntax-only
-generation exists, they may read and return repo-relative indexed-file metadata
-and code-unit records for inventory/debugging only.
+`files` and `units` commands are a limited exception: when an active
+file-manifest-only or syntax-only generation exists, they may read and return
+repo-relative indexed-file metadata and code-unit records for inventory/debugging
+only.
 The query application layer now owns a shared preflight contract so pattern
 family commands remain fallback-only until family evidence exists, while
 `files` and `units` are treated as implemented inventory commands whose fallback
-means an active syntax-only index precondition is missing or unreadable.
+means an active inventory index precondition is missing or unreadable.
 Semantic-fact freshness/readiness checks remain internal and must not introduce
 semantic-fact CLI output before family claim builders exist.
 
@@ -267,14 +268,15 @@ repository.
 For `files` and `units`, initialized state with no active generation must keep
 the fallback marker but use `reason: no active index generation`, guidance to
 run `repogrammar index`, and `implemented: true` in JSON. Corrupt or unreadable
-state must direct users to `repogrammar doctor`. Once an active syntax-only
-generation exists, `files --json` must return `status: ok`, `implemented: true`,
-`indexing: syntax_only_code_units`, the active generation, and a `files` array
-of repo-relative paths, languages, sizes, and strict content hashes. `units
---json` must return the active generation, `semantic_worker: deferred`, `mining:
-deferred`, and a `units` array of repo-relative unit ids, paths, languages,
-kinds, byte ranges, and strict content hashes. Neither command may include
-source snippets or absolute paths.
+state must direct users to `repogrammar doctor`. Once an active
+file-manifest-only or syntax-only generation exists, `files --json` must return
+`status: ok`, `implemented: true`, the active generation, an `indexing` value of
+either `file_manifest_only` or `syntax_only_code_units`, and a `files` array of
+repo-relative paths, languages, sizes, and strict content hashes. `units --json`
+must return the active generation, the same `indexing` contract,
+`semantic_worker: deferred`, `mining: deferred`, and a `units` array of
+repo-relative unit ids, paths, languages, kinds, byte ranges, and strict content
+hashes. Neither command may include source snippets or absolute paths.
 
 ## Current implementation status
 
@@ -298,9 +300,10 @@ only worker facts that match the active building-generation code-unit
 path/hash/range gate, and still make no family or query claims.
 They do not store source snippets, absolute paths, families, or pattern-family
 evidence.
-`files` and `units` now read only active syntax-only index metadata and code-unit
-records. Pattern-family query commands return `FALLBACK_TO_CODE_SEARCH` plus
-not-implemented guidance when no family evidence is available, and return a
-structured fallback object when `--json` is present. Commands that install agent
-configuration or serve MCP return explicit not-implemented or deferred-write
-errors until those implementations are designed and tested.
+`files` and `units` now read only active file-manifest-only or syntax-only index
+metadata and, when present, code-unit records. Pattern-family query commands
+return `FALLBACK_TO_CODE_SEARCH` plus not-implemented guidance when no family
+evidence is available, and return a structured fallback object when `--json` is
+present. Commands that install agent configuration or serve MCP return explicit
+not-implemented or deferred-write errors until those implementations are
+designed and tested.

@@ -62,23 +62,27 @@
   facts are recorded only through the same-generation code-unit path/hash/range
   storage gate; worker fallback remains syntax-only, and stale or mismatched
   semantic evidence aborts the new generation.
-- Active `files` and `units` read paths that return repo-relative syntax-only
-  indexed-file metadata and code-unit records from the validated active
-  generation without source snippets, absolute paths, semantic facts, mining, or
-  family evidence claims; the read path opens the active generation read-only
-  and revalidates stored paths, hashes, languages, unit ids, and byte ranges
-  before returning records.
+- Active `files` and `units` read paths that return repo-relative
+  file-manifest-only or syntax-only indexed-file metadata and code-unit records
+  from the validated active generation without source snippets, absolute paths,
+  semantic facts, mining, or family evidence claims; the read path opens the
+  active generation read-only and revalidates stored paths, hashes, languages,
+  unit ids, and byte ranges before returning records.
 - Active semantic-fact/evidence read path for future claim builders, with
   read-only active-generation access and validation of stored fact
   kind/certainty tokens, assumptions JSON, repo-relative evidence paths,
   content hashes, code-unit ids, and byte ranges. This remains internal and does
   not expose semantic facts through CLI/MCP query commands or make them
   freshness-validated family evidence.
+- Internal active-generation claim-input snapshot over files, code units, IR
+  nodes/edges, and semantic facts for future claim builders. It uses the same
+  read-only active generation and validation rules, remains unavailable through
+  CLI/MCP, and does not create family evidence.
 - Internal semantic-fact freshness and claim-input readiness gate that checks
   active fact evidence against current source content hashes, blocks stale or
   missing evidence with typed `StaleEvidence` `UNKNOWN`, and keeps structural,
-  framework-heuristic, conflicting, or unknown certainty out of future family
-  claim inputs.
+  framework-heuristic, conflicting, or unknown certainty and `UNKNOWN` fact kind
+  out of future family claim inputs.
 - Application-level query preflight contract that keeps pattern-family query
   commands in fallback until family evidence exists while treating `files` and
   `units` as implemented inventory commands whose missing-index fallback is an

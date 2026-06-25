@@ -654,9 +654,9 @@ mod tests {
     };
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
-        ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
-        IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-        IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
+        ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
+        ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
+        IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity};
     use crate::ports::semantic_worker::{
@@ -1604,6 +1604,12 @@ mod tests {
                 panic!("active IR graph reads must not run during indexing")
             }
 
+            fn load_active_claim_input_snapshot(
+                &self,
+            ) -> Result<ActiveClaimInputSnapshot, IndexStoreError> {
+                panic!("active claim-input snapshot reads must not run during indexing")
+            }
+
             fn validate_generation(
                 &self,
                 _generation: &GenerationHandle,
@@ -1718,6 +1724,12 @@ mod tests {
 
             fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
                 panic!("active IR graph reads must not run during indexing")
+            }
+
+            fn load_active_claim_input_snapshot(
+                &self,
+            ) -> Result<ActiveClaimInputSnapshot, IndexStoreError> {
+                panic!("active claim-input snapshot reads must not run during indexing")
             }
 
             fn validate_generation(

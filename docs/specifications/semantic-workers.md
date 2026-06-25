@@ -155,9 +155,10 @@ building generation's indexed path, hash, or code-unit range aborts the new
 generation instead of becoming stale or partial semantic evidence.
 
 Recorded semantic facts are not pattern-family evidence by themselves. The
-query application boundary can now run an internal file-hash freshness and
-claim-input readiness gate over active semantic facts, but that only decides
-whether a fact may be considered by future claim builders. Query, MCP,
+storage/query boundary can load an internal active-generation claim-input
+snapshot and run file-hash freshness plus readiness checks over its semantic
+facts, but that only decides whether supported fact kinds may be considered by
+future claim builders. Query, MCP,
 conformance, and family membership claims remain deferred until family-evidence
 claim builders are implemented.
 
@@ -201,13 +202,14 @@ Node worker stub that reports semantic analysis as unavailable without echoing
 source paths. `index` and `sync` can optionally execute a configured worker via
 `REPOGRAMMAR_TYPESCRIPT_WORKER` plus
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
-`semantic_worker: deferred`. The storage/query boundary can read active
-generation semantic facts and evidence back after validating stored fact tokens,
-assumptions JSON, repo-relative evidence paths, strict content hashes, and byte
-ranges. The query application layer can additionally check those facts against
-current source hashes and block stale, weak, or conflicting facts with typed
-`UNKNOWN` readiness outcomes, but this is still an internal substrate for future
-claim builders.
+`semantic_worker: deferred`. The storage/query boundary can load an internal
+active-generation claim-input snapshot after validating files, units, IR
+nodes/edges, stored fact tokens, assumptions JSON, repo-relative evidence paths,
+strict content hashes, and byte ranges. The query application layer can
+additionally check snapshot semantic facts against current source hashes and
+block stale facts, unsupported fact kinds, weak certainty, or conflicting facts
+with typed `UNKNOWN` readiness outcomes, but this is still an internal substrate
+for future claim builders.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
 compiler APIs, use worker facts for family claims, expose semantic facts through

@@ -22,10 +22,10 @@
 - The Rust domain now has stable typed UNKNOWN class/reason tokens, and the
   query application layer uses them for internal semantic-fact claim-input
   readiness. Stale or missing source blocks with `StaleEvidence`, weak certainty
-  blocks with `InsufficientSupport`, and conflicting certainty blocks with
-  `ConflictingFacts`.
-- A fresh semantic fact is only eligible input for future claim builders. It is
-  not a pattern-family classification or conformance result.
+  and `UNKNOWN` fact kind block with `InsufficientSupport`, and conflicting
+  certainty blocks with `ConflictingFacts`.
+- A fresh supported semantic fact kind is only eligible input for future claim
+  builders. It is not a pattern-family classification or conformance result.
 - Tests for new analyzers should include uncertain, conflicting, stale,
   unsupported, and dynamic cases.
 

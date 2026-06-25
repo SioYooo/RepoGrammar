@@ -46,10 +46,11 @@ Stored semantic-worker facts, when explicitly configured and accepted by the
 storage gate, are not freshness-validated family evidence and do not enable
 query or MCP claims. Syntax-only code units are structural candidates, not
 semantic or family claims. The `files` and `units` commands may read active
-syntax-only index metadata for inventory/debugging, but that read path is not
-family-query execution. The application layer can also read active semantic
-facts and their evidence for future claim builders after revalidating fact
-tokens, assumptions, repo-relative evidence, hashes, and byte ranges; that
+file-manifest-only or syntax-only index metadata for inventory/debugging, but
+that read path is not family-query execution. The application layer can also
+load an internal active-generation claim-input snapshot for future claim
+builders after revalidating files, code units, IR nodes/edges, semantic fact
+tokens, assumptions, repo-relative evidence, hashes, and byte ranges. That
 internal read path still does not classify families or expose semantic facts
 through CLI/MCP query commands.
 
@@ -126,13 +127,14 @@ accepted facts only after evidence matches an indexed manifest entry, code-unit
 id, content hash, and byte range in the same building generation.
 Worker fallback statuses keep the generation syntax-only, while storage-gate
 conflicts abort the new generation. Active-generation semantic facts can be read
-back only through the storage/query boundary for future claim construction. The
-current query application boundary has an internal file-hash freshness and
-claim-input readiness gate for active semantic facts: stale or missing source
-blocks the affected future claim input as `StaleEvidence`, weak certainty blocks
-as `InsufficientSupport`, and conflicting certainty blocks as
-`ConflictingFacts`. This does not classify families or expose semantic facts
-through CLI/MCP. No semantic fact may influence family claims until full
+back only through the storage/query claim-input snapshot for future claim
+construction. The current query application boundary has an internal file-hash
+freshness and readiness gate for snapshot semantic facts: stale or missing
+source blocks the affected future claim input as `StaleEvidence`, unsupported
+fact kinds or weak certainty block as `InsufficientSupport`, and conflicting
+certainty blocks as `ConflictingFacts`. This does not classify families or
+expose semantic facts through CLI/MCP. No semantic fact may influence family
+claims until full
 family-evidence claim builders exist. Other languages should use their own
 compiler, type-checker, or LSP where that is the most authoritative source.
 

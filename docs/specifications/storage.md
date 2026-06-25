@@ -122,16 +122,17 @@ conservative IR containment edges, then activates
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, families,
 freshness manifests, or family-evidence query execution. The CLI can read the
 active generation for `files` and `units` inventory/debugging output only. The
-storage port can also list the active structural IR graph, and the
-storage/query application boundary can list active semantic facts for future
-claim builders, but those paths are internal and are not family-query or MCP
-surfaces. Active-generation reads open the generation read-only, require a
-regular `current-generation` pointer, validate the generation schema and health,
-and recheck stored repo-relative paths, strict content hashes, languages, unit
-ids, byte ranges, IR node/edge references, semantic fact kind/certainty tokens,
-assumptions JSON, and same-generation evidence before returning records.
-The query application layer can now run an internal file-hash freshness and
-claim-input readiness gate over active semantic facts using the current
+storage port can also list the active structural IR graph and load an internal
+active-generation claim-input snapshot containing files, code units, IR
+nodes/edges, and semantic facts for future claim builders. These paths are
+internal and are not family-query or MCP surfaces. Active-generation reads open
+one generation read-only, require a regular `current-generation` pointer,
+validate the generation schema and health, and recheck stored repo-relative
+paths, strict content hashes, languages, unit ids, byte ranges, IR node/edge
+references, semantic fact kind/certainty tokens, assumptions JSON, and
+same-generation evidence before returning records.
+The query application layer can run an internal file-hash freshness and
+claim-input readiness gate over snapshot semantic facts using the current
 source-store hash boundary. That gate does not require a storage schema bump,
 does not persist family claims, and does not expose semantic facts through
 CLI/MCP.
@@ -262,9 +263,10 @@ database per generation under `.repogrammar/generations/<generation>/` and
 records the active generation in `.repogrammar/current-generation`. The
 top-level `.repogrammar/repogrammar.sqlite` active database path remains the
 target read path for later family-evidence query integration. Current CLI
-`files` and `units` reads open the active generation database directly after
-validating the active pointer and schema, and expose only repo-relative metadata
-and code-unit rows.
+`files` and `units` reads use the validated active generation and expose only
+repo-relative metadata and code-unit rows. The internal claim-input snapshot uses
+the same active generation and validation rules, but remains unavailable through
+CLI/MCP.
 
 Required PRAGMAs:
 
@@ -404,8 +406,9 @@ If the index is stale, RepoGrammar must either return a stale warning or refuse
 family claims whose evidence changed.
 
 The current implementation performs only an internal semantic-fact
-claim-input readiness check against current source content hashes. Changed or
-missing source blocks the affected semantic fact with typed `StaleEvidence`.
+claim-input readiness check over the active claim-input snapshot against current
+source content hashes. Changed or missing source blocks the affected semantic
+fact with typed `StaleEvidence`.
 Repository-revision, worktree-wide, and persisted family freshness remain
 deferred.
 

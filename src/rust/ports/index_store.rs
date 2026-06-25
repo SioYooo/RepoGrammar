@@ -92,6 +92,16 @@ pub struct ActiveIrGraph {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveClaimInputSnapshot {
+    pub generation_id: String,
+    pub files: Vec<IndexedFileRecord>,
+    pub units: Vec<IndexedCodeUnitRecord>,
+    pub ir_nodes: Vec<IndexedIrNodeRecord>,
+    pub ir_edges: Vec<IndexedIrEdgeRecord>,
+    pub semantic_facts: Vec<IndexedSemanticFactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageInspection {
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
@@ -150,6 +160,9 @@ pub trait IndexStore {
     fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError>;
 
     fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError>;
+
+    fn load_active_claim_input_snapshot(&self)
+        -> Result<ActiveClaimInputSnapshot, IndexStoreError>;
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;
 

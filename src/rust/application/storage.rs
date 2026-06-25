@@ -350,8 +350,8 @@ mod tests {
     use super::*;
     use crate::core::model::ContentHash;
     use crate::ports::index_store::{
-        ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts,
-        STORAGE_SCHEMA_VERSION,
+        ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
+        ActiveSemanticFacts, STORAGE_SCHEMA_VERSION,
     };
 
     struct FakeStore;
@@ -429,6 +429,19 @@ mod tests {
                 generation_id: "gen-000001".to_string(),
                 nodes: Vec::new(),
                 edges: Vec::new(),
+            })
+        }
+
+        fn load_active_claim_input_snapshot(
+            &self,
+        ) -> Result<ActiveClaimInputSnapshot, IndexStoreError> {
+            Ok(ActiveClaimInputSnapshot {
+                generation_id: "gen-000001".to_string(),
+                files: Vec::new(),
+                units: Vec::new(),
+                ir_nodes: Vec::new(),
+                ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
             })
         }
 

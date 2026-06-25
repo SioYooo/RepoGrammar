@@ -1,7 +1,7 @@
 //! Freshness policy connects evidence to repository revision and content hashes.
 
 use crate::core::model::{
-    ContentHash, FactCertainty, TypedUnknown, UnknownClass, UnknownReasonCode,
+    ContentHash, FactCertainty, SemanticFactKind, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
 
 pub const SEMANTIC_FACT_CLAIM_INPUT: &str = "semantic_fact_claim_input";
@@ -38,11 +38,18 @@ pub fn content_hash_freshness(
 }
 
 pub fn semantic_fact_claim_input_readiness(
+    kind: SemanticFactKind,
     certainty: FactCertainty,
     freshness: EvidenceFreshness,
 ) -> ClaimInputReadiness {
     if let EvidenceFreshness::Unknown(unknown) = freshness {
         return ClaimInputReadiness::Blocked { unknown };
+    }
+
+    if kind == SemanticFactKind::Unknown {
+        return ClaimInputReadiness::Blocked {
+            unknown: blocking_unknown(UnknownReasonCode::InsufficientSupport, None),
+        };
     }
 
     if certainty.supports_family_membership() {
@@ -114,8 +121,11 @@ mod tests {
     #[test]
     fn fresh_semantic_and_dataflow_facts_are_eligible_inputs_only() {
         for certainty in [FactCertainty::Semantic, FactCertainty::DataflowDerived] {
-            let readiness =
-                semantic_fact_claim_input_readiness(certainty, EvidenceFreshness::Fresh);
+            let readiness = semantic_fact_claim_input_readiness(
+                SemanticFactKind::ResolvedImport,
+                certainty,
+                EvidenceFreshness::Fresh,
+            );
 
             assert_eq!(readiness, ClaimInputReadiness::EligibleInput);
             assert!(readiness.is_eligible_input());
@@ -127,6 +137,7 @@ mod tests {
         let unknown = blocking_unknown(UnknownReasonCode::StaleEvidence, None);
 
         let readiness = semantic_fact_claim_input_readiness(
+            SemanticFactKind::ResolvedImport,
             FactCertainty::Semantic,
             EvidenceFreshness::Unknown(unknown.clone()),
         );
@@ -141,8 +152,11 @@ mod tests {
             FactCertainty::FrameworkHeuristic,
             FactCertainty::Unknown,
         ] {
-            let readiness =
-                semantic_fact_claim_input_readiness(certainty, EvidenceFreshness::Fresh);
+            let readiness = semantic_fact_claim_input_readiness(
+                SemanticFactKind::ResolvedImport,
+                certainty,
+                EvidenceFreshness::Fresh,
+            );
             let ClaimInputReadiness::Blocked { unknown } = readiness else {
                 panic!("weak certainty must not be eligible claim input");
             };
@@ -151,8 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_fact_kind_cannot_become_claim_input() {
+        let readiness = semantic_fact_claim_input_readiness(
+            SemanticFactKind::Unknown,
+            FactCertainty::Semantic,
+            EvidenceFreshness::Fresh,
+        );
+        let ClaimInputReadiness::Blocked { unknown } = readiness else {
+            panic!("unknown fact kind must not become eligible claim input");
+        };
+
+        assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+    }
+
+    #[test]
     fn conflicting_certainty_blocks_with_conflicting_facts() {
         let readiness = semantic_fact_claim_input_readiness(
+            SemanticFactKind::ResolvedImport,
             FactCertainty::Conflicting,
             EvidenceFreshness::Fresh,
         );

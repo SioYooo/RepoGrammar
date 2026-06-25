@@ -386,9 +386,10 @@ fn query_fallback(
 
 fn indexed_files_human(report: &IndexedFilesReport) -> String {
     let mut output = format!(
-        "files: active index metadata\nactive_generation: {}\nindexed_files: {}\nindexing: syntax_only_code_units\n",
+        "files: active index metadata\nactive_generation: {}\nindexed_files: {}\nindexing: {}\n",
         report.active_generation,
-        report.files.len()
+        report.files.len(),
+        report.indexing
     );
     for file in &report.files {
         output.push_str(&format!(
@@ -418,17 +419,19 @@ fn indexed_files_json(report: &IndexedFilesReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"files\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"syntax_only_code_units\",\"files\":[{}]}}\n",
+        "{{\"command\":\"files\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"{}\",\"files\":[{}]}}\n",
         json_string(&report.active_generation),
+        json_string(&report.indexing),
         files
     )
 }
 
 fn indexed_units_human(report: &IndexedCodeUnitsReport) -> String {
     let mut output = format!(
-        "units: active syntax-only code units\nactive_generation: {}\nindexed_units: {}\nindexing: syntax_only_code_units\nsemantic_worker: deferred\nmining: deferred\n",
+        "units: active index code units\nactive_generation: {}\nindexed_units: {}\nindexing: {}\nsemantic_worker: deferred\nmining: deferred\n",
         report.active_generation,
-        report.units.len()
+        report.units.len(),
+        report.indexing
     );
     for unit in &report.units {
         output.push_str(&format!(
@@ -464,8 +467,9 @@ fn indexed_units_json(report: &IndexedCodeUnitsReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"units\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"syntax_only_code_units\",\"semantic_worker\":\"deferred\",\"mining\":\"deferred\",\"units\":[{}]}}\n",
+        "{{\"command\":\"units\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"{}\",\"semantic_worker\":\"deferred\",\"mining\":\"deferred\",\"units\":[{}]}}\n",
         json_string(&report.active_generation),
+        json_string(&report.indexing),
         units
     )
 }
@@ -2246,9 +2250,7 @@ mod tests {
         let units = run_with_context_and_runtime(["units"], workspace.path(), &env, &runtime);
         assert_eq!(units.status, 0);
         assert!(units.stderr.is_empty());
-        assert!(units
-            .stdout
-            .contains("units: active syntax-only code units"));
+        assert!(units.stdout.contains("units: active index code units"));
         assert!(units.stdout.contains("semantic_worker: deferred"));
         assert!(units.stdout.contains("mining: deferred"));
         assert!(!units

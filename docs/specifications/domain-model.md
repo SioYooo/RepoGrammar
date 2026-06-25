@@ -38,10 +38,11 @@ Certainty levels are semantic, dataflow-derived, structural,
 framework-heuristic, conflicting, and unknown. Structural certainty is not
 enough to prove family membership.
 The current Rust domain includes an internal claim-input readiness gate for
-semantic facts: fresh `SEMANTIC` and `DATAFLOW_DERIVED` facts may become inputs
-to future family claim builders, while stale evidence, conflicting facts,
-structural certainty, framework heuristics, and unknown certainty are blocked
-with typed `UNKNOWN`. Readiness is not itself a family classification.
+semantic facts: fresh supported fact kinds with `SEMANTIC` or
+`DATAFLOW_DERIVED` certainty may become inputs to future family claim builders,
+while stale evidence, conflicting facts, structural certainty, framework
+heuristics, unknown certainty, and `UNKNOWN` fact kind are blocked with typed
+`UNKNOWN`. Readiness is not itself a family classification.
 
 ## PatternFamily
 

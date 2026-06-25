@@ -1,7 +1,7 @@
 # Project State
 
 - Status: Bootstrap plus syntax-only indexing, structural IR storage, opt-in
-  semantic fact ingestion, active semantic-fact reads, and internal
+  semantic fact ingestion, internal active claim-input snapshot reads, and
   semantic-fact freshness/readiness gating
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
@@ -23,9 +23,10 @@ TypeScript semantic-worker request/output protocol validation and process
 validation, a dependency-free TypeScript worker stub that reports compiler
 analysis as unavailable, a validated semantic-fact storage writer, and opt-in
 command-level semantic-worker fact ingestion through the same-generation storage
-gate. It also has an internal active-generation semantic-fact/evidence read path
+gate. It also has an internal active-generation claim-input snapshot read path
 for future claim builders and an internal file-hash freshness/readiness gate
-that blocks stale, weak, or conflicting facts with typed `UNKNOWN`.
+that blocks stale facts, unsupported fact kinds, weak certainty, or conflicting
+certainty with typed `UNKNOWN`.
 
 ## Durable knowledge
 
@@ -40,11 +41,11 @@ CodeUnit-derived structural IR nodes and conservative containment edges,
 generation-scoped SQLite migrations/storage/validation/activation, product
 runtime wiring for `index` and `sync`, and the dependency-free
 `src/workers/typescript/worker.js` unavailable fallback stub, plus limited
-`files`/`units` reads from the active syntax-only generation. Those reads
-revalidate active-generation health plus stored paths, hashes, languages, unit
-ids, and byte ranges before returning repo-relative metadata. The storage port
-and SQLite adapter can persist already-validated semantic facts and
-repo-relative evidence for building generations when they match an indexed
+`files`/`units` reads from active file-manifest-only or syntax-only generations.
+Those reads revalidate active-generation health plus stored paths, hashes,
+languages, unit ids, and byte ranges before returning repo-relative metadata.
+The storage port and SQLite adapter can persist already-validated semantic facts
+and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default
 `index` and `sync` still report `semantic_worker: deferred`; when
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, optional
@@ -52,15 +53,16 @@ same-generation code unit's path, content hash, and byte range. By default
 worker facts may be recorded before generation validation and activation.
 Worker fallback keeps indexing syntax-only, while mismatched semantic evidence
 aborts the new generation.
-The application query/storage boundary can read active semantic facts back from
-the active generation after revalidating stored fact kind/certainty tokens,
-assumptions JSON, repo-relative evidence, content hashes, code-unit ids, and
-byte ranges. This is an internal substrate only; CLI/MCP query commands do not
-render semantic facts. The query application layer can check active semantic
-facts against current source hashes and classify them as eligible inputs for
-future claim builders or typed `UNKNOWN` blockers (`StaleEvidence`,
-`InsufficientSupport`, or `ConflictingFacts`). Fresh eligible facts are still
-not family evidence.
+The application query/storage boundary can load an internal active-generation
+claim-input snapshot containing files, code units, IR nodes/edges, and semantic
+facts after revalidating stored fact kind/certainty tokens, assumptions JSON,
+repo-relative evidence, content hashes, code-unit ids, and byte ranges. This is
+an internal substrate only; CLI/MCP query commands do not render semantic facts.
+The query application layer can check snapshot semantic facts against current
+source hashes and classify fresh supported facts as eligible inputs for future
+claim builders or typed `UNKNOWN` blockers (`StaleEvidence`,
+`InsufficientSupport`, or `ConflictingFacts`). Fresh eligible facts are still not
+family evidence.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
 full repository/worktree freshness metadata, family-claim gates, typed IR
@@ -69,8 +71,8 @@ family mining, query-ready family evidence, pattern-family query execution, MCP
 serving, installer writes, and telemetry network transport are not implemented.
 
 Pattern-family query commands still use stable fallback behavior. `files` and
-`units` can return active syntax-only index metadata, but stored syntax-only
-units must not be described as query-ready family evidence.
+`units` can return active file-manifest-only or syntax-only index metadata, but
+stored syntax-only units must not be described as query-ready family evidence.
 
 ## Implications
 

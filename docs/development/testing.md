@@ -43,7 +43,9 @@ allowed.
   graph rejection before activation, atomic rollback of failed fact writes,
   building-generation write gates, read-only active `files`/`units` listing
   order and tamper rejection, read-only active IR and semantic-fact listing with
-  validation and tamper rejection, and rejection of symlinked or malformed
+  validation and tamper rejection, internal active claim-input snapshot reads
+  from one validated generation, snapshot tamper rejection across files, units,
+  IR, and semantic facts, and rejection of symlinked or malformed
   active-generation pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
@@ -115,14 +117,16 @@ TS/JS file discovery filtering/hash/path-safety behavior, SQLite storage
 migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
-status/doctor reporting, active syntax-only `files`/`units` read paths, product
-runtime wiring, optional semantic-worker fact ingestion through the
+status/doctor reporting, active file-manifest-only or syntax-only
+`files`/`units` read paths, product runtime wiring, optional semantic-worker
+fact ingestion through the
 same-generation storage gate, sanitized worker fallback during indexing,
 structural IR node/containment-edge storage for syntax-only code units,
-active semantic-fact/evidence read-path validation for future claim builders,
-typed UNKNOWN class/reason token validation, internal semantic-fact
-freshness/readiness gating for fresh, stale, missing, weak-certainty, and
-conflicting facts,
+active semantic-fact/evidence read-path validation plus internal active
+claim-input snapshot validation for future claim builders, typed UNKNOWN
+class/reason token validation, internal semantic-fact freshness/readiness gating
+for fresh supported facts, stale evidence, missing source, weak certainty,
+conflicting facts, and `UNKNOWN` fact kind,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 and

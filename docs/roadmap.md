@@ -32,11 +32,13 @@
   worker fallback keeps syntax-only indexing, and mismatched evidence aborts the
   new generation.
 - Active `files`/`units` inventory reads for repo-relative indexed-file metadata
-  and syntax-only code units from the validated active generation.
-- Internal semantic-fact freshness and claim-input readiness gate that compares
-  active fact evidence with current source hashes and blocks stale, weak, or
-  conflicting facts with typed `UNKNOWN` before any future family claim builder
-  can consume them.
+  and file-manifest-only or syntax-only code units from the validated active
+  generation.
+- Internal active-generation claim-input snapshot plus semantic-fact freshness
+  and readiness gate that compares active fact evidence with current source
+  hashes and blocks stale facts, weak certainty, conflicting certainty, and
+  `UNKNOWN` fact kinds with typed `UNKNOWN` before any future family claim
+  builder can consume them.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -66,8 +68,9 @@ The detailed coordination artifact is
 
 The current codebase has completed the repo-local lifecycle substrate,
 TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
-indexing, CodeUnit-derived IR node/containment-edge storage, active syntax-only
-files/units inventory reads, internal active semantic-fact/evidence reads,
+indexing, CodeUnit-derived IR node/containment-edge storage, active
+file-manifest-only or syntax-only files/units inventory reads, internal active
+claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash

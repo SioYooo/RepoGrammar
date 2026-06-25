@@ -75,9 +75,10 @@ Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Compiler-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints.
 Freshness is a required gate before semantic facts can become inputs to future
-family claim builders. A fresh semantic fact is still only eligible input; it is
-not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result until
-EC-MVFI support, compatibility, and contrastive evidence checks are implemented.
+family claim builders. A fresh supported fact kind is still only eligible input;
+it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result
+until EC-MVFI support, compatibility, and contrastive evidence checks are
+implemented.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

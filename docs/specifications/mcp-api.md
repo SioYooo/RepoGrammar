@@ -78,10 +78,11 @@ Typed analysis uncertainty must not be flattened into transport failure. Once
 query execution exists, MCP responses must preserve `UNKNOWN` class, reason
 code, affected claim, provenance, freshness status, and suggested recovery
 action where available.
-The current Rust query boundary has an internal semantic-fact freshness and
-claim-input readiness gate for future claim builders. MCP responses must not
-expose semantic-worker facts or treat them as family evidence until query
-execution consumes that gate and family-evidence claim builders exist.
+The current Rust storage/query boundary has an internal active-generation
+claim-input snapshot plus semantic-fact freshness/readiness gate for future
+claim builders. MCP responses must not expose semantic-worker facts, raw
+snapshot contents, or treat them as family evidence until query execution
+consumes that gate and family-evidence claim builders exist.
 
 ## Serving mode
 

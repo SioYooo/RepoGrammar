@@ -5,9 +5,10 @@
 
 use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
 use crate::ports::index_store::{
-    ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph, ActiveSemanticFacts, GenerationHandle,
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
+    ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
+    ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
+    IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -532,43 +533,7 @@ impl IndexStore for SqliteIndexStore {
 
     fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
         let (generation_id, connection) = self.open_active_generation_read_only()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT path, content_hash, size_bytes, language \
-                 FROM indexed_files \
-                 WHERE generation_id = ?1 \
-                 ORDER BY path COLLATE BINARY",
-            )
-            .map_err(sql_unavailable)?;
-        let rows = statement
-            .query_map(params![generation_id.as_str()], |row| {
-                let content_hash = row.get::<_, String>(1)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    content_hash,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(sql_unavailable)?;
-        let mut files = Vec::new();
-        for row in rows {
-            let (path, content_hash, size_bytes, language) = row.map_err(sql_unavailable)?;
-            validate_stored_repo_relative_path(&path, "stored indexed file path")?;
-            validate_stored_non_empty_text(&language, "stored indexed file language")?;
-            files.push(IndexedFileRecord {
-                path,
-                content_hash: ContentHash::new(content_hash).map_err(|_| {
-                    IndexStoreError::InvalidState(
-                        "stored indexed file content hash is invalid".to_string(),
-                    )
-                })?,
-                size_bytes: u64::try_from(size_bytes).map_err(|_| {
-                    IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
-                })?,
-                language,
-            });
-        }
+        let files = query_indexed_files(&connection, &generation_id)?;
         Ok(ActiveIndexedFiles {
             generation_id,
             files,
@@ -577,88 +542,7 @@ impl IndexStore for SqliteIndexStore {
 
     fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
         let (generation_id, connection) = self.open_active_generation_read_only()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT code_units.code_unit_id, code_units.path, code_units.language, \
-                        code_units.kind, code_units.start_byte, code_units.end_byte, \
-                        code_units.content_hash, indexed_files.content_hash, indexed_files.size_bytes \
-                 FROM code_units \
-                 JOIN indexed_files \
-                   ON indexed_files.generation_id = code_units.generation_id \
-                  AND indexed_files.path = code_units.path \
-                 WHERE code_units.generation_id = ?1 \
-                 ORDER BY code_units.path COLLATE BINARY, code_units.start_byte, \
-                          code_units.end_byte, code_units.kind COLLATE BINARY, \
-                          code_units.code_unit_id COLLATE BINARY",
-            )
-            .map_err(sql_unavailable)?;
-        let rows = statement
-            .query_map(params![generation_id.as_str()], |row| {
-                let content_hash = row.get::<_, String>(6)?;
-                let file_hash = row.get::<_, String>(7)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    content_hash,
-                    file_hash,
-                    row.get::<_, i64>(8)?,
-                ))
-            })
-            .map_err(sql_unavailable)?;
-        let mut units = Vec::new();
-        for row in rows {
-            let (
-                id,
-                path,
-                language,
-                kind,
-                start_byte,
-                end_byte,
-                content_hash,
-                file_hash,
-                file_size,
-            ) = row.map_err(sql_unavailable)?;
-            validate_stored_repo_relative_path(&path, "stored code unit path")?;
-            validate_stored_code_unit_id(&id, &path)?;
-            validate_stored_non_empty_text(&language, "stored code unit language")?;
-            validate_stored_non_empty_text(&kind, "stored code unit kind")?;
-            if content_hash != file_hash {
-                return Err(IndexStoreError::InvalidState(
-                    "stored code unit content hash does not match indexed file".to_string(),
-                ));
-            }
-            let start_byte = usize::try_from(start_byte).map_err(|_| {
-                IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
-            })?;
-            let end_byte = usize::try_from(end_byte).map_err(|_| {
-                IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
-            })?;
-            let file_size = usize::try_from(file_size).map_err(|_| {
-                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
-            })?;
-            if end_byte < start_byte || end_byte > file_size {
-                return Err(IndexStoreError::InvalidState(
-                    "stored code unit range is invalid".to_string(),
-                ));
-            }
-            units.push(IndexedCodeUnitRecord {
-                id,
-                path,
-                language,
-                kind,
-                start_byte,
-                end_byte,
-                content_hash: ContentHash::new(content_hash).map_err(|_| {
-                    IndexStoreError::InvalidState(
-                        "stored code unit content hash is invalid".to_string(),
-                    )
-                })?,
-            });
-        }
+        let units = query_code_units(&connection, &generation_id)?;
         Ok(ActiveCodeUnits {
             generation_id,
             units,
@@ -667,187 +551,7 @@ impl IndexStore for SqliteIndexStore {
 
     fn list_active_semantic_facts(&self) -> Result<ActiveSemanticFacts, IndexStoreError> {
         let (generation_id, connection) = self.open_active_generation_read_only()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT semantic_facts.fact_id, semantic_facts.kind, semantic_facts.subject, \
-                        semantic_facts.target, semantic_facts.certainty, \
-                        semantic_facts.origin_engine, semantic_facts.origin_engine_version, \
-                        semantic_facts.origin_method, semantic_facts.assumptions_json, \
-                        semantic_facts.evidence_id, evidence.code_unit_id, evidence.path, \
-                        evidence.content_hash, evidence.start_byte, evidence.end_byte, \
-                        evidence.note, code_units.path, code_units.content_hash, \
-                        code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
-                        indexed_files.size_bytes \
-                 FROM semantic_facts \
-                 JOIN evidence \
-                   ON evidence.generation_id = semantic_facts.generation_id \
-                  AND evidence.evidence_id = semantic_facts.evidence_id \
-                 JOIN code_units \
-                   ON code_units.generation_id = evidence.generation_id \
-                  AND code_units.code_unit_id = evidence.code_unit_id \
-                 JOIN indexed_files \
-                   ON indexed_files.generation_id = evidence.generation_id \
-                  AND indexed_files.path = evidence.path \
-                 WHERE semantic_facts.generation_id = ?1 \
-                 ORDER BY evidence.path COLLATE BINARY, evidence.start_byte, \
-                          evidence.end_byte, evidence.code_unit_id COLLATE BINARY, \
-                          semantic_facts.kind COLLATE BINARY, semantic_facts.subject COLLATE BINARY, \
-                          semantic_facts.fact_id COLLATE BINARY",
-            )
-            .map_err(sql_unavailable)?;
-        let rows = statement
-            .query_map(params![generation_id.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, String>(15)?,
-                    row.get::<_, String>(16)?,
-                    row.get::<_, String>(17)?,
-                    row.get::<_, i64>(18)?,
-                    row.get::<_, i64>(19)?,
-                    row.get::<_, String>(20)?,
-                    row.get::<_, i64>(21)?,
-                ))
-            })
-            .map_err(sql_unavailable)?;
-        let mut facts = Vec::new();
-        for row in rows {
-            let (
-                fact_id,
-                kind,
-                subject,
-                target,
-                certainty,
-                origin_engine,
-                origin_engine_version,
-                origin_method,
-                assumptions_json,
-                evidence_id,
-                code_unit_id,
-                path,
-                content_hash,
-                start_byte,
-                end_byte,
-                note,
-                unit_path,
-                unit_hash,
-                unit_start_byte,
-                unit_end_byte,
-                file_hash,
-                file_size,
-            ) = row.map_err(sql_unavailable)?;
-            validate_stored_semantic_text_field("stored semantic fact id", &fact_id)?;
-            validate_stored_semantic_text_field("stored semantic fact subject", &subject)?;
-            validate_stored_semantic_text_field(
-                "stored semantic fact origin engine",
-                &origin_engine,
-            )?;
-            validate_stored_semantic_text_field(
-                "stored semantic fact origin engine version",
-                &origin_engine_version,
-            )?;
-            validate_stored_semantic_text_field(
-                "stored semantic fact origin method",
-                &origin_method,
-            )?;
-            validate_stored_semantic_text_field("stored semantic fact evidence id", &evidence_id)?;
-            validate_stored_semantic_text_field("stored semantic fact note", &note)?;
-            if let Some(target) = &target {
-                validate_stored_semantic_text_field("stored semantic fact target", target)?;
-            }
-            SemanticFactKind::parse_protocol_str(&kind).map_err(|_| {
-                IndexStoreError::InvalidState("stored semantic fact kind is invalid".to_string())
-            })?;
-            FactCertainty::parse_protocol_str(&certainty).map_err(|_| {
-                IndexStoreError::InvalidState(
-                    "stored semantic fact certainty is invalid".to_string(),
-                )
-            })?;
-            let assumptions: Vec<String> =
-                serde_json::from_str(&assumptions_json).map_err(|_| {
-                    IndexStoreError::InvalidState(
-                        "stored semantic fact assumptions JSON is invalid".to_string(),
-                    )
-                })?;
-            for assumption in &assumptions {
-                validate_stored_semantic_text_field("stored semantic fact assumption", assumption)?;
-            }
-            validate_stored_repo_relative_path(&path, "stored semantic fact evidence path")?;
-            if path != unit_path {
-                return Err(IndexStoreError::InvalidState(
-                    "stored semantic fact evidence path does not match code unit".to_string(),
-                ));
-            }
-            validate_stored_code_unit_id(&code_unit_id, &path)?;
-            if content_hash != unit_hash || content_hash != file_hash {
-                return Err(IndexStoreError::InvalidState(
-                    "stored semantic fact content hash does not match indexed evidence".to_string(),
-                ));
-            }
-            let start_byte = usize::try_from(start_byte).map_err(|_| {
-                IndexStoreError::InvalidState(
-                    "stored semantic fact start byte is invalid".to_string(),
-                )
-            })?;
-            let end_byte = usize::try_from(end_byte).map_err(|_| {
-                IndexStoreError::InvalidState(
-                    "stored semantic fact end byte is invalid".to_string(),
-                )
-            })?;
-            let unit_start_byte = usize::try_from(unit_start_byte).map_err(|_| {
-                IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
-            })?;
-            let unit_end_byte = usize::try_from(unit_end_byte).map_err(|_| {
-                IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
-            })?;
-            let file_size = usize::try_from(file_size).map_err(|_| {
-                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
-            })?;
-            if start_byte > end_byte
-                || start_byte < unit_start_byte
-                || end_byte > unit_end_byte
-                || end_byte > file_size
-            {
-                return Err(IndexStoreError::InvalidState(
-                    "stored semantic fact range is invalid".to_string(),
-                ));
-            }
-            facts.push(IndexedSemanticFactRecord {
-                fact_id,
-                kind,
-                subject,
-                target,
-                certainty,
-                origin_engine,
-                origin_engine_version,
-                origin_method,
-                assumptions,
-                evidence_id,
-                code_unit_id,
-                path,
-                content_hash: ContentHash::new(content_hash).map_err(|_| {
-                    IndexStoreError::InvalidState(
-                        "stored semantic fact content hash is invalid".to_string(),
-                    )
-                })?,
-                start_byte,
-                end_byte,
-                note,
-            });
-        }
+        let facts = query_semantic_facts(&connection, &generation_id)?;
         Ok(ActiveSemanticFacts {
             generation_id,
             facts,
@@ -856,87 +560,30 @@ impl IndexStore for SqliteIndexStore {
 
     fn list_active_ir_graph(&self) -> Result<ActiveIrGraph, IndexStoreError> {
         let (generation_id, connection) = self.open_active_generation_read_only()?;
-        let mut node_statement = connection
-            .prepare(
-                "SELECT ir_nodes.node_id, ir_nodes.code_unit_id, ir_nodes.kind, \
-                        ir_nodes.payload_json, code_units.path \
-                 FROM ir_nodes \
-                 JOIN code_units \
-                   ON code_units.generation_id = ir_nodes.generation_id \
-                  AND code_units.code_unit_id = ir_nodes.code_unit_id \
-                 WHERE ir_nodes.generation_id = ?1 \
-                 ORDER BY ir_nodes.node_id COLLATE BINARY",
-            )
-            .map_err(sql_unavailable)?;
-        let node_rows = node_statement
-            .query_map(params![generation_id.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })
-            .map_err(sql_unavailable)?;
-        let mut nodes = Vec::new();
-        for row in node_rows {
-            let (id, code_unit_id, kind, payload_json, path) = row.map_err(sql_unavailable)?;
-            validate_stored_code_unit_id(&code_unit_id, &path)?;
-            validate_stored_ir_node_id(&id, &code_unit_id)?;
-            IrNodeKind::parse_protocol_str(&kind).map_err(|_| {
-                IndexStoreError::InvalidState("stored IR node kind is invalid".to_string())
-            })?;
-            validate_stored_empty_object_payload(&payload_json, "stored IR node payload")?;
-            nodes.push(IndexedIrNodeRecord {
-                id,
-                code_unit_id,
-                kind,
-                payload_json,
-            });
-        }
-
-        let mut edge_statement = connection
-            .prepare(
-                "SELECT from_node_id, to_node_id, label \
-                 FROM ir_edges \
-                 WHERE generation_id = ?1 \
-                 ORDER BY from_node_id COLLATE BINARY, to_node_id COLLATE BINARY, \
-                          label COLLATE BINARY",
-            )
-            .map_err(sql_unavailable)?;
-        let edge_rows = edge_statement
-            .query_map(params![generation_id.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(sql_unavailable)?;
-        let mut edges = Vec::new();
-        for row in edge_rows {
-            let (from_node_id, to_node_id, label) = row.map_err(sql_unavailable)?;
-            validate_stored_non_empty_text(&from_node_id, "stored IR edge from node id")?;
-            validate_stored_non_empty_text(&to_node_id, "stored IR edge to node id")?;
-            if from_node_id == to_node_id {
-                return Err(IndexStoreError::InvalidState(
-                    "stored IR edge points to itself".to_string(),
-                ));
-            }
-            IrEdgeLabel::parse_protocol_str(&label).map_err(|_| {
-                IndexStoreError::InvalidState("stored IR edge label is invalid".to_string())
-            })?;
-            edges.push(IndexedIrEdgeRecord {
-                from_node_id,
-                to_node_id,
-                label,
-            });
-        }
+        let (nodes, edges) = query_ir_graph(&connection, &generation_id)?;
         Ok(ActiveIrGraph {
             generation_id,
             nodes,
             edges,
+        })
+    }
+
+    fn load_active_claim_input_snapshot(
+        &self,
+    ) -> Result<ActiveClaimInputSnapshot, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let files = query_indexed_files(&connection, &generation_id)?;
+        let units = query_code_units(&connection, &generation_id)?;
+        let (ir_nodes, ir_edges) = query_ir_graph(&connection, &generation_id)?;
+        let semantic_facts = query_semantic_facts(&connection, &generation_id)?;
+
+        Ok(ActiveClaimInputSnapshot {
+            generation_id,
+            files,
+            units,
+            ir_nodes,
+            ir_edges,
+            semantic_facts,
         })
     }
 
@@ -1048,6 +695,389 @@ impl IndexStore for SqliteIndexStore {
         }
         inspect_connection(&connection, Some(&generation_id))
     }
+}
+
+fn query_indexed_files(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFileRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT path, content_hash, size_bytes, language \
+             FROM indexed_files \
+             WHERE generation_id = ?1 \
+             ORDER BY path COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            let content_hash = row.get::<_, String>(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                content_hash,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut files = Vec::new();
+    for row in rows {
+        let (path, content_hash, size_bytes, language) = row.map_err(sql_unavailable)?;
+        validate_stored_repo_relative_path(&path, "stored indexed file path")?;
+        validate_stored_non_empty_text(&language, "stored indexed file language")?;
+        files.push(IndexedFileRecord {
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored indexed file content hash is invalid".to_string(),
+                )
+            })?,
+            size_bytes: u64::try_from(size_bytes).map_err(|_| {
+                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+            })?,
+            language,
+        });
+    }
+    Ok(files)
+}
+
+fn query_code_units(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedCodeUnitRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT code_units.code_unit_id, code_units.path, code_units.language, \
+                    code_units.kind, code_units.start_byte, code_units.end_byte, \
+                    code_units.content_hash, indexed_files.content_hash, indexed_files.size_bytes \
+             FROM code_units \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = code_units.generation_id \
+              AND indexed_files.path = code_units.path \
+             WHERE code_units.generation_id = ?1 \
+             ORDER BY code_units.path COLLATE BINARY, code_units.start_byte, \
+                      code_units.end_byte, code_units.kind COLLATE BINARY, \
+                      code_units.code_unit_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            let content_hash = row.get::<_, String>(6)?;
+            let file_hash = row.get::<_, String>(7)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                content_hash,
+                file_hash,
+                row.get::<_, i64>(8)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut units = Vec::new();
+    for row in rows {
+        let (id, path, language, kind, start_byte, end_byte, content_hash, file_hash, file_size) =
+            row.map_err(sql_unavailable)?;
+        validate_stored_repo_relative_path(&path, "stored code unit path")?;
+        validate_stored_code_unit_id(&id, &path)?;
+        validate_stored_non_empty_text(&language, "stored code unit language")?;
+        validate_stored_non_empty_text(&kind, "stored code unit kind")?;
+        if content_hash != file_hash {
+            return Err(IndexStoreError::InvalidState(
+                "stored code unit content hash does not match indexed file".to_string(),
+            ));
+        }
+        let start_byte = usize::try_from(start_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
+        })?;
+        let end_byte = usize::try_from(end_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
+        })?;
+        let file_size = usize::try_from(file_size).map_err(|_| {
+            IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+        })?;
+        if end_byte < start_byte || end_byte > file_size {
+            return Err(IndexStoreError::InvalidState(
+                "stored code unit range is invalid".to_string(),
+            ));
+        }
+        units.push(IndexedCodeUnitRecord {
+            id,
+            path,
+            language,
+            kind,
+            start_byte,
+            end_byte,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored code unit content hash is invalid".to_string(),
+                )
+            })?,
+        });
+    }
+    Ok(units)
+}
+
+fn query_semantic_facts(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedSemanticFactRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT semantic_facts.fact_id, semantic_facts.kind, semantic_facts.subject, \
+                    semantic_facts.target, semantic_facts.certainty, \
+                    semantic_facts.origin_engine, semantic_facts.origin_engine_version, \
+                    semantic_facts.origin_method, semantic_facts.assumptions_json, \
+                    semantic_facts.evidence_id, evidence.code_unit_id, evidence.path, \
+                    evidence.content_hash, evidence.start_byte, evidence.end_byte, \
+                    evidence.note, code_units.path, code_units.content_hash, \
+                    code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
+                    indexed_files.size_bytes \
+             FROM semantic_facts \
+             JOIN evidence \
+               ON evidence.generation_id = semantic_facts.generation_id \
+              AND evidence.evidence_id = semantic_facts.evidence_id \
+             JOIN code_units \
+               ON code_units.generation_id = evidence.generation_id \
+              AND code_units.code_unit_id = evidence.code_unit_id \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = evidence.generation_id \
+              AND indexed_files.path = evidence.path \
+             WHERE semantic_facts.generation_id = ?1 \
+             ORDER BY evidence.path COLLATE BINARY, evidence.start_byte, \
+                      evidence.end_byte, evidence.code_unit_id COLLATE BINARY, \
+                      semantic_facts.kind COLLATE BINARY, semantic_facts.subject COLLATE BINARY, \
+                      semantic_facts.fact_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, i64>(14)?,
+                row.get::<_, String>(15)?,
+                row.get::<_, String>(16)?,
+                row.get::<_, String>(17)?,
+                row.get::<_, i64>(18)?,
+                row.get::<_, i64>(19)?,
+                row.get::<_, String>(20)?,
+                row.get::<_, i64>(21)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut facts = Vec::new();
+    for row in rows {
+        let (
+            fact_id,
+            kind,
+            subject,
+            target,
+            certainty,
+            origin_engine,
+            origin_engine_version,
+            origin_method,
+            assumptions_json,
+            evidence_id,
+            code_unit_id,
+            path,
+            content_hash,
+            start_byte,
+            end_byte,
+            note,
+            unit_path,
+            unit_hash,
+            unit_start_byte,
+            unit_end_byte,
+            file_hash,
+            file_size,
+        ) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored semantic fact id", &fact_id)?;
+        validate_stored_semantic_text_field("stored semantic fact subject", &subject)?;
+        validate_stored_semantic_text_field("stored semantic fact origin engine", &origin_engine)?;
+        validate_stored_semantic_text_field(
+            "stored semantic fact origin engine version",
+            &origin_engine_version,
+        )?;
+        validate_stored_semantic_text_field("stored semantic fact origin method", &origin_method)?;
+        validate_stored_semantic_text_field("stored semantic fact evidence id", &evidence_id)?;
+        validate_stored_semantic_text_field("stored semantic fact note", &note)?;
+        if let Some(target) = &target {
+            validate_stored_semantic_text_field("stored semantic fact target", target)?;
+        }
+        SemanticFactKind::parse_protocol_str(&kind).map_err(|_| {
+            IndexStoreError::InvalidState("stored semantic fact kind is invalid".to_string())
+        })?;
+        FactCertainty::parse_protocol_str(&certainty).map_err(|_| {
+            IndexStoreError::InvalidState("stored semantic fact certainty is invalid".to_string())
+        })?;
+        let assumptions: Vec<String> = serde_json::from_str(&assumptions_json).map_err(|_| {
+            IndexStoreError::InvalidState(
+                "stored semantic fact assumptions JSON is invalid".to_string(),
+            )
+        })?;
+        for assumption in &assumptions {
+            validate_stored_semantic_text_field("stored semantic fact assumption", assumption)?;
+        }
+        validate_stored_repo_relative_path(&path, "stored semantic fact evidence path")?;
+        if path != unit_path {
+            return Err(IndexStoreError::InvalidState(
+                "stored semantic fact evidence path does not match code unit".to_string(),
+            ));
+        }
+        validate_stored_code_unit_id(&code_unit_id, &path)?;
+        if content_hash != unit_hash || content_hash != file_hash {
+            return Err(IndexStoreError::InvalidState(
+                "stored semantic fact content hash does not match indexed evidence".to_string(),
+            ));
+        }
+        let start_byte = usize::try_from(start_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored semantic fact start byte is invalid".to_string())
+        })?;
+        let end_byte = usize::try_from(end_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored semantic fact end byte is invalid".to_string())
+        })?;
+        let unit_start_byte = usize::try_from(unit_start_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
+        })?;
+        let unit_end_byte = usize::try_from(unit_end_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
+        })?;
+        let file_size = usize::try_from(file_size).map_err(|_| {
+            IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+        })?;
+        if start_byte > end_byte
+            || start_byte < unit_start_byte
+            || end_byte > unit_end_byte
+            || end_byte > file_size
+        {
+            return Err(IndexStoreError::InvalidState(
+                "stored semantic fact range is invalid".to_string(),
+            ));
+        }
+        facts.push(IndexedSemanticFactRecord {
+            fact_id,
+            kind,
+            subject,
+            target,
+            certainty,
+            origin_engine,
+            origin_engine_version,
+            origin_method,
+            assumptions,
+            evidence_id,
+            code_unit_id,
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored semantic fact content hash is invalid".to_string(),
+                )
+            })?,
+            start_byte,
+            end_byte,
+            note,
+        });
+    }
+    Ok(facts)
+}
+
+fn query_ir_graph(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<(Vec<IndexedIrNodeRecord>, Vec<IndexedIrEdgeRecord>), IndexStoreError> {
+    let mut node_statement = connection
+        .prepare(
+            "SELECT ir_nodes.node_id, ir_nodes.code_unit_id, ir_nodes.kind, \
+                    ir_nodes.payload_json, code_units.path \
+             FROM ir_nodes \
+             JOIN code_units \
+               ON code_units.generation_id = ir_nodes.generation_id \
+              AND code_units.code_unit_id = ir_nodes.code_unit_id \
+             WHERE ir_nodes.generation_id = ?1 \
+             ORDER BY ir_nodes.node_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let node_rows = node_statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut nodes = Vec::new();
+    for row in node_rows {
+        let (id, code_unit_id, kind, payload_json, path) = row.map_err(sql_unavailable)?;
+        validate_stored_code_unit_id(&code_unit_id, &path)?;
+        validate_stored_ir_node_id(&id, &code_unit_id)?;
+        IrNodeKind::parse_protocol_str(&kind).map_err(|_| {
+            IndexStoreError::InvalidState("stored IR node kind is invalid".to_string())
+        })?;
+        validate_stored_empty_object_payload(&payload_json, "stored IR node payload")?;
+        nodes.push(IndexedIrNodeRecord {
+            id,
+            code_unit_id,
+            kind,
+            payload_json,
+        });
+    }
+
+    let mut edge_statement = connection
+        .prepare(
+            "SELECT from_node_id, to_node_id, label \
+             FROM ir_edges \
+             WHERE generation_id = ?1 \
+             ORDER BY from_node_id COLLATE BINARY, to_node_id COLLATE BINARY, \
+                      label COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let edge_rows = edge_statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut edges = Vec::new();
+    for row in edge_rows {
+        let (from_node_id, to_node_id, label) = row.map_err(sql_unavailable)?;
+        validate_stored_non_empty_text(&from_node_id, "stored IR edge from node id")?;
+        validate_stored_non_empty_text(&to_node_id, "stored IR edge to node id")?;
+        if from_node_id == to_node_id {
+            return Err(IndexStoreError::InvalidState(
+                "stored IR edge points to itself".to_string(),
+            ));
+        }
+        IrEdgeLabel::parse_protocol_str(&label).map_err(|_| {
+            IndexStoreError::InvalidState("stored IR edge label is invalid".to_string())
+        })?;
+        edges.push(IndexedIrEdgeRecord {
+            from_node_id,
+            to_node_id,
+            label,
+        });
+    }
+    Ok((nodes, edges))
 }
 
 fn apply_pragmas(connection: &Connection) -> rusqlite::Result<()> {
@@ -2279,6 +2309,134 @@ mod tests {
     }
 
     #[test]
+    fn load_active_claim_input_snapshot_returns_same_generation_records_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-active-claim-input-snapshot");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut a_file = file("src/a.ts");
+        a_file.size_bytes = 100;
+        let mut b_file = file("src/b.ts");
+        b_file.size_bytes = 100;
+        store
+            .record_indexed_file(&generation, &b_file)
+            .expect("record b file");
+        store
+            .record_indexed_file(&generation, &a_file)
+            .expect("record a file");
+        let mut module = code_unit("src/a.ts");
+        module.id = "unit:src/a.ts#module:0-100".to_string();
+        module.end_byte = 100;
+        let mut function = code_unit("src/a.ts");
+        function.id = "unit:src/a.ts#function:10-40".to_string();
+        function.kind = "function".to_string();
+        function.start_byte = 10;
+        function.end_byte = 40;
+        store
+            .record_code_unit(&generation, &function)
+            .expect("record function");
+        store
+            .record_code_unit(&generation, &module)
+            .expect("record module");
+        let function_node = ir_node(&function);
+        let module_node = ir_node(&module);
+        store
+            .record_ir_node(&generation, &function_node)
+            .expect("record function node");
+        store
+            .record_ir_node(&generation, &module_node)
+            .expect("record module node");
+        store
+            .record_ir_edge(&generation, &ir_edge(&module_node, &function_node))
+            .expect("record IR edge");
+        let mut fact = semantic_fact("src/a.ts");
+        fact.code_unit_id = function.id.clone();
+        fact.start_byte = function.start_byte;
+        fact.end_byte = function.end_byte;
+        fact.evidence_id = "evidence:fact:src/a.ts#function:express".to_string();
+        store
+            .record_semantic_fact(&generation, &fact)
+            .expect("record semantic fact");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let snapshot = store
+            .load_active_claim_input_snapshot()
+            .expect("load claim input snapshot");
+
+        assert_eq!(snapshot.generation_id, "gen-000001");
+        assert_eq!(
+            snapshot
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["src/a.ts", "src/b.ts"]
+        );
+        assert_eq!(
+            snapshot
+                .units
+                .iter()
+                .map(|unit| unit.id.as_str())
+                .collect::<Vec<_>>(),
+            ["unit:src/a.ts#module:0-100", "unit:src/a.ts#function:10-40"]
+        );
+        assert_eq!(
+            snapshot
+                .ir_nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ir:unit:src/a.ts#function:10-40",
+                "ir:unit:src/a.ts#module:0-100"
+            ]
+        );
+        assert_eq!(
+            snapshot.ir_edges,
+            vec![ir_edge(&module_node, &function_node)]
+        );
+        assert_eq!(snapshot.semantic_facts, vec![fact]);
+
+        let debug = format!("{snapshot:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("UNIQUE_SOURCE_SENTINEL"));
+        assert!(!debug.contains("DOMINANT_PATTERN"));
+        assert!(!debug.contains("CONFORMS"));
+    }
+
+    #[test]
+    fn load_active_claim_input_snapshot_returns_empty_file_manifest_only_generation() {
+        let workspace = TempWorkspace::new("sqlite-active-claim-input-empty");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("README.md"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let snapshot = store
+            .load_active_claim_input_snapshot()
+            .expect("load claim input snapshot");
+
+        assert_eq!(snapshot.generation_id, "gen-000001");
+        assert_eq!(
+            snapshot
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["README.md"]
+        );
+        assert!(snapshot.units.is_empty());
+        assert!(snapshot.ir_nodes.is_empty());
+        assert!(snapshot.ir_edges.is_empty());
+        assert!(snapshot.semantic_facts.is_empty());
+    }
+
+    #[test]
     fn list_active_reads_reject_missing_active_generation() {
         let workspace = TempWorkspace::new("sqlite-list-no-active");
         let store = store(&workspace);
@@ -2293,10 +2451,14 @@ mod tests {
         let facts_error = store
             .list_active_semantic_facts()
             .expect_err("missing active generation must fail semantic-fact reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("missing active generation must fail snapshot reads");
 
         assert!(matches!(files_error, IndexStoreError::InvalidState(_)));
         assert!(matches!(units_error, IndexStoreError::InvalidState(_)));
         assert!(matches!(facts_error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2320,8 +2482,12 @@ mod tests {
         let error = store
             .list_active_indexed_files()
             .expect_err("malformed active schema must fail reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("malformed active schema must fail snapshot reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2336,8 +2502,12 @@ mod tests {
             let error = store
                 .list_active_semantic_facts()
                 .expect_err("tampered semantic fact must fail reads");
+            let snapshot_error = store
+                .load_active_claim_input_snapshot()
+                .expect_err("tampered semantic fact must fail snapshot reads");
 
             assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
         }
 
         assert_rejected("sqlite-list-semantic-fact-bad-kind", |connection, _| {
@@ -2408,8 +2578,12 @@ mod tests {
         let error = store
             .list_active_indexed_files()
             .expect_err("tampered file hash must fail reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("tampered file hash must fail snapshot reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2441,8 +2615,12 @@ mod tests {
         let error = store
             .list_active_code_units()
             .expect_err("tampered unit hash/range must fail reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("tampered unit hash/range must fail snapshot reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2472,8 +2650,12 @@ mod tests {
         let error = store
             .list_active_code_units()
             .expect_err("tampered unit id must fail reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("tampered unit id must fail snapshot reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
@@ -2761,8 +2943,12 @@ mod tests {
         let error = store
             .list_active_ir_graph()
             .expect_err("tampered IR payload must fail reads");
+        let snapshot_error = store
+            .load_active_claim_input_snapshot()
+            .expect_err("tampered IR payload must fail snapshot reads");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(snapshot_error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
