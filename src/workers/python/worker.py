@@ -34,6 +34,13 @@ MAX_FACT_TARGET_CHARS = 512
 MAX_RUST_PARSE_FACT_TARGET_CHARS = 256
 MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
+FASTAPI_PARAMETER_MARKERS = {
+    "fastapi.Body": ("fastapi_request_body_model", "fastapi.request_body"),
+    "fastapi.Cookie": ("fastapi_cookie_param", "fastapi.request_param.cookie"),
+    "fastapi.Header": ("fastapi_header_param", "fastapi.request_param.header"),
+    "fastapi.Path": ("fastapi_path_param", "fastapi.request_param.path"),
+    "fastapi.Query": ("fastapi_query_param", "fastapi.request_param.query"),
+}
 SQLALCHEMY_SESSION_METHODS = {
     "add",
     "commit",
@@ -1114,6 +1121,116 @@ def collect_fastapi_response_model_facts(
         )
 
 
+def annotated_type_and_metadata(
+    annotation: ast.AST | None,
+    aliases: dict[str, str],
+) -> tuple[ast.AST | None, list[ast.AST]]:
+    if not isinstance(annotation, ast.Subscript):
+        return annotation, []
+    name = dotted_name(annotation.value)
+    canonical = canonical_name(name, aliases, {}) if name else None
+    if canonical not in {"typing.Annotated", "Annotated"}:
+        return annotation, []
+    if isinstance(annotation.slice, ast.Tuple):
+        elements = annotation.slice.elts
+    else:
+        elements = [annotation.slice]
+    if not elements:
+        return None, []
+    return elements[0], elements[1:]
+
+
+def fastapi_parameter_marker(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+) -> tuple[str, str] | None:
+    if not isinstance(node, ast.Call):
+        return None
+    name = dotted_name(node.func)
+    if not name:
+        return None
+    return FASTAPI_PARAMETER_MARKERS.get(canonical_name(name, aliases, {}))
+
+
+def fastapi_parameter_annotation_target(
+    annotation: ast.AST | None,
+    aliases: dict[str, str],
+) -> str | None:
+    type_node, _ = annotated_type_and_metadata(annotation, aliases)
+    if type_node is None:
+        return None
+    name = static_type_name(type_node)
+    return canonical_name(name, aliases, {}) if name else None
+
+
+def function_parameters(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[ast.arg, ast.AST | None]]:
+    positional_args = [*node.args.posonlyargs, *node.args.args]
+    padding = [None] * (len(positional_args) - len(node.args.defaults))
+    parameters = list(zip(positional_args, [*padding, *node.args.defaults]))
+    parameters.extend(zip(node.args.kwonlyargs, node.args.kw_defaults))
+    return parameters
+
+
+def collect_fastapi_parameter_facts(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for parameter, default in function_parameters(node):
+        if parameter.arg in {"self", "cls"}:
+            continue
+        type_node, metadata = annotated_type_and_metadata(parameter.annotation, aliases)
+        marker = fastapi_parameter_marker(default, aliases)
+        if marker is None:
+            marker = next(
+                (
+                    candidate
+                    for item in metadata
+                    if (candidate := fastapi_parameter_marker(item, aliases)) is not None
+                ),
+                None,
+            )
+        if marker is None:
+            continue
+        anchor_kind, prefix = marker
+        if anchor_kind == "fastapi_request_body_model":
+            type_name = fastapi_parameter_annotation_target(type_node, aliases)
+            if not type_name:
+                continue
+            target = f"{prefix}.{type_name}"
+            fact_kind = "TYPE"
+            start, end = node_range(starts, type_node)
+        else:
+            if not is_python_identifier(parameter.arg):
+                continue
+            target = f"{prefix}.{parameter.arg}"
+            fact_kind = "SYMBOL"
+            start, end = node_range(starts, parameter)
+        if not is_safe_fact_target(target) or len(target) > MAX_RUST_PARSE_FACT_TARGET_CHARS:
+            continue
+        add_fact(
+            facts,
+            structural_fact(
+                kind=fact_kind,
+                subject_unit_id=subject_unit_id,
+                target=target,
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind=anchor_kind,
+            ),
+        )
+
+
 def decorator_anchor_kind(target: str) -> str:
     parts = target.split(".")
     if target in {"pytest.fixture", "fixture"}:
@@ -1926,6 +2043,17 @@ def analyze_source(
                 assignments,
                 facts,
             )
+            if unit_by_node[id(item)]["kind"] == "fastapi_route":
+                collect_fastapi_parameter_facts(
+                    item,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    subject_unit_id,
+                    aliases,
+                    facts,
+                )
             parametrize_names, indirect_parametrize_names = pytest_parametrize_name_sets(
                 item, aliases, assignments
             )

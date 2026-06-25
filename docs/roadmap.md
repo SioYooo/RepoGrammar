@@ -47,6 +47,9 @@
   local forms such as `service = UserService(); service.list_users()` and
   `runner = run_query; runner()`. These remain structural handler/service
   context and are not family-support targets.
+- Static FastAPI request body/path/query/header/cookie marker anchors for
+  route-shape context. These remain structural metadata and are not
+  family-support targets.
 - SQLAlchemy repository-method exact anchors now include direct
   `Session.commit`, `Session.rollback`, `Session.scalar`, `Session.scalars`, and
   async session equivalents, while relationship and `Session.add` anchors remain
@@ -197,7 +200,8 @@ evidence contracts remain validated together.
   calls, `pytest.test` test-function anchors, alias-aware pytest fixture
   decorators, same-file pytest fixture edges, direct
   `pytest.mark.parametrize` argument precedence over same-name fixtures, and
-  typed dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
+  static FastAPI request body/path/query/header/cookie marker anchors, typed
+  dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
   monkey-patch, and unresolved import `UNKNOWN`, plus path-derived module names,
   CPython `symtable` scope anchors, and private `tomllib` project-config
   summaries. The semantic-worker-compatible

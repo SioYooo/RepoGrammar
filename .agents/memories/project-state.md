@@ -3,8 +3,8 @@
 - Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
   discovery, CPython AST structural indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
-  structural scope anchors, FastAPI dependency/error anchors, pytest
-  parametrize argument anchors, Pydantic field/config/member anchors, typed
+  structural scope anchors, FastAPI dependency/error/request-shape anchors,
+  pytest parametrize argument anchors, Pydantic field/config/member anchors, typed
   dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
   monkey-patch, and unresolved import `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
@@ -36,7 +36,8 @@
   record metadata-only variation evidence when exact-compatible framework-anchor
   support targets differ. FastAPI static `response_model=...`, static
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
-  HTTPException status-code structural anchors remain auxiliary
+  HTTPException status-code structural anchors, plus static FastAPI
+  body/path/query/header/cookie request-shape anchors, remain auxiliary
   schema/context/effect metadata and are not membership support targets.
   Pytest fixture decorators are now alias-aware in same-file and `conftest.py`
   contexts. Direct parametrize arguments take precedence over same-name fixtures,
@@ -87,7 +88,8 @@ decorator, dynamic call, monkey-patch, dynamic import, `sys.path` mutation, or
 unresolved import `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
-HTTPException status codes, literal pytest parametrize arguments, Pydantic
+HTTPException status codes, static FastAPI body/path/query/header/cookie
+request-shape markers, literal pytest parametrize arguments, Pydantic
 field/config/member declarations, and bounded FastAPI same-function service
 calls as structural parser-origin anchors without upgrading them to
 provider-backed semantics.
@@ -143,8 +145,8 @@ extraction, worker-local Python structural fact payloads for import bindings,
 decorator anchors, class bases, simple call targets, `pytest.test`
 test-function anchors, alias-aware pytest fixture decorators, same-file pytest
 fixture edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
-dependency/error anchors, pytest parametrize argument anchors that are not
-treated as fixture injection UNKNOWNs,
+dependency/error/request-shape anchors, pytest parametrize argument anchors that
+are not treated as fixture injection UNKNOWNs,
 Pydantic field/config/member anchors, typed dynamic decorator
 framework-identity `UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed
 dynamic/unresolved import `UNKNOWN` cases, plus bounded same-function FastAPI

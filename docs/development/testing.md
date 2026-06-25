@@ -148,7 +148,8 @@ allowed.
   diagnostics, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
-  dependency-target/dependency-call/error/status-code anchors, pytest fixture
+  dependency-target/dependency-call/error/status-code anchors, static FastAPI
+  request body/path/query/header/cookie marker anchors, pytest fixture
   decorator aliases, pytest parametrize decorator and literal argument anchors,
   direct-parametrize-over-fixture precedence, indirect parametrize remaining
   typed `PytestFixtureInjection` `UNKNOWN`, Pydantic field, field-type,
@@ -194,8 +195,9 @@ allowed.
   repo-local import `UNKNOWN`, `sys.path` mutation
   `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
   facts including FastAPI response-model/static dependency-target/
-  dependency-call/error/status-code anchors, pytest parametrize, and Pydantic
-  validator anchors, typed `UNKNOWN`,
+  dependency-call/error/status-code anchors, static FastAPI request
+  body/parameter anchors, pytest parametrize, and Pydantic validator anchors,
+  typed `UNKNOWN`,
   persisted project-config facts staying out of claim-input readiness,
   heuristic framework-role facts staying out of family claims, raw parser-origin
   facts staying out of family construction,
@@ -209,8 +211,8 @@ allowed.
   and bounded discovered `conftest.py` contents,
   exact-anchor target variation coverage only for already-ready Python families,
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
-  context anchors staying out of support derivation and support-target
-  variation metadata, pytest fixture-edge and parametrize-argument anchors
+  context anchors and static request body/parameter anchors staying out of
+  support derivation and support-target variation metadata, pytest fixture-edge and parametrize-argument anchors
   staying out of family support, SQLAlchemy relationship and Session.add
   structural anchors staying out of family support, SQLAlchemy
   `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and

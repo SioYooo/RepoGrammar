@@ -64,9 +64,12 @@ their already-compatible exact framework-anchor support targets differ within
 the same family; this does not imply provider-backed semantics or runtime
 equivalence. The current Python worker can also emit bounded same-function
 FastAPI route service-call anchors as structural handler/service context; those
-anchors are not membership support. Dynamic decorator factories and
-`setattr(...)` monkey-patching become typed `UNKNOWN`s rather than inferred
-framework identity or call-target evidence. It also persists root
+anchors are not membership support. It can also emit static FastAPI request
+body and request-parameter anchors for `Body`, `Path`, `Query`, `Header`, and
+`Cookie` marker shapes; those are route-shape context only and are not
+membership support. Dynamic decorator factories and `setattr(...)`
+monkey-patching become typed `UNKNOWN`s rather than inferred framework identity
+or call-target evidence. It also persists root
 `pyproject.toml` only as structural project-config context or typed config
 `UNKNOWN`. Subsequent
 slices should add selective Pyrefly provider queries for plausible family

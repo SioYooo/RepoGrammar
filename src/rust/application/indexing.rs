@@ -2445,6 +2445,31 @@ mod tests {
                 SemanticFactKind::Type,
                 "fastapi.response_model.UserOut",
             ),
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Type,
+                "fastapi.request_body.UserIn",
+            ),
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "fastapi.request_param.path.user_id",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.request_param.query.query",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.request_param.header.request_id",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.request_param.cookie.session_id",
+            ),
         ];
 
         let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)

@@ -52,11 +52,12 @@ parse_messages = run_worker(
         "content_hash": "sha256:" + "0" * 64,
         "repository_revision": "UNKNOWN",
         "text": """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
+from typing import Annotated
 import pytest
 import pytest as pt
 from pytest import fixture as pytest_fixture
@@ -147,8 +148,15 @@ def run_imported():
     runner = run_query
     return runner()
 
-@router.get("/users", response_model=list[UserOut])
-async def list_users(dependency=Depends(get_db)):
+@router.get("/users/{user_id}", response_model=list[UserOut])
+async def list_users(
+    user_id: int = Path(...),
+    payload: Annotated[UserOut, Body()] = None,
+    query: str = Query(""),
+    request_id: str = Header(""),
+    session_id: str = Cookie(""),
+    dependency=Depends(get_db),
+):
     service = UserService()
     alias = service
     getattr(alias, "dynamic_users")()
@@ -341,6 +349,36 @@ assert any(
     for fact in parse_facts
 )
 assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "fastapi.request_body.UserOut"
+    and "python_anchor_kind=fastapi_request_body_model" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.path.user_id"
+    and "python_anchor_kind=fastapi_path_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.query.query"
+    and "python_anchor_kind=fastapi_query_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.header.request_id"
+    and "python_anchor_kind=fastapi_header_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.cookie.session_id"
+    and "python_anchor_kind=fastapi_cookie_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "fastapi.Depends"
     and "python_anchor_kind=fastapi_dependency" in fact["assumptions"]
@@ -428,6 +466,11 @@ for fact in parse_facts:
     assert "start_byte" in fact["evidence"]
     assert "end_byte" in fact["evidence"]
 assert "from fastapi" not in json.dumps(parse_messages)
+assert "Body()" not in json.dumps(parse_messages)
+assert "Path(" not in json.dumps(parse_messages)
+assert "Query(" not in json.dumps(parse_messages)
+assert "Header(" not in json.dumps(parse_messages)
+assert "Cookie(" not in json.dumps(parse_messages)
 assert "model_config =" not in json.dumps(parse_messages)
 assert "arbitrary_types_allowed" not in json.dumps(parse_messages)
 assert "dynamic_users" not in json.dumps(parse_messages)

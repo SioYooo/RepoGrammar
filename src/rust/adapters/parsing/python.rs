@@ -1240,6 +1240,11 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_dependency_target"
             | "fastapi_http_exception"
             | "fastapi_http_exception_status"
+            | "fastapi_cookie_param"
+            | "fastapi_header_param"
+            | "fastapi_path_param"
+            | "fastapi_query_param"
+            | "fastapi_request_body_model"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
             | "fastapi_service_call"
@@ -1387,9 +1392,10 @@ mod tests {
     fn cpython_frontend_extracts_python_units_and_facts_without_snippets() {
         let source = r#"
 from fastapi import APIRouter
-from fastapi import Depends, HTTPException
+from fastapi import Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
+from typing import Annotated
 import pytest
 import pytest as pt
 from pytest import fixture as pytest_fixture
@@ -1420,8 +1426,15 @@ class UserOut(BaseModel):
 def get_db():
     return object()
 
-@router.get("/users", response_model=list[UserOut])
-async def list_users(dependency=Depends(get_db)):
+@router.get("/users/{user_id}", response_model=list[UserOut])
+async def list_users(
+    user_id: int = Path(...),
+    payload: Annotated[UserOut, Body()] = None,
+    query: str = Query(""),
+    request_id: str = Header(""),
+    session_id: str = Cookie(""),
+    dependency=Depends(get_db),
+):
     service = UserService()
     alias = service
     getattr(alias, "dynamic_users")()
@@ -1600,6 +1613,56 @@ def test_users(client, status, missing_fixture):
                     .any(|assumption| assumption == "python_anchor_kind=fastapi_response_model")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.request_body.UserOut")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_request_body_model")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.request_param.path.user_id")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_path_param")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.request_param.query.query")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_query_param")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.request_param.header.request_id")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_header_param")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.request_param.cookie.session_id")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_cookie_param")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.Depends")
                 && fact
@@ -1730,6 +1793,11 @@ def test_users(client, status, missing_fixture):
         assert!(!debug.contains("@router.get"));
         assert!(!debug.contains("response_model="));
         assert!(!debug.contains("list[UserOut]"));
+        assert!(!debug.contains("Body()"));
+        assert!(!debug.contains("Path("));
+        assert!(!debug.contains("Query("));
+        assert!(!debug.contains("Header("));
+        assert!(!debug.contains("Cookie("));
         assert!(!debug.contains("Depends("));
         assert!(!debug.contains("Depends(get_db"));
         assert!(!debug.contains("HTTPException("));

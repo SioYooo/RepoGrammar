@@ -76,6 +76,10 @@ default `index` or `sync`.
 Dynamic imports, monkey patching, decorator rewrites, pytest fixture injection,
 settings/framework magic, runtime dependency injection, missing dependencies,
 and analyzer disagreement must become typed `UNKNOWN` for affected claims.
+The current CPython `ast` worker emits structural FastAPI request-shape anchors
+for static `Body`, `Path`, `Query`, `Header`, and `Cookie` route parameter
+markers. These anchors are parser-origin context metadata and do not become
+family evidence.
 The current CPython `ast` worker emits parser-origin typed `UNKNOWN` facts for
 non-literal dynamic imports, `sys.path` mutation, dynamic calls, dynamic
 decorator factories that block framework identity, monkey-patching calls such

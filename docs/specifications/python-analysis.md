@@ -120,7 +120,9 @@ The current implementation covers the first structural slice only:
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
   static `Depends(get_db)` dependency target slots, `HTTPException(...)`, and
-  literal `HTTPException(status_code=...)` status-code effect slots, alias-aware
+  literal `HTTPException(status_code=...)` status-code effect slots, static
+  FastAPI request body and request-parameter marker slots for `Body`, `Path`,
+  `Query`, `Header`, and `Cookie`, alias-aware
   pytest `fixture` decorators and `mark.parametrize` decorators plus literal
   parametrize arguments, and Pydantic model-member anchors for fields, field
   annotation targets, `model_config`, nested `Config`, `computed_field`,
@@ -194,8 +196,9 @@ The current implementation covers the first structural slice only:
   gate for derived and future provider-backed strong facts. FastAPI
   `response_model=...`, static `Depends(get_db)` dependency-target,
   `Depends(...)`, `HTTPException(...)`, and literal HTTPException status-code
-  anchors remain route schema/context/effect metadata and are explicitly
-  excluded from membership support derivation. Pydantic field, field-type,
+  anchors, plus FastAPI request body and request-parameter anchors, remain
+  route schema/context/effect metadata and are explicitly excluded from
+  membership support derivation. Pydantic field, field-type,
   `model_config`, nested `Config`, `computed_field`, and `model_validator`
   anchors remain model schema/config/member metadata and are also excluded from
   membership support derivation.

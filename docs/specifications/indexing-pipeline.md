@@ -217,7 +217,8 @@ FastAPI service-call context anchors,
 and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
-status-code effect anchors, path-derived module names, CPython `symtable`
+status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
+`Cookie` request-shape anchors, path-derived module names, CPython `symtable`
 scope anchors, and typed dynamic decorator, dynamic call, monkey-patch,
 dynamic/unresolved/ambiguous import, and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
@@ -227,8 +228,9 @@ parser adapter validates and persists parse-document payloads as internal
 evidence. They are not passed to the family builder and remain blocked from
 claim-input readiness as insufficient support. Pydantic member/config/computed
 anchors are schema/config/member context only, and FastAPI service-call anchors
-are handler/service context only; neither category synthesizes family support
-facts.
+are handler/service context only. FastAPI request body and request-parameter
+anchors are route-shape context only; none of these categories synthesizes
+family support facts.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store
@@ -346,8 +348,9 @@ FastAPI route decorator targets can become derived support only when they
 exact-match the canonical route-method table. Static `response_model=...`,
 static `Depends(get_db)` dependency-target, `Depends(...)`, and
 `HTTPException(...)` parser anchors, including literal status-code effect
-anchors, stay schema/context/effect metadata and do not prove membership
-support. Pydantic field, field-type, `model_config`, nested `Config`,
+anchors, plus static FastAPI request body and request-parameter anchors, stay
+schema/context/effect metadata and do not prove membership support. Pydantic
+field, field-type, `model_config`, nested `Config`,
 computed-field, and model-validator anchors likewise stay model
 schema/config/member metadata and do not prove membership support. FastAPI
 service-call anchors stay handler/service context metadata and also do not prove

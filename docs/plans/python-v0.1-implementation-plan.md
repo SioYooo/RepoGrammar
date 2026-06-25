@@ -89,7 +89,9 @@ input. The worker performs file-local simple FastAPI router/app alias
 propagation with same-name top-level reassignment invalidation, emits typed
 `UNKNOWN` for dynamic decorators, monkey-patching, dynamic calls, dynamic
 imports, `sys.path` mutation, unresolved imports, and fixture ambiguity, and
-the application layer derives separate `DATAFLOW_DERIVED` support facts from
+emits static FastAPI request body/path/query/header/cookie marker anchors as
+route-shape context rather than family support. The application layer derives
+separate `DATAFLOW_DERIVED` support facts from
 exact canonical CPython anchors when a unit has one Python framework role; raw
 parser facts and framework heuristics still remain blocked from direct claim
 input.
@@ -208,8 +210,8 @@ exact-anchor smoke fixture. They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 
-- FastAPI route families with `APIRouter`, `Depends`, response models, service
-  calls, and error mapping.
+- FastAPI route families with `APIRouter`, `Depends`, response/request-shape
+  metadata, service calls, and error mapping.
 - pytest fixture/test families with `conftest.py` hierarchy and parametrized
   tests.
 - Pydantic model/settings families with fields, validators, config, and
