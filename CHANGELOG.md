@@ -179,3 +179,6 @@
 - Hardened `doctor` lifecycle diagnostics so missing or invalid generated state
   `.gitignore`, Git exclude patterns, init receipts, and root `.gitignore`
   markers are reported without mutating repository state.
+- Split `status` schema reporting into explicit `manifest_schema_version` and
+  `storage_schema_version` human/JSON fields, removing the ambiguous status
+  JSON `schema_version` field.

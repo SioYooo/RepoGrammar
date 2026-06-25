@@ -162,6 +162,9 @@ matching literal text. Field order and formatting are not meaningful, but
 `schema_version`, non-empty `repogrammar_version`, `state`, `storage.status`,
 and `indexing.status` must match the current bootstrap contract before status,
 doctor, init repair, or index preflight treat the repository as initialized.
+`repogrammar status --json` reports this manifest value as
+`manifest_schema_version`, separately from SQLite's
+`storage_schema_version`.
 
 ## File Discovery Exclusions
 
@@ -337,7 +340,9 @@ The production SQLite dependency is `rusqlite` with bundled SQLite enabled.
 Only `src/rust/adapters/persistence/` may depend on it directly; application and
 domain code must use RepoGrammar-owned storage port types.
 
-`repogrammar status` must show journal mode when an active generation exists.
+`repogrammar status` must show journal mode when an active generation exists
+and must distinguish the bootstrap manifest schema from the active SQLite
+storage schema in both human and JSON output.
 `repogrammar doctor` must run SQLite integrity checks, verify schema version,
 verify active generation consistency, report missing storage layout without
 recreating it, and report lock state.

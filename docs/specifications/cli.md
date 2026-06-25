@@ -100,12 +100,15 @@ project indexes. `uninit` must make logs deletion explicit.
 
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
-schema version, journal mode, storage/indexing implementation status, missing
-subdirectories, and relevant warning states. When storage is wired, it must also
-report SQLite integrity status and unhealthy storage states without exposing
-absolute paths. Manifest status must be based on parsed JSON fields, not literal
-text layout, so valid reordered manifests are accepted and malformed required
-fields are reported as corrupted.
+manifest schema version, storage schema version, journal mode,
+storage/indexing implementation status, missing subdirectories, and relevant
+warning states. Status JSON must use `manifest_schema_version` and
+`storage_schema_version`; it must not use an ambiguous top-level
+`schema_version` field. When storage is wired, it must also report SQLite
+integrity status and unhealthy storage states without exposing absolute paths.
+Manifest status must be based on parsed JSON fields, not literal text layout,
+so valid reordered manifests are accepted and malformed required fields are
+reported as corrupted.
 
 `repogrammar doctor` must support human and `--json` output. It must check
 manifest status, required lifecycle subdirectories, storage/indexing

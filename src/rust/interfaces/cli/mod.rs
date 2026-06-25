@@ -1232,21 +1232,17 @@ fn status_human(report: &RepositoryStatusReport) -> String {
     output.push_str(&format!("state_dir: {}\n", report.state_dir));
     output.push_str(&format!("manifest: {}\n", manifest_status(report.manifest)));
     output.push_str(&format!(
-        "schema_version: {}\n",
+        "manifest_schema_version: {}\n",
+        optional_human_number(report.manifest_schema_version)
+    ));
+    output.push_str(&format!(
+        "storage_schema_version: {}\n",
         report
             .storage_inspection
             .as_ref()
             .and_then(|inspection| inspection.schema_version)
             .map(|version| version.to_string())
-            .unwrap_or_else(|| {
-                if report.storage != RepositoryImplementationStatus::Unhealthy
-                    && matches!(report.manifest, RepositoryManifestStatus::Valid)
-                {
-                    "1".to_string()
-                } else {
-                    "none".to_string()
-                }
-            })
+            .unwrap_or_else(|| "none".to_string())
     ));
     output.push_str(&format!(
         "journal_mode: {}\n",
@@ -1294,7 +1290,7 @@ fn status_human(report: &RepositoryStatusReport) -> String {
 
 fn status_json(report: &RepositoryStatusReport) -> String {
     format!(
-        "{{\"command\":\"status\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"manifest\":\"{}\",\"active_generation\":{},\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{},\"foreign_keys_enabled\":{},\"storage\":\"{}\",\"indexing\":\"{}\",\"storage_error\":{},\"missing_subdirs\":{}}}\n",
+        "{{\"command\":\"status\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"manifest\":\"{}\",\"active_generation\":{},\"manifest_schema_version\":{},\"storage_schema_version\":{},\"journal_mode\":{},\"integrity_check\":{},\"foreign_keys_enabled\":{},\"storage\":\"{}\",\"indexing\":\"{}\",\"storage_error\":{},\"missing_subdirs\":{}}}\n",
         matches!(report.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.state_dir),
         repository_status_value(&report.status),
@@ -1307,20 +1303,13 @@ fn status_json(report: &RepositoryStatusReport) -> String {
             }
             _ => "null".to_string(),
         },
+        optional_json_number(report.manifest_schema_version),
         report
             .storage_inspection
             .as_ref()
             .and_then(|inspection| inspection.schema_version)
             .map(|version| version.to_string())
-            .unwrap_or_else(|| {
-                if report.storage != RepositoryImplementationStatus::Unhealthy
-                    && matches!(report.manifest, RepositoryManifestStatus::Valid)
-                {
-                    "1".to_string()
-                } else {
-                    "null".to_string()
-                }
-            }),
+            .unwrap_or_else(|| "null".to_string()),
         optional_json_string(
             report
                 .storage_inspection
@@ -1577,6 +1566,18 @@ fn optional_json_string(value: Option<&str>) -> String {
     value
         .map(|value| format!("\"{}\"", json_string(value)))
         .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_json_number(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_human_number(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn json_string(value: &str) -> String {
@@ -2408,17 +2409,39 @@ mod tests {
         assert!(human
             .stdout
             .contains("RepoGrammar repository status: not initialized"));
+        assert!(human.stdout.contains("manifest_schema_version: none"));
+        assert!(human.stdout.contains("storage_schema_version: none"));
+        assert!(!human
+            .stdout
+            .lines()
+            .any(|line| line.starts_with("schema_version:")));
 
         let json = run_with_context(["status", "--json"], workspace.path(), &env);
         let value: Value = serde_json::from_str(json.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], false);
         assert_eq!(value["state_dir"], DEFAULT_STATE_DIR);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], Value::Null);
+        assert_eq!(value["storage_schema_version"], Value::Null);
 
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        let initialized_human = run_with_context(["status"], workspace.path(), &env);
+        assert!(initialized_human
+            .stdout
+            .contains("manifest_schema_version: 1"));
+        assert!(initialized_human
+            .stdout
+            .contains("storage_schema_version: none"));
+        assert!(!initialized_human
+            .stdout
+            .lines()
+            .any(|line| line.starts_with("schema_version:")));
         let initialized = run_with_context(["status", "--json"], workspace.path(), &env);
         let value: Value = serde_json::from_str(initialized.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], true);
-        assert_eq!(value["schema_version"], 1);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], 1);
+        assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["indexing"], "not_implemented");
     }
 
@@ -2633,6 +2656,9 @@ mod tests {
         assert_eq!(status.status, 0);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], 1);
+        assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage"], "available");
         assert_eq!(value["indexing"], "not_implemented");
 
@@ -2662,7 +2688,9 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert_eq!(value["schema_version"], Value::Null);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], 1);
+        assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["journal_mode"], Value::Null);
         assert_eq!(value["integrity_check"], Value::Null);
         assert_eq!(value["storage"], "unhealthy");
@@ -2769,6 +2797,18 @@ mod tests {
             0
         );
 
+        let human_status =
+            run_with_context_and_runtime(["status"], workspace.path(), &env, &runtime);
+        assert_eq!(human_status.status, 0);
+        assert!(human_status.stdout.contains("manifest_schema_version: 1"));
+        assert!(human_status
+            .stdout
+            .contains(&format!("storage_schema_version: {STORAGE_SCHEMA_VERSION}")));
+        assert!(!human_status
+            .stdout
+            .lines()
+            .any(|line| line.starts_with("schema_version:")));
+
         let status =
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         assert_eq!(status.status, 0);
@@ -2777,7 +2817,9 @@ mod tests {
             .contains(workspace.path().to_string_lossy().as_ref()));
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000001");
-        assert_eq!(value["schema_version"], STORAGE_SCHEMA_VERSION);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], 1);
+        assert_eq!(value["storage_schema_version"], STORAGE_SCHEMA_VERSION);
         assert_eq!(value["journal_mode"], "wal");
         assert_eq!(value["integrity_check"], "ok");
         assert_eq!(value["storage"], "available");
@@ -2833,7 +2875,9 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert_eq!(value["schema_version"], Value::Null);
+        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["manifest_schema_version"], 1);
+        assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage"], "unhealthy");
 
         let index =

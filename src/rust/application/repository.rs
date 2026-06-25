@@ -26,6 +26,7 @@ const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
 .repogrammar-*/\n\
 # END RepoGrammar local state\n";
 const LIFECYCLE_TEXT_MAX_BYTES: u64 = 1024 * 1024;
+const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const BOOTSTRAP_STORAGE_STATUSES: &[&str] = &["not_implemented"];
 const BOOTSTRAP_INDEXING_STATUSES: &[&str] = &["not_implemented"];
 
@@ -225,6 +226,7 @@ pub struct RepositoryStatusReport {
     pub state_dir: String,
     pub status: RepositoryStatus,
     pub manifest: RepositoryManifestStatus,
+    pub manifest_schema_version: Option<u32>,
     pub missing_subdirs: Vec<String>,
     pub storage: RepositoryImplementationStatus,
     pub indexing: RepositoryImplementationStatus,
@@ -805,6 +807,7 @@ fn status_for_resolved_state(
             state_dir: resolved.relative.clone(),
             status: RepositoryStatus::NotInitialized,
             manifest: RepositoryManifestStatus::Missing,
+            manifest_schema_version: None,
             missing_subdirs: Vec::new(),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
@@ -820,6 +823,7 @@ fn status_for_resolved_state(
             state_dir: resolved.relative.clone(),
             status: RepositoryStatus::NotInitialized,
             manifest: RepositoryManifestStatus::Missing,
+            manifest_schema_version: None,
             missing_subdirs: missing_subdirs(&resolved.absolute),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
@@ -830,11 +834,13 @@ fn status_for_resolved_state(
 
     let manifest = fs::read_to_string(&manifest_path)
         .map_err(|_| invalid_input("failed to read repository-local RepoGrammar manifest"))?;
+    let manifest_schema_version = bootstrap_manifest_schema_version(&manifest);
     if !is_valid_bootstrap_manifest(&manifest) {
         return Ok(RepositoryStatusReport {
             state_dir: resolved.relative.clone(),
             status: RepositoryStatus::CorruptedManifest,
             manifest: RepositoryManifestStatus::Corrupted,
+            manifest_schema_version,
             missing_subdirs: missing_subdirs(&resolved.absolute),
             storage: RepositoryImplementationStatus::NotImplemented,
             indexing: RepositoryImplementationStatus::NotImplemented,
@@ -849,6 +855,7 @@ fn status_for_resolved_state(
             active_generation: "not implemented".to_string(),
         },
         manifest: RepositoryManifestStatus::Valid,
+        manifest_schema_version,
         missing_subdirs: missing_subdirs(&resolved.absolute),
         storage: RepositoryImplementationStatus::NotImplemented,
         indexing: RepositoryImplementationStatus::NotImplemented,
@@ -1265,14 +1272,16 @@ fn missing_subdirs(state_dir: &Path) -> Vec<String> {
 
 fn manifest_contents() -> String {
     format!(
-        "{{\n  \"schema_version\": 1,\n  \"repogrammar_version\": \"{}\",\n  \"state\": \"initialized\",\n  \"storage\": {{ \"status\": \"not_implemented\" }},\n  \"indexing\": {{ \"status\": \"not_implemented\" }}\n}}\n",
+        "{{\n  \"schema_version\": {},\n  \"repogrammar_version\": \"{}\",\n  \"state\": \"initialized\",\n  \"storage\": {{ \"status\": \"not_implemented\" }},\n  \"indexing\": {{ \"status\": \"not_implemented\" }}\n}}\n",
+        BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
         env!("CARGO_PKG_VERSION")
     )
 }
 
 fn init_receipt_contents() -> String {
     format!(
-        "{{\n  \"schema_version\": 1,\n  \"repogrammar_version\": \"{}\",\n  \"operation\": \"init\",\n  \"status\": \"complete\"\n}}\n",
+        "{{\n  \"schema_version\": {},\n  \"repogrammar_version\": \"{}\",\n  \"operation\": \"init\",\n  \"status\": \"complete\"\n}}\n",
+        BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -1284,10 +1293,7 @@ fn is_valid_bootstrap_manifest(manifest: &str) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
-    object
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        == Some(1)
+    bootstrap_manifest_schema_version(manifest) == Some(BOOTSTRAP_MANIFEST_SCHEMA_VERSION)
         && object
             .get("repogrammar_version")
             .and_then(serde_json::Value::as_str)
@@ -1295,6 +1301,12 @@ fn is_valid_bootstrap_manifest(manifest: &str) -> bool {
         && object.get("state").and_then(serde_json::Value::as_str) == Some("initialized")
         && manifest_status_is(object.get("storage"), BOOTSTRAP_STORAGE_STATUSES)
         && manifest_status_is(object.get("indexing"), BOOTSTRAP_INDEXING_STATUSES)
+}
+
+fn bootstrap_manifest_schema_version(manifest: &str) -> Option<u32> {
+    let value = serde_json::from_str::<serde_json::Value>(manifest).ok()?;
+    let version = value.as_object()?.get("schema_version")?.as_u64()?;
+    u32::try_from(version).ok()
 }
 
 fn manifest_status_is(value: Option<&serde_json::Value>, allowed: &[&str]) -> bool {
@@ -1548,6 +1560,7 @@ mod tests {
             .expect("status before init");
         assert_eq!(status.status, RepositoryStatus::NotInitialized);
         assert_eq!(status.manifest, RepositoryManifestStatus::Missing);
+        assert_eq!(status.manifest_schema_version, None);
         assert_eq!(
             status.storage,
             RepositoryImplementationStatus::NotImplemented
@@ -1567,6 +1580,10 @@ mod tests {
             }
         );
         assert_eq!(status.manifest, RepositoryManifestStatus::Valid);
+        assert_eq!(
+            status.manifest_schema_version,
+            Some(BOOTSTRAP_MANIFEST_SCHEMA_VERSION)
+        );
         assert!(status.missing_subdirs.is_empty());
     }
 
@@ -1604,6 +1621,10 @@ mod tests {
             }
         );
         assert_eq!(status.manifest, RepositoryManifestStatus::Valid);
+        assert_eq!(
+            status.manifest_schema_version,
+            Some(BOOTSTRAP_MANIFEST_SCHEMA_VERSION)
+        );
     }
 
     #[test]

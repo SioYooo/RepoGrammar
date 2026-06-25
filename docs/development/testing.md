@@ -25,7 +25,9 @@ allowed.
 - Repo-local lifecycle tests must use temporary workspaces and cover init
   layout, idempotent repair, Git exclude hygiene, optional root `.gitignore`
   marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
-  human and JSON status/doctor output, JSON-parsed manifest validation with
+  human and JSON status/doctor output, explicit status
+  `manifest_schema_version` and `storage_schema_version` fields without an
+  ambiguous status `schema_version` field, JSON-parsed manifest validation with
   reordered valid fields and invalid required fields, corrupted manifests,
   missing subdirs, diagnostic-only doctor findings for missing or invalid
   `.repogrammar/.gitignore`, `.git/info/exclude`, root `.gitignore` markers,

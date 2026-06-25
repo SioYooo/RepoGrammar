@@ -508,6 +508,7 @@ mod tests {
             state_dir: ".repogrammar".to_string(),
             status,
             manifest: RepositoryManifestStatus::Valid,
+            manifest_schema_version: Some(1),
             missing_subdirs: missing_subdirs.into_iter().map(str::to_string).collect(),
             storage,
             indexing: active_indexing,
