@@ -481,12 +481,22 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             ));
         }
     }
+    let include_variations = object
+        .get("include_variations")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let include_exceptions = object
+        .get("include_exceptions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(ContextArguments {
         operation,
         target,
         output_options: FamilyOutputOptions {
             evidence_mode,
             token_budget,
+            include_variations,
+            include_exceptions,
         },
     })
 }
@@ -535,6 +545,10 @@ fn family_detail_value(
             "mode": selected_evidence.mode.as_str(),
             "token_budget": selected_evidence.token_budget,
             "estimated_evidence_tokens": selected_evidence.estimated_tokens,
+            "selection_strategy": selected_evidence.selection_strategy,
+            "budget_satisfied": selected_evidence.budget_satisfied,
+            "covered_claims": selected_evidence.covered_claims,
+            "missing_claims": selected_evidence.missing_claims,
             "source_snippets_included": selected_evidence.source_snippets_included,
         },
         "members": family.members.iter().map(|member| {
@@ -552,15 +566,18 @@ fn family_detail_value(
             })
         }).collect::<Vec<_>>(),
         "evidence": selected_evidence.evidence.iter().map(|evidence| {
+            let record = &evidence.record;
             json!({
-                "evidence_id": evidence.evidence_id,
-                "family_id": evidence.family_id,
-                "code_unit_id": evidence.code_unit_id,
-                "path": evidence.path,
-                "content_hash": evidence.content_hash.as_str(),
-                "start_byte": evidence.start_byte,
-                "end_byte": evidence.end_byte,
-                "note": evidence.note,
+                "evidence_id": record.evidence_id,
+                "family_id": record.family_id,
+                "code_unit_id": record.code_unit_id,
+                "path": record.path,
+                "content_hash": record.content_hash.as_str(),
+                "start_byte": record.start_byte,
+                "end_byte": record.end_byte,
+                "note": record.note,
+                "estimated_tokens": evidence.estimated_tokens,
+                "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
         "unknowns": unknowns_value(&family.unknowns),
@@ -778,8 +795,22 @@ mod tests {
         assert_eq!(response["status"], "ok");
         assert_eq!(response["output"]["mode"], "evidence");
         assert_eq!(response["output"]["token_budget"], 1);
+        assert_eq!(
+            response["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
+        assert_eq!(
+            response["output"]["covered_claims"],
+            json!(["canonical", "support"])
+        );
+        assert_eq!(response["output"]["missing_claims"], json!([]));
+        assert_eq!(response["output"]["budget_satisfied"], false);
         assert_eq!(response["output"]["source_snippets_included"], false);
         assert_eq!(response["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(
+            response["evidence"][0]["covered_claims"],
+            json!(["canonical", "support"])
+        );
         assert!(
             response["output"]["estimated_evidence_tokens"]
                 .as_u64()
@@ -788,6 +819,38 @@ mod tests {
         );
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn active_family_include_flags_report_uncovered_variations_and_exceptions() {
+        let runtime = FakeMcpRuntime::ready_found();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+                "mode": "evidence",
+                "include_variations": true,
+                "include_exceptions": true
+            }),
+        )
+        .expect("family response");
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(
+            response["output"]["covered_claims"],
+            json!(["canonical", "support"])
+        );
+        assert_eq!(
+            response["output"]["missing_claims"],
+            json!(["variation", "exception"])
+        );
+        assert_eq!(
+            response["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
     }
 
     #[test]

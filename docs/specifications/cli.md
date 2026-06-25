@@ -343,15 +343,21 @@ family match. Matched family output defaults to `--mode compact`: family id,
 classification, support, members, variation slots, typed unknowns, selected
 output metadata, and no evidence records or source snippets. `--mode evidence`
 adds budgeted repo-relative evidence metadata: evidence id, family id,
-code-unit id, path, content hash, byte range, and note. `--token-budget <n>`
-validates a positive integer and implies `--mode evidence` unless an explicit
-mode is provided. `--mode deep` is accepted as an explicit detail request, but
-until a safe source-span rendering contract exists it remains metadata-only and
-must report `source_snippets_included: false`. None of these modes may include
-absolute paths or source snippets. `check` is advisory in this slice: it may
-return matched family context as `CONTEXT_ONLY`, but the check-specific
-conformance status remains `UNKNOWN` with reason `runtime equivalence remains
-unproven`.
+code-unit id, path, content hash, byte range, note, estimated token cost, and
+covered claim labels. `--token-budget <n>` validates a positive integer and
+implies `--mode evidence` unless an explicit mode is provided. Evidence mode
+uses deterministic greedy marginal coverage per estimated token cost. Current
+stored family evidence can honestly cover only `canonical` and `support`
+claims; `--include-variations` and `--include-exceptions` request those
+coverage classes, but until evidence records are explicitly linked to
+variation slots or exceptions the output must report them in `missing_claims`
+rather than inferring coverage from note text. `--mode deep` is accepted as an
+explicit detail request, but until a safe source-span rendering contract exists
+it remains metadata-only and must report `source_snippets_included: false`.
+None of these modes may include absolute paths or source snippets. `check` is
+advisory in this slice: it may return matched family context as
+`CONTEXT_ONLY`, but the check-specific conformance status remains `UNKNOWN`
+with reason `runtime equivalence remains unproven`.
 
 Before public pattern-family output is returned, stored family evidence must be
 fresh against the current repository source hashes. If an evidence source is

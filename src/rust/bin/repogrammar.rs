@@ -1419,11 +1419,27 @@ mod tests {
         assert_eq!(evidence_json["output"]["mode"], "evidence");
         assert_eq!(evidence_json["output"]["source_snippets_included"], false);
         assert_eq!(
+            evidence_json["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
+        assert_eq!(
+            evidence_json["output"]["covered_claims"],
+            serde_json::json!(["canonical", "support"])
+        );
+        assert_eq!(
+            evidence_json["output"]["missing_claims"],
+            serde_json::json!([])
+        );
+        assert_eq!(
             evidence_json["evidence"]
                 .as_array()
                 .expect("evidence")
                 .len(),
-            3
+            1
+        );
+        assert_eq!(
+            evidence_json["evidence"][0]["covered_claims"],
+            serde_json::json!(["canonical", "support"])
         );
 
         let check = run_with_runtime(

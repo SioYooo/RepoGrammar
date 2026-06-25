@@ -138,8 +138,10 @@ return explicit missing-index fallback guidance before `index`; after an active
 index exists, they return typed `UNKNOWN` when family evidence is insufficient.
 With `--json`, both states are parseable. Matched family detail defaults to
 compact output without evidence records; explicit `--mode evidence` or
-`--mode deep` returns selected repo-relative evidence metadata only. `files` and
-`units` are limited to active file-manifest-only or syntax-only index metadata.
+`--mode deep` returns selected repo-relative evidence metadata only, with
+coverage labels and missing requested variation/exception coverage reported
+without source snippets. `files` and `units` are limited to active
+file-manifest-only or syntax-only index metadata.
 
 ## Product Shape
 

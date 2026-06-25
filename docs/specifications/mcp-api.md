@@ -30,8 +30,9 @@ The current input schema is intentionally small:
   metadata. Supplying it implies `mode: evidence` unless an explicit mode is
   provided.
 - optional `mode`: one of `compact`, `evidence`, or `deep`.
-- optional `include_variations` and `include_exceptions`: booleans, accepted for
-  contract compatibility.
+- optional `include_variations` and `include_exceptions`: booleans requesting
+  those evidence-coverage labels. Current output reports them as missing unless
+  stored family evidence explicitly covers them.
 
 Advanced MCP tools may exist later, but they must be hidden by default and
 enabled only by configuration or environment variable, for example:
@@ -108,9 +109,15 @@ contract.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
 unknowns, and output metadata without evidence records; `evidence` adds
-budgeted repo-relative evidence metadata; `deep` is accepted only as an
+budgeted repo-relative evidence metadata selected by deterministic greedy
+marginal coverage per estimated token cost; `deep` is accepted only as an
 explicit detail request and remains metadata-only until a safe source-span
-rendering contract exists. MCP responses must report whether source snippets
+rendering contract exists. Output metadata includes the selection strategy,
+estimated evidence tokens, covered claim labels, missing claim labels, and
+whether the rough budget was satisfied. Current stored family evidence can
+cover only `canonical` and `support`; requested variation or exception coverage
+must be reported as missing until storage/model records explicitly link
+evidence to those claims. MCP responses must report whether source snippets
 were included; the current implementation always reports
 `source_snippets_included: false`.
 

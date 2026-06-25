@@ -271,6 +271,16 @@ Structural alignment compares candidates. Anti-unification derives shared
 templates and variation slots. Clustering groups aligned candidates into
 families. These algorithms are deliberately deferred.
 
+## Representative evidence selection
+
+Representative selection is implemented only for query rendering over already
+stored family evidence metadata. The selector uses deterministic greedy
+marginal coverage per estimated token cost and never reads source snippets.
+The current storage records can cover `canonical` and `support`; requested
+variation or exception coverage is reported as missing until family evidence is
+explicitly linked to variation slots or counterexamples. This selector does not
+replace future medoid selection, template induction, or exception mining.
+
 ## Framework adapters
 
 Initial Python v0.1 framework adapters are scoped to FastAPI, pytest,

@@ -50,6 +50,11 @@ analysis rules.
   evidence records unless `evidence` or `deep` mode is explicitly selected.
   Current `deep` mode is metadata-only and must report that source snippets are
   not included until a safe source-span rendering contract exists.
+- Evidence/deep output may report greedy selector coverage metadata, but the
+  current stored family-evidence model can cover only `canonical` and
+  `support`. Requested variation or exception coverage must be reported as
+  missing until explicit storage/model links exist; do not infer those roles
+  from free-text notes.
 - `index` and `sync` must acquire `.repogrammar/locks/index.lock` before
   discovery, source reads, generation preparation, validation, and activation.
   They must clean up partial lock metadata writes and only remove the lock

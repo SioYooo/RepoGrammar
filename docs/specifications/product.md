@@ -116,9 +116,11 @@ syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default
 compact mode returns family summary, members, variation slots, and unknowns
 without evidence records or source snippets. Explicit evidence/deep modes may
-return selected repo-relative evidence metadata under a token budget, but the
-current deep mode is still metadata-only until a safe source-span rendering
-contract exists.
+return selected repo-relative evidence metadata under a token budget. The
+current selector uses greedy marginal coverage over conservative metadata
+labels and reports missing requested coverage instead of inventing unsupported
+variation or exception evidence. Deep mode is still metadata-only until a safe
+source-span rendering contract exists.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

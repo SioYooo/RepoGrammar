@@ -55,6 +55,10 @@
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and
   explicitly report that source snippets are not included.
+- Greedy family evidence selection metadata for CLI and MCP. Evidence/deep
+  output now reports the selector strategy, rough budget satisfaction, covered
+  claim labels, and missing requested variation/exception coverage instead of
+  preserving raw storage order or inferring unsupported coverage from notes.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

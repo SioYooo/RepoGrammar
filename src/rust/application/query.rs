@@ -3,6 +3,9 @@
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
+use crate::core::mining::representative_selection::{
+    select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
+};
 use crate::core::model::{FactCertainty, SemanticFactKind, UnknownClass, UnknownReasonCode};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
@@ -17,6 +20,7 @@ use crate::ports::index_store::{
     IndexedSemanticFactRecord,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryPreflightOperation {
@@ -222,6 +226,8 @@ impl FamilyEvidenceMode {
 pub struct FamilyOutputOptions {
     pub evidence_mode: FamilyEvidenceMode,
     pub token_budget: Option<usize>,
+    pub include_variations: bool,
+    pub include_exceptions: bool,
 }
 
 impl Default for FamilyOutputOptions {
@@ -229,6 +235,8 @@ impl Default for FamilyOutputOptions {
         Self {
             evidence_mode: FamilyEvidenceMode::Compact,
             token_budget: None,
+            include_variations: false,
+            include_exceptions: false,
         }
     }
 }
@@ -238,8 +246,19 @@ pub struct SelectedFamilyEvidence {
     pub mode: FamilyEvidenceMode,
     pub token_budget: Option<usize>,
     pub estimated_tokens: usize,
+    pub selection_strategy: &'static str,
+    pub budget_satisfied: bool,
+    pub covered_claims: Vec<String>,
+    pub missing_claims: Vec<String>,
     pub source_snippets_included: bool,
-    pub evidence: Vec<IndexedFamilyEvidenceRecord>,
+    pub evidence: Vec<SelectedFamilyEvidenceRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedFamilyEvidenceRecord {
+    pub record: IndexedFamilyEvidenceRecord,
+    pub estimated_tokens: usize,
+    pub covered_claims: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,44 +469,107 @@ pub fn select_family_evidence(
     family: &FamilyDetailReport,
     options: FamilyOutputOptions,
 ) -> SelectedFamilyEvidence {
-    let evidence = match options.evidence_mode {
-        FamilyEvidenceMode::Compact => Vec::new(),
+    let selected = match options.evidence_mode {
+        FamilyEvidenceMode::Compact => BudgetedEvidenceSelection::empty(),
         FamilyEvidenceMode::Evidence | FamilyEvidenceMode::Deep => {
-            select_budgeted_evidence(family.evidence.clone(), options.token_budget)
+            select_budgeted_evidence(family, options)
         }
     };
-    let estimated_tokens = evidence.iter().map(estimated_evidence_tokens).sum();
 
     SelectedFamilyEvidence {
         mode: options.evidence_mode,
         token_budget: options.token_budget,
-        estimated_tokens,
+        estimated_tokens: selected.estimated_tokens,
+        selection_strategy: "greedy_marginal_coverage_v1",
+        budget_satisfied: selected.budget_satisfied,
+        covered_claims: selected.covered_claims,
+        missing_claims: selected.missing_claims,
         source_snippets_included: false,
-        evidence,
+        evidence: selected.evidence,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BudgetedEvidenceSelection {
+    estimated_tokens: usize,
+    budget_satisfied: bool,
+    covered_claims: Vec<String>,
+    missing_claims: Vec<String>,
+    evidence: Vec<SelectedFamilyEvidenceRecord>,
+}
+
+impl BudgetedEvidenceSelection {
+    fn empty() -> Self {
+        Self {
+            estimated_tokens: 0,
+            budget_satisfied: true,
+            covered_claims: Vec::new(),
+            missing_claims: Vec::new(),
+            evidence: Vec::new(),
+        }
     }
 }
 
 fn select_budgeted_evidence(
-    evidence: Vec<IndexedFamilyEvidenceRecord>,
-    token_budget: Option<usize>,
-) -> Vec<IndexedFamilyEvidenceRecord> {
-    let Some(token_budget) = token_budget else {
-        return evidence;
-    };
-    if evidence.is_empty() {
-        return Vec::new();
+    family: &FamilyDetailReport,
+    options: FamilyOutputOptions,
+) -> BudgetedEvidenceSelection {
+    if family.evidence.is_empty() {
+        return BudgetedEvidenceSelection::empty();
     }
+    let candidates = family
+        .evidence
+        .iter()
+        .enumerate()
+        .map(|(index, evidence)| EvidenceSelectionCandidate {
+            stable_id: evidence.evidence_id.clone(),
+            estimated_tokens: estimated_evidence_tokens(evidence),
+            coverage: evidence_coverage(family, index, evidence),
+            source_order: index,
+        })
+        .collect::<Vec<_>>();
+    let required_coverage = required_evidence_coverage(family, options);
+    let selected =
+        select_representative_evidence(&candidates, &required_coverage, options.token_budget);
+    let coverage_by_id = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.stable_id.as_str(),
+                coverage_strings(&candidate.coverage),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let evidence_by_id = family
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.evidence_id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
 
-    let mut selected = Vec::new();
-    let mut used = 0usize;
-    for item in evidence {
-        let cost = estimated_evidence_tokens(&item);
-        if selected.is_empty() || used.saturating_add(cost) <= token_budget {
-            used = used.saturating_add(cost);
-            selected.push(item);
-        }
+    let evidence = selected
+        .selected_ids
+        .iter()
+        .filter_map(|evidence_id| {
+            evidence_by_id
+                .get(evidence_id.as_str())
+                .map(|evidence| SelectedFamilyEvidenceRecord {
+                    record: (*evidence).clone(),
+                    estimated_tokens: estimated_evidence_tokens(evidence),
+                    covered_claims: coverage_by_id
+                        .get(evidence_id.as_str())
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+        })
+        .collect::<Vec<_>>();
+
+    BudgetedEvidenceSelection {
+        estimated_tokens: selected.estimated_tokens,
+        budget_satisfied: selected.budget_satisfied,
+        covered_claims: coverage_strings(&selected.covered),
+        missing_claims: coverage_strings(&selected.missing),
+        evidence,
     }
-    selected
 }
 
 fn estimated_evidence_tokens(evidence: &IndexedFamilyEvidenceRecord) -> usize {
@@ -499,6 +581,43 @@ fn estimated_evidence_tokens(evidence: &IndexedFamilyEvidenceRecord) -> usize {
         + evidence.note.len()
         + 32;
     bytes.div_ceil(4).max(1)
+}
+
+fn required_evidence_coverage(
+    family: &FamilyDetailReport,
+    options: FamilyOutputOptions,
+) -> BTreeSet<EvidenceCoverage> {
+    let mut required = BTreeSet::new();
+    if !family.evidence.is_empty() {
+        required.insert(EvidenceCoverage::Canonical);
+        required.insert(EvidenceCoverage::Support);
+    }
+    if !family.variation_slots.is_empty() && options.include_variations {
+        required.insert(EvidenceCoverage::Variation);
+    }
+    if options.include_exceptions {
+        required.insert(EvidenceCoverage::Exception);
+    }
+    required
+}
+
+fn evidence_coverage(
+    _family: &FamilyDetailReport,
+    index: usize,
+    _evidence: &IndexedFamilyEvidenceRecord,
+) -> BTreeSet<EvidenceCoverage> {
+    let mut coverage = BTreeSet::from([EvidenceCoverage::Support]);
+    if index == 0 {
+        coverage.insert(EvidenceCoverage::Canonical);
+    }
+    coverage
+}
+
+fn coverage_strings(coverage: &BTreeSet<EvidenceCoverage>) -> Vec<String> {
+    coverage
+        .iter()
+        .map(|coverage| coverage.as_str().to_string())
+        .collect()
 }
 
 pub fn assess_semantic_fact_readiness(
@@ -1311,35 +1430,74 @@ mod tests {
         assert_eq!(selected.mode, FamilyEvidenceMode::Compact);
         assert!(selected.evidence.is_empty());
         assert_eq!(selected.estimated_tokens, 0);
+        assert!(selected.covered_claims.is_empty());
+        assert!(selected.missing_claims.is_empty());
+        assert!(selected.budget_satisfied);
         assert!(!selected.source_snippets_included);
     }
 
     #[test]
-    fn family_evidence_selection_preserves_store_order_and_respects_budget() {
+    fn family_evidence_selection_uses_greedy_claim_coverage() {
         let first = family_evidence("src/routes/b.ts", 0, "first stored evidence");
-        let second = family_evidence("src/routes/a.ts", 1, "second stored evidence");
-        let detail = family_detail_with_evidence(vec![first.clone(), second.clone()]);
+        let second = family_evidence("src/routes/a.ts", 1, "VARIATION: alternate handler shape");
+        let mut detail = family_detail_with_evidence(vec![first.clone(), second.clone()]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:handler".to_string(),
+            description: "handler shape differs".to_string(),
+        }];
 
-        let all = select_family_evidence(
+        let selected = select_family_evidence(
             &detail,
             FamilyOutputOptions {
                 evidence_mode: FamilyEvidenceMode::Evidence,
                 token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
             },
         );
-        assert_eq!(all.evidence, vec![first.clone(), second]);
-        assert!(!all.source_snippets_included);
-        assert!(all.estimated_tokens > 0);
+        assert_eq!(
+            selected
+                .evidence
+                .iter()
+                .map(|evidence| evidence.record.evidence_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.evidence_id.as_str()]
+        );
+        assert_eq!(selected.covered_claims, vec!["canonical", "support"]);
+        assert_eq!(selected.missing_claims, vec!["variation"]);
+        assert!(selected.budget_satisfied);
+        assert!(!selected.source_snippets_included);
+        assert!(selected.estimated_tokens > 0);
+        assert!(!selected.evidence[0]
+            .covered_claims
+            .contains(&"variation".to_string()));
+    }
+
+    #[test]
+    fn family_evidence_selection_reports_missing_claim_coverage_and_tiny_budget() {
+        let first = family_evidence("src/routes/b.ts", 0, "first stored evidence");
+        let mut detail = family_detail_with_evidence(vec![first.clone()]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:handler".to_string(),
+            description: "handler shape differs".to_string(),
+        }];
 
         let tiny_budget = select_family_evidence(
             &detail,
             FamilyOutputOptions {
                 evidence_mode: FamilyEvidenceMode::Evidence,
                 token_budget: Some(1),
+                include_variations: true,
+                include_exceptions: true,
             },
         );
-        assert_eq!(tiny_budget.evidence, vec![first]);
+        assert_eq!(tiny_budget.evidence[0].record, first);
+        assert_eq!(tiny_budget.covered_claims, vec!["canonical", "support"]);
+        assert_eq!(tiny_budget.missing_claims, vec!["variation", "exception"]);
         assert!(tiny_budget.estimated_tokens > 1);
+        assert!(!tiny_budget.budget_satisfied);
         assert!(!tiny_budget.source_snippets_included);
     }
 
@@ -1356,11 +1514,17 @@ mod tests {
             FamilyOutputOptions {
                 evidence_mode: FamilyEvidenceMode::Deep,
                 token_budget: None,
+                include_variations: false,
+                include_exceptions: false,
             },
         );
 
         assert_eq!(selected.mode, FamilyEvidenceMode::Deep);
         assert_eq!(selected.evidence.len(), 1);
+        assert_eq!(
+            selected.evidence[0].covered_claims,
+            vec!["canonical", "support"]
+        );
         assert!(!selected.source_snippets_included);
     }
 

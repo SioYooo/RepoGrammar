@@ -129,7 +129,11 @@ The current implementation covers the first structural slice only:
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored
   repo-relative evidence metadata under an optional token budget and explicitly
-  report that source snippets are not included;
+  report that source snippets are not included. The selector now uses
+  deterministic greedy marginal coverage over conservative claim labels:
+  current stored evidence can cover `canonical` and `support`, while requested
+  variation or exception coverage is reported as missing until storage/model
+  records explicitly link evidence to those roles;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for derived and future provider-backed strong facts.
 
@@ -155,8 +159,8 @@ support.
 This slice does not implement Pyrefly, Pyright, provider cache keys, usage
 propagation, call hierarchy recovery, Tree-sitter fallback, runtime
 observation, broad Python family mining, source snippet retrieval, or
-claim-coverage-aware medoid/variation/exception evidence ranking. Persisted
-project configuration facts are structural context only and remain blocked from
+schema-backed medoid/variation/exception evidence links. Persisted project
+configuration facts are structural context only and remain blocked from
 family-claim input.
 
 ### Layer 0: Authoritative Frontend
@@ -523,11 +527,12 @@ per estimated token cost, with these constraints:
 
 Current selector status: CLI and MCP share a deterministic metadata selector
 over stored `IndexedFamilyEvidenceRecord`s. `compact` returns no evidence
-records. `evidence` and `deep` preserve storage order and include as many
-metadata records as fit the token budget, always keeping the first record when
-evidence exists. Because family evidence records do not yet carry covered-claim,
-medoid, variation, or exception roles, this is not the final coverage-aware
-selector described above.
+records. `evidence` and `deep` run a greedy marginal-coverage selector over
+conservative metadata candidates and keep source snippets disabled. The current
+record model can cover only `canonical` and `support` claims; when callers ask
+for variation or exception coverage, the selector reports those labels in
+`missing_claims` instead of inferring them from free-text notes. Schema-backed
+medoid, variation-slot, and exception evidence links remain future work.
 
 ## Rejected v0.1 Routes
 

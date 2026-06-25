@@ -630,6 +630,26 @@ fn family_lookup_human(
                     snippets
                 )
             };
+            output.push_str(&format!(
+                "evidence_selection: {}\n",
+                selected_evidence.selection_strategy
+            ));
+            output.push_str(&format!(
+                "budget_satisfied: {}\n",
+                selected_evidence.budget_satisfied
+            ));
+            if !selected_evidence.covered_claims.is_empty() {
+                output.push_str(&format!(
+                    "covered_claims: {}\n",
+                    selected_evidence.covered_claims.join(",")
+                ));
+            }
+            if !selected_evidence.missing_claims.is_empty() {
+                output.push_str(&format!(
+                    "missing_claims: {}\n",
+                    selected_evidence.missing_claims.join(",")
+                ));
+            }
             if command == "check" {
                 output.push_str("advisory_status: UNKNOWN\n");
                 output.push_str("reason: runtime equivalence remains unproven\n");
@@ -641,13 +661,16 @@ fn family_lookup_human(
                 ));
             }
             for evidence in &selected_evidence.evidence {
+                let record = &evidence.record;
                 output.push_str(&format!(
-                    "evidence: {}\tpath: {}\trange: {}-{}\tcontent_hash: {}\n",
-                    evidence.evidence_id,
-                    evidence.path,
-                    evidence.start_byte,
-                    evidence.end_byte,
-                    evidence.content_hash.as_str()
+                    "evidence: {}\tpath: {}\trange: {}-{}\tcontent_hash: {}\testimated_tokens: {}\tcovered_claims: {}\n",
+                    record.evidence_id,
+                    record.path,
+                    record.start_byte,
+                    record.end_byte,
+                    record.content_hash.as_str(),
+                    evidence.estimated_tokens,
+                    evidence.covered_claims.join(",")
                 ));
             }
             for slot in &family.variation_slots {
@@ -737,6 +760,10 @@ fn family_detail_json(
             "mode": selected_evidence.mode.as_str(),
             "token_budget": selected_evidence.token_budget,
             "estimated_evidence_tokens": selected_evidence.estimated_tokens,
+            "selection_strategy": selected_evidence.selection_strategy,
+            "budget_satisfied": selected_evidence.budget_satisfied,
+            "covered_claims": selected_evidence.covered_claims,
+            "missing_claims": selected_evidence.missing_claims,
             "source_snippets_included": selected_evidence.source_snippets_included,
         },
         "members": family.members.iter().map(|member| {
@@ -754,15 +781,18 @@ fn family_detail_json(
             })
         }).collect::<Vec<_>>(),
         "evidence": selected_evidence.evidence.iter().map(|evidence| {
+            let record = &evidence.record;
             json!({
-                "evidence_id": evidence.evidence_id,
-                "family_id": evidence.family_id,
-                "code_unit_id": evidence.code_unit_id,
-                "path": evidence.path,
-                "content_hash": evidence.content_hash.as_str(),
-                "start_byte": evidence.start_byte,
-                "end_byte": evidence.end_byte,
-                "note": evidence.note,
+                "evidence_id": record.evidence_id,
+                "family_id": record.family_id,
+                "code_unit_id": record.code_unit_id,
+                "path": record.path,
+                "content_hash": record.content_hash.as_str(),
+                "start_byte": record.start_byte,
+                "end_byte": record.end_byte,
+                "note": record.note,
+                "estimated_tokens": evidence.estimated_tokens,
+                "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
         "unknowns": unknowns_json(&family.unknowns),
@@ -1194,6 +1224,8 @@ struct QueryOptions {
     evidence_mode: FamilyEvidenceMode,
     mode_explicit: bool,
     token_budget: Option<usize>,
+    include_variations: bool,
+    include_exceptions: bool,
 }
 
 impl QueryOptions {
@@ -1201,6 +1233,8 @@ impl QueryOptions {
         FamilyOutputOptions {
             evidence_mode: self.evidence_mode,
             token_budget: self.token_budget,
+            include_variations: self.include_variations,
+            include_exceptions: self.include_exceptions,
         }
     }
 }
@@ -1473,7 +1507,14 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 options.json = true;
                 index += 1;
             }
-            "--include-variations" | "--include-exceptions" => index += 1,
+            "--include-variations" => {
+                options.include_variations = true;
+                index += 1;
+            }
+            "--include-exceptions" => {
+                options.include_exceptions = true;
+                index += 1;
+            }
             value if !value.starts_with('-') => {
                 if options.target.is_none() {
                     options.target = Some(value.to_string());
@@ -2044,7 +2085,7 @@ mod tests {
     use crate::ports::index_store::STORAGE_SCHEMA_VERSION;
     use crate::test_support::TempWorkspace;
     use rusqlite::Connection;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::fs;
     use std::process::Command;
 
@@ -2854,14 +2895,68 @@ mod tests {
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
         assert_eq!(value["output"]["mode"], "evidence");
         assert_eq!(value["output"]["token_budget"], 1);
+        assert_eq!(
+            value["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
+        assert_eq!(
+            value["output"]["covered_claims"],
+            json!(["canonical", "support"])
+        );
+        assert_eq!(value["output"]["missing_claims"], json!([]));
+        assert_eq!(value["output"]["budget_satisfied"], false);
         assert_eq!(value["output"]["source_snippets_included"], false);
         assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(
+            value["evidence"][0]["covered_claims"],
+            json!(["canonical", "support"])
+        );
         assert!(
             value["output"]["estimated_evidence_tokens"]
                 .as_u64()
                 .expect("estimated tokens")
                 > 1
         );
+    }
+
+    #[test]
+    fn family_query_include_flags_report_uncovered_variations_and_exceptions() {
+        let workspace = TempWorkspace::new("cli-family-query-include-coverage");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--mode",
+                "evidence",
+                "--include-variations",
+                "--include-exceptions",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+        assert_eq!(
+            value["output"]["covered_claims"],
+            json!(["canonical", "support"])
+        );
+        assert_eq!(
+            value["output"]["missing_claims"],
+            json!(["variation", "exception"])
+        );
+        assert_eq!(
+            value["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]
