@@ -33,8 +33,9 @@ allowed.
   unsupported module extensions, default dependency/build/generated/state-dir
   exclusions, Git-ignored files when Git is available, safe Git-unavailable
   warnings, the inclusive 1 MB size boundary, oversized skips, strict SHA-256
-  hash generation, deterministic ordering, symlink escape skips, invalid roots,
-  and absence of source snippets or absolute paths in reports.
+  hash generation, bounded max-plus-one content reads for hashing,
+  deterministic ordering, symlink escape skips, invalid roots, and absence of
+  source snippets or absolute paths in reports.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, activation pointer validation, preservation of the
@@ -133,5 +134,6 @@ for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
-and
-`repo-guard` sync/path/diff/ADR-0008 required document logic.
+bounded filesystem source reads for discovery hashing and source-store
+hash-checked reads, and `repo-guard` sync/path/diff/ADR-0008 required document
+logic.

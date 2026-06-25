@@ -1,5 +1,6 @@
 //! Filesystem-backed repository file discovery.
 
+use super::bounded_read::{read_file_bounded, BoundedReadError};
 use crate::adapters::languages::typescript::TypeScriptLanguageAdapter;
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
@@ -227,9 +228,16 @@ impl DiscoveryState {
                 return;
             }
         };
-        let bytes = match fs::read(canonical) {
+        let bytes = match read_file_bounded(&canonical, self.max_file_bytes) {
             Ok(bytes) => bytes,
-            Err(_) => {
+            Err(BoundedReadError::TooLarge) => {
+                self.skipped.push(SkippedPath {
+                    path: relative_path,
+                    reason: SkippedReason::TooLarge,
+                });
+                return;
+            }
+            Err(BoundedReadError::Unreadable) => {
                 self.skipped.push(SkippedPath {
                     path: relative_path,
                     reason: SkippedReason::Unreadable,
@@ -237,14 +245,7 @@ impl DiscoveryState {
                 return;
             }
         };
-        let actual_size_bytes = bytes.len() as u64;
-        if actual_size_bytes > self.max_file_bytes {
-            self.skipped.push(SkippedPath {
-                path: relative_path,
-                reason: SkippedReason::TooLarge,
-            });
-            return;
-        }
+        let actual_size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
 
         let content_hash = ContentHash::new(format!("sha256:{}", sha256_hex(&bytes)))
             .expect("sha256_hex returns strict sha256:<64 hex chars> payload");

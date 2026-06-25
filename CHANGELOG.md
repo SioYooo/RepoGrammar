@@ -117,6 +117,8 @@
 
 - Tightened provenance and semantic-worker evidence docs around strict
   `sha256:<64 hex>` content hashes.
+- Bound discovery hashing and source-store reads to `max_file_bytes + 1` bytes
+  so oversized files are classified without allocating the full file.
 - Documented JSON-parsed semantic-worker protocol fixture tests without
   claiming a running TypeScript worker or runtime indexing integration.
 - Documented request-side semantic-worker fixture validation without claiming a

@@ -1,5 +1,6 @@
 //! Filesystem-backed transient source reads for indexing.
 
+use super::bounded_read::{read_file_bounded, BoundedReadError};
 use crate::adapters::filesystem::discovery::sha256_hex;
 use crate::core::model::ContentHash;
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
@@ -67,15 +68,21 @@ fn read_repository_source(request: SourceReadRequest) -> Result<SourceText, Sour
         )));
     }
 
-    let bytes = fs::read(&canonical_source).map_err(|_| {
-        SourceStoreError::Unavailable(format!("failed to read source: {}", request.path))
-    })?;
-    if bytes.len() as u64 > request.max_file_bytes {
-        return Err(SourceStoreError::TooLarge(format!(
-            "source exceeds configured size limit: {}",
-            request.path
-        )));
-    }
+    let bytes = match read_file_bounded(&canonical_source, request.max_file_bytes) {
+        Ok(bytes) => bytes,
+        Err(BoundedReadError::TooLarge) => {
+            return Err(SourceStoreError::TooLarge(format!(
+                "source exceeds configured size limit: {}",
+                request.path
+            )));
+        }
+        Err(BoundedReadError::Unreadable) => {
+            return Err(SourceStoreError::Unavailable(format!(
+                "failed to read source: {}",
+                request.path
+            )));
+        }
+    };
     let content_hash = ContentHash::new(format!("sha256:{}", sha256_hex(&bytes)))
         .expect("sha256_hex returns strict sha256:<64 hex chars> payload");
     if content_hash != request.expected_content_hash {
@@ -163,6 +170,46 @@ mod tests {
 
         assert_eq!(result.path, "a.ts");
         assert_eq!(result.text, "export const a = 1;\n");
+    }
+
+    #[test]
+    fn size_limit_is_inclusive_and_rejects_limit_plus_one() {
+        let workspace = TempWorkspace::new("source-store-size-boundary");
+        let exact = vec![b'x'; 8];
+        let oversized = vec![b'x'; 9];
+        fs::write(workspace.path().join("exact.ts"), &exact).expect("write exact");
+        fs::write(workspace.path().join("oversized.ts"), &oversized).expect("write oversized");
+
+        let mut exact_request = request(&workspace, "exact.ts", &exact);
+        exact_request.max_file_bytes = 8;
+        let exact_result = FilesystemSourceStore
+            .read_source(exact_request)
+            .expect("exact limit must read");
+        assert_eq!(exact_result.text.len(), 8);
+
+        let mut oversized_request = request(&workspace, "oversized.ts", &oversized);
+        oversized_request.max_file_bytes = 8;
+        let error = FilesystemSourceStore
+            .read_source(oversized_request)
+            .expect_err("limit plus one must fail");
+        assert!(matches!(error, SourceStoreError::TooLarge(_)));
+    }
+
+    #[test]
+    fn oversized_source_is_too_large_before_hash_or_utf8_validation() {
+        let workspace = TempWorkspace::new("source-store-oversized-first");
+        let oversized_non_utf8 = vec![0xff; 9];
+        fs::write(workspace.path().join("oversized.ts"), &oversized_non_utf8)
+            .expect("write oversized source");
+
+        let mut request = request(&workspace, "oversized.ts", b"different");
+        request.max_file_bytes = 8;
+
+        let error = FilesystemSourceStore
+            .read_source(request)
+            .expect_err("oversized source must fail before content validation");
+
+        assert!(matches!(error, SourceStoreError::TooLarge(_)));
     }
 
     #[test]

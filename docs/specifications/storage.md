@@ -180,6 +180,11 @@ generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
 families, and pattern-family evidence are not stored by `index`/`sync`.
+File metadata size checks are an optimization, not the safety boundary:
+discovery hashing and transient source-store reads must open regular files and
+read at most `max_file_bytes + 1` bytes, accepting exactly `max_file_bytes` and
+classifying observed limit-plus-one content as oversized without allocating the
+full file.
 Semantic-worker-produced facts are stored only when an explicit worker is
 configured and the facts pass same-generation evidence validation.
 The active indexed-file and code-unit rows are exposed only through the limited
