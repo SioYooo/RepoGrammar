@@ -1956,6 +1956,42 @@ mod tests {
     }
 
     #[test]
+    fn exact_pydantic_parser_anchors_derive_family_support() {
+        let first = indexed_python_unit("schemas.py", "pydantic_model", 0);
+        let second = indexed_python_unit("schemas.py", "pydantic_model", 1);
+        let third = indexed_python_unit("schemas.py", "pydantic_model", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = units
+            .iter()
+            .map(|unit| {
+                parser_structural_anchor_fact(unit, SemanticFactKind::Type, "pydantic.BaseModel")
+            })
+            .collect::<Vec<_>>();
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pydantic.model"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pydantic support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.BaseModel")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].framework_role, "framework:pydantic.model");
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
     fn python_parser_anchor_derivation_rejects_substrings_and_non_claim_inputs() {
         let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
         let second = indexed_python_unit("app/b.py", "fastapi_route", 1);

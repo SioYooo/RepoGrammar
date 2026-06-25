@@ -1177,6 +1177,13 @@ mod tests {
                 evidence_path: "test_api.py",
                 member_role: "framework:pytest.test",
             },
+            ExactAnchorCase {
+                fixture: "pydantic-basic",
+                family_id: "family:python:pydantic_model:framework_pydantic_model",
+                support_target: "pydantic.BaseModel",
+                evidence_path: "schemas.py",
+                member_role: "framework:pydantic.model",
+            },
         ];
 
         for case in CASES {
@@ -1221,7 +1228,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(derived_support_facts.len(), 3);
             assert!(derived_support_facts.iter().all(|fact| {
-                matches!(fact.kind.as_str(), "RESOLVED_CALL" | "SYMBOL")
+                matches!(fact.kind.as_str(), "RESOLVED_CALL" | "SYMBOL" | "TYPE")
                     && fact.certainty == "DATAFLOW_DERIVED"
                     && fact.target.as_deref() == Some(case.support_target)
                     && fact.path == case.evidence_path

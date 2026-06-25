@@ -54,8 +54,8 @@ only, plus a narrow bounded exact-anchor derivation step that synthesizes
 separate `DATAFLOW_DERIVED` support facts when validated parser anchors
 exact-match the canonical Python framework compatibility table for a unit with
 one framework role. Product smoke tests now prove low-support and dynamic cases
-remain `UNKNOWN`, while three-member FastAPI and pytest fixtures can produce
-families without a semantic worker through those derived facts. It also
+remain `UNKNOWN`, while three-member FastAPI, pytest, and Pydantic fixtures can
+produce families without a semantic worker through those derived facts. It also
 persists root `pyproject.toml` only as structural project-config context or
 typed config `UNKNOWN`. Subsequent slices should add selective Pyrefly provider
 queries for plausible family candidates, Pyright cross-checks only for
