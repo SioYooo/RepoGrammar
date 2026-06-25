@@ -3,6 +3,13 @@
 use crate::core::model::ContentHash;
 use crate::ports::index_store::GenerationHandle;
 
+pub const FAMILY_EVIDENCE_COVERED_CLAIMS: &[&str] =
+    &["canonical", "support", "variation", "exception"];
+
+pub fn family_evidence_covered_claim_is_supported(value: &str) -> bool {
+    FAMILY_EVIDENCE_COVERED_CLAIMS.contains(&value)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedFamilyRecord {
     pub family_id: String,
@@ -28,6 +35,7 @@ pub struct IndexedFamilyEvidenceRecord {
     pub evidence_id: String,
     pub family_id: String,
     pub code_unit_id: String,
+    pub covered_claims: Vec<String>,
     pub path: String,
     pub content_hash: ContentHash,
     pub start_byte: usize,

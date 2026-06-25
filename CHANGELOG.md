@@ -59,6 +59,10 @@
   output now reports the selector strategy, rough budget satisfaction, covered
   claim labels, and missing requested variation/exception coverage instead of
   preserving raw storage order or inferring unsupported coverage from notes.
+- Schema-backed family evidence coverage labels. The pre-release storage schema
+  v5 now persists validated `covered_claims` labels for family evidence, and
+  query selection consumes those labels rather than inferring claim coverage
+  from notes or storage order.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

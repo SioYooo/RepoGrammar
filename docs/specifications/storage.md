@@ -301,9 +301,10 @@ least:
 Database source paths must be repository-relative. Manifest and telemetry may
 store a hash of the canonical repository root, but telemetry must not upload the
 raw path. Every family and evidence row must carry generation id; every evidence
-row must carry file content hash and source range. Full repository revision
-metadata for family evidence remains deferred until repository/worktree
-freshness metadata is implemented.
+row must carry file content hash, source range, and schema-backed
+`covered_claims` labels from the allowlist `canonical`, `support`, `variation`,
+and `exception`. Full repository revision metadata for family evidence remains
+deferred until repository/worktree freshness metadata is implemented.
 Repository-relative storage paths are lexical, slash-separated, non-empty
 paths. They must reject absolute paths, Windows drive prefixes, backslashes,
 URI-like text, control characters, `.`/`..` traversal segments, and empty path
@@ -344,9 +345,10 @@ derived in the application layer. The storage ports also expose semantic-fact
 and family evidence writers for frontend and claim-builder integration. These
 writers accept only building generations and require evidence to match an
 indexed code unit's repository-relative path, content hash, and byte range in
-the same generation. Family evidence rows must be linked to a family; semantic
-fact evidence rows must remain unlinked to a family. Generation validation must
-reject malformed semantic or family evidence rows before activation. The storage
+the same generation. Family evidence rows must be linked to a family and must
+declare covered family-claim labels explicitly; semantic fact evidence rows must
+remain unlinked to a family. Generation validation must reject malformed
+semantic or family evidence rows before activation. The storage
 adapter enforces foreign keys, repo-relative paths at the Rust port boundary,
 matching file/code-unit content hashes, code-unit byte ranges bounded by indexed
 file size, IR node references to same-generation code units, IR edge references

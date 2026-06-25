@@ -346,12 +346,14 @@ adds budgeted repo-relative evidence metadata: evidence id, family id,
 code-unit id, path, content hash, byte range, note, estimated token cost, and
 covered claim labels. `--token-budget <n>` validates a positive integer and
 implies `--mode evidence` unless an explicit mode is provided. Evidence mode
-uses deterministic greedy marginal coverage per estimated token cost. Current
-stored family evidence can honestly cover only `canonical` and `support`
-claims; `--include-variations` and `--include-exceptions` request those
-coverage classes, but until evidence records are explicitly linked to
-variation slots or exceptions the output must report them in `missing_claims`
-rather than inferring coverage from note text. `--mode deep` is accepted as an
+uses deterministic greedy marginal coverage per estimated token cost. Stored
+family evidence carries schema-backed `covered_claims` labels from the
+allowlist `canonical`, `support`, `variation`, and `exception`; the selector
+must consume those labels rather than inferring coverage from note text or
+storage order. The current family builder emits only `canonical` and `support`
+labels, so `--include-variations` and `--include-exceptions` must report missing
+coverage until later builders explicitly link evidence to variation slots or
+exceptions. `--mode deep` is accepted as an
 explicit detail request, but until a safe source-span rendering contract exists
 it remains metadata-only and must report `source_snippets_included: false`.
 None of these modes may include absolute paths or source snippets. `check` is

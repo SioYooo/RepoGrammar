@@ -228,7 +228,8 @@ class/reason token validation, internal semantic-fact freshness/readiness gating
 for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
-read-only MCP `repogrammar_context` schema/JSON-RPC serving,
+read-only MCP `repogrammar_context` schema/JSON-RPC serving, schema-backed
+family-evidence `covered_claims` write/read validation and query selection,
 installer live-write gating through native MCP CLIs and managed receipts,
 transitional TS/JS release fixture smoke coverage for product CLI JSON paths,
 dependency-free TypeScript worker unavailable-stub behavior,

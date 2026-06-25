@@ -4,8 +4,9 @@ use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKin
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    ActiveFamilies, ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord,
-    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily, FamilyStore,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+    IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
@@ -352,12 +353,45 @@ fn validate_family_evidence(
     validate_family_text_field("family evidence id", &evidence.evidence_id)?;
     validate_family_text_field("family evidence family id", &evidence.family_id)?;
     validate_family_text_field("family evidence code unit id", &evidence.code_unit_id)?;
+    validate_family_evidence_covered_claims(&evidence.covered_claims)?;
     validate_repo_relative_path(&evidence.path)?;
     validate_family_text_field("family evidence note", &evidence.note)?;
     if evidence.start_byte > evidence.end_byte {
         return Err(RepoGrammarError::InvalidInput(
             "family evidence source range start must not exceed end".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_family_evidence_covered_claims(claims: &[String]) -> Result<(), RepoGrammarError> {
+    if claims.is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "family evidence covered claims must not be empty".to_string(),
+        ));
+    }
+    let mut seen = Vec::new();
+    for claim in claims {
+        if claim.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(
+                "family evidence covered claims must not contain empty values".to_string(),
+            ));
+        }
+        validate_family_text_field("family evidence covered claim", claim)?;
+        if !family_evidence_covered_claim_is_supported(claim) {
+            return Err(RepoGrammarError::InvalidInput(
+                "family evidence covered claim is unsupported".to_string(),
+            ));
+        }
+        if seen
+            .iter()
+            .any(|seen: &&String| seen.as_str() == claim.as_str())
+        {
+            return Err(RepoGrammarError::InvalidInput(
+                "family evidence covered claims must be unique".to_string(),
+            ));
+        }
+        seen.push(claim);
     }
     Ok(())
 }
@@ -710,6 +744,7 @@ mod tests {
             evidence_id: "evidence:family:routes:read:src/a.ts".to_string(),
             family_id: family().family_id,
             code_unit_id: "unit:src/a.ts#module:0-1".to_string(),
+            covered_claims: vec!["canonical".to_string(), "support".to_string()],
             path: "src/a.ts".to_string(),
             content_hash: file("src/a.ts").content_hash,
             start_byte: 0,
@@ -1045,6 +1080,31 @@ mod tests {
             .expect_err("URI note")
             .to_string()
             .contains("unsupported content"));
+
+        let mut empty_claims = family_evidence();
+        empty_claims.covered_claims = Vec::new();
+        assert!(record_family_evidence(&store, &generation, &empty_claims)
+            .expect_err("empty covered claims")
+            .to_string()
+            .contains("covered claims"));
+
+        let mut unsupported_claim = family_evidence();
+        unsupported_claim.covered_claims = vec!["canonical".to_string(), "runtime".to_string()];
+        assert!(
+            record_family_evidence(&store, &generation, &unsupported_claim)
+                .expect_err("unsupported covered claim")
+                .to_string()
+                .contains("unsupported")
+        );
+
+        let mut duplicate_claim = family_evidence();
+        duplicate_claim.covered_claims = vec!["support".to_string(), "support".to_string()];
+        assert!(
+            record_family_evidence(&store, &generation, &duplicate_claim)
+                .expect_err("duplicate covered claim")
+                .to_string()
+                .contains("unique")
+        );
 
         let mut reversed = family_evidence();
         reversed.start_byte = 2;

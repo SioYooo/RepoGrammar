@@ -528,11 +528,13 @@ per estimated token cost, with these constraints:
 Current selector status: CLI and MCP share a deterministic metadata selector
 over stored `IndexedFamilyEvidenceRecord`s. `compact` returns no evidence
 records. `evidence` and `deep` run a greedy marginal-coverage selector over
-conservative metadata candidates and keep source snippets disabled. The current
-record model can cover only `canonical` and `support` claims; when callers ask
-for variation or exception coverage, the selector reports those labels in
-`missing_claims` instead of inferring them from free-text notes. Schema-backed
-medoid, variation-slot, and exception evidence links remain future work.
+conservative metadata candidates and keep source snippets disabled. Evidence
+records carry schema-backed `covered_claims` labels from the allowlist
+`canonical`, `support`, `variation`, and `exception`; the selector consumes
+those labels and never infers coverage from free-text notes. The current builder
+emits only `canonical` and `support`, so requested variation or exception
+coverage remains in `missing_claims` until explicit medoid, variation-slot, and
+exception evidence links exist.
 
 ## Rejected v0.1 Routes
 

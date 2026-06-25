@@ -114,10 +114,13 @@ marginal coverage per estimated token cost; `deep` is accepted only as an
 explicit detail request and remains metadata-only until a safe source-span
 rendering contract exists. Output metadata includes the selection strategy,
 estimated evidence tokens, covered claim labels, missing claim labels, and
-whether the rough budget was satisfied. Current stored family evidence can
-cover only `canonical` and `support`; requested variation or exception coverage
-must be reported as missing until storage/model records explicitly link
-evidence to those claims. MCP responses must report whether source snippets
+whether the rough budget was satisfied. Stored family evidence carries
+schema-backed `covered_claims` labels from the allowlist `canonical`,
+`support`, `variation`, and `exception`; selectors must consume those labels
+rather than infer coverage from notes or record order. The current family
+builder emits only `canonical` and `support`, so requested variation or
+exception coverage must be reported as missing until later builders explicitly
+link evidence to those claims. MCP responses must report whether source snippets
 were included; the current implementation always reports
 `source_snippets_included: false`.
 

@@ -603,14 +603,20 @@ fn required_evidence_coverage(
 
 fn evidence_coverage(
     _family: &FamilyDetailReport,
-    index: usize,
-    _evidence: &IndexedFamilyEvidenceRecord,
+    _index: usize,
+    evidence: &IndexedFamilyEvidenceRecord,
 ) -> BTreeSet<EvidenceCoverage> {
-    let mut coverage = BTreeSet::from([EvidenceCoverage::Support]);
-    if index == 0 {
-        coverage.insert(EvidenceCoverage::Canonical);
-    }
-    coverage
+    evidence
+        .covered_claims
+        .iter()
+        .filter_map(|claim| match claim.as_str() {
+            "canonical" => Some(EvidenceCoverage::Canonical),
+            "support" => Some(EvidenceCoverage::Support),
+            "variation" => Some(EvidenceCoverage::Variation),
+            "exception" => Some(EvidenceCoverage::Exception),
+            _ => None,
+        })
+        .collect()
 }
 
 fn coverage_strings(coverage: &BTreeSet<EvidenceCoverage>) -> Vec<String> {
@@ -964,6 +970,7 @@ mod tests {
                     evidence_id: "family-evidence:000000".to_string(),
                     family_id: "family:typescript:express_route:express".to_string(),
                     code_unit_id: "unit:src/routes/a.ts#express_route:0-20".to_string(),
+                    covered_claims: vec!["canonical".to_string(), "support".to_string()],
                     path: "src/routes/a.ts".to_string(),
                     content_hash: semantic_fact().content_hash,
                     start_byte: 0,
@@ -1081,6 +1088,11 @@ mod tests {
             evidence_id: format!("family-evidence:{index:06}"),
             family_id: "family:typescript:express_route:express".to_string(),
             code_unit_id: format!("unit:{path}#express_route:0-20"),
+            covered_claims: if index == 0 {
+                vec!["canonical".to_string(), "support".to_string()]
+            } else {
+                vec!["support".to_string()]
+            },
             path: path.to_string(),
             content_hash: semantic_fact().content_hash,
             start_byte: index,
@@ -1472,6 +1484,44 @@ mod tests {
         assert!(!selected.evidence[0]
             .covered_claims
             .contains(&"variation".to_string()));
+    }
+
+    #[test]
+    fn family_evidence_selection_uses_stored_claim_coverage_labels() {
+        let first = family_evidence("src/routes/b.ts", 0, "first stored evidence");
+        let mut second = family_evidence("src/routes/a.ts", 1, "alternate handler shape");
+        second.covered_claims = vec!["variation".to_string()];
+        let mut detail = family_detail_with_evidence(vec![first.clone(), second.clone()]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:handler".to_string(),
+            description: "handler shape differs".to_string(),
+        }];
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+            },
+        );
+
+        assert_eq!(
+            selected
+                .evidence
+                .iter()
+                .map(|evidence| evidence.record.evidence_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.evidence_id.as_str(), second.evidence_id.as_str()]
+        );
+        assert_eq!(
+            selected.covered_claims,
+            vec!["canonical", "support", "variation"]
+        );
+        assert!(selected.missing_claims.is_empty());
+        assert_eq!(selected.evidence[1].covered_claims, vec!["variation"]);
     }
 
     #[test]

@@ -6,8 +6,9 @@
 use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
-    ActiveFamilies, ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord,
-    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily, FamilyStore,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+    IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -852,6 +853,7 @@ fn record_family_evidence_sqlite(
     validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
     validate_index_text_field(&evidence.family_id, "family evidence family id")?;
     validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
+    validate_family_evidence_covered_claims(&evidence.covered_claims)?;
     validate_repo_relative_path(&evidence.path)?;
     validate_index_text_field(&evidence.note, "family evidence note")?;
     let connection = store.open_existing_generation(&generation.generation_id)?;
@@ -887,16 +889,18 @@ fn record_family_evidence_sqlite(
             "family evidence range must stay within code unit range",
         ));
     }
+    let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
     connection
         .execute(
             "INSERT INTO evidence \
-             (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 generation.generation_id,
                 evidence.evidence_id,
                 evidence.family_id,
                 evidence.code_unit_id,
+                covered_claims_json,
                 evidence.path,
                 evidence.content_hash.as_str(),
                 start_byte,
@@ -913,6 +917,39 @@ fn validate_family_classification(classification: &str) -> Result<(), IndexStore
         "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
         _ => Err(invalid_record("family classification is unsupported")),
     }
+}
+
+fn validate_family_evidence_covered_claims(claims: &[String]) -> Result<(), IndexStoreError> {
+    if claims.is_empty() {
+        return Err(invalid_record(
+            "family evidence covered claims must not be empty",
+        ));
+    }
+    let mut seen = Vec::new();
+    for claim in claims {
+        validate_index_text_field(claim, "family evidence covered claim")?;
+        if !family_evidence_covered_claim_is_supported(claim) {
+            return Err(invalid_record(
+                "family evidence covered claim is unsupported",
+            ));
+        }
+        if seen
+            .iter()
+            .any(|seen: &&String| seen.as_str() == claim.as_str())
+        {
+            return Err(invalid_record(
+                "family evidence covered claims must be unique",
+            ));
+        }
+        seen.push(claim);
+    }
+    Ok(())
+}
+
+fn family_evidence_covered_claims_json(claims: &[String]) -> Result<String, IndexStoreError> {
+    validate_family_evidence_covered_claims(claims)?;
+    serde_json::to_string(claims)
+        .map_err(|_| invalid_record("family evidence covered claims JSON is invalid"))
 }
 
 fn require_family_row(
@@ -1137,8 +1174,9 @@ fn query_family_evidence(
         .prepare(
             "SELECT evidence.evidence_id, evidence.family_id, evidence.code_unit_id, evidence.path, \
                     evidence.content_hash, evidence.start_byte, evidence.end_byte, evidence.note, \
-                    code_units.path, code_units.content_hash, code_units.start_byte, \
-                    code_units.end_byte, indexed_files.content_hash, indexed_files.size_bytes \
+                    evidence.covered_claims_json, code_units.path, code_units.content_hash, \
+                    code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
+                    indexed_files.size_bytes \
              FROM evidence \
              JOIN code_units \
                ON code_units.generation_id = evidence.generation_id \
@@ -1164,10 +1202,11 @@ fn query_family_evidence(
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, String>(9)?,
-                row.get::<_, i64>(10)?,
+                row.get::<_, String>(10)?,
                 row.get::<_, i64>(11)?,
-                row.get::<_, String>(12)?,
-                row.get::<_, i64>(13)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, String>(13)?,
+                row.get::<_, i64>(14)?,
             ))
         })
         .map_err(sql_unavailable)?;
@@ -1182,6 +1221,7 @@ fn query_family_evidence(
             start_byte,
             end_byte,
             note,
+            covered_claims_json,
             unit_path,
             unit_hash,
             unit_start_byte,
@@ -1202,6 +1242,7 @@ fn query_family_evidence(
         validate_stored_semantic_text_field("stored family evidence id", &evidence_id)?;
         validate_stored_semantic_text_field("stored family evidence family id", &row_family_id)?;
         validate_stored_semantic_text_field("stored family evidence note", &note)?;
+        let covered_claims = stored_family_evidence_covered_claims(&covered_claims_json)?;
         validate_stored_repo_relative_path(&path, "stored family evidence path")?;
         if path != unit_path {
             return Err(IndexStoreError::InvalidState(
@@ -1244,6 +1285,7 @@ fn query_family_evidence(
             evidence_id,
             family_id: row_family_id,
             code_unit_id,
+            covered_claims,
             path,
             content_hash: ContentHash::new(content_hash).map_err(|_| {
                 IndexStoreError::InvalidState(
@@ -1956,9 +1998,12 @@ fn family_evidence_violation_count(
             |row| row.get::<_, i64>(0),
         )
         .map_err(sql_unavailable)?;
+    let invalid_covered_claim_count =
+        family_evidence_covered_claims_violation_count(connection, generation_id)?;
     let total = row_violation_count
         .checked_add(missing_evidence_count)
         .and_then(|count| count.checked_add(invalid_classification_count))
+        .and_then(|count| count.checked_add(invalid_covered_claim_count))
         .ok_or_else(|| {
             IndexStoreError::InvalidState("family evidence violation count overflow".to_string())
         })?;
@@ -1967,6 +2012,30 @@ fn family_evidence_violation_count(
             "family evidence violation count is outside valid range".to_string(),
         )
     })
+}
+
+fn family_evidence_covered_claims_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<i64, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT covered_claims_json \
+             FROM evidence \
+             WHERE generation_id = ?1 AND family_id IS NOT NULL",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| row.get::<_, String>(0))
+        .map_err(sql_unavailable)?;
+    let mut count = 0i64;
+    for row in rows {
+        let covered_claims_json = row.map_err(sql_unavailable)?;
+        if stored_family_evidence_covered_claims(&covered_claims_json).is_err() {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn semantic_evidence_violation_count(
@@ -2274,6 +2343,40 @@ fn validate_stored_empty_object_payload(
     }
 }
 
+fn stored_family_evidence_covered_claims(
+    claims_json: &str,
+) -> Result<Vec<String>, IndexStoreError> {
+    let claims: Vec<String> = serde_json::from_str(claims_json).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "stored family evidence covered claims JSON is invalid".to_string(),
+        )
+    })?;
+    if claims.is_empty() {
+        return Err(IndexStoreError::InvalidState(
+            "stored family evidence covered claims are empty".to_string(),
+        ));
+    }
+    let mut seen = Vec::new();
+    for claim in &claims {
+        validate_stored_semantic_text_field("stored family evidence covered claim", claim)?;
+        if !family_evidence_covered_claim_is_supported(claim) {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence covered claim is unsupported".to_string(),
+            ));
+        }
+        if seen
+            .iter()
+            .any(|seen: &&String| seen.as_str() == claim.as_str())
+        {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence covered claims contain duplicates".to_string(),
+            ));
+        }
+        seen.push(claim);
+    }
+    Ok(claims)
+}
+
 fn validate_stored_semantic_text_field(
     label: &'static str,
     value: &str,
@@ -2463,6 +2566,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
             "evidence_id",
             "family_id",
             "code_unit_id",
+            "covered_claims_json",
             "path",
             "content_hash",
             "start_byte",
@@ -2586,6 +2690,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     evidence_id TEXT NOT NULL,
     family_id TEXT,
     code_unit_id TEXT,
+    covered_claims_json TEXT NOT NULL DEFAULT '[]' CHECK (covered_claims_json <> ''),
     path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     start_byte INTEGER NOT NULL CHECK (start_byte >= 0),
@@ -2702,6 +2807,7 @@ mod tests {
             evidence_id: format!("evidence:family:routes:read:{path}"),
             family_id: family().family_id,
             code_unit_id: code_unit(path).id,
+            covered_claims: vec!["canonical".to_string(), "support".to_string()],
             path: path.to_string(),
             content_hash: file(path).content_hash,
             start_byte: 0,
@@ -2887,6 +2993,49 @@ mod tests {
             .record_family_evidence(&generation, &missing_family)
             .expect_err("missing family");
         assert!(format!("{error:?}").contains("same generation"));
+
+        let mut unsupported_claim = family_evidence("src/a.ts");
+        unsupported_claim.covered_claims = vec!["canonical".to_string(), "runtime".to_string()];
+        let error = store
+            .record_family_evidence(&generation, &unsupported_claim)
+            .expect_err("unsupported covered claim");
+        assert!(format!("{error:?}").contains("covered claim"));
+    }
+
+    #[test]
+    fn generation_validation_rejects_malformed_family_evidence_covered_claims() {
+        let workspace = TempWorkspace::new("sqlite-family-evidence-coverage-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        store
+            .record_family_evidence(&generation, &family_evidence("src/a.ts"))
+            .expect("record family evidence");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open building generation");
+        connection
+            .execute(
+                "UPDATE evidence SET covered_claims_json = '[\"canonical\",\"runtime\"]' \
+                 WHERE generation_id = ?1 AND family_id = ?2",
+                params![generation.generation_id, family().family_id],
+            )
+            .expect("tamper family evidence coverage");
+
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("malformed family coverage must fail validation");
+
+        assert!(format!("{error:?}").contains("family evidence"));
     }
 
     #[test]
@@ -2960,6 +3109,29 @@ mod tests {
     }
 
     #[test]
+    fn list_active_families_validates_family_evidence_covered_claims() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-list-validates-evidence-claims");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+
+        connection
+            .execute(
+                "UPDATE evidence SET covered_claims_json = '[\"canonical\",\"runtime\"]' \
+                 WHERE generation_id = ?1 AND family_id = ?2",
+                params![generation.generation_id, family().family_id],
+            )
+            .expect("tamper family evidence coverage");
+
+        let error = store
+            .list_active_families()
+            .expect_err("tampered family evidence coverage is rejected by list");
+
+        assert!(format!("{error:?}").contains("family evidence"));
+    }
+
+    #[test]
     fn semantic_fact_evidence_must_not_be_family_bound() {
         let (_workspace, store, generation) =
             store_with_active_semantic_fact("sqlite-semantic-family-bound-evidence");
@@ -2985,7 +3157,10 @@ mod tests {
             .list_active_semantic_facts()
             .expect_err("family-bound semantic evidence is rejected");
 
-        assert!(format!("{error:?}").contains("semantic fact evidence"));
+        let error_text = format!("{error:?}");
+        assert!(
+            error_text.contains("semantic fact evidence") || error_text.contains("family evidence")
+        );
     }
 
     #[test]
@@ -4402,7 +4577,7 @@ mod tests {
             .execute_batch(
                 r#"
                 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
-                INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'weak', 'now');
+                INSERT INTO schema_migrations (version, name, applied_at) VALUES (5, 'weak', 'now');
                 CREATE TABLE index_generations (generation_id TEXT PRIMARY KEY, status TEXT, created_at TEXT, activated_at TEXT, repogrammar_version TEXT, repository_revision TEXT, worktree_hash TEXT);
                 INSERT INTO index_generations (generation_id, status, created_at, repogrammar_version) VALUES ('gen-000001', 'building', 'now', '0.1.0');
                 CREATE TABLE indexed_files (generation_id TEXT, path TEXT, content_hash TEXT, size_bytes INTEGER, language TEXT);

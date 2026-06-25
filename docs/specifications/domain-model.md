@@ -123,7 +123,11 @@ remaining inside the same family.
 Evidence links a conclusion to a code unit, source range, provenance record, and
 note. Every future family conclusion must carry auditable source evidence.
 Family evidence storage must remain linked to a family and same-generation code
-unit; semantic-fact evidence must not be treated as family evidence by itself.
+unit and must carry explicit covered-claim labels. The current allowlist is
+`canonical`, `support`, `variation`, and `exception`; current builders emit only
+`canonical` and `support` until explicit variation-slot and exception evidence
+links exist. Semantic-fact evidence must not be treated as family evidence by
+itself.
 
 ## Provenance
 

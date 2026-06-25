@@ -1139,6 +1139,7 @@ mod tests {
                 evidence_id: "family-evidence:000000".to_string(),
                 family_id: "family:typescript:express_route:express".to_string(),
                 code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
+                covered_claims: vec!["canonical".to_string(), "support".to_string()],
                 path: "src/routes/a.ts".to_string(),
                 content_hash: hash,
                 start_byte: 0,

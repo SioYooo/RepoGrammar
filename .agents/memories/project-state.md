@@ -119,9 +119,10 @@ without claiming production Python semantic-provider support.
 Family detail reads now use compact/evidence/deep output modes. Compact omits
 evidence records; evidence/deep run deterministic greedy metadata selection
 under an optional token budget and report `source_snippets_included: false`.
-Current evidence records can cover `canonical` and `support`; requested
-variation or exception coverage is returned in `missing_claims` until storage
-links evidence to those roles.
+Family evidence records carry schema-backed `covered_claims` labels. The
+current builder emits `canonical` and `support`; requested variation or
+exception coverage is returned in `missing_claims` until later builders link
+evidence to those roles.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed

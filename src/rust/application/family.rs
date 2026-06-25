@@ -239,6 +239,11 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
             ),
             family_id: claim.family_id.clone(),
             code_unit_id: evidence.code_unit_id.clone(),
+            covered_claims: if index == 0 {
+                vec!["canonical".to_string(), "support".to_string()]
+            } else {
+                vec!["support".to_string()]
+            },
             path: evidence.path.clone(),
             content_hash: evidence.content_hash.clone(),
             start_byte: evidence.start_byte,
