@@ -206,8 +206,9 @@ SQLAlchemy mapped field and relationship anchors, typed SQLAlchemy session calls
 including `add`, simple calls, `pytest.test` test-function anchors, same-file
 and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
-dependency-target anchors, path-derived module names, CPython `symtable` scope
-anchors, and typed
+dependency-target anchors, literal `HTTPException(status_code=...)`
+status-code effect anchors, path-derived module names, CPython `symtable`
+scope anchors, and typed
 dynamic/unresolved/ambiguous `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
@@ -324,8 +325,9 @@ strong semantic/dataflow support; otherwise query output remains typed
 FastAPI route decorator targets can become derived support only when they
 exact-match the canonical route-method table. Static `response_model=...`,
 static `Depends(get_db)` dependency-target, `Depends(...)`, and
-`HTTPException(...)` parser anchors stay schema/context/effect metadata and do
-not prove membership support.
+`HTTPException(...)` parser anchors, including literal status-code effect
+anchors, stay schema/context/effect metadata and do not prove membership
+support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

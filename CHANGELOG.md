@@ -44,9 +44,9 @@
   simple FastAPI router/app alias propagation with same-name reassignment
   invalidation, emits structural FastAPI `response_model`, `Depends`, and
   static `Depends(get_db)` dependency-target anchors plus `HTTPException`
-  anchors, treats literal `pytest.mark.parametrize` arguments as parametrize
-  facts rather than fixture-injection UNKNOWNs, and labels Pydantic validator
-  decorators.
+  call and literal status-code anchors, treats literal
+  `pytest.mark.parametrize` arguments as parametrize facts rather than
+  fixture-injection UNKNOWNs, and labels Pydantic validator decorators.
   SQLAlchemy parser anchors now include `Mapped[...]`, `mapped_column(...)`,
   and typed `Session`/`AsyncSession` call targets.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
@@ -78,11 +78,11 @@
   `variation` evidence label. This does not add provider-backed semantics,
   source snippets, exception mining, or runtime-equivalence claims.
 - Python family claim-boundary regression coverage now proves FastAPI
-  `response_model`, static dependency-target, `Depends`, and `HTTPException`
-  structural anchors do not create membership support or alter exact-anchor
-  support targets. Family detail UNKNOWN output now scopes runtime-equivalence
-  gaps to the concrete family id, and human `families` output preserves typed
-  stale-evidence UNKNOWN details.
+  `response_model`, static dependency-target, `Depends`, `HTTPException`, and
+  literal HTTPException status-code structural anchors do not create membership
+  support or alter exact-anchor support targets. Family detail UNKNOWN output
+  now scopes runtime-equivalence gaps to the concrete family id, and human
+  `families` output preserves typed stale-evidence UNKNOWN details.
 - CPython AST worker SQLAlchemy structural anchors now include
   `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
   calls. These anchors remain structural context and are explicitly excluded

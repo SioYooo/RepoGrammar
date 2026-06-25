@@ -1232,6 +1232,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_dependency"
             | "fastapi_dependency_target"
             | "fastapi_http_exception"
+            | "fastapi_http_exception_status"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
             | "class_base"
@@ -1480,6 +1481,15 @@ def test_users(client, status):
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=fastapi_http_exception")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::Structural
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.http_exception.status_code.404")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=fastapi_http_exception_status"
+                })
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol

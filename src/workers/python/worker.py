@@ -1258,6 +1258,16 @@ def collect_call_facts(
                     assignments,
                     facts,
                 )
+            elif canonical == "fastapi.HTTPException":
+                collect_fastapi_http_exception_status_fact(
+                    call,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    subject_unit_id,
+                    facts,
+                )
 
 
 def collect_fastapi_dependency_target_fact(
@@ -1299,6 +1309,49 @@ def collect_fastapi_dependency_target_fact(
             start=start,
             end=end,
             anchor_kind="fastapi_dependency_target",
+        ),
+    )
+
+
+def collect_fastapi_http_exception_status_fact(
+    call: ast.Call,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    facts: list[dict[str, Any]],
+) -> None:
+    status = call.args[0] if call.args else None
+    if status is None:
+        for keyword in call.keywords:
+            if keyword.arg == "status_code":
+                status = keyword.value
+                break
+    if (
+        not isinstance(status, ast.Constant)
+        or not isinstance(status.value, int)
+        or isinstance(status.value, bool)
+    ):
+        return
+    if status.value < 100 or status.value > 599:
+        return
+    target = f"fastapi.http_exception.status_code.{status.value}"
+    if not is_safe_fact_target(target) or len(target) > MAX_RUST_PARSE_FACT_TARGET_CHARS:
+        return
+    start, end = node_range(starts, status)
+    add_fact(
+        facts,
+        structural_fact(
+            kind="SYMBOL",
+            subject_unit_id=subject_unit_id,
+            target=target,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind="fastapi_http_exception_status",
         ),
     )
 

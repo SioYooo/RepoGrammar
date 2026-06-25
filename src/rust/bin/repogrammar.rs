@@ -2106,7 +2106,7 @@ mod tests {
         fs::write(
             workspace.path().join("src/acme/api.py"),
             r#"
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from acme.services import users
 from .services import users as relative_users
@@ -2122,6 +2122,8 @@ def get_db():
 
 @router.get("/users", response_model=UserOut)
 async def list_users(dependency=Depends(get_db)):
+    if dependency is None:
+        raise HTTPException(status_code=400)
     return []
 
 def test_users(client, missing_fixture):
@@ -2348,6 +2350,17 @@ project_includes = ["src"]
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("fastapi.http_exception.status_code.400")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=fastapi_http_exception_status"
+                })
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
+                && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("pytest.test")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
@@ -2425,6 +2438,7 @@ project_includes = ["src"]
             "@router.get",
             "response_model=",
             "Depends(get_db",
+            "HTTPException(",
             "assert client.get",
             "return object",
             "missing_fixture",

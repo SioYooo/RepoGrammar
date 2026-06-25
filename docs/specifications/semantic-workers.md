@@ -266,10 +266,11 @@ returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, SQLAlchemy mapped fields, `relationship(...)` calls,
 typed SQLAlchemy session calls including `add`, simple call targets, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
-target slots, `Depends`/`HTTPException` calls, `pytest.test` test-function
-anchors, same-file pytest fixture edges, literal pytest parametrize argument
-anchors, Pydantic validator decorators, path-derived module names, and CPython
-`symtable` scope anchors, plus typed `UNKNOWN` facts for
+target slots, `Depends`/`HTTPException` calls, literal
+`HTTPException(status_code=...)` status-code effect slots, `pytest.test`
+test-function anchors, same-file pytest fixture edges, literal pytest
+parametrize argument anchors, Pydantic validator decorators, path-derived
+module names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for
 dynamic import, unresolved import, framework magic, and unresolved pytest
 fixture injection cases. Literal pytest parametrize arguments are structural
 parametrize facts, not unresolved fixture injections. Default indexing passes the

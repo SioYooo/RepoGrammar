@@ -2185,6 +2185,11 @@ mod tests {
             ),
             parser_structural_anchor_fact(
                 &third,
+                SemanticFactKind::Symbol,
+                "fastapi.http_exception.status_code.404",
+            ),
+            parser_structural_anchor_fact(
+                &third,
                 SemanticFactKind::Type,
                 "fastapi.response_model.UserOut",
             ),
@@ -2244,6 +2249,11 @@ mod tests {
                 &second,
                 SemanticFactKind::ResolvedCall,
                 "fastapi.HTTPException",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.http_exception.status_code.400",
             ),
             parser_structural_anchor_fact(
                 &second,

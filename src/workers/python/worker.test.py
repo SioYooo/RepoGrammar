@@ -168,6 +168,12 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.http_exception.status_code.404"
+    and "python_anchor_kind=fastapi_http_exception_status" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pydantic.field_validator"
     and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
     for fact in parse_facts
@@ -297,7 +303,7 @@ alias_parse_messages = run_worker(
         "content_hash": "sha256:" + "a" * 64,
         "repository_revision": "UNKNOWN",
         "text": """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 router = APIRouter()
 api = router
@@ -309,6 +315,7 @@ def list_users():
 
 @v1.get("/dynamic", response_model=make_response_model())
 def dynamic_response_model(dependency=Depends(make_dependency())):
+    raise HTTPException(status_code=make_status())
     return []
 """,
     }
@@ -330,9 +337,15 @@ assert not any(
     and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
     for fact in alias_facts
 )
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_http_exception_status" in fact["assumptions"]
+    for fact in alias_facts
+)
 assert "@v1.get" not in json.dumps(alias_parse_messages)
 assert "response_model=" not in json.dumps(alias_parse_messages)
 assert "Depends(make_dependency" not in json.dumps(alias_parse_messages)
+assert "HTTPException(" not in json.dumps(alias_parse_messages)
 
 shadowed_alias_messages = run_worker(
     {

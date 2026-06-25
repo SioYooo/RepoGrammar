@@ -146,8 +146,8 @@ allowed.
   diagnostics, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
-  dependency-target/dependency-call/error anchors, pytest parametrize decorator
-  and literal argument anchors, Pydantic validator anchors,
+  dependency-target/dependency-call/error/status-code anchors, pytest
+  parametrize decorator and literal argument anchors, Pydantic validator anchors,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
@@ -184,8 +184,9 @@ allowed.
   import resolution for unique module-level matches, ambiguous or missing
   repo-local import `UNKNOWN`, `sys.path` mutation
   `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
-  facts including FastAPI response-model/static dependency-target/dependency-call/error,
-  pytest parametrize, and Pydantic validator anchors, typed `UNKNOWN`,
+  facts including FastAPI response-model/static dependency-target/
+  dependency-call/error/status-code anchors, pytest parametrize, and Pydantic
+  validator anchors, typed `UNKNOWN`,
   persisted project-config facts staying out of claim-input readiness,
   heuristic framework-role facts staying out of family claims, raw parser-origin
   facts staying out of family construction,
@@ -194,10 +195,10 @@ allowed.
   SQLAlchemy session/repository families only when Python support reaches three
   members, their CLI/MCP metadata-only compact/evidence/deep query paths,
   exact-anchor target variation coverage only for already-ready Python families,
-  FastAPI response-model/static dependency-target/dependency-call/error context
-  anchors staying out of support derivation and support-target variation
-  metadata, SQLAlchemy relationship and Session.add structural anchors staying
-  out of family support,
+  FastAPI response-model/static dependency-target/dependency-call/error/status-code
+  context anchors staying out of support derivation and support-target
+  variation metadata, SQLAlchemy relationship and Session.add structural anchors
+  staying out of family support,
   low-support Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical
