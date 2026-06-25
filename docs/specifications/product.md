@@ -80,8 +80,9 @@ The current Rust code now has only the owned future Python provider port
 contract for request scope, provenance assumptions, cache keys, and recoverable
 provider-unavailable `UNKNOWN`s, plus an application-layer planner that can
 construct candidate-scoped Pyrefly framework-identity request envelopes for
-future adapters. It does not execute provider tools, store provider facts, or
-add production provider-backed Python semantics.
+future adapters from in-memory facts or validated active-generation snapshots.
+It does not execute provider tools, store provider facts, or add production
+provider-backed Python semantics.
 The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 

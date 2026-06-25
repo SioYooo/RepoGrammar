@@ -18,8 +18,8 @@ use crate::ports::file_discovery::{
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, SourceDocument,
@@ -757,20 +757,58 @@ pub struct PlannedPythonProviderRequest {
     pub request: PythonProviderRequest,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivePythonProviderPlanningReport {
+    pub active_generation: String,
+    pub requests: Vec<PlannedPythonProviderRequest>,
+}
+
+pub fn plan_active_pyrefly_framework_identity_requests(
+    store: &impl IndexStore,
+    python_version: impl Into<String>,
+    provider_config_hash: ContentHash,
+    environment_fingerprint: impl Into<String>,
+) -> Result<ActivePythonProviderPlanningReport, RepoGrammarError> {
+    let snapshot = store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    let facts = snapshot
+        .semantic_facts
+        .iter()
+        .map(semantic_fact_from_index_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let requests = plan_pyrefly_framework_identity_requests(
+        &snapshot.units,
+        &facts,
+        python_version,
+        provider_config_hash,
+        environment_fingerprint,
+    )?;
+
+    Ok(ActivePythonProviderPlanningReport {
+        active_generation: snapshot.generation_id,
+        requests,
+    })
+}
+
 pub fn plan_pyrefly_framework_identity_requests(
     code_units: &[IndexedCodeUnitRecord],
-    framework_role_facts: &[SemanticFact],
+    facts: &[SemanticFact],
     python_version: impl Into<String>,
     provider_config_hash: ContentHash,
     environment_fingerprint: impl Into<String>,
 ) -> Result<Vec<PlannedPythonProviderRequest>, RepoGrammarError> {
     let python_version = python_version.into();
     let environment_fingerprint = environment_fingerprint.into();
-    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let role_by_unit = framework_role_targets_by_unit(facts);
+    let blocked_units = python_provider_planner_blocked_units(code_units, facts);
     let mut groups: BTreeMap<PythonProviderPlanKey, Vec<&IndexedCodeUnitRecord>> = BTreeMap::new();
 
     for unit in code_units {
         if unit.language != "python" || !family_eligible_kind(&unit.kind) {
+            continue;
+        }
+        if blocked_units.contains(unit.id.as_str()) {
             continue;
         }
         let Some(framework_role) = role_by_unit
@@ -844,6 +882,102 @@ fn python_provider_kind_role_pair_is_supported(kind: &str, framework_role: &str)
                 "framework:sqlalchemy.repository_method"
             )
     )
+}
+
+fn semantic_fact_from_index_record(
+    record: &IndexedSemanticFactRecord,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let kind = SemanticFactKind::parse_protocol_str(&record.kind).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact kind is invalid".to_string())
+    })?;
+    let certainty = FactCertainty::parse_protocol_str(&record.certainty).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact certainty is invalid".to_string())
+    })?;
+    Ok(SemanticFact {
+        kind,
+        subject: record.subject.clone(),
+        target: record
+            .target
+            .as_ref()
+            .map(SymbolId::new)
+            .transpose()
+            .map_err(RepoGrammarError::InvalidInput)?,
+        origin: FactOrigin {
+            engine: record.origin_engine.clone(),
+            engine_version: record.origin_engine_version.clone(),
+            method: record.origin_method.clone(),
+        },
+        certainty,
+        evidence: Evidence::new(
+            CodeUnitId::new(record.code_unit_id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(record.start_byte, record.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &record.path,
+                record.content_hash.clone(),
+                RepositoryRevision::new("UNKNOWN").expect("UNKNOWN is a valid revision marker"),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            &record.note,
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions: record.assumptions.clone(),
+    })
+}
+
+fn python_provider_planner_blocked_units(
+    code_units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+) -> BTreeSet<String> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocked = BTreeSet::new();
+
+    for fact in facts {
+        if !python_provider_planner_blocking_unknown(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language == "python" && parser_fact_evidence_is_within_unit(fact, unit) {
+            blocked.insert(unit.id.clone());
+        }
+    }
+
+    blocked
+}
+
+fn python_provider_planner_blocking_unknown(fact: &SemanticFact) -> bool {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != "python"
+        || fact.origin.method != "cpython_ast"
+    {
+        return false;
+    }
+
+    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
+        return false;
+    };
+    match reason {
+        "DynamicImport" | "RuntimeDependencyInjection" | "UnresolvedImport" => fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "affected_claim=python_import_resolution"),
+        "FrameworkMagic" => fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "affected_claim=python_framework_identity"),
+        "PytestFixtureInjection" => fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "affected_claim=pytest_fixture_binding"),
+        _ => false,
+    }
 }
 
 fn framework_role_targets_by_unit(facts: &[SemanticFact]) -> BTreeMap<String, BTreeSet<String>> {
@@ -1290,12 +1424,21 @@ fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
     RepoGrammarError::InvalidInput(message.to_string())
 }
 
+fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
+    match error {
+        IndexStoreError::Unavailable(message)
+        | IndexStoreError::InvalidState(message)
+        | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::filesystem::discovery::FilesystemFileDiscovery;
     use crate::adapters::filesystem::source_store::FilesystemSourceStore;
     use crate::adapters::frameworks::SyntaxFrameworkRoleDetector;
+    use crate::adapters::parsing::python::PythonAstParser;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::application::query::{assess_semantic_fact_readiness, SemanticFactReadinessRequest};
@@ -1715,6 +1858,40 @@ mod tests {
             )
             .expect("valid evidence"),
             assumptions: vec!["binding unresolved without provider".to_string()],
+        }
+    }
+
+    fn parser_unknown_fact_for_unit(
+        unit: &IndexedCodeUnitRecord,
+        reason_code: &str,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(reason_code).expect("valid reason code")),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "3.13.0".to_string(),
+                method: "cpython_ast".to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte + 1, unit.end_byte - 1).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "typed Python UNKNOWN for provider planning",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                format!("reason_code={reason_code}"),
+                format!("affected_claim={affected_claim}"),
+            ],
         }
     }
 
@@ -2262,6 +2439,165 @@ mod tests {
             plan.request.provider == PythonProviderKind::Pyrefly
                 && plan.request.operation == PythonProviderOperation::ResolveFrameworkIdentity
         }));
+    }
+
+    #[test]
+    fn provider_identity_planner_skips_only_claim_blocking_unknown_units() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let fourth = indexed_python_unit("app/d.py", "fastapi_route", 3);
+        let units = vec![first.clone(), second.clone(), third.clone(), fourth.clone()];
+        let mut facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        facts.push(parser_unknown_fact_for_unit(
+            &second,
+            "DynamicImport",
+            "python_import_resolution",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &third,
+            "MonkeyPatch",
+            "python_call_target",
+        ));
+
+        let planned = plan_pyrefly_framework_identity_requests(
+            &units,
+            &facts,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-unknowns",
+        )
+        .expect("plan provider requests");
+
+        assert_eq!(planned.len(), 1);
+        assert_eq!(
+            planned[0]
+                .request
+                .candidates
+                .iter()
+                .map(|candidate| candidate.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app/a.py", "app/c.py", "app/d.py"]
+        );
+    }
+
+    #[test]
+    fn active_provider_identity_planner_uses_persisted_snapshot_without_mutation() {
+        let workspace = TempWorkspace::new("indexing-active-python-provider-plan");
+        fs::create_dir_all(workspace.path().join("app")).expect("create app dir");
+        fs::write(
+            workspace.path().join("app/a.py"),
+            concat!(
+                "from fastapi import APIRouter\n",
+                "router = APIRouter()\n",
+                "@router.get('/a')\n",
+                "def a():\n",
+                "    return {'ok': True}\n",
+            ),
+        )
+        .expect("write route a");
+        fs::write(
+            workspace.path().join("app/b.py"),
+            concat!(
+                "from fastapi import APIRouter\n",
+                "import importlib\n",
+                "router = APIRouter()\n",
+                "@router.get('/b')\n",
+                "def b(name: str):\n",
+                "    return importlib.import_module(name)\n",
+            ),
+        )
+        .expect("write route b");
+        fs::write(
+            workspace.path().join("app/c.py"),
+            concat!(
+                "from fastapi import APIRouter\n",
+                "router = APIRouter()\n",
+                "@router.get('/c')\n",
+                "def c(obj, name):\n",
+                "    setattr(obj, name, object())\n",
+                "    return {'ok': True}\n",
+            ),
+        )
+        .expect("write route c");
+        fs::write(
+            workspace.path().join("app/d.py"),
+            concat!(
+                "from fastapi import APIRouter\n",
+                "router = APIRouter()\n",
+                "@router.get('/d')\n",
+                "def d():\n",
+                "    return {'ok': True}\n",
+            ),
+        )
+        .expect("write route d");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonAstParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index Python routes");
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        let facts_before = store
+            .list_active_semantic_facts()
+            .expect("list active facts before planning")
+            .facts;
+        assert!(facts_before.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("DynamicImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        assert!(facts_before.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("MonkeyPatch")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_call_target")
+        }));
+
+        let report = plan_active_pyrefly_framework_identity_requests(
+            &store,
+            "3.12.6",
+            strict_hash("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "env-sha256-active",
+        )
+        .expect("plan from active snapshot");
+
+        assert_eq!(report.active_generation, "gen-000001");
+        assert_eq!(report.requests.len(), 1);
+        assert_eq!(
+            report.requests[0]
+                .request
+                .candidates
+                .iter()
+                .map(|candidate| candidate.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app/a.py", "app/c.py", "app/d.py"]
+        );
+        let facts_after = store
+            .list_active_semantic_facts()
+            .expect("list active facts after planning")
+            .facts;
+        assert_eq!(facts_after.len(), facts_before.len());
+        assert!(store
+            .list_active_families()
+            .expect("list active families")
+            .families
+            .is_empty());
     }
 
     #[test]

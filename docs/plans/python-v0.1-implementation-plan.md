@@ -128,7 +128,9 @@ layer also defines future candidate-scoped Python provider request,
 provenance, cache-key, and unavailable-UNKNOWN boundaries. Pyrefly,
 Pyright, and RightTyper adapter execution remain deferred. The application
 layer can now plan validated Pyrefly framework-identity request scopes for
-plausible Python candidate groups, but those plans are not executed, stored, or
+plausible Python candidate groups and skip units with parser-origin blocking
+`UNKNOWN`s for the planned claim. It can also plan from validated
+active-generation snapshots, but those plans are not executed, stored, or
 rendered through CLI/MCP.
 
 Non-goals: Django, plugin execution, runtime DI resolution, whole-project

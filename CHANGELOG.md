@@ -134,8 +134,9 @@
   semantics.
 - Application-layer Pyrefly framework-identity request planning for plausible
   Python candidate groups. The planner validates future-provider request scopes
-  without executing Pyrefly, storing provider facts, changing CLI/MCP output, or
-  upgrading family claims.
+  from in-memory facts or active-generation snapshots and skips
+  claim-blocking parser `UNKNOWN`s without executing Pyrefly, storing provider
+  facts, changing CLI/MCP output, or upgrading family claims.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and

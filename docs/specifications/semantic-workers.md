@@ -67,9 +67,11 @@ same-unit path/hash/range evidence before those facts can support a family
 claim.
 The current application layer can plan candidate-scoped Pyrefly
 `ResolveFrameworkIdentity` requests for future adapters when a Python candidate
-group has one supported framework role and enough support. Planning only
-constructs validated request envelopes; it is not worker execution, provider
-support, storage ingestion, or a family-claim upgrade.
+group has one supported framework role, enough support, and no parser-origin
+blocking `UNKNOWN` for the claim being planned. Planning only constructs
+validated request envelopes, including from active-generation snapshot records;
+it is not worker execution, provider support, storage ingestion, or a
+family-claim upgrade.
 
 Pyrefly and Pyright agreement may support a future cross-checked certainty tier
 only after Rust domain, protocol schemas, storage, CLI, MCP, and tests define

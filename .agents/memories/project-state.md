@@ -61,8 +61,11 @@
   provenance assumptions, cache-key dimensions, and recoverable
   provider-unavailable `UNKNOWN`s. The application layer can plan validated
   Pyrefly framework-identity request scopes for plausible Python candidate
-  groups, but Pyrefly/Pyright/RightTyper execution, provider fact storage, and
-  provider-backed canonical evidence remain deferred.
+  groups and skip parser-origin blocking `UNKNOWN`s for the planned claim, but
+  Pyrefly/Pyright/RightTyper execution, provider fact storage, and
+  provider-backed canonical evidence remain deferred. The planner can run over
+  active-generation snapshots without mutating semantic facts, family rows, or
+  CLI/MCP output.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and

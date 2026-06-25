@@ -213,10 +213,13 @@ The current implementation covers the first structural slice only:
 - an application-layer Pyrefly framework-identity request planner for future
   provider adapters. It groups only plausible Python family candidates that
   have one supported framework role and enough support under the current
-  Python threshold, then builds validated `ResolveFrameworkIdentity` request
-  scopes. The planner does not execute Pyrefly, write storage rows, emit
-  facts, alter CLI/MCP output, or turn syntax/framework-role evidence into a
-  family claim.
+  Python threshold, skips units with parser-origin blocking `UNKNOWN`s for the
+  claim being planned, then builds validated `ResolveFrameworkIdentity` request
+  scopes. The planner can also run over the same validated active-generation
+  snapshot used by query/family reads, so future provider adapters consume
+  stored repo-relative code-unit and fact records instead of reparsing. It does
+  not execute Pyrefly, write storage rows, emit facts, alter CLI/MCP output, or
+  turn syntax/framework-role evidence into a family claim.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and

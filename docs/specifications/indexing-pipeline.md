@@ -256,8 +256,12 @@ boundary for candidate-scoped requests, provider provenance assumptions,
 cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. Default
 indexing does not call a provider adapter. The application layer now includes
 an internal planner for validated Pyrefly `ResolveFrameworkIdentity` request
-scopes over plausible Python family candidate groups, but it does not execute
-those requests, persist provider facts, or expose them through CLI/MCP.
+scopes over plausible Python family candidate groups. It skips parser-origin
+blocking `UNKNOWN`s that affect Python framework identity, import resolution,
+or pytest fixture binding for the planned claim, and it can read the same
+validated active-generation claim-input snapshot used by query/family code.
+It does not execute those requests, persist provider facts, or expose them
+through CLI/MCP.
 No Pyrefly, Pyright, RightTyper, or runtime-trace adapter is implemented.
 
 ## Optional providers

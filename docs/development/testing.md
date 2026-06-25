@@ -249,8 +249,10 @@ allowed.
 - Python provider-planner tests must cover grouping only plausible candidate
   sets by supported code-unit kind and exact framework role, Python support
   threshold enforcement, ambiguous-role and low-support skips, deterministic
-  request ordering, unsafe path rejection, invalid metadata rejection, and no
-  family claim or CLI/MCP behavior change from planning alone.
+  request ordering, claim-specific blocking `UNKNOWN` skips, non-blocking
+  `UNKNOWN` preservation, unsafe path rejection, invalid metadata rejection,
+  active-generation snapshot planning without mutation, and no family claim or
+  CLI/MCP behavior change from planning alone.
 - UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
   irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
   metrics code.
