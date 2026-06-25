@@ -61,9 +61,12 @@ repo-relative path, language, kind, byte range, strict content hash, one IR node
 per code unit, and conservative containment edges. They may also store
 syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
 recognized Express, React, and Jest/Vitest code-unit shapes, without launching a
-semantic worker. They do not store source snippets, absolute paths, families, or
-pattern-family evidence by default. `files` and `units` can read the active
-file-manifest-only or syntax-only generation for inventory/debugging. Pattern
+semantic worker. The Python path may also store root `pyproject.toml` as a
+`python-config` inventory file and `project_config` unit with sanitized
+`PROJECT_CONFIG`/`STRUCTURAL` metadata or typed config `UNKNOWN`s. They do not
+store source snippets, absolute paths, families, or pattern-family evidence by
+default. `files` and `units` can read the active file-manifest-only or
+syntax-only generation for inventory/debugging. Pattern
 family query commands are wired to the active FamilyStore read path: with no
 active index they still return fallback guidance, and with an active index but
 insufficient family evidence they return typed `UNKNOWN` instead of pretending a

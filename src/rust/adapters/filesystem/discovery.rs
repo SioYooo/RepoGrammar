@@ -357,6 +357,9 @@ fn is_default_excluded_dir(name: Option<&str>) -> bool {
 }
 
 fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
+    if path == "pyproject.toml" {
+        return Some(DiscoveredLanguage::PythonConfig);
+    }
     let extension = Path::new(path).extension()?.to_str()?;
     match extension {
         "ts" => Some(DiscoveredLanguage::TypeScript),
@@ -457,6 +460,11 @@ mod tests {
             "def test_main():\n    pass\n",
         )
         .expect("write test");
+        fs::write(
+            workspace.path().join("pyproject.toml"),
+            "[project]\nname = \"demo\"\n",
+        )
+        .expect("write pyproject");
         for directory in [
             "venv",
             "__pycache__",
@@ -486,6 +494,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("app/main.py", DiscoveredLanguage::Python),
+                ("pyproject.toml", DiscoveredLanguage::PythonConfig),
                 ("tests/test_main.py", DiscoveredLanguage::Python),
             ]
         );

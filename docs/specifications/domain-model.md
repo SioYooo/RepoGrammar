@@ -16,7 +16,10 @@ test blocks. The first Python v0.1 slice can also persist CPython
 `ast`-derived records for modules, functions, async functions, classes, methods,
 FastAPI route-shaped functions, pytest tests and fixtures, Pydantic model-shaped
 classes, SQLAlchemy model-shaped classes, and SQLAlchemy repository
-method-shaped functions. These records are structural candidates only. They are
+method-shaped functions. Root `pyproject.toml` may be represented as a
+`python-config` language file with a `project_config` code unit so the config
+artifact can share the same generation, hash, and evidence validation boundary.
+These records are structural candidates only. They are
 not semantic facts, resolved symbols, framework-equivalence claims, or
 pattern-family membership evidence. A separate syntax-origin `SemanticFact` may
 be derived from some framework-shaped code units, but that fact remains
@@ -65,7 +68,12 @@ family membership. Current default Python indexing can also persist CPython
 `ast` parse-document structural facts for import bindings, decorator anchors,
 class bases, simple calls, and typed dynamic/unresolved `UNKNOWN` cases. These
 facts remain `STRUCTURAL` or `UNKNOWN`, are blocked from family-claim input, and
-are not fed to the current family builder. Future Python facts should follow the
+are not fed to the current family builder. It can also persist
+`PROJECT_CONFIG` facts for sanitized root `pyproject.toml` project name, safe
+source roots, and recognized tool sections, or typed config `UNKNOWN`s when
+`tomllib` or valid TOML is unavailable. `PROJECT_CONFIG` facts are structural
+context only and are blocked from claim-input readiness even if a future bug
+marks them with stronger certainty. Future Python facts should follow the
 same owned model for FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser,
 type-checker, LSP, or Python runtime objects must not enter the core domain.
 

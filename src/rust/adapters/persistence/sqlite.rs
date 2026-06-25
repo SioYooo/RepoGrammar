@@ -2027,7 +2027,7 @@ fn ir_graph_violation_count(
                         'test_suite', 'test_case', 'async_function', \
                         'fastapi_route', 'pytest_test', 'pytest_fixture', \
                         'pydantic_model', 'sqlalchemy_model', \
-                        'sqlalchemy_repository_method', 'unknown'\
+                        'sqlalchemy_repository_method', 'project_config', 'unknown'\
                     ) \
                     OR ir_nodes.payload_json <> '{}')",
             params![generation_id],

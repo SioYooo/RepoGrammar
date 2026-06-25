@@ -274,10 +274,15 @@ typed `UNKNOWN`s. The default product indexing path validates and stores those
 private parse-document payloads as internal parser-origin semantic facts with
 `STRUCTURAL` or `UNKNOWN` certainty, but does not expose them through CLI/MCP
 query commands and does not pass them to family construction. The worker also
-has a private `parse_project_config` mode that
-uses standard-library `tomllib` when available to return sanitized
-`pyproject.toml` summaries and typed project-config `UNKNOWN` values; this mode
-is not yet wired into default indexing or family claims. The same Python worker
+has a private `parse_project_config` mode that uses standard-library `tomllib`
+when available to return sanitized `pyproject.toml` summaries and typed
+project-config `UNKNOWN` values. Default indexing uses that private mode for a
+root `pyproject.toml`, while Rust still reads the file through the source-store
+path/hash boundary and translates the sanitized summary into a `python-config`
+file, `project_config` code unit, and internal `PROJECT_CONFIG`/`STRUCTURAL` or
+`UNKNOWN` records. These config records are not provider facts, are not passed
+to family construction, and remain blocked from claim-input readiness as
+insufficient support. The same Python worker
 has a semantic-worker-compatible NDJSON project mode that builds a bounded
 repo-local module graph from requested `.py` files, applies sanitized
 `pyproject.toml` source roots when `tomllib` is available, emits structural
@@ -290,7 +295,8 @@ these worker-local facts through CLI/MCP query commands.
 Python worker tests run under `python3` and assert parseable JSON/NDJSON,
 repo-relative paths, strict content hashes, no source snippets, invalid path
 rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,
-bounded semantic-mode file reads, and framework-role heuristic output.
+bounded semantic-mode file reads, project-config summary sanitization, and
+framework-role heuristic output.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
 compiler APIs, run Pyrefly/Pyright, expose semantic facts through query/MCP

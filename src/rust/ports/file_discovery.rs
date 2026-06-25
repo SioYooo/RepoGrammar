@@ -15,6 +15,7 @@ pub enum DiscoveredLanguage {
     JavaScript,
     JavaScriptReact,
     Python,
+    PythonConfig,
 }
 
 impl DiscoveredLanguage {
@@ -25,6 +26,7 @@ impl DiscoveredLanguage {
             Self::JavaScript => "javascript",
             Self::JavaScriptReact => "javascript-react",
             Self::Python => "python",
+            Self::PythonConfig => "python-config",
         }
     }
 }

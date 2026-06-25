@@ -728,6 +728,7 @@ mod tests {
                 Language::JavaScript
             }
             DiscoveredLanguage::Python => Language::Python,
+            DiscoveredLanguage::PythonConfig => Language::PythonConfig,
         }
     }
 
@@ -1465,6 +1466,25 @@ def test_users(client):
 "#,
         )
         .expect("write source");
+        fs::write(
+            workspace.path().join("pyproject.toml"),
+            r#"
+[project]
+name = "demo-api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "../secret"]
+pythonpath = ["src", "/tmp/secret"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src/lib", "C:/secret"]
+
+[tool.pyrefly]
+project_includes = ["src"]
+"#,
+        )
+        .expect("write pyproject");
         let runtime = ProductCliRuntime;
 
         let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
@@ -1481,6 +1501,16 @@ def test_users(client):
             value["semantic_facts"].as_u64().unwrap_or_default() > 3,
             "Python parse facts should be stored in addition to framework-role heuristics"
         );
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(files.status, 0);
+        assert!(files.stderr.is_empty());
+        let value: Value = serde_json::from_str(files.stdout.trim()).expect("files JSON");
+        assert!(value["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .any(|file| file["path"] == "pyproject.toml" && file["language"] == "python-config"));
 
         let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
         assert_eq!(units.status, 0);
@@ -1503,6 +1533,15 @@ def test_users(client):
                 unit["path"] == "src/acme/api.py"
                     && unit["language"] == "python"
                     && unit["kind"] == "pydantic_model"
+            }));
+        assert!(value["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .any(|unit| {
+                unit["path"] == "pyproject.toml"
+                    && unit["language"] == "python-config"
+                    && unit["kind"] == "project_config"
             }));
         assert!(!units
             .stdout
@@ -1616,6 +1655,42 @@ def test_users(client):
                 && fact.origin_method == "cpython_ast"
                 && fact.certainty == "UNKNOWN"
         }));
+        let has_project_config_summary = facts.facts.iter().any(|fact| {
+            fact.path == "pyproject.toml"
+                && fact.kind == "PROJECT_CONFIG"
+                && fact.target.as_deref() == Some("python.project_config.project_name.demo-api")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "tomllib"
+                && fact.certainty == "STRUCTURAL"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "not_family_claim_input")
+        });
+        let has_project_config_missing_dependency_unknown = facts.facts.iter().any(|fact| {
+            fact.path == "pyproject.toml"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("MissingDependency")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "tomllib"
+                && fact.certainty == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_project_config")
+        });
+        assert!(
+            has_project_config_summary || has_project_config_missing_dependency_unknown,
+            "pyproject.toml must persist either sanitized config facts or a typed provider UNKNOWN"
+        );
+        if has_project_config_summary {
+            assert!(facts.facts.iter().any(|fact| {
+                fact.path == "pyproject.toml"
+                    && fact.kind == "PROJECT_CONFIG"
+                    && fact.target.as_deref() == Some("python.project_config.source_root.src.lib")
+                    && fact.certainty == "STRUCTURAL"
+            }));
+        }
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "FRAMEWORK_ROLE"
@@ -1628,6 +1703,10 @@ def test_users(client):
             "from acme.services",
             "@router.get",
             "assert client.get",
+            "../secret",
+            "/tmp/secret",
+            "C:/secret",
+            "project_includes",
         ] {
             assert!(
                 !debug.contains(forbidden),

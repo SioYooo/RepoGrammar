@@ -6,18 +6,19 @@
   structural scope anchors, typed dynamic/unresolved `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
-  import context from discovered `.py` inventory, structural IR storage, opt-in
-  syntax-origin framework-role fact storage, semantic fact ingestion, internal
-  active claim-input snapshot reads, semantic-fact freshness/readiness gating,
-  FamilyStore-backed query reads, read-only MCP serving, and narrow global
+  import context from discovered `.py` inventory, default-indexed root
+  `pyproject.toml` structural project-config records, structural IR storage,
+  opt-in syntax-origin framework-role fact storage, semantic fact ingestion,
+  internal active claim-input snapshot reads, semantic-fact
+  freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
+  serving, and narrow global
   explicit-target installer writes. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current
   Python slice is structural/framework-heuristic only; parser-origin Python
-  facts are persisted but blocked from family construction and claim-input
-  readiness. Project-config summaries remain private worker output and are not
-  persisted by default indexing. Pyrefly/Pyright, provider-backed canonical
-  evidence, and Python family claims remain deferred.
+  facts and structural project-config records are persisted but blocked from
+  family construction and claim-input readiness. Pyrefly/Pyright,
+  provider-backed canonical evidence, and Python family claims remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -41,6 +42,8 @@ TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, same-file pytest fixture edges, and typed dynamic or
 unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts,
+root `pyproject.toml` persisted as a `python-config` file and `project_config`
+unit with sanitized structural config metadata or typed config `UNKNOWN`,
 syntax-origin TS/JS and Python framework-role fact storage,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
 TypeScript semantic-worker
@@ -82,6 +85,8 @@ decorator anchors, class bases, simple call targets, same-file pytest fixture
 edges, and typed dynamic/unresolved `UNKNOWN` cases, syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
+root `pyproject.toml` discovery and sanitized structural project-config
+records,
 CodeUnit-derived structural IR nodes and
 conservative containment edges, generation-scoped SQLite
 migrations/storage/validation/activation, product runtime wiring for `index`
@@ -168,7 +173,7 @@ canonical specs.
 
 ## Revalidation conditions
 
-Update this memory after persisted project-configuration facts,
+Update this memory after provider-backed project-configuration semantics,
 Pyrefly/Pyright provider integration, Tree-sitter fallback, TypeScript compiler
 API integration, full family-claim gates, broader installer writes, production
 family evidence, or stable MCP API support lands.

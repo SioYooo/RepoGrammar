@@ -46,7 +46,10 @@ pub fn semantic_fact_claim_input_readiness(
         return ClaimInputReadiness::Blocked { unknown };
     }
 
-    if kind == SemanticFactKind::Unknown {
+    if matches!(
+        kind,
+        SemanticFactKind::Unknown | SemanticFactKind::ProjectConfig
+    ) {
         return ClaimInputReadiness::Blocked {
             unknown: blocking_unknown(UnknownReasonCode::InsufficientSupport, None),
         };
@@ -166,16 +169,18 @@ mod tests {
 
     #[test]
     fn unknown_fact_kind_cannot_become_claim_input() {
-        let readiness = semantic_fact_claim_input_readiness(
-            SemanticFactKind::Unknown,
-            FactCertainty::Semantic,
-            EvidenceFreshness::Fresh,
-        );
-        let ClaimInputReadiness::Blocked { unknown } = readiness else {
-            panic!("unknown fact kind must not become eligible claim input");
-        };
+        for kind in [SemanticFactKind::Unknown, SemanticFactKind::ProjectConfig] {
+            let readiness = semantic_fact_claim_input_readiness(
+                kind,
+                FactCertainty::Semantic,
+                EvidenceFreshness::Fresh,
+            );
+            let ClaimInputReadiness::Blocked { unknown } = readiness else {
+                panic!("non-claim fact kind must not become eligible claim input");
+            };
 
-        assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+            assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+        }
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub enum SemanticFactKind {
     Symbol,
     Type,
     FrameworkRole,
+    ProjectConfig,
     Unknown,
 }
 
@@ -38,6 +39,7 @@ impl SemanticFactKind {
             Self::Symbol => "SYMBOL",
             Self::Type => "TYPE",
             Self::FrameworkRole => "FRAMEWORK_ROLE",
+            Self::ProjectConfig => "PROJECT_CONFIG",
             Self::Unknown => "UNKNOWN",
         }
     }
@@ -49,6 +51,7 @@ impl SemanticFactKind {
             "SYMBOL" => Ok(Self::Symbol),
             "TYPE" => Ok(Self::Type),
             "FRAMEWORK_ROLE" => Ok(Self::FrameworkRole),
+            "PROJECT_CONFIG" => Ok(Self::ProjectConfig),
             "UNKNOWN" => Ok(Self::Unknown),
             _ => Err(format!("unsupported semantic fact kind {value}")),
         }
@@ -134,6 +137,7 @@ mod tests {
             (SemanticFactKind::Symbol, "SYMBOL"),
             (SemanticFactKind::Type, "TYPE"),
             (SemanticFactKind::FrameworkRole, "FRAMEWORK_ROLE"),
+            (SemanticFactKind::ProjectConfig, "PROJECT_CONFIG"),
             (SemanticFactKind::Unknown, "UNKNOWN"),
         ];
 

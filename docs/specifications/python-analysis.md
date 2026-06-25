@@ -99,6 +99,12 @@ The current implementation covers the first structural slice only:
   source-tied parse pass can emit unique repo-local import facts and typed
   unresolved/ambiguous import `UNKNOWN`s without launching a separate Python
   semantic worker;
+- default parser-mode indexing discovers root `pyproject.toml` as
+  `python-config`, reads it through the Rust source-store path/hash boundary,
+  calls the private `parse_project_config` worker mode, and persists a
+  `project_config` code unit plus `PROJECT_CONFIG`/`STRUCTURAL` facts for
+  sanitized project name, safe source roots, recognized tool sections, or typed
+  `UNKNOWN` config facts when `tomllib` or valid TOML is unavailable;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -116,12 +122,13 @@ The current implementation covers the first structural slice only:
   gate for future strong facts.
 
 These worker facts use current protocol fact and certainty tokens only:
-`RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, and `UNKNOWN` with
-`STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative, hash-backed, and
-snippet-free, but they are still worker-local structural anchors. Default
-product indexing persists them only as internal structural/`UNKNOWN` semantic
-fact records. It does not expose them through CLI/MCP query commands, feed them
-to the family builder, or treat them as semantic-provider claims.
+`RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and
+`UNKNOWN` with `STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative,
+hash-backed, and snippet-free, but they are still worker-local structural
+anchors or config metadata. Default product indexing persists them only as
+internal structural/`UNKNOWN` semantic fact records. It does not expose them
+through CLI/MCP query commands, feed them to the family builder, or treat them
+as semantic-provider claims.
 
 The strong Python release smoke path is test-only. It uses the existing
 transitional worker executable boundary to inject fixture-controlled
@@ -130,10 +137,11 @@ fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
 implementation and must not be documented as production Python semantic
 support.
 
-This slice does not persist project configuration facts and does not implement
-Pyrefly, Pyright, provider cache keys, usage propagation, call hierarchy
-recovery, Tree-sitter fallback, runtime observation, Python family claims, or
-source snippet retrieval.
+This slice does not implement Pyrefly, Pyright, provider cache keys, usage
+propagation, call hierarchy recovery, Tree-sitter fallback, runtime
+observation, Python family claims, or source snippet retrieval. Persisted
+project configuration facts are structural context only and remain blocked from
+family-claim input.
 
 ### Layer 0: Authoritative Frontend
 
@@ -184,13 +192,13 @@ may become external dependency context. Ambiguous namespace packages, missing
 project configuration, non-literal `importlib.import_module`, mutated
 `sys.path`, or runtime import hooks must produce typed `UNKNOWN`.
 
-The current implementation performs the first narrow version of this only in
-the semantic-worker-compatible project mode. It builds a module index from the
-requested safe `.py` files, understands package `__init__.py`, applies
-sanitized `pyproject.toml` source roots when the running Python provides
-`tomllib`, and resolves only module-level targets with exactly one repo-local
-file. It does not resolve imported symbols, re-exports, namespace packages, or
-site-packages, and it does not make default indexing import-aware yet.
+The current implementation performs the first narrow version in both private
+parse-document and semantic-worker-compatible project modes. Default indexing
+passes discovered safe `.py` inventory into private parse-document requests and
+persists unique module-level repo-local import anchors as structural facts.
+Project mode additionally applies sanitized `pyproject.toml` source roots when
+the running Python provides `tomllib`. Neither path resolves imported symbols,
+re-exports, namespace packages, or site-packages.
 
 ### Layer 2: Typed Canonical Framework Identity
 

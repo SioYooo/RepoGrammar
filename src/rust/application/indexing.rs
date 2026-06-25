@@ -903,6 +903,7 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
             Language::JavaScript
         }
         DiscoveredLanguage::Python => Language::Python,
+        DiscoveredLanguage::PythonConfig => Language::PythonConfig,
     }
 }
 

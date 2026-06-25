@@ -44,6 +44,7 @@ pub enum Language {
     TypeScript,
     JavaScript,
     Python,
+    PythonConfig,
     Unknown(String),
 }
 
@@ -53,6 +54,7 @@ impl Language {
             Self::TypeScript => "typescript",
             Self::JavaScript => "javascript",
             Self::Python => "python",
+            Self::PythonConfig => "python-config",
             Self::Unknown(value) => value.as_str(),
         }
     }
@@ -77,6 +79,7 @@ pub enum CodeUnitKind {
     PydanticModel,
     SqlAlchemyModel,
     SqlAlchemyRepositoryMethod,
+    ProjectConfig,
     Unknown,
 }
 
@@ -100,6 +103,7 @@ impl CodeUnitKind {
             Self::PydanticModel => "pydantic_model",
             Self::SqlAlchemyModel => "sqlalchemy_model",
             Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
+            Self::ProjectConfig => "project_config",
             Self::Unknown => "unknown",
         }
     }
@@ -153,6 +157,7 @@ mod tests {
     #[test]
     fn python_language_and_unit_kinds_use_stable_tokens() {
         assert_eq!(Language::Python.as_str(), "python");
+        assert_eq!(Language::PythonConfig.as_str(), "python-config");
         assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");
         assert_eq!(CodeUnitKind::FastApiRoute.as_str(), "fastapi_route");
         assert_eq!(CodeUnitKind::PytestTest.as_str(), "pytest_test");
@@ -163,5 +168,6 @@ mod tests {
             CodeUnitKind::SqlAlchemyRepositoryMethod.as_str(),
             "sqlalchemy_repository_method"
         );
+        assert_eq!(CodeUnitKind::ProjectConfig.as_str(), "project_config");
     }
 }

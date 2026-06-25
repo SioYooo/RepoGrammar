@@ -107,11 +107,12 @@ Python discovery currently discovers `.py` files and skips common Python
 virtual-environment, cache, and dependency directories such as `venv`,
 `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
 `site-packages` without executing repository code. Package-root discovery and
-persisted project-configuration facts remain deferred. The implemented Python
-frontend uses CPython `ast` for code-unit extraction, CPython `symtable` for
-structural scope anchors, and a private standard-library `tomllib` parser mode
-for sanitized `pyproject.toml` summaries that are not yet part of default
-indexing. Default parser-mode indexing now passes discovered repo-relative
+provider-backed project-configuration semantics remain deferred. The
+implemented Python frontend uses CPython `ast` for code-unit extraction,
+CPython `symtable` for structural scope anchors, and a private standard-library
+`tomllib` parser mode for sanitized `pyproject.toml` summaries that default
+indexing persists only as structural config context or typed config `UNKNOWN`.
+Default parser-mode indexing now passes discovered repo-relative
 `.py` inventory into private parse-document requests, so source-tied unique
 repo-local imports can be persisted as `STRUCTURAL` parser facts and
 ambiguous/missing imports can remain typed `UNKNOWN`s. Future slices should add
@@ -202,15 +203,19 @@ as internal `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same
 code-unit evidence. They are not passed to the family builder and remain
 blocked from claim-input readiness as insufficient support.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
-with `tomllib` when available, but those summaries are not yet persisted by
-default indexing. Its semantic-worker-compatible NDJSON mode can emit those
-structural facts plus project-scope module-level repo-local import facts for
-unique safe `.py` module matches, typed `UNKNOWN` for ambiguous/missing
-repo-local imports and `sys.path` mutation, and conservative
-`FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units.
-The product indexing path does not launch a Python semantic worker separately.
-Pyrefly, Pyright, usage propagation, call hierarchy recovery, persisted
-project-config facts, and runtime observation remain deferred.
+with `tomllib` when available. Default indexing now discovers root
+`pyproject.toml` as `python-config`, reads it through the Rust source-store
+path/hash boundary, and persists a `project_config` code unit plus sanitized
+`PROJECT_CONFIG`/`STRUCTURAL` records or typed config `UNKNOWN`s. Those records
+are structural context only, are not provider facts, are not passed to family
+construction, and stay blocked from claim-input readiness. The worker's
+semantic-worker-compatible NDJSON mode can emit those structural facts plus
+project-scope module-level repo-local import facts for unique safe `.py` module
+matches, typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
+mutation, and conservative `FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for
+Python framework-shaped units. The product indexing path does not launch a
+Python semantic worker separately. Pyrefly, Pyright, usage propagation, call
+hierarchy recovery, and runtime observation remain deferred.
 
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains

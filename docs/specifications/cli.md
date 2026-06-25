@@ -145,7 +145,9 @@ and `mining: deferred`. By default, `semantic_worker` is `deferred`.
 During the current TS/JS and Python framework-role slices, `semantic_facts` may
 be greater than zero even when `semantic_worker` is `deferred`; those records
 are syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty,
-not compiler/provider-backed facts or family evidence.
+Python parser-origin structural/`UNKNOWN` facts, or root `pyproject.toml`
+`PROJECT_CONFIG`/config-`UNKNOWN` records, not compiler/provider-backed facts
+or family evidence.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
@@ -363,7 +365,10 @@ syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
 deferred`. The structural extractors can also produce syntax-origin
 framework-role fact records for recognized Express, React, Jest/Vitest,
 FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes; these may increase
-`semantic_facts` while `semantic_worker: deferred` remains true. By default the
+`semantic_facts` while `semantic_worker: deferred` remains true. Python
+parser-origin structural facts and root `pyproject.toml` project-config records
+may also increase `semantic_facts` without changing `semantic_worker:
+deferred`. By default the
 commands do not launch a semantic worker and report
 `semantic_worker: deferred`. When
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, optional

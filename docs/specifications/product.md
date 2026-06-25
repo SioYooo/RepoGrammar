@@ -52,11 +52,12 @@ module-level repo-local import resolution, default parser-mode repo-local
 import context from discovered `.py` inventory, and framework-role heuristics
 only, plus committed Python release fixtures and product smoke tests that
 preserve no-claim defaults unless compatible test-injected `SEMANTIC` fixture
-evidence is present. Subsequent slices should persist safe project-config facts,
-add selective Pyrefly provider queries for plausible family candidates, Pyright
-cross-checks only for claim-upgrading facts, bounded framework-role
-propagation, target-centered call recovery, EC-MVFI-lite family induction, and
-typed `UNKNOWN` governance. The canonical algorithm contract is
+evidence is present. It also persists root `pyproject.toml` only as structural
+project-config context or typed config `UNKNOWN`. Subsequent slices should add
+selective Pyrefly provider queries for plausible family candidates, Pyright
+cross-checks only for claim-upgrading facts, bounded framework-role propagation,
+target-centered call recovery, EC-MVFI-lite family induction, and typed
+`UNKNOWN` governance. The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 
 Existing TypeScript/JavaScript discovery, syntax extraction, framework-role

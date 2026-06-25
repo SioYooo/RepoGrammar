@@ -79,8 +79,11 @@ private `tomllib` project-config summaries, and semantic-worker-compatible
 project-mode module-level repo-local import resolution are implemented. Default
 indexing now passes discovered repo-relative `.py` inventory into private
 parse-document requests so source-tied repo-local import facts can be persisted
-as structural parser-origin facts. Persisted project-config facts remain later
-P2 work.
+as structural parser-origin facts. Default indexing also discovers root
+`pyproject.toml`, reads it through the Rust source-store boundary, and persists
+only a `python-config`/`project_config` structural summary or typed config
+`UNKNOWN`; these records are not provider facts and cannot become family claim
+input.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 
@@ -217,7 +220,8 @@ storage, worker, runtime-trace, or mining implementation.
 ## Deferred Work
 
 - TypeScript/JavaScript production-quality family evidence after Python v0.1.
-- Persisted safe Python project-config facts.
+- Provider-backed Python project-configuration semantics beyond the current
+  structural `pyproject.toml` summary records.
 - Django support.
 - C/C++ support.
 - Optional CodeGraph provider runtime integration.

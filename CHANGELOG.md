@@ -39,6 +39,11 @@
   contextless parsing. Default indexing validates and persists parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.
+- Default Python indexing discovers root `pyproject.toml` as `python-config`,
+  reads it through the Rust source-store path/hash boundary, and persists a
+  `project_config` unit with sanitized `PROJECT_CONFIG`/`STRUCTURAL` metadata
+  or typed config `UNKNOWN` facts; these records stay out of family construction
+  and claim-input readiness.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

@@ -22,7 +22,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::TypeScript | crate::core::model::Language::JavaScript => {
                 self.syntax.parse(document)
             }
-            crate::core::model::Language::Python => self.python.parse(document),
+            crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
+                self.python.parse(document)
+            }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
         }
     }
@@ -36,7 +38,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::TypeScript | crate::core::model::Language::JavaScript => {
                 self.syntax.parse(document)
             }
-            crate::core::model::Language::Python => {
+            crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context(document, context)
             }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),

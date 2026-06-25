@@ -45,6 +45,7 @@ pub enum IrNodeKind {
     PydanticModel,
     SqlAlchemyModel,
     SqlAlchemyRepositoryMethod,
+    ProjectConfig,
     Unknown,
 }
 
@@ -68,6 +69,7 @@ impl IrNodeKind {
             CodeUnitKind::PydanticModel => Self::PydanticModel,
             CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
             CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
+            CodeUnitKind::ProjectConfig => Self::ProjectConfig,
             CodeUnitKind::Unknown => Self::Unknown,
         }
     }
@@ -91,6 +93,7 @@ impl IrNodeKind {
             "pydantic_model" => Ok(Self::PydanticModel),
             "sqlalchemy_model" => Ok(Self::SqlAlchemyModel),
             "sqlalchemy_repository_method" => Ok(Self::SqlAlchemyRepositoryMethod),
+            "project_config" => Ok(Self::ProjectConfig),
             "unknown" => Ok(Self::Unknown),
             _ => Err(format!("unsupported IR node kind: {value}")),
         }
@@ -115,6 +118,7 @@ impl IrNodeKind {
             Self::PydanticModel => "pydantic_model",
             Self::SqlAlchemyModel => "sqlalchemy_model",
             Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
+            Self::ProjectConfig => "project_config",
             Self::Unknown => "unknown",
         }
     }

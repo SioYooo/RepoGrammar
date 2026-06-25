@@ -137,7 +137,10 @@ fact/evidence rows from CPython `ast` parse-document structural anchors and
 typed `UNKNOWN` facts after Rust-side validation; those rows use `STRUCTURAL`
 or `UNKNOWN` certainty, remain unavailable through CLI/MCP query output, are
 not passed to the current family builder, and do not create family rows by
-themselves. The CLI can
+themselves. Root `pyproject.toml` may be indexed as a `python-config` file and
+`project_config` code unit; only sanitized `PROJECT_CONFIG`/`STRUCTURAL`
+metadata or typed project-config `UNKNOWN` records may be stored, and they are
+blocked from family-claim input. The CLI can
 read the active generation for `files`, `units`, and FamilyStore-backed
 pattern-family commands. Raw structural IR and semantic-fact read paths remain
 internal. Active-generation reads

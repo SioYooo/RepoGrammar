@@ -55,6 +55,13 @@ impl PythonAstParser {
 
 impl SourceParser for PythonAstParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        if is_python_project_config_path(document.path) {
+            if document.language != Language::PythonConfig {
+                return Err(ParseError::UnsupportedLanguage);
+            }
+            let response = self.parse_project_config(&document)?;
+            return parse_project_config_response(&document, &response);
+        }
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
         }
@@ -67,6 +74,13 @@ impl SourceParser for PythonAstParser {
         document: SourceDocument<'_>,
         context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
+        if is_python_project_config_path(document.path) {
+            if document.language != Language::PythonConfig {
+                return Err(ParseError::UnsupportedLanguage);
+            }
+            let response = self.parse_project_config(&document)?;
+            return parse_project_config_response(&document, &response);
+        }
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
         }
@@ -86,12 +100,38 @@ impl SourceParser for PythonAstParser {
 }
 
 impl PythonAstParser {
+    fn parse_project_config(&self, document: &SourceDocument<'_>) -> Result<String, ParseError> {
+        let payload = json!({
+            "protocol_version": 1,
+            "mode": "parse_project_config",
+            "path": document.path,
+            "content_hash": document.content_hash.as_str(),
+            "repository_revision": document.repository_revision.as_str(),
+            "text": document.text,
+        })
+        .to_string();
+        if payload.len() > MAX_PYTHON_FRONTEND_INPUT_BYTES {
+            return Err(ParseError::Internal(
+                "python ast frontend request exceeded size limit".to_string(),
+            ));
+        }
+        self.run_worker_request(&payload)
+    }
+
     fn parse_document(
         &self,
         document: &SourceDocument<'_>,
         context: Option<&ParserProjectContext>,
     ) -> Result<PythonParseOutput, ParseError> {
         let (serialized, context_omitted) = serialize_parse_request(document, context)?;
+        let response = self.run_worker_request(&serialized)?;
+        Ok(PythonParseOutput {
+            response,
+            context_omitted,
+        })
+    }
+
+    fn run_worker_request(&self, serialized: &str) -> Result<String, ParseError> {
         let mut child = Command::new(&self.executable)
             .arg(&self.worker_script)
             .stdin(Stdio::piped())
@@ -123,12 +163,8 @@ impl PythonAstParser {
                 "python ast frontend output exceeded size limit".to_string(),
             ));
         }
-        let response = String::from_utf8(output.stdout)
-            .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))?;
-        Ok(PythonParseOutput {
-            response,
-            context_omitted,
-        })
+        String::from_utf8(output.stdout)
+            .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))
     }
 }
 
@@ -189,6 +225,25 @@ fn parse_worker_response(
     document: &SourceDocument<'_>,
     response: &str,
 ) -> Result<ParseReport, ParseError> {
+    parse_report_response(
+        document,
+        response,
+        "parse_document",
+        &[
+            "protocol_version",
+            "mode",
+            "path",
+            "units",
+            "facts",
+            "diagnostics",
+        ],
+    )
+}
+
+fn parse_project_config_response(
+    document: &SourceDocument<'_>,
+    response: &str,
+) -> Result<ParseReport, ParseError> {
     if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
         return Err(ParseError::Internal(
             "python ast frontend output exceeded size limit".to_string(),
@@ -210,18 +265,60 @@ fn parse_worker_response(
     })?;
     validate_allowed_keys(
         object,
-        &[
-            "protocol_version",
-            "mode",
-            "path",
-            "units",
-            "facts",
-            "diagnostics",
-        ],
+        &["protocol_version", "mode", "path", "config", "unknowns"],
         "python ast frontend response",
     )?;
     if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
-        || object.get("mode").and_then(Value::as_str) != Some("parse_document")
+        || object.get("mode").and_then(Value::as_str) != Some("parse_project_config")
+        || object.get("path").and_then(Value::as_str) != Some(document.path)
+    {
+        return Err(ParseError::Internal(
+            "python ast frontend response envelope was invalid".to_string(),
+        ));
+    }
+
+    let unit = project_config_unit(document)?;
+    let mut semantic_facts = project_config_facts(document, &unit, object)?;
+    sort_semantic_facts(&mut semantic_facts);
+    let units = vec![unit];
+    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
+    Ok(ParseReport {
+        units,
+        ir_nodes,
+        ir_edges: Vec::new(),
+        semantic_facts,
+        diagnostics: Vec::new(),
+    })
+}
+
+fn parse_report_response(
+    document: &SourceDocument<'_>,
+    response: &str,
+    expected_mode: &str,
+    allowed_keys: &[&str],
+) -> Result<ParseReport, ParseError> {
+    if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
+        return Err(ParseError::Internal(
+            "python ast frontend output exceeded size limit".to_string(),
+        ));
+    }
+    let lines = response
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    let [line] = lines.as_slice() else {
+        return Err(ParseError::Internal(
+            "python ast frontend must return exactly one response".to_string(),
+        ));
+    };
+    let value: Value = serde_json::from_str(line)
+        .map_err(|_| ParseError::Internal("python ast frontend returned invalid JSON".into()))?;
+    let object = value.as_object().ok_or_else(|| {
+        ParseError::Internal("python ast frontend response was not an object".into())
+    })?;
+    validate_allowed_keys(object, allowed_keys, "python ast frontend response")?;
+    if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
+        || object.get("mode").and_then(Value::as_str) != Some(expected_mode)
         || object.get("path").and_then(Value::as_str) != Some(document.path)
     {
         return Err(ParseError::Internal(
@@ -283,6 +380,233 @@ fn parse_worker_response(
         semantic_facts,
         diagnostics,
     })
+}
+
+fn is_python_project_config_path(path: &str) -> bool {
+    path == "pyproject.toml"
+}
+
+fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
+    let end_byte = document.text.len();
+    let range = SourceRange::new(0, end_byte).map_err(ParseError::Internal)?;
+    let provenance = Provenance::new(
+        document.path,
+        document.content_hash.clone(),
+        document.repository_revision.clone(),
+    )
+    .map_err(ParseError::Internal)?;
+    let id = CodeUnitId::new(format!(
+        "unit:{}#project_config:project_config:0-{}:0",
+        document.path, end_byte
+    ))
+    .map_err(ParseError::Internal)?;
+    Ok(CodeUnit {
+        id,
+        language: Language::PythonConfig,
+        kind: CodeUnitKind::ProjectConfig,
+        range,
+        provenance,
+    })
+}
+
+fn project_config_facts(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    object: &Map<String, Value>,
+) -> Result<Vec<SemanticFact>, ParseError> {
+    let config = object
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ParseError::Internal("python project config summary was invalid".into()))?;
+    validate_allowed_keys(
+        config,
+        &["project_name", "source_roots", "tool_sections"],
+        "python project config summary",
+    )?;
+    let mut facts = Vec::new();
+    if let Some(name) = optional_project_config_name(config.get("project_name"))? {
+        facts.push(project_config_structural_fact(
+            document,
+            unit,
+            "project.name",
+            &project_config_target("project_name", name),
+        )?);
+    }
+    for root in project_config_string_array(config.get("source_roots"), "source_roots")? {
+        crate::core::policy::paths::validate_repo_relative_path(root).map_err(|_| {
+            ParseError::Internal("python project config source root was invalid".to_string())
+        })?;
+        facts.push(project_config_structural_fact(
+            document,
+            unit,
+            "source_roots",
+            &project_config_target("source_root", &root.replace('/', ".")),
+        )?);
+    }
+    for section in project_config_string_array(config.get("tool_sections"), "tool_sections")? {
+        if !matches!(section, "pyrefly" | "pyright" | "pytest") {
+            return Err(ParseError::Internal(
+                "python project config tool section was invalid".to_string(),
+            ));
+        }
+        facts.push(project_config_structural_fact(
+            document,
+            unit,
+            "tool_sections",
+            &project_config_target("tool_section", section),
+        )?);
+    }
+    let unknowns = object
+        .get("unknowns")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ParseError::Internal("python project config unknowns were invalid".into())
+        })?;
+    for unknown in unknowns {
+        facts.push(project_config_unknown_fact(document, unit, unknown)?);
+    }
+    Ok(facts)
+}
+
+fn optional_project_config_name(value: Option<&Value>) -> Result<Option<&str>, ParseError> {
+    match value {
+        Some(Value::Null) | None => Ok(None),
+        Some(Value::String(value)) if is_safe_project_config_name(value) => Ok(Some(value)),
+        _ => Err(ParseError::Internal(
+            "python project config project name was invalid".to_string(),
+        )),
+    }
+}
+
+fn project_config_string_array<'a>(
+    value: Option<&'a Value>,
+    label: &'static str,
+) -> Result<Vec<&'a str>, ParseError> {
+    value
+        .and_then(Value::as_array)
+        .ok_or_else(|| ParseError::Internal(format!("python project config {label} invalid")))?
+        .iter()
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                ParseError::Internal(format!("python project config {label} invalid"))
+            })
+        })
+        .collect()
+}
+
+fn is_safe_project_config_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+        })
+}
+
+fn project_config_target(kind: &str, value: &str) -> String {
+    format!("python.project_config.{kind}.{value}")
+}
+
+fn project_config_structural_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    field: &str,
+    target: &str,
+) -> Result<SemanticFact, ParseError> {
+    Ok(SemanticFact {
+        kind: SemanticFactKind::ProjectConfig,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(target).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: "python".to_string(),
+            engine_version: "UNKNOWN".to_string(),
+            method: "tomllib".to_string(),
+        },
+        certainty: FactCertainty::Structural,
+        evidence: project_config_evidence(document, unit, "Python project config structural fact")?,
+        assumptions: vec![
+            format!("python_config_field={field}"),
+            "parsed_with=tomllib".to_string(),
+            "not_family_claim_input".to_string(),
+        ],
+    })
+}
+
+fn project_config_unknown_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    value: &Value,
+) -> Result<SemanticFact, ParseError> {
+    let object = value.as_object().ok_or_else(|| {
+        ParseError::Internal("python project config UNKNOWN was invalid".to_string())
+    })?;
+    validate_allowed_keys(
+        object,
+        &["reason", "affected_claim"],
+        "python project config UNKNOWN",
+    )?;
+    let reason = object
+        .get("reason")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ParseError::Internal("python project config UNKNOWN reason was invalid".to_string())
+        })?;
+    if !matches!(reason, "MissingProjectConfig" | "MissingDependency") {
+        return Err(ParseError::Internal(
+            "python project config UNKNOWN reason was unsupported".to_string(),
+        ));
+    }
+    let affected_claim = object
+        .get("affected_claim")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ParseError::Internal(
+                "python project config UNKNOWN affected claim was invalid".to_string(),
+            )
+        })?;
+    if affected_claim != "python_project_config" {
+        return Err(ParseError::Internal(
+            "python project config UNKNOWN affected claim was unsupported".to_string(),
+        ));
+    }
+    Ok(SemanticFact {
+        kind: SemanticFactKind::Unknown,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(reason).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: "python".to_string(),
+            engine_version: "UNKNOWN".to_string(),
+            method: "tomllib".to_string(),
+        },
+        certainty: FactCertainty::Unknown,
+        evidence: project_config_evidence(
+            document,
+            unit,
+            "typed UNKNOWN from Python project config",
+        )?,
+        assumptions: vec![
+            format!("reason_code={reason}"),
+            "affected_claim=python_project_config".to_string(),
+        ],
+    })
+}
+
+fn project_config_evidence(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    note: &str,
+) -> Result<Evidence, ParseError> {
+    Evidence::new(
+        unit.id.clone(),
+        unit.range.clone(),
+        Provenance::new(
+            document.path,
+            document.content_hash.clone(),
+            document.repository_revision.clone(),
+        )
+        .map_err(ParseError::Internal)?,
+        note,
+    )
+    .map_err(ParseError::Internal)
 }
 
 fn parse_unit(document: &SourceDocument<'_>, value: &Value) -> Result<CodeUnit, ParseError> {
@@ -528,7 +852,7 @@ fn parse_origin(value: Option<&Value>) -> Result<FactOrigin, ParseError> {
             MAX_PYTHON_FACT_TEXT_BYTES,
         )?,
     };
-    if origin.engine != "python" || origin.method != "cpython_ast" {
+    if origin.engine != "python" || !matches!(origin.method.as_str(), "cpython_ast" | "tomllib") {
         return Err(ParseError::Internal(
             "python ast frontend fact origin was unsupported".to_string(),
         ));
@@ -829,7 +1153,11 @@ fn validate_python_fact_note(
             | SemanticFactKind::Symbol
             | SemanticFactKind::Type,
             FactCertainty::Structural,
-        ) if note.starts_with("CPython ast structural ") => Ok(()),
+        ) if note.starts_with("CPython ast structural ")
+            || note.starts_with("CPython tomllib structural ") =>
+        {
+            Ok(())
+        }
         _ => Err(ParseError::Internal(
             "python ast frontend fact note was unsupported".to_string(),
         )),
@@ -877,7 +1205,10 @@ fn python_unknown_reason_is_supported(value: &str) -> bool {
 fn python_affected_claim_is_supported(value: &str) -> bool {
     matches!(
         value,
-        "python_import_resolution" | "python_call_target" | "pytest_fixture_binding"
+        "python_import_resolution"
+            | "python_call_target"
+            | "pytest_fixture_binding"
+            | "python_project_config"
     )
 }
 
@@ -895,6 +1226,10 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "scope_namespace"
             | "scope_assigned"
             | "repo_local_import_binding"
+            | "project_config"
+            | "project_config_name"
+            | "project_config_tool"
+            | "project_config_source_root"
     )
 }
 
@@ -948,6 +1283,7 @@ fn code_unit_kind(value: &str) -> Option<CodeUnitKind> {
         "pydantic_model" => Some(CodeUnitKind::PydanticModel),
         "sqlalchemy_model" => Some(CodeUnitKind::SqlAlchemyModel),
         "sqlalchemy_repository_method" => Some(CodeUnitKind::SqlAlchemyRepositoryMethod),
+        "project_config" => Some(CodeUnitKind::ProjectConfig),
         _ => None,
     }
 }
@@ -982,6 +1318,19 @@ mod tests {
         SourceDocument {
             path,
             language: Language::Python,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text,
+        }
+    }
+
+    fn project_config_document(text: &str) -> SourceDocument<'_> {
+        SourceDocument {
+            path: "pyproject.toml",
+            language: Language::PythonConfig,
             content_hash: ContentHash::new(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             )
@@ -1083,6 +1432,109 @@ def test_users(client):
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("@router.get"));
         assert!(!debug.contains("assert client.get"));
+    }
+
+    #[test]
+    fn project_config_frontend_synthesizes_structural_unit_and_facts_without_leaks() {
+        let source = r#"
+[project]
+name = "demo-api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "../secret"]
+pythonpath = ["src", "/tmp/secret"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src/lib", "C:/secret"]
+
+[tool.pyrefly]
+project_includes = ["src"]
+"#;
+
+        let document = project_config_document(source);
+        let response = json!({
+            "protocol_version": 1,
+            "mode": "parse_project_config",
+            "path": "pyproject.toml",
+            "config": {
+                "project_name": "demo-api",
+                "source_roots": ["src", "src/lib", "tests"],
+                "tool_sections": ["pyrefly", "pyright", "pytest"]
+            },
+            "unknowns": []
+        })
+        .to_string();
+        let report =
+            parse_project_config_response(&document, &response).expect("parse project config");
+
+        assert_eq!(report.units.len(), 1);
+        let unit = &report.units[0];
+        assert_eq!(unit.language, Language::PythonConfig);
+        assert_eq!(unit.kind, CodeUnitKind::ProjectConfig);
+        assert_eq!(unit.range.start_byte, 0);
+        assert_eq!(unit.range.end_byte, source.len());
+        assert_eq!(unit.provenance.path, "pyproject.toml");
+        assert_eq!(report.ir_nodes.len(), 1);
+        assert!(report.ir_edges.is_empty());
+        assert!(report.diagnostics.is_empty());
+
+        let targets = report
+            .semantic_facts
+            .iter()
+            .map(|fact| fact.target.as_ref().map(SymbolId::as_str))
+            .collect::<Vec<_>>();
+        assert!(targets.contains(&Some("python.project_config.project_name.demo-api")));
+        assert!(targets.contains(&Some("python.project_config.source_root.src.lib")));
+        assert!(targets.contains(&Some("python.project_config.tool_section.pyright")));
+        assert!(report.semantic_facts.iter().all(|fact| {
+            fact.kind == SemanticFactKind::ProjectConfig
+                && fact.certainty == FactCertainty::Structural
+                && fact.origin.engine == "python"
+                && fact.origin.method == "tomllib"
+                && fact.subject == unit.id.as_str()
+                && fact.evidence.code_unit_id == unit.id
+                && fact.evidence.provenance.path == "pyproject.toml"
+                && fact.evidence.provenance.content_hash == unit.provenance.content_hash
+                && fact.evidence.range.start_byte == 0
+                && fact.evidence.range.end_byte == source.len()
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "not_family_claim_input")
+        }));
+
+        let debug = format!("{:?}", report);
+        for forbidden in ["../secret", "/tmp/secret", "C:/secret", "project_includes"] {
+            assert!(
+                !debug.contains(forbidden),
+                "project config leaked forbidden text {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_project_config_becomes_typed_unknown_without_leaking_toml() {
+        let source = "[project\nname = 'broken'\n";
+        let report = PythonAstParser::default()
+            .parse(project_config_document(source))
+            .expect("malformed project config is represented as UNKNOWN");
+
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.certainty == FactCertainty::Unknown
+                && matches!(
+                    fact.target.as_ref().map(SymbolId::as_str),
+                    Some("MissingProjectConfig" | "MissingDependency")
+                )
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_project_config")
+        }));
+        assert!(!format!("{:?}", report).contains("[project"));
     }
 
     #[test]

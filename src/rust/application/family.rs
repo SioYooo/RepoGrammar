@@ -291,7 +291,9 @@ fn eligible_support_by_unit(
         if !fact.certainty.supports_family_membership()
             || matches!(
                 fact.kind,
-                SemanticFactKind::FrameworkRole | SemanticFactKind::Unknown
+                SemanticFactKind::FrameworkRole
+                    | SemanticFactKind::ProjectConfig
+                    | SemanticFactKind::Unknown
             )
         {
             continue;
@@ -586,6 +588,12 @@ mod tests {
         }
     }
 
+    fn semantic_project_config_fact(unit: &IndexedCodeUnitRecord) -> SemanticFact {
+        let mut fact = semantic_support_fact_with_target(unit, "fastapi.APIRouter.get");
+        fact.kind = SemanticFactKind::ProjectConfig;
+        fact
+    }
+
     #[test]
     fn framework_heuristic_role_support_stays_unknown_without_semantic_support() {
         let first = unit("src/a.ts", "express_route", 0);
@@ -701,6 +709,30 @@ mod tests {
                 semantic_support_fact_with_target(&first, "myproject.fastapi.APIRouter.get"),
                 semantic_support_fact_with_target(&second, "fastapi.APIRouter.get_extra"),
                 semantic_support_fact_with_target(&third, "notes:fastapi.FastAPI.post"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn project_config_facts_never_prove_family_membership() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_project_config_fact(&first),
+                semantic_project_config_fact(&second),
+                semantic_project_config_fact(&third),
             ],
         );
 
