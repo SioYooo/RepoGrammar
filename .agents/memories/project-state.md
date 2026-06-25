@@ -70,6 +70,11 @@
   provider-backed canonical evidence remain deferred. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
+  The `dynamic-unknown` release fixture now exercises dynamic import,
+  `sys.path` mutation, dynamic call target, dynamic decorator, and monkey-patch
+  boundaries through product indexing/query paths; each boundary is persisted
+  as typed parser-origin `UNKNOWN`, blocked from claim-input readiness, and
+  kept out of derived support.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -181,7 +186,9 @@ leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
 direct FastAPI, FastAPI alias, pytest, alias-aware pytest fixtures,
 Pydantic model/settings, SQLAlchemy,
-mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
+mixed, dynamic-unknown, and low-support examples. The dynamic fixture covers
+dynamic import, `sys.path` mutation, dynamic call target, dynamic decorator,
+and monkey patching without producing family claims. Positive direct FastAPI,
 FastAPI alias, pytest tests, pytest fixtures, Pydantic model/settings,
 SQLAlchemy model-field, and SQLAlchemy session/repository including
 commit/rollback and scalar/scalars fixtures now validate the

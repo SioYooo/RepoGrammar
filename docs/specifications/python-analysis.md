@@ -169,7 +169,8 @@ The current implementation covers the first structural slice only:
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, low-support, strong-evidence, and stale-evidence smoke
-  coverage;
+  coverage. The dynamic-unknown fixture covers dynamic import, `sys.path`
+  mutation, dynamic call target, dynamic decorator, and monkey-patch boundaries;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,
@@ -181,6 +182,8 @@ The current implementation covers the first structural slice only:
   automatic evidence selection plus explicit compact/evidence/deep modes stay
   metadata-only, prove FastAPI request-shape and SQLAlchemy relationship/add
   auxiliary anchors remain metadata-only and blocked from claim-input readiness,
+  prove dynamic-boundary facts remain typed `UNKNOWN`, blocked from claim-input
+  readiness, and absent from derived support,
   prove supported MCP operations return the same family context,
   prove stale source mutation or deletion returns blocking `StaleEvidence`
   `UNKNOWN`, and keep the test-injected

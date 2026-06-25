@@ -63,7 +63,9 @@
   Dynamic decorator factories now produce typed `FrameworkMagic` UNKNOWNs for
   `python_framework_identity`, and `setattr(...)` monkey-patching produces typed
   `MonkeyPatch` UNKNOWNs for `python_call_target`; neither path becomes family
-  evidence.
+  evidence. The `dynamic-unknown` release fixture now covers dynamic import,
+  `sys.path` mutation, dynamic call target, dynamic decorator, and monkey-patch
+  boundaries through the product indexing/query path.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming
@@ -159,6 +161,9 @@
   strong FastAPI semantic-support fixture that validates family reads, stale
   evidence fallback, leakage guards, and a no-worker exact-anchor FastAPI
   positive path without claiming production Python semantic-provider support.
+  Dynamic release smoke now asserts each dynamic boundary is persisted as typed
+  `UNKNOWN`, blocked from claim-input readiness, and absent from derived
+  support.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

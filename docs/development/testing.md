@@ -193,7 +193,9 @@ allowed.
   typed config `UNKNOWN`, semantic-worker-compatible project-mode repo-local
   import resolution for unique module-level matches, ambiguous or missing
   repo-local import `UNKNOWN`, `sys.path` mutation
-  `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
+  `RuntimeDependencyInjection` `UNKNOWN`, dynamic import, dynamic call-target,
+  dynamic decorator, and monkey-patch `UNKNOWN` facts through product indexing,
+  persisted parser-origin structural
   facts including FastAPI response-model/static dependency-target/
   dependency-call/error/status-code anchors, static FastAPI request
   body/parameter anchors, pytest parametrize, and Pydantic validator anchors,
@@ -223,7 +225,7 @@ allowed.
   field-type, model-config, nested Config,
   computed-field, and model-validator anchors staying out of support derivation,
   FastAPI service-call context anchors staying out of support derivation,
-  low-support Python release fixtures preserving `UNKNOWN`, test-only strong
+  low-support and dynamic Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical
   framework identities rather than framework-name substring matching. Human
@@ -234,9 +236,9 @@ allowed.
   Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
-  `UNKNOWN` for pytest fixture injection, runtime dependency injection, missing
-  dependencies, stale evidence, and framework magic beyond the current dynamic
-  decorator/call slice. Tests must not expect future cross-checked or observed
+  `UNKNOWN` for pytest fixture injection, missing dependencies, stale evidence,
+  and dynamic forms beyond the current import/path/decorator/call/monkey-patch
+  slice. Tests must not expect future cross-checked or observed
   certainty tokens until Rust domain, protocol, storage, CLI, MCP, and schema
   support are added.
 - Optional provider tests, once added, must cover provider absent, present,

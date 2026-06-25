@@ -92,7 +92,10 @@ imports, `sys.path` mutation, unresolved imports, and fixture ambiguity, and
 emits static FastAPI request body/path/query/header/cookie marker anchors as
 route-shape context rather than family support; product-path tests now verify
 these anchors are persisted, blocked from claim-input readiness, and excluded
-from derived support. The application layer derives
+from derived support. Product-path tests also verify the `dynamic-unknown`
+release fixture persists typed `UNKNOWN`s for dynamic import, `sys.path`
+mutation, dynamic call target, dynamic decorator, and monkey patching without
+creating derived support or successful family queries. The application layer derives
 separate `DATAFLOW_DERIVED` support facts from
 exact canonical CPython anchors when a unit has one Python framework role; raw
 parser facts and framework heuristics still remain blocked from direct claim
@@ -208,7 +211,9 @@ facts are labeled separately and never bypass static conflict/UNKNOWN gates.
 ## Required Python Fixtures
 
 Initial release-smoke fixtures now live under `src/fixtures/python/release/v0_1/`.
-They cover low-support and dynamic `UNKNOWN` behavior, a no-worker exact-anchor
+They cover low-support and dynamic `UNKNOWN` behavior, including dynamic
+import, `sys.path` mutation, dynamic call target, dynamic decorator, and
+monkey-patching boundaries, a no-worker exact-anchor
 FastAPI family path through derived support, and a test-only strong FastAPI
 semantic-support fixture for explicit worker family read and stale-evidence
 smoke coverage. They also include a no-worker FastAPI exact-anchor target

@@ -693,6 +693,7 @@ mod tests {
             "mapped_column",
             "@pytest.fixture",
             "importlib.import_module",
+            "sys.path.append",
             "client.get(",
             "return {",
             "Depends(",
@@ -700,6 +701,7 @@ mod tests {
             "DeclarativeBase",
             "select(",
             "getattr(",
+            "setattr(",
             "cpython_ast",
             "STRUCTURAL",
             "FRAMEWORK_HEURISTIC",
@@ -719,6 +721,29 @@ mod tests {
         assert_eq!(value["status"], "UNKNOWN");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
+    }
+
+    fn assert_no_claim_payload(command: &str, value: &Value) {
+        if let Some(families) = value.get("families") {
+            assert!(
+                families.as_array().expect("families array").is_empty(),
+                "{command} UNKNOWN leaked families: {value}"
+            );
+        }
+        for field in [
+            "family",
+            "member",
+            "members",
+            "variation_slots",
+            "evidence",
+            "output",
+            "check",
+        ] {
+            assert!(
+                value.get(field).is_none(),
+                "{command} UNKNOWN leaked claim field {field}: {value}"
+            );
+        }
     }
 
     fn assert_stored_python_structural_fact(
@@ -760,6 +785,61 @@ mod tests {
                 "auxiliary target {target} must not be derived family support"
             );
         }
+    }
+
+    fn assert_no_dynamic_boundary_fact_leakage(
+        workspace: &TempWorkspace,
+        facts: &[repogrammar::ports::index_store::IndexedSemanticFactRecord],
+    ) {
+        let debug = format!("{facts:?}");
+        for forbidden in [
+            workspace.path().to_string_lossy().as_ref(),
+            release_fixture_root().to_string_lossy().as_ref(),
+            python_release_fixture_root().to_string_lossy().as_ref(),
+            "importlib.import_module",
+            "sys.path.append",
+            "getattr(module",
+            "decorator_factory(\"secret\")",
+            "setattr(target",
+            "return getattr",
+        ] {
+            assert!(
+                !debug.contains(forbidden),
+                "leaked forbidden dynamic source text {forbidden}"
+            );
+        }
+        for fact in facts {
+            assert_repo_relative_json_path(&Value::String(fact.path.clone()));
+        }
+    }
+
+    fn assert_stored_python_unknown_fact(
+        facts: &[repogrammar::ports::index_store::IndexedSemanticFactRecord],
+        path: &str,
+        reason_code: &str,
+        affected_claim: &str,
+    ) {
+        let reason_assumption = format!("reason_code={reason_code}");
+        let claim_assumption = format!("affected_claim={affected_claim}");
+        assert!(
+            facts.iter().any(|fact| {
+                fact.path == path
+                    && fact.kind == "UNKNOWN"
+                    && fact.target.as_deref() == Some(reason_code)
+                    && fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.certainty == "UNKNOWN"
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == &reason_assumption)
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == &claim_assumption)
+            }),
+            "missing Python UNKNOWN {reason_code} for {affected_claim}"
+        );
     }
 
     fn assert_targets_blocked_from_claim_input(
@@ -1431,6 +1511,91 @@ mod tests {
             assert_eq!(doctor_json["command"], "doctor");
             assert_eq!(doctor_json["checks"]["storage"], "available");
             assert!(doctor_json["checks"].get("schema_version").is_none());
+        }
+    }
+
+    #[test]
+    fn python_release_dynamic_boundaries_persist_unknowns_without_claims() {
+        let workspace = TempWorkspace::new("python-release-dynamic-boundaries");
+        copy_python_release_fixture("dynamic-unknown", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_eq!(facts.active_generation, "gen-000001");
+
+        for (reason_code, affected_claim) in [
+            ("DynamicImport", "python_import_resolution"),
+            ("RuntimeDependencyInjection", "python_import_resolution"),
+            ("FrameworkMagic", "python_call_target"),
+            ("FrameworkMagic", "python_framework_identity"),
+            ("MonkeyPatch", "python_call_target"),
+        ] {
+            assert_stored_python_unknown_fact(
+                &facts.facts,
+                "dynamic.py",
+                reason_code,
+                affected_claim,
+            );
+        }
+        assert_targets_blocked_from_claim_input(
+            &workspace,
+            &store,
+            &facts.facts,
+            &[
+                "DynamicImport",
+                "RuntimeDependencyInjection",
+                "FrameworkMagic",
+                "MonkeyPatch",
+            ],
+        );
+        assert_no_derived_python_support_for_targets(
+            &facts.facts,
+            &[
+                "DynamicImport",
+                "RuntimeDependencyInjection",
+                "FrameworkMagic",
+                "MonkeyPatch",
+            ],
+        );
+
+        assert_no_dynamic_boundary_fact_leakage(&workspace, &facts.facts);
+
+        for command in ["families", "find", "family", "member", "explain", "check"] {
+            let output = if command == "families" {
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime)
+            } else {
+                run_with_runtime(
+                    cli_args(command, workspace.path(), &["dynamic.py", "--json"]),
+                    &runtime,
+                )
+            };
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+            assert_no_claim_payload(command, &value);
         }
     }
 
