@@ -74,6 +74,25 @@ RepoGrammar should not run every analyzer over every file. The cascade is:
 
 ## Adopted v0.1 Method Stack
 
+### Current Implementation Slice
+
+The current implementation covers the first structural slice only:
+
+- `.py` file discovery with Python virtualenv/cache/dependency directory skips;
+- CPython `ast` parse-document worker output for code-unit extraction;
+- Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
+  metadata;
+- syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
+  pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy
+  model-shaped classes, and SQLAlchemy repository method-shaped functions;
+- exact canonical Python framework target checks in the EC-MVFI-lite support
+  gate for future strong facts.
+
+This slice does not implement repo-local import resolution, `symtable` scope
+facts, `tomllib` configuration facts, Pyrefly, Pyright, provider cache keys,
+usage propagation, call hierarchy recovery, Tree-sitter fallback, runtime
+observation, Python family claims, or source snippet retrieval.
+
 ### Layer 0: Authoritative Frontend
 
 Use existing native and public parsers instead of hand-written Python parsing.

@@ -132,8 +132,8 @@ for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
 `repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. The implemented bootstrap path still runs
-TS/JS discovery, reads source through a
+repository-local state directory. The implemented bootstrap path runs TS/JS and
+Python `.py` discovery, reads source through a
 repo-relative hash-checked boundary, store repo-relative file metadata and
 syntax-only code-unit records plus any syntax-origin framework-role fact records
 in a new generation-scoped SQLite database, validate the generation, and
@@ -142,10 +142,10 @@ atomically activate
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
 and `mining: deferred`. By default, `semantic_worker` is `deferred`.
-During the current TS/JS framework-role slice, `semantic_facts` may be greater
-than zero even when `semantic_worker` is `deferred`; those records are
-syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty, not
-compiler-backed facts or family evidence.
+During the current TS/JS and Python framework-role slices, `semantic_facts` may
+be greater than zero even when `semantic_worker` is `deferred`; those records
+are syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty,
+not compiler/provider-backed facts or family evidence.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
@@ -257,8 +257,8 @@ when repository state or an active index generation is missing or unreadable.
 storage. Stored syntax-only code units are not family evidence; stored
 syntax-origin framework-role facts remain insufficient support unless stronger
 compatible semantic/dataflow evidence exists. Query commands must not imply that
-Python v0.1 analysis, TypeScript compiler analysis, full mining, or production
-family evidence has run. The
+provider-backed Python v0.1 analysis, TypeScript compiler analysis, full
+mining, or production family evidence has run. The
 `files` and `units` commands are a limited exception: when an active
 file-manifest-only or syntax-only generation exists, they may read and return
 repo-relative indexed-file metadata and code-unit records for inventory/debugging
@@ -355,15 +355,17 @@ ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
 repo-local lifecycle information without claiming parser/mining support.
 `index` and `sync` currently create syntax-only SQLite generations from the
-TS/JS file discovery substrate and dependency-free structural extractor. Their JSON output
+TS/JS file discovery substrate plus the Python `.py` discovery/CPython AST
+structural extractor. Their JSON output
 includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, the actual `semantic_facts` count, `indexing:
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
-deferred`. The structural extractor can also produce syntax-origin
-framework-role fact records for recognized Express, React, and Jest/Vitest
-code-unit shapes; these may increase `semantic_facts` while
-`semantic_worker: deferred` remains true. By default the commands do not launch
-a semantic worker and report `semantic_worker: deferred`. When
+deferred`. The structural extractors can also produce syntax-origin
+framework-role fact records for recognized Express, React, Jest/Vitest,
+FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes; these may increase
+`semantic_facts` while `semantic_worker: deferred` remains true. By default the
+commands do not launch a semantic worker and report
+`semantic_worker: deferred`. When
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies the worker argv vector. The
 commands pass the discovered repo-relative TS/JS file set to that worker, record
@@ -382,6 +384,7 @@ when EC-MVFI-lite has written supported family rows. `serve` runs the read-only
 MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
-self-test. Python v0.1 analysis is the next official implementation target but
-is not yet implemented in the CLI. Unsupported live target/scope combinations return explicit deferred
+self-test. The CLI now includes the first Python structural indexing slice, but
+repo-local import resolution, Pyrefly/Pyright provider evidence, and Python
+family claims remain deferred. Unsupported live target/scope combinations return explicit deferred
 errors; dry-run planning remains available for all targets and scopes.

@@ -815,6 +815,7 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::JavaScript | DiscoveredLanguage::JavaScriptReact => {
             Language::JavaScript
         }
+        DiscoveredLanguage::Python => Language::Python,
     }
 }
 

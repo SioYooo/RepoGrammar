@@ -22,6 +22,9 @@
   request contract and emits sanitized NDJSON `worker_error` plus
   `end_of_stream` fallback output when compiler-backed semantic analysis is
   unavailable.
+- CPython AST Python worker with private parse-document JSON output for the
+  Rust parser adapter and semantic-worker-compatible NDJSON framework-role
+  heuristic smoke output, without running repository code or provider tools.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.
@@ -41,6 +44,8 @@
   content hashes, default generated-directory skips, Git ignore checks,
   symlink-escape rejection, size-limit handling, and deterministic skip
   reasons.
+- Python `.py` discovery with repo-relative metadata and default skips for
+  common Python virtualenv, cache, and dependency directories.
 - SQLite storage substrate behind a port, including generation-scoped
   migrations, WAL and foreign-key PRAGMAs, required-table validation,
   repository-relative indexed-file records, active-generation pointer
@@ -56,8 +61,16 @@
 - CodeUnit-derived structural IR storage for syntax-only indexing, with one IR
   node per code unit, conservative containment edges, empty IR payloads, and
   same-generation SQLite validation without introducing family claims.
+- CPython AST-backed Python structural code-unit extraction for modules,
+  functions, async functions, classes, methods, FastAPI route-shaped functions,
+  pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy model-shaped
+  classes, and SQLAlchemy repository method-shaped functions.
 - Lightweight TS/JS framework-role fact storage for syntax-origin Express,
   React, and Jest/Vitest code-unit shapes. Stored facts use
+  `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions, and do not
+  enable pattern-family query commands.
+- Lightweight Python framework-role fact storage for CPython AST-origin
+  FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes. Stored facts use
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions, and do not
   enable pattern-family query commands.
 - Opt-in semantic-worker fact ingestion for `index` and `sync` when

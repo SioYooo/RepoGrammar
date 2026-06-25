@@ -63,6 +63,36 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             "syntax code unit indicates Jest or Vitest test role",
             "test runner binding unresolved",
         ),
+        CodeUnitKind::FastApiRoute => (
+            "framework:fastapi.route",
+            "CPython ast code unit indicates FastAPI route role",
+            "FastAPI binding unresolved without provider",
+        ),
+        CodeUnitKind::PytestTest => (
+            "framework:pytest.test",
+            "CPython ast code unit indicates pytest test role",
+            "pytest fixture binding unresolved",
+        ),
+        CodeUnitKind::PytestFixture => (
+            "framework:pytest.fixture",
+            "CPython ast code unit indicates pytest fixture role",
+            "pytest fixture graph unresolved",
+        ),
+        CodeUnitKind::PydanticModel => (
+            "framework:pydantic.model",
+            "CPython ast code unit indicates Pydantic model role",
+            "Pydantic runtime validation behavior unresolved",
+        ),
+        CodeUnitKind::SqlAlchemyModel => (
+            "framework:sqlalchemy.model",
+            "CPython ast code unit indicates SQLAlchemy model role",
+            "SQLAlchemy mapping behavior unresolved",
+        ),
+        CodeUnitKind::SqlAlchemyRepositoryMethod => (
+            "framework:sqlalchemy.repository_method",
+            "CPython ast code unit indicates SQLAlchemy repository method role",
+            "SQLAlchemy transaction behavior unresolved",
+        ),
         _ => return None,
     };
     Some(FrameworkRole {
@@ -130,10 +160,19 @@ mod tests {
                 unit(CodeUnitKind::ReactHook, "hook"),
                 unit(CodeUnitKind::TestSuite, "suite"),
                 unit(CodeUnitKind::TestCase, "test"),
+                unit(CodeUnitKind::FastApiRoute, "fastapi"),
+                unit(CodeUnitKind::PytestTest, "pytest-test"),
+                unit(CodeUnitKind::PytestFixture, "pytest-fixture"),
+                unit(CodeUnitKind::PydanticModel, "pydantic"),
+                unit(CodeUnitKind::SqlAlchemyModel, "sqlalchemy-model"),
+                unit(
+                    CodeUnitKind::SqlAlchemyRepositoryMethod,
+                    "sqlalchemy-repository",
+                ),
             ])
             .expect("detect roles");
 
-        assert_eq!(facts.len(), 5);
+        assert_eq!(facts.len(), 11);
         let forbidden_fragments = [
             "/tmp/secret",
             "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE",
@@ -175,7 +214,13 @@ mod tests {
                 "framework:react.component",
                 "framework:react.hook",
                 "framework:jest_vitest.suite",
-                "framework:jest_vitest.test"
+                "framework:jest_vitest.test",
+                "framework:fastapi.route",
+                "framework:pytest.test",
+                "framework:pytest.fixture",
+                "framework:pydantic.model",
+                "framework:sqlalchemy.model",
+                "framework:sqlalchemy.repository_method"
             ]
         );
     }
@@ -186,6 +231,7 @@ mod tests {
             .detect_roles(&[
                 unit(CodeUnitKind::Module, "module"),
                 unit(CodeUnitKind::Function, "function"),
+                unit(CodeUnitKind::AsyncFunction, "async"),
                 unit(CodeUnitKind::ArrowFunction, "arrow"),
                 unit(CodeUnitKind::Class, "class"),
                 unit(CodeUnitKind::Method, "method"),

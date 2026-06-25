@@ -30,6 +30,7 @@ impl IrNodeId {
 pub enum IrNodeKind {
     Module,
     Function,
+    AsyncFunction,
     ArrowFunction,
     Class,
     Method,
@@ -38,6 +39,12 @@ pub enum IrNodeKind {
     ExpressRoute,
     TestSuite,
     TestCase,
+    FastApiRoute,
+    PytestTest,
+    PytestFixture,
+    PydanticModel,
+    SqlAlchemyModel,
+    SqlAlchemyRepositoryMethod,
     Unknown,
 }
 
@@ -46,6 +53,7 @@ impl IrNodeKind {
         match kind {
             CodeUnitKind::Module => Self::Module,
             CodeUnitKind::Function => Self::Function,
+            CodeUnitKind::AsyncFunction => Self::AsyncFunction,
             CodeUnitKind::ArrowFunction => Self::ArrowFunction,
             CodeUnitKind::Class => Self::Class,
             CodeUnitKind::Method => Self::Method,
@@ -54,6 +62,12 @@ impl IrNodeKind {
             CodeUnitKind::ExpressRoute => Self::ExpressRoute,
             CodeUnitKind::TestSuite => Self::TestSuite,
             CodeUnitKind::TestCase => Self::TestCase,
+            CodeUnitKind::FastApiRoute => Self::FastApiRoute,
+            CodeUnitKind::PytestTest => Self::PytestTest,
+            CodeUnitKind::PytestFixture => Self::PytestFixture,
+            CodeUnitKind::PydanticModel => Self::PydanticModel,
+            CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
+            CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
             CodeUnitKind::Unknown => Self::Unknown,
         }
     }
@@ -62,6 +76,7 @@ impl IrNodeKind {
         match value {
             "module" => Ok(Self::Module),
             "function" => Ok(Self::Function),
+            "async_function" => Ok(Self::AsyncFunction),
             "arrow_function" => Ok(Self::ArrowFunction),
             "class" => Ok(Self::Class),
             "method" => Ok(Self::Method),
@@ -70,6 +85,12 @@ impl IrNodeKind {
             "express_route" => Ok(Self::ExpressRoute),
             "test_suite" => Ok(Self::TestSuite),
             "test_case" => Ok(Self::TestCase),
+            "fastapi_route" => Ok(Self::FastApiRoute),
+            "pytest_test" => Ok(Self::PytestTest),
+            "pytest_fixture" => Ok(Self::PytestFixture),
+            "pydantic_model" => Ok(Self::PydanticModel),
+            "sqlalchemy_model" => Ok(Self::SqlAlchemyModel),
+            "sqlalchemy_repository_method" => Ok(Self::SqlAlchemyRepositoryMethod),
             "unknown" => Ok(Self::Unknown),
             _ => Err(format!("unsupported IR node kind: {value}")),
         }
@@ -79,6 +100,7 @@ impl IrNodeKind {
         match self {
             Self::Module => "module",
             Self::Function => "function",
+            Self::AsyncFunction => "async_function",
             Self::ArrowFunction => "arrow_function",
             Self::Class => "class",
             Self::Method => "method",
@@ -87,6 +109,12 @@ impl IrNodeKind {
             Self::ExpressRoute => "express_route",
             Self::TestSuite => "test_suite",
             Self::TestCase => "test_case",
+            Self::FastApiRoute => "fastapi_route",
+            Self::PytestTest => "pytest_test",
+            Self::PytestFixture => "pytest_fixture",
+            Self::PydanticModel => "pydantic_model",
+            Self::SqlAlchemyModel => "sqlalchemy_model",
+            Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
             Self::Unknown => "unknown",
         }
     }

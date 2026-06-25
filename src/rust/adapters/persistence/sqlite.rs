@@ -2024,7 +2024,10 @@ fn ir_graph_violation_count(
                     OR ir_nodes.kind NOT IN (\
                         'module', 'function', 'arrow_function', 'class', 'method', \
                         'react_component', 'react_hook', 'express_route', \
-                        'test_suite', 'test_case', 'unknown'\
+                        'test_suite', 'test_case', 'async_function', \
+                        'fastapi_route', 'pytest_test', 'pytest_fixture', \
+                        'pydantic_model', 'sqlalchemy_model', \
+                        'sqlalchemy_repository_method', 'unknown'\
                     ) \
                     OR ir_nodes.payload_json <> '{}')",
             params![generation_id],

@@ -18,6 +18,11 @@
 - Git-aware TypeScript and JavaScript file discovery substrate with strict
   hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
   and deterministic ordering.
+- Python `.py` discovery and CPython AST-backed structural code-unit extraction
+  for modules, functions, async functions, classes, methods, FastAPI
+  route-shaped functions, pytest tests/fixtures, Pydantic model-shaped classes,
+  SQLAlchemy model-shaped classes, and SQLAlchemy repository method-shaped
+  functions, with Python virtualenv/cache/dependency directories skipped.
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
   foreign-key enforcement, semantic-fact/evidence and family-evidence write
   validation for building generations, validation before activation, and
@@ -28,6 +33,10 @@
 - Lightweight TS/JS framework-role fact storage for syntax-origin Express,
   React, and Jest/Vitest code-unit shapes, using `FRAMEWORK_HEURISTIC`
   certainty and unresolved-binding assumptions without enabling family claims.
+- Lightweight Python framework-role fact storage for CPython AST-origin
+  FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
+  `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
+  enabling family claims.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
   argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
@@ -93,9 +102,10 @@ as overclaimed user-visible family claims.
 13. Phase 9: release fixtures and smoke gate.
 
 The current codebase has completed the repo-local lifecycle substrate,
-TS/JS discovery, generation-scoped SQLite storage, syntax-only code-unit
-indexing, syntax-origin framework-role fact storage, CodeUnit-derived IR
-node/containment-edge storage, active
+TS/JS and Python `.py` discovery, generation-scoped SQLite storage, syntax-only
+TS/JS and CPython AST-backed Python code-unit indexing, syntax-origin
+framework-role fact storage, CodeUnit-derived IR node/containment-edge storage,
+active
 file-manifest-only or syntax-only files/units inventory reads, FamilyStore-backed
 pattern-family query read paths with typed `UNKNOWN`, internal active
 claim-input snapshot reads,
@@ -105,7 +115,8 @@ ingestion through the storage gate, plus an internal semantic-fact file-hash
 freshness and claim-input readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
 v0.1 TS/JS release fixture smoke gate. Continue one boundary at a time:
-Python discovery/module graph, parser boundary, framework-role facts, or richer
+Python repo-local module/import graph, safe project configuration, provider
+provenance/cache keys, bounded framework-role propagation, or richer
 family-claim gates. Keep
 syntax-only code units, structural IR, syntax-origin framework-role facts, and
 weak stored semantic facts out of family claims unless the conservative builder
@@ -118,6 +129,8 @@ evidence contracts remain validated together.
 ## Command implementation path
 
 - Add full repository/worktree freshness metadata for stored family evidence.
+- Add Python repo-local import/module graph and safe `pyproject.toml`/pytest
+  configuration extraction before provider-backed claim upgrades.
 - Add typed IR attributes only after CodeUnit-derived IR nodes and containment
   edges remain stable.
 - Extend `find`, `family`, `explain`, and `check` beyond the current
@@ -141,9 +154,10 @@ evidence contracts remain validated together.
 - Python is the v0.1 implementation target.
 - Use the method stack in `docs/specifications/python-analysis.md` and
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
-- Start with CPython `ast`/`symtable`/`tomllib`, escalate only plausible
-  family candidates to Pyrefly, and use Pyright only for claim-upgrading
-  cross-checks.
+- The first CPython `ast` structural slice is implemented. Next Python slices
+  should add `symtable`/`tomllib` facts, repo-local import resolution, then
+  escalate only plausible family candidates to Pyrefly and use Pyright only for
+  claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.
@@ -182,9 +196,9 @@ evidence contracts remain validated together.
 
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
-- Implement Python discovery, repo-local import resolution, parser-backed
-  syntax extraction, framework role extraction, pytest fixture graph recovery,
-  usage propagation, and target-centered call recovery in scoped phases.
+- Implement Python repo-local import resolution, safe project configuration,
+  pytest fixture graph recovery, usage propagation, provider-backed canonical
+  target evidence, and target-centered call recovery in scoped phases.
 - Validate TypeScript worker tooling and package manager before adding
   TypeScript compiler API dependencies or semantic fact emission.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap

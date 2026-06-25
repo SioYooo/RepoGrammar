@@ -9,13 +9,17 @@ A `CodeUnit` is a repository-owned analyzable source unit such as a function,
 class, module, or test case. It carries a language, kind, source range, and
 provenance. It must not contain Tree-sitter nodes or transport-specific types.
 
-Current syntax-only indexing can persist transitional TS/JS `CodeUnit` records for modules,
-functions, assigned arrow functions, classes, methods, React function
-components, custom hooks, Express route calls, and Jest/Vitest suite or test
-blocks. These records are structural candidates only. They are not semantic
-facts, resolved symbols, framework-equivalence claims, or pattern-family
-membership evidence. A separate syntax-origin `SemanticFact` may be derived
-from some framework-shaped code units, but that fact remains
+Current syntax-only indexing can persist transitional TS/JS `CodeUnit` records
+for modules, functions, assigned arrow functions, classes, methods, React
+function components, custom hooks, Express route calls, and Jest/Vitest suite or
+test blocks. The first Python v0.1 slice can also persist CPython
+`ast`-derived records for modules, functions, async functions, classes, methods,
+FastAPI route-shaped functions, pytest tests and fixtures, Pydantic model-shaped
+classes, SQLAlchemy model-shaped classes, and SQLAlchemy repository
+method-shaped functions. These records are structural candidates only. They are
+not semantic facts, resolved symbols, framework-equivalence claims, or
+pattern-family membership evidence. A separate syntax-origin `SemanticFact` may
+be derived from some framework-shaped code units, but that fact remains
 framework-heuristic evidence for future claim builders, not proof of semantic
 equivalence or family membership.
 
@@ -52,9 +56,14 @@ for recognized Express, React, and Jest/Vitest code-unit shapes. These facts
 carry repo-relative code-unit evidence, `FRAMEWORK_HEURISTIC` certainty, and
 explicit unresolved-binding assumptions; they do not resolve TypeScript symbols,
 framework runtime behavior, or family membership.
-Python v0.1 facts should follow the same owned model for FastAPI, pytest,
-SQLAlchemy, and Pydantic evidence; parser, type-checker, LSP, or Python runtime
-objects must not enter the core domain.
+Current default Python indexing can store syntax-origin `FRAMEWORK_ROLE` facts
+for FastAPI route-shaped units, pytest tests/fixtures, Pydantic models,
+SQLAlchemy models, and SQLAlchemy repository methods. These facts also use
+`FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions; they do not
+resolve imports, decorator targets, fixture bindings, SQLAlchemy mappings, or
+family membership. Future Python facts should follow the same owned model for
+FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser, type-checker, LSP,
+or Python runtime objects must not enter the core domain.
 
 Python framework compatibility must use typed canonical identities rather than
 free-text matching. Python facts should map provider output into owned records

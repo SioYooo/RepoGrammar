@@ -17,16 +17,22 @@ claim.
 This repository is in bootstrap state. It currently contains governance,
 documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
-discovery, syntax-only code-unit extraction, syntax-origin framework-role fact
-storage, CodeUnit-derived structural IR storage, SQLite generation-storage
-wiring, a dependency-free TypeScript worker unavailable stub, repository guard
-checks, and a read-only MCP `repogrammar_context` stdio boundary.
+discovery, Python `.py` discovery, syntax-only code-unit extraction,
+syntax-origin framework-role fact storage, CodeUnit-derived structural IR
+storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
+unavailable stub, a CPython AST-backed Python worker for the first structural
+slice, repository guard checks, and a read-only MCP `repogrammar_context` stdio
+boundary.
 
 The official v0.1 implementation target has pivoted to Python-first analysis
 for FastAPI, pytest, SQLAlchemy, and Pydantic. The current TS/JS code remains
 transitional substrate from the earlier bootstrap while Python discovery,
 parser, framework-role, import-resolution, and family-evidence work is
-implemented. The Python plan uses a claim-driven selective cascade: cheap
+implemented. The first Python slice discovers `.py` files, extracts CPython
+`ast` structural code units for FastAPI route-shaped functions, pytest
+tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
+and stores framework-role heuristic facts without turning them into family
+claims. The Python plan still uses a claim-driven selective cascade: cheap
 CPython syntax/scope/config facts first, Pyrefly only for plausible family
 candidates, Pyright only for claim-upgrading cross-checks, and typed `UNKNOWN`
 when evidence cannot support a claim.
@@ -124,9 +130,9 @@ active file-manifest-only or syntax-only index metadata.
 |---|---|---|
 | Language scope | v0.1 target is Python-first; current code still contains TS/JS bootstrap substrate | Production-quality Python pattern-family evidence for FastAPI, pytest, SQLAlchemy, and Pydantic |
 | TS/JS | Transitional substrate from the earlier bootstrap | Deferred production-quality TS/JS pattern-family evidence after Python v0.1 unless a later ADR changes scope |
-| Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Python parser boundary is planned | Public parser-backed syntax candidates, not final semantic truth |
+| Parsing | Dependency-free syntax-only TS/JS extractor and CPython AST-backed Python extractor store structural code-unit candidates | Public parser-backed syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
-| Discovery | TS/JS discovery currently feeds syntax-only `index`/`sync` generations | Git-aware Python source inventory feeding parser and storage |
+| Discovery | TS/JS and `.py` discovery feed syntax-only `index`/`sync` generations; Python virtualenv/cache/dependency dirs are skipped | Git-aware Python source inventory plus package/import context feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Read-only `repogrammar_context` serve boundary is implemented | Stable agent-tool API after more compatibility testing |

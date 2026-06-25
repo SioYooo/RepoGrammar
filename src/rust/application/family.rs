@@ -10,7 +10,8 @@ use crate::ports::family_store::{
 use crate::ports::index_store::IndexedCodeUnitRecord;
 use std::collections::{BTreeMap, BTreeSet};
 
-const MIN_FAMILY_SUPPORT: usize = 2;
+const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
+const PYTHON_MIN_FAMILY_SUPPORT: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyCandidate {
@@ -153,7 +154,7 @@ pub fn build_family_claims(
             .into_iter()
             .filter(|evidence| supported_units.contains(&evidence.code_unit_id))
             .collect::<Vec<_>>();
-        if supported_evidence.len() < MIN_FAMILY_SUPPORT {
+        if supported_evidence.len() < min_family_support(&key.language) {
             unknowns.push(insufficient_support_unknown(format!(
                 "family:{}:{}:{}",
                 key.language, key.code_unit_kind, key.framework_role
@@ -318,6 +319,10 @@ fn eligible_support_by_unit(
 }
 
 fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> bool {
+    if let Some(result) = python_support_fact_is_role_compatible(fact, framework_role) {
+        return result;
+    }
+
     let mut evidence_text = format!(
         "{} {} {}",
         fact.kind.as_protocol_str(),
@@ -345,6 +350,68 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     }
 }
 
+fn python_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    match framework_role {
+        "framework:fastapi.route" => Some(matches!(
+            target,
+            "fastapi.FastAPI.delete"
+                | "fastapi.FastAPI.get"
+                | "fastapi.FastAPI.head"
+                | "fastapi.FastAPI.options"
+                | "fastapi.FastAPI.patch"
+                | "fastapi.FastAPI.post"
+                | "fastapi.FastAPI.put"
+                | "fastapi.APIRouter.delete"
+                | "fastapi.APIRouter.get"
+                | "fastapi.APIRouter.head"
+                | "fastapi.APIRouter.options"
+                | "fastapi.APIRouter.patch"
+                | "fastapi.APIRouter.post"
+                | "fastapi.APIRouter.put"
+        )),
+        "framework:pytest.test" => Some(matches!(
+            target,
+            "pytest.test" | "pytest.mark.parametrize" | "pytest.fixture"
+        )),
+        "framework:pytest.fixture" => Some(matches!(target, "pytest.fixture")),
+        "framework:pydantic.model" => Some(matches!(
+            target,
+            "pydantic.BaseModel"
+                | "pydantic_settings.BaseSettings"
+                | "pydantic.field_validator"
+                | "pydantic.validator"
+        )),
+        "framework:sqlalchemy.model" => Some(matches!(
+            target,
+            "sqlalchemy.orm.DeclarativeBase"
+                | "sqlalchemy.orm.Mapped"
+                | "sqlalchemy.orm.mapped_column"
+        )),
+        "framework:sqlalchemy.repository_method" => Some(matches!(
+            target,
+            "sqlalchemy.select"
+                | "sqlalchemy.orm.Session.execute"
+                | "sqlalchemy.orm.Session.commit"
+                | "sqlalchemy.orm.Session.rollback"
+                | "sqlalchemy.ext.asyncio.AsyncSession.execute"
+                | "sqlalchemy.ext.asyncio.AsyncSession.commit"
+                | "sqlalchemy.ext.asyncio.AsyncSession.rollback"
+        )),
+        _ if framework_role.starts_with("framework:fastapi")
+            || framework_role.starts_with("framework:pytest")
+            || framework_role.starts_with("framework:pydantic")
+            || framework_role.starts_with("framework:sqlalchemy") =>
+        {
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
 fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
     if roles.len() == 1 {
         roles.iter().next().map(String::as_str)
@@ -356,8 +423,26 @@ fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
 fn family_eligible_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "express_route" | "react_component" | "react_hook" | "test_suite" | "test_case"
+        "express_route"
+            | "react_component"
+            | "react_hook"
+            | "test_suite"
+            | "test_case"
+            | "fastapi_route"
+            | "pytest_test"
+            | "pytest_fixture"
+            | "pydantic_model"
+            | "sqlalchemy_model"
+            | "sqlalchemy_repository_method"
     )
+}
+
+fn min_family_support(language: &str) -> usize {
+    if language == "python" {
+        PYTHON_MIN_FAMILY_SUPPORT
+    } else {
+        DEFAULT_MIN_FAMILY_SUPPORT
+    }
 }
 
 fn normalized_shape(kind: &str, framework_role: &str) -> String {
@@ -416,10 +501,23 @@ mod tests {
     }
 
     fn unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        unit_with_language(path, "typescript", kind, index)
+    }
+
+    fn python_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        unit_with_language(path, "python", kind, index)
+    }
+
+    fn unit_with_language(
+        path: &str,
+        language: &str,
+        kind: &str,
+        index: usize,
+    ) -> IndexedCodeUnitRecord {
         IndexedCodeUnitRecord {
             id: format!("unit:{path}#{kind}:{index}:0-10:{index}"),
             path: path.to_string(),
-            language: "typescript".to_string(),
+            language: language.to_string(),
             kind: kind.to_string(),
             start_byte: 0,
             end_byte: 10,
@@ -541,6 +639,68 @@ mod tests {
                 role_fact(&second, "framework:express.route_handler"),
                 semantic_support_fact_with_target(&first, "package:lodash"),
                 semantic_support_fact_with_target(&second, "package:lodash"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_family_requires_three_compatible_canonical_support_facts() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+
+        let low_support = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.FastAPI.post"),
+            ],
+        );
+        assert!(low_support.claims.is_empty());
+        assert!(low_support
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.FastAPI.post"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.delete"),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn python_framework_support_uses_exact_targets_not_substrings() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "myproject.fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get_extra"),
+                semantic_support_fact_with_target(&third, "notes:fastapi.FastAPI.post"),
             ],
         );
 

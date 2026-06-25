@@ -11,7 +11,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/application/` | Indexing, query, conformance, install planning, progress, repository lifecycle, storage, telemetry, and metrics use-case boundaries | `docs/architecture/overview.md`, this file, relevant specifications |
 | `src/rust/application/family.rs` | Conservative EC-MVFI-lite family claim construction from validated application inputs | `docs/specifications/indexing-pipeline.md`, `docs/specifications/product.md`, `docs/specifications/unknowns.md` |
 | `src/rust/adapters/filesystem/` | Filesystem and Git-backed discovery boundaries | `docs/specifications/indexing-pipeline.md`, `docs/specifications/storage.md`, `docs/architecture/dependency-rules.md` |
-| `src/rust/adapters/parsing/` | Tree-sitter parser boundary | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
+| `src/rust/adapters/parsing/` | Parser boundaries, including transitional TS/JS syntax extraction and the CPython AST-backed Python extractor | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/semantic_workers/` | Rust-side process boundary for language-native semantic workers | `docs/specifications/semantic-workers.md`, `docs/decisions/ADR-0004-rust-core-language-native-workers.md` |
 | `src/rust/adapters/frameworks/` | Framework recognition boundaries; current TS/JS transitional roles plus future Python FastAPI, pytest, SQLAlchemy, and Pydantic roles | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md`, `docs/specifications/python-analysis.md` |
@@ -24,7 +24,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/test_support/` | Shared deterministic Rust test helpers | `docs/development/testing.md` |
 | `src/rust/integration_tests/` | Crate-level Rust integration-style tests | `docs/development/testing.md` |
 | `src/workers/typescript/` | Transitional TypeScript semantic worker executable stub and future compiler-backed worker | `docs/specifications/semantic-workers.md` |
-| `src/workers/python/` | Future Python semantic worker entry point | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
+| `src/workers/python/` | CPython AST-backed Python worker for private parse-document extraction plus conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
 | `src/fixtures/typescript/` | TypeScript source fixtures | `docs/development/testing.md` |
 | `src/fixtures/python/` | Future Python v0.1 source fixtures | `docs/development/testing.md`, `docs/specifications/python-analysis.md` |

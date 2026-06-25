@@ -2,7 +2,7 @@
 
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
-use crate::adapters::languages::typescript::TypeScriptLanguageAdapter;
+use crate::adapters::languages::python::PythonLanguageAdapter;
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -20,6 +20,14 @@ const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     "build",
     "target",
     ".venv",
+    "venv",
+    "env",
+    ".tox",
+    ".nox",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
     "Pods",
     ".next",
     "coverage",
@@ -27,6 +35,7 @@ const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".cache",
     "cache",
     "out",
+    "site-packages",
 ];
 
 #[derive(Debug, Default)]
@@ -349,14 +358,14 @@ fn is_default_excluded_dir(name: Option<&str>) -> bool {
 
 fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
     let extension = Path::new(path).extension()?.to_str()?;
-    if !TypeScriptLanguageAdapter::supports_extension(extension) {
-        return None;
-    }
     match extension {
         "ts" => Some(DiscoveredLanguage::TypeScript),
         "tsx" => Some(DiscoveredLanguage::TypeScriptReact),
         "js" => Some(DiscoveredLanguage::JavaScript),
         "jsx" => Some(DiscoveredLanguage::JavaScriptReact),
+        extension if PythonLanguageAdapter::supports_extension(extension) => {
+            Some(DiscoveredLanguage::Python)
+        }
         _ => None,
     }
 }
@@ -421,6 +430,80 @@ mod tests {
         assert!(report.files[0].content_hash.as_str().starts_with("sha256:"));
         assert_eq!(report.files[1].path, "src/b.js");
         assert_eq!(report.git_ignore_status, GitIgnoreStatus::NotRepository);
+    }
+
+    #[test]
+    fn discovers_python_files_and_skips_python_runtime_directories() {
+        let workspace = TempWorkspace::new("discovery-python");
+        for directory in [
+            "app",
+            "tests",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "site-packages",
+        ] {
+            fs::create_dir_all(workspace.path().join(directory)).expect("create directory");
+        }
+        fs::write(
+            workspace.path().join("app/main.py"),
+            "def main():\n    pass\n",
+        )
+        .expect("write app");
+        fs::write(
+            workspace.path().join("tests/test_main.py"),
+            "def test_main():\n    pass\n",
+        )
+        .expect("write test");
+        for directory in [
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "site-packages",
+        ] {
+            fs::write(
+                workspace.path().join(directory).join("ignored.py"),
+                "def ignored():\n    pass\n",
+            )
+            .expect("write ignored");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("app/main.py", DiscoveredLanguage::Python),
+                ("tests/test_main.py", DiscoveredLanguage::Python),
+            ]
+        );
+        for directory in [
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "site-packages",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skip| {
+                    skip.path == directory && skip.reason == SkippedReason::DefaultExcludedDirectory
+                }),
+                "expected default skip for {directory}"
+            );
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
-use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
+use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::indexing::{
@@ -104,6 +104,7 @@ impl CliRuntime for ProductCliRuntime {
             max_file_bytes: request.max_file_bytes,
         };
         let framework_roles = SyntaxFrameworkRoleDetector;
+        let parser = RepoGrammarSourceParser::default();
         if let Some(executable) = request.semantic_worker_executable {
             let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                 .with_args(request.semantic_worker_args);
@@ -111,7 +112,7 @@ impl CliRuntime for ProductCliRuntime {
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
-                &SyntaxCodeUnitParser,
+                &parser,
                 &framework_roles,
                 &worker,
                 &store,
@@ -121,7 +122,7 @@ impl CliRuntime for ProductCliRuntime {
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
-                &SyntaxCodeUnitParser,
+                &parser,
                 &framework_roles,
                 &store,
             )
@@ -532,6 +533,7 @@ fn run_native_agent_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
     use repogrammar::interfaces::mcp::handle_context_call;
     use repogrammar::ports::file_discovery::{
@@ -686,6 +688,7 @@ mod tests {
             DiscoveredLanguage::JavaScript | DiscoveredLanguage::JavaScriptReact => {
                 Language::JavaScript
             }
+            DiscoveredLanguage::Python => Language::Python,
         }
     }
 
@@ -1078,6 +1081,79 @@ mod tests {
             assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
             assert_eq!(unknown["implemented"], true);
         }
+    }
+
+    #[test]
+    fn product_runtime_indexes_python_ast_units_without_query_claims() {
+        let workspace = TempWorkspace::new("product-runtime-python");
+        fs::write(
+            workspace.path().join("app.py"),
+            r#"
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+router = APIRouter()
+
+class UserOut(BaseModel):
+    id: int
+
+@router.get("/users")
+async def list_users():
+    return []
+
+def test_users(client):
+    assert client.get("/users").status_code == 200
+"#,
+        )
+        .expect("write source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0);
+        assert!(index.stderr.is_empty());
+        let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["semantic_worker"], "deferred");
+        assert_eq!(value["semantic_facts"], 3);
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(units.status, 0);
+        assert!(units.stderr.is_empty());
+        let value: Value = serde_json::from_str(units.stdout.trim()).expect("units JSON");
+        assert!(value["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .any(|unit| {
+                unit["path"] == "app.py"
+                    && unit["language"] == "python"
+                    && unit["kind"] == "fastapi_route"
+            }));
+        assert!(value["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .any(|unit| {
+                unit["path"] == "app.py"
+                    && unit["language"] == "python"
+                    && unit["kind"] == "pydantic_model"
+            }));
+        assert!(!units
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        assert_eq!(families.status, 0);
+        let unknown: Value = serde_json::from_str(families.stdout.trim()).expect("UNKNOWN JSON");
+        assert_eq!(unknown["status"], "UNKNOWN");
+        assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
     #[test]

@@ -77,6 +77,10 @@ project-native auxiliary evidence only when the target repository already uses
 it. RightTyper-style observed evidence is deferred, explicitly opt-in, and must
 not run during default indexing because it executes user code.
 
+The current implemented Python slice uses a checked-in CPython `ast` worker for
+structural code-unit extraction only. It does not run Pyrefly, Pyright, mypy,
+`ty`, RightTyper, or repository code.
+
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into
 RepoGrammar-owned facts at the adapter boundary before entering `core`. Do not

@@ -21,6 +21,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: node src/workers/typescript/worker.test.js
+      - run: python3 src/workers/python/worker.test.py
       - run: cargo run --quiet --bin repo-guard -- check
       - if: github.event_name == 'pull_request'
         run: cargo run --quiet --bin repo-guard -- check-diff --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"

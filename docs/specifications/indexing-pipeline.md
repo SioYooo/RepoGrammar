@@ -23,15 +23,16 @@ Repository files
 
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
-dependency-free syntax-only code-unit extractor, and `index`/`sync` wiring. The
-current CLI can discover TS/JS files, read source through a hash-checked
-repo-relative boundary, store repo-relative file metadata and structural code
-units in a generation-scoped SQLite database, validate that generation, and
-activate `.repogrammar/current-generation`. The current default indexing path
-also stores syntax-origin `FRAMEWORK_ROLE` semantic fact records for recognized
-TS/JS framework-shaped code units. These records use `FRAMEWORK_HEURISTIC`
-certainty and same-generation code-unit evidence; they are candidate grouping
-facts, not family evidence by themselves.
+Python `.py` discovery slice, syntax-only code-unit extractors, and
+`index`/`sync` wiring. The current CLI can discover TS/JS/Python files, read
+source through a hash-checked repo-relative boundary, store repo-relative file
+metadata and structural code units in a generation-scoped SQLite database,
+validate that generation, and activate `.repogrammar/current-generation`. The
+current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
+semantic fact records for recognized TS/JS and Python framework-shaped code
+units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
+code-unit evidence; they are candidate grouping facts, not family evidence by
+themselves.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index` and `sync` can also ask that worker for facts about the discovered
 repo-relative TS/JS file set. Optional worker arguments come from
@@ -80,7 +81,8 @@ cache, coverage, virtual environment, and generated output directories. Files
 larger than the configured size limit are skipped, with 1 MB as the default
 inclusive limit.
 
-The current discovery substrate supports `.ts`, `.tsx`, `.js`, and `.jsx`.
+The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, and
+`.py`.
 Module-specific extensions such as `.mjs`, `.cjs`, `.mts`, and `.cts` remain
 deferred until language-mode policy is defined. Discovery reports contain
 repository-relative paths, language classification, strict
@@ -101,10 +103,13 @@ extensions, include/exclude patterns, framework adapters, and family thresholds.
 Malformed configuration must warn and fall back to safe defaults rather than
 failing indexing.
 
-Python discovery is the next official v0.1 implementation target. It must
-discover `.py` files, package roots, safe project configuration, and
-repo-local module names without executing repository code. The Python frontend
-uses CPython `ast`, `symtable`, and `tomllib` as primary sources and
+Python discovery currently discovers `.py` files and skips common Python
+virtual-environment, cache, and dependency directories such as `venv`,
+`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
+`site-packages` without executing repository code. Package-root discovery,
+repo-local import resolution, and safe project-configuration extraction remain
+deferred. The implemented Python frontend uses CPython `ast` for the first
+structural slice. Future slices should add `symtable` and `tomllib` facts, plus
 Tree-sitter as tolerant structural fallback only. Python syntax-only facts still
 cannot become semantic claims or family evidence by themselves.
 
@@ -113,14 +118,18 @@ cannot become semantic claims or family evidence by themselves.
 Tree-sitter will be used in parsing and language adapters. AST nodes must be
 converted into `CodeUnit` and unified IR types before entering `core`.
 
-The current implementation uses a dependency-free syntax-only extractor as a
-bootstrap parser adapter. It recognizes modules, functions, assigned arrow
-functions, classes, methods, React function components, custom hooks, Express
-route calls, and Jest/Vitest `describe`/`it`/`test` blocks by structural syntax
-only. It preserves byte ranges, returns partial units with diagnostics for
-unbalanced syntax, and stores RepoGrammar-owned `CodeUnit` metadata plus
-CodeUnit-derived IR nodes and conservative containment edges. Tree-sitter
-integration remains planned.
+The current implementation uses dependency-free syntax-only extractor adapters
+as bootstrap parser boundaries. The TS/JS extractor recognizes modules,
+functions, assigned arrow functions, classes, methods, React function
+components, custom hooks, Express route calls, and Jest/Vitest
+`describe`/`it`/`test` blocks by structural syntax only. The Python extractor
+uses a checked-in CPython `ast` worker and recognizes modules, functions,
+async functions, classes, methods, FastAPI route-shaped functions, pytest tests
+and fixtures, Pydantic model-shaped classes, SQLAlchemy model-shaped classes,
+and SQLAlchemy repository method-shaped functions. Both extractors preserve
+byte ranges, return diagnostics for parser errors, and store RepoGrammar-owned
+`CodeUnit` metadata plus CodeUnit-derived IR nodes and conservative containment
+edges. Tree-sitter integration remains planned.
 
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
@@ -172,6 +181,15 @@ role facts may be recorded by the current TS/JS framework adapter with
 `FRAMEWORK_HEURISTIC` certainty. Those facts remain blocked from family-claim
 input as insufficient support unless the current claim builder can combine them
 with stronger compatible evidence.
+
+The checked-in Python worker currently has two narrow modes. Its private
+parse-document mode is used by the Rust parser adapter to get CPython
+`ast`-derived code-unit metadata without hand-written Python parsing. Its
+semantic-worker-compatible NDJSON mode can emit conservative
+`FRAMEWORK_ROLE`/`FRAMEWORK_HEURISTIC` facts for Python framework-shaped units,
+but the product indexing path does not launch a Python semantic worker
+separately. Pyrefly, Pyright, repo-local import resolution, usage propagation,
+call hierarchy recovery, and runtime observation remain deferred.
 
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains
@@ -227,8 +245,14 @@ families. These algorithms are deliberately deferred.
 Initial Python v0.1 framework adapters are scoped to FastAPI, pytest,
 SQLAlchemy, and Pydantic. Framework rules belong in
 `src/rust/adapters/frameworks/`.
+The current framework adapter maps CPython AST-origin code-unit kinds for
+FastAPI routes, pytest tests/fixtures, Pydantic models, SQLAlchemy models, and
+SQLAlchemy repository methods into syntax-origin `FRAMEWORK_ROLE` fact records.
 Python framework compatibility must use typed canonical identities and explicit
-compatibility tables, never framework-name substring matching.
+compatibility tables, never framework-name substring matching. The current
+EC-MVFI-lite gate requires at least three Python members plus stronger
+compatible same-generation semantic/dataflow support before storing a Python
+family; framework heuristics alone stay `UNKNOWN`.
 
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
 Express routes, React components, React hooks, Jest/Vitest suites, and

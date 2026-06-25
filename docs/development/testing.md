@@ -38,13 +38,17 @@ allowed.
   `index.lock` removal with `--force --yes`, active/unknown/invalid lock
   refusal, daemon/SQLite lock preservation, and redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
-  unsupported module extensions, default dependency/build/generated/state-dir
+  Python `.py` inclusion, unsupported module extensions,
+  default dependency/build/generated/state-dir
   exclusions, Git-ignored files when Git is available, safe Git-unavailable
   warnings, parent Git worktree ignore rules for subdirectory projects, the
   inclusive 1 MB size boundary, oversized skips, strict SHA-256 hash
   generation, bounded max-plus-one content reads for hashing,
   deterministic ordering, symlink escape skips, invalid roots, and absence of
-  source snippets or absolute paths in reports.
+  source snippets or absolute paths in reports. Python discovery coverage must
+  include common virtualenv/cache/dependency directories such as `venv`,
+  `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
+  `site-packages`.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, activation pointer validation, preservation of the
@@ -133,6 +137,11 @@ allowed.
   output for valid requests, accept large changed-file requests below the
   shared 1 MiB stdin envelope, reject malformed requests, and prove request
   paths are not echoed in errors.
+- Python worker executable tests must run the checked-in CPython AST worker
+  through `python3`, validate private parse-document JSON output, syntax-error
+  diagnostics, semantic-worker-compatible NDJSON framework-role output,
+  oversized request rejection, unsafe path and symlink-escape rejection, and
+  absence of source snippets or absolute paths.
 - Transitional release fixture smoke tests currently copy committed TS/JS source fixtures from
   `src/fixtures/typescript/release/v0_1/` into temporary workspaces and run the
   product CLI through `init`, `index`, `files`, `units`, `families`, `family`,
@@ -141,17 +150,19 @@ allowed.
   output is parseable and does not leak source snippets or absolute paths, and
   family query commands return typed `UNKNOWN`/`InsufficientSupport` unless a
   test explicitly injects strong semantic or dataflow support.
-- Python v0.1 tests, once implementation begins, must cover CPython
-  `ast`/`symtable`/`tomllib` frontend output, Tree-sitter fallback not creating
-  family claims, FastAPI, pytest, SQLAlchemy, and Pydantic positive fixtures,
-  typed canonical framework identities rather than framework-name substring
-  matching, Pyrefly/Pyright disagreement becoming `ConflictingFacts`, provider
-  provenance/freshness cache keys, and typed `UNKNOWN` for dynamic imports,
-  monkey patching, pytest fixture injection, runtime dependency injection,
-  unresolved imports, missing dependencies, stale evidence, and framework
-  magic. Tests must not expect future cross-checked or observed certainty
-  tokens until Rust domain, protocol, storage, CLI, MCP, and schema support are
-  added.
+- Python v0.1 tests must cover the implemented CPython `ast` frontend output,
+  FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
+  language/kind token stability, product `index`/`units` smoke coverage,
+  heuristic framework-role facts staying out of family claims, and typed
+  canonical framework identities rather than framework-name substring matching.
+  Future Python slices must add coverage for `symtable`/`tomllib`, Tree-sitter
+  fallback not creating family claims, Pyrefly/Pyright disagreement becoming
+  `ConflictingFacts`, provider provenance/freshness cache keys, and typed
+  `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,
+  runtime dependency injection, unresolved imports, missing dependencies, stale
+  evidence, and framework magic. Tests must not expect future cross-checked or
+  observed certainty tokens until Rust domain, protocol, storage, CLI, MCP, and
+  schema support are added.
 - Optional provider tests, once added, must cover provider absent, present,
   stale, and conflicting states without making CodeGraph or any other provider
   required for default tests.
@@ -175,7 +186,7 @@ process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
 JSON-parsed bootstrap manifest validation,
-TS/JS file discovery filtering/hash/path-safety behavior, SQLite storage
+TS/JS and Python file discovery filtering/hash/path-safety behavior, SQLite storage
 migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
@@ -195,6 +206,7 @@ read-only MCP `repogrammar_context` schema/JSON-RPC serving,
 installer live-write gating through native MCP CLIs and managed receipts,
 transitional TS/JS release fixture smoke coverage for product CLI JSON paths,
 dependency-free TypeScript worker unavailable-stub behavior,
+CPython AST Python worker structural parse and NDJSON smoke behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory

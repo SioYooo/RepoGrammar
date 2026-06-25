@@ -255,12 +255,22 @@ nodes/edges, stored fact tokens, assumptions JSON, repo-relative evidence paths,
 strict content hashes, and byte ranges. The query application layer can
 additionally check snapshot semantic facts against current source hashes and
 block stale facts, unsupported fact kinds, weak certainty, or conflicting facts
-with typed `UNKNOWN` readiness outcomes. The default TS/JS indexing path can also store
-syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
-recognized framework-shaped code units; these records are not worker facts and
-remain blocked from family claims as insufficient support.
+with typed `UNKNOWN` readiness outcomes. The default TS/JS indexing path can
+also store syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC`
+certainty for recognized framework-shaped code units; these records are not
+worker facts and remain blocked from family claims as insufficient support.
+The default Python indexing path can now call the checked-in
+`src/workers/python/worker.py` in private parse-document mode to extract
+CPython `ast` code-unit metadata for `.py` files. The same Python worker also
+has a semantic-worker-compatible NDJSON mode that emits conservative Python
+framework-role heuristic facts for direct worker smoke testing, but the product
+runtime does not separately launch it as a Pyrefly, Pyright, import-resolution,
+usage-propagation, or call-hierarchy provider. Python worker tests run under
+`python3` and assert parseable JSON/NDJSON, repo-relative paths, no source
+snippets, invalid path rejection, syntax diagnostics, and framework-role
+heuristic output.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
-compiler APIs, expose semantic facts through query/MCP commands, or treat stored
-semantic facts as pattern-family evidence without the family builder's
-compatibility and support checks.
+compiler APIs, run Pyrefly/Pyright, expose semantic facts through query/MCP
+commands, or treat stored semantic facts as pattern-family evidence without the
+family builder's compatibility and support checks.

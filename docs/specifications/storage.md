@@ -118,9 +118,9 @@ or rewriting them.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 `.repogrammar/.gitignore`, `manifest.json`, and `receipts/init.json`. The current
-`index` and `sync` implementation creates SQLite generations from TS/JS discovery
-metadata plus syntax-only code-unit records, CodeUnit-derived IR nodes, and
-conservative IR containment edges, then activates
+`index` and `sync` implementation creates SQLite generations from TS/JS and
+Python `.py` discovery metadata plus syntax-only code-unit records,
+CodeUnit-derived IR nodes, and conservative IR containment edges, then activates
 `.repogrammar/current-generation` after validation. It does not yet create a
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, freshness
 manifests, or family-evidence query execution. The current storage adapter has
@@ -128,10 +128,11 @@ generation-scoped family tables and a FamilyStore port. The product `index` and
 `sync` path now invokes a conservative EC-MVFI-lite builder before activation,
 but that builder writes family rows only when compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
-support. Current default TS/JS indexing may populate semantic-fact/evidence rows
-with syntax-origin `FRAMEWORK_ROLE` records for recognized framework-shaped code
-units; those rows use `FRAMEWORK_HEURISTIC` certainty and same-generation
-code-unit evidence, and do not create family rows by themselves. The CLI can
+support. Current default TS/JS and Python indexing may populate
+semantic-fact/evidence rows with syntax-origin `FRAMEWORK_ROLE` records for
+recognized framework-shaped code units; those rows use `FRAMEWORK_HEURISTIC`
+certainty and same-generation code-unit evidence, and do not create family rows
+by themselves. The CLI can
 read the active generation for `files`, `units`, and FamilyStore-backed
 pattern-family commands. Raw structural IR and semantic-fact read paths remain
 internal. Active-generation reads
@@ -190,7 +191,7 @@ Explicit project configuration may opt in additional files, but ignored
 third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
-`.js`, and `.jsx` files only. It returns repo-relative metadata and skip
+`.js`, `.jsx`, and `.py` files. It returns repo-relative metadata and skip
 reasons, and `index`/`sync` store the discovered file manifest in a
 generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
@@ -219,12 +220,14 @@ absolute paths through unit ids. Active semantic-fact reads are internal and
 must likewise revalidate fact/evidence rows before any future family builder
 consumes them.
 
-Python discovery is the official v0.1 target once implemented. It must record
-language provenance, source hashes, support level where relevant, and freshness
-metadata with the same repo-relative storage discipline as existing TS/JS
-substrate. Optional provider facts, including future CodeGraph-derived facts,
-must carry provider provenance and freshness metadata before they can
-participate in family evidence.
+Python discovery is now part of the official v0.1 substrate for `.py` files. It
+records language provenance and source hashes with the same repo-relative
+storage discipline as the existing TS/JS substrate. Python support level,
+repo-local module/import facts, provider provenance, and richer freshness
+metadata remain deferred until provider-backed evidence is implemented.
+Optional provider facts, including future CodeGraph-derived facts, must carry
+provider provenance and freshness metadata before they can participate in family
+evidence.
 
 ## Project Configuration
 

@@ -1,13 +1,16 @@
 # Project State
 
-- Status: Bootstrap plus syntax-only TS/JS indexing substrate, structural IR
+- Status: Bootstrap plus syntax-only TS/JS indexing substrate, first Python
+  `.py` discovery and CPython AST structural indexing slice, structural IR
   storage, opt-in syntax-origin framework-role fact storage, semantic fact
   ingestion, internal active claim-input snapshot reads, semantic-fact
   freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
-  serving, and narrow global explicit-target installer writes. ADR-0011 now
-  makes Python-first analysis the official v0.1 implementation target, but the
-  Python analyzer is not implemented yet. ADR-0012 defines the planned
-  claim-driven selective Python analysis cascade.
+  serving, and narrow global explicit-target installer writes. ADR-0011 makes
+  Python-first analysis the official v0.1 implementation target, and ADR-0012
+  defines the claim-driven selective Python analysis cascade. The current
+  Python slice is structural/framework-heuristic only; repo-local import
+  resolution, Pyrefly/Pyright, provider-backed canonical evidence, and Python
+  family claims remain deferred.
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -25,10 +28,12 @@
 
 RepoGrammar is still pre-alpha, but it is past pure skeleton bootstrap. The
 current branch has repository-local lifecycle, transitional
-TypeScript/JavaScript discovery,
-generation-scoped SQLite storage, syntax-only code-unit indexing,
-syntax-origin TS/JS framework-role fact storage, CodeUnit-derived structural IR
-node/containment-edge storage, Rust-side TypeScript semantic-worker
+TypeScript/JavaScript discovery, Python `.py` discovery with Python
+virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
+TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
+indexing, syntax-origin TS/JS and Python framework-role fact storage,
+CodeUnit-derived structural IR node/containment-edge storage, Rust-side
+TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
 TypeScript worker stub that reports compiler analysis as unavailable, a
 validated semantic-fact storage writer, opt-in command-level semantic-worker
@@ -46,7 +51,8 @@ queries, and `doctor` without treating syntax-only evidence as a family claim.
 ADR-0011 pivots the official v0.1 implementation target to Python-first
 analysis for FastAPI, pytest, SQLAlchemy, and Pydantic; ADR-0012 defines that
 the implementation should use a claim-driven selective cascade rather than
-running every analyzer over every file. The current TS/JS substrate remains
+running every analyzer over every file. The current Python implementation is
+the first CPython AST structural slice only. The current TS/JS substrate remains
 useful scaffolding but must not be described as the official v0.1 target.
 
 ## Durable knowledge
@@ -57,10 +63,12 @@ progress and telemetry policy types, stable not-implemented behavior,
 transport-neutral MCP single-tool operation boundary, read-only MCP serving,
 repository guard checks,
 documentation, skills, memories, CI configuration, repo-local
-`init`/`uninit`/`status`/`doctor`/`unlock`/`logs`, TS/JS file discovery,
-hash-checked source reads, dependency-free syntax-only code-unit extraction,
-syntax-origin framework-role facts for recognized Express, React, and
-Jest/Vitest code-unit shapes, CodeUnit-derived structural IR nodes and
+`init`/`uninit`/`status`/`doctor`/`unlock`/`logs`, TS/JS and Python file
+discovery, hash-checked source reads, dependency-free TS/JS syntax-only
+code-unit extraction, CPython AST-backed Python structural code-unit
+extraction, syntax-origin framework-role facts for recognized Express, React,
+Jest/Vitest, FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes,
+CodeUnit-derived structural IR nodes and
 conservative containment edges, generation-scoped SQLite
 migrations/storage/validation/activation, product runtime wiring for `index`
 and `sync`, and the dependency-free
@@ -107,11 +115,14 @@ framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
 evidence.
 
-Tree-sitter integration, TypeScript compiler API integration, command-level
-full repository/worktree freshness metadata, typed IR attributes beyond the
-structural bootstrap graph, resolved framework semantics, full family mining,
-broad installer writes, project-local installer writes, instruction-file
-integration, and telemetry network transport are not implemented.
+Tree-sitter integration, TypeScript compiler API integration, Python repo-local
+import resolution, safe Python project-configuration extraction, Pyrefly/Pyright
+provider execution, provider-backed canonical framework evidence,
+command-level full repository/worktree freshness metadata, typed IR attributes
+beyond the structural bootstrap graph, resolved framework semantics, full
+family mining, broad installer writes, project-local installer writes,
+instruction-file integration, and telemetry network transport are not
+implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
 behavior before an active index and typed `UNKNOWN` when active evidence is
@@ -123,10 +134,11 @@ must not be described as query-ready family evidence.
 
 ## Implications
 
-Future agents must not claim compiler-backed TypeScript analysis, implemented
-Python analysis, full pattern-family mining, freshness-validated semantic
-claims, installer writes beyond explicit Codex/Claude MCP registration, or
-stable MCP API support until those capabilities are implemented and tested.
+Future agents must not claim compiler-backed TypeScript analysis,
+provider-backed Python semantic analysis, Python import resolution, full
+pattern-family mining, freshness-validated semantic claims, installer writes
+beyond explicit Codex/Claude MCP registration, or stable MCP API support until
+those capabilities are implemented and tested.
 Agents also must not restart repo-local lifecycle, SQLite generation, opt-in
 semantic-worker ingestion, or Rust-side worker process validation work from
 scratch. Do not restart structural IR storage or active semantic-fact/evidence
@@ -136,7 +148,7 @@ canonical specs.
 
 ## Revalidation conditions
 
-Update this memory after Python parser/import/framework analysis lands,
-Tree-sitter integration changes, TypeScript compiler API integration, full
-family-claim gates, broader installer writes, production family evidence, or
-stable MCP API support lands.
+Update this memory after Python import/module graph, `symtable`/`tomllib`
+configuration facts, Pyrefly/Pyright provider integration, Tree-sitter fallback,
+TypeScript compiler API integration, full family-claim gates, broader installer
+writes, production family evidence, or stable MCP API support lands.
