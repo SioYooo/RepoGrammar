@@ -1843,6 +1843,53 @@ def decorated(target, method):
     }
 
     #[test]
+    fn cpython_frontend_emits_generic_python_code_units() {
+        let source = r#"
+def helper():
+    return 1
+
+async def fetch():
+    return 2
+
+class Plain:
+    def method(self):
+        return helper()
+
+    async def async_method(self):
+        return await fetch()
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+        let kinds = report
+            .units
+            .iter()
+            .map(|unit| unit.kind.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"module"));
+        assert!(kinds.contains(&"function"));
+        assert!(kinds.contains(&"async_function"));
+        assert!(kinds.contains(&"class"));
+        assert_eq!(kinds.iter().filter(|kind| **kind == "method").count(), 2);
+        assert!(!kinds.iter().any(|kind| matches!(
+            *kind,
+            "fastapi_route"
+                | "pytest_test"
+                | "pytest_fixture"
+                | "pydantic_model"
+                | "sqlalchemy_model"
+                | "sqlalchemy_repository_method"
+        )));
+        assert!(report
+            .units
+            .iter()
+            .all(|unit| unit.language == Language::Python
+                && unit.provenance.path == "app.py"
+                && unit.range.start_byte <= unit.range.end_byte));
+    }
+
+    #[test]
     fn cpython_frontend_distinguishes_literal_dynamic_imports_and_plain_getattr() {
         let source = r#"
 import importlib

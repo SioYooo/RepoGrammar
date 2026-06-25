@@ -200,6 +200,47 @@ assert sum(1 for kind in unit_kinds if kind == "pytest_fixture") == 2
 assert "pydantic_model" in unit_kinds
 assert "sqlalchemy_model" in unit_kinds
 assert "async_function" not in unit_kinds
+generic_unit_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "generic_units.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def helper():
+    return 1
+
+async def fetch():
+    return 2
+
+class Plain:
+    def method(self):
+        return helper()
+
+    async def async_method(self):
+        return await fetch()
+""",
+    }
+)
+generic_unit_kinds = [unit["kind"] for unit in generic_unit_messages[0]["units"]]
+assert "module" in generic_unit_kinds
+assert "function" in generic_unit_kinds
+assert "async_function" in generic_unit_kinds
+assert "class" in generic_unit_kinds
+assert sum(1 for kind in generic_unit_kinds if kind == "method") == 2
+assert not any(
+    kind
+    in {
+        "fastapi_route",
+        "pytest_test",
+        "pytest_fixture",
+        "pydantic_model",
+        "sqlalchemy_model",
+        "sqlalchemy_repository_method",
+    }
+    for kind in generic_unit_kinds
+)
 parse_facts = parse_messages[0]["facts"]
 assert any(fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "fastapi.APIRouter" for fact in parse_facts)
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "app" for fact in parse_facts)

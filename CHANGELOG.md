@@ -166,7 +166,9 @@
   support. Worker and parser regression tests now also distinguish safe literal
   `importlib.import_module(...)` anchors from unsafe/nonliteral dynamic imports,
   cover `sys.path.insert`, and prove plain `getattr(...)` assignments do not
-  become dynamic call-target evidence.
+  become dynamic call-target evidence. They also pin generic Python
+  `module`/`function`/`async_function`/`class`/`method` code-unit output apart
+  from framework-specialized units.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

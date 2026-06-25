@@ -145,7 +145,8 @@ allowed.
   paths are not echoed in errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output, syntax-error
-  diagnostics, parse-document structural facts for imports/decorators/class
+  diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
+  code-unit output, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
   dependency-target/dependency-call/error/status-code anchors, static FastAPI
