@@ -292,6 +292,16 @@ def decorator_names(node: ast.AST) -> list[str]:
     return [name for decorator in getattr(node, "decorator_list", []) if (name := dotted_name(decorator))]
 
 
+def canonical_decorator_names(
+    node: ast.AST,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> list[str]:
+    aliases = aliases or {}
+    assignments = assignments or {}
+    return [canonical_name(name, aliases, assignments) for name in decorator_names(node)]
+
+
 def has_fastapi_route_decorator(node: ast.AST) -> bool:
     for name in decorator_names(node):
         parts = name.split(".")
@@ -300,15 +310,26 @@ def has_fastapi_route_decorator(node: ast.AST) -> bool:
     return False
 
 
-def has_pytest_fixture_decorator(node: ast.AST) -> bool:
-    return any(name in {"fixture", "pytest.fixture"} for name in decorator_names(node))
+def has_pytest_fixture_decorator(
+    node: ast.AST,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> bool:
+    return any(
+        name in {"fixture", "pytest.fixture"}
+        for name in canonical_decorator_names(node, aliases, assignments)
+    )
 
 
-def pytest_fixture_names_from_tree(tree: ast.Module) -> set[str]:
+def pytest_fixture_names_from_tree(
+    tree: ast.Module,
+    aliases: dict[str, str] | None = None,
+) -> set[str]:
     return {
         item.name
         for item in tree.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(item)
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and has_pytest_fixture_decorator(item, aliases)
     }
 
 
@@ -351,10 +372,15 @@ def has_sqlalchemy_repository_call(node: ast.AST) -> bool:
     return False
 
 
-def function_kind(node: ast.FunctionDef | ast.AsyncFunctionDef, class_name: str | None) -> str:
+def function_kind(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    class_name: str | None,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> str:
     if has_fastapi_route_decorator(node):
         return "fastapi_route"
-    if has_pytest_fixture_decorator(node):
+    if has_pytest_fixture_decorator(node, aliases, assignments):
         return "pytest_fixture"
     if node.name.startswith("test_"):
         return "pytest_test"
@@ -1087,7 +1113,16 @@ def pytest_parametrize_names(
     aliases: dict[str, str],
     assignments: dict[str, str],
 ) -> set[str]:
-    names: set[str] = set()
+    return pytest_parametrize_name_sets(node, aliases, assignments)[0]
+
+
+def pytest_parametrize_name_sets(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+) -> tuple[set[str], set[str]]:
+    direct_names: set[str] = set()
+    indirect_names: set[str] = set()
     for decorator in getattr(node, "decorator_list", []):
         if not isinstance(decorator, ast.Call):
             continue
@@ -1098,9 +1133,10 @@ def pytest_parametrize_names(
         decorator_names = pytest_literal_name_set(first_arg)
         if not decorator_names:
             continue
-        indirect_names = pytest_parametrize_indirect_names(decorator, decorator_names)
-        names.update(decorator_names - indirect_names)
-    return names
+        decorator_indirect_names = pytest_parametrize_indirect_names(decorator, decorator_names)
+        direct_names.update(decorator_names - decorator_indirect_names)
+        indirect_names.update(decorator_indirect_names)
+    return direct_names, indirect_names
 
 
 def pytest_literal_name_set(value: ast.AST | None) -> set[str]:
@@ -1633,6 +1669,7 @@ def collect_fixture_facts(
     fixture_names: set[str],
     conftest_fixture_names: set[str] | None,
     parametrize_names: set[str] | None,
+    indirect_parametrize_names: set[str] | None,
     facts: list[dict[str, Any]],
 ) -> None:
     if not node.name.startswith("test_"):
@@ -1654,11 +1691,41 @@ def collect_fixture_facts(
     )
     conftest_fixture_names = conftest_fixture_names or set()
     parametrize_names = parametrize_names or set()
+    indirect_parametrize_names = indirect_parametrize_names or set()
     for arg in node.args.args:
         if arg.arg == "self":
             continue
         start, end = node_range(starts, arg)
-        if arg.arg in fixture_names:
+        if arg.arg in parametrize_names:
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="SYMBOL",
+                    subject_unit_id=subject_unit_id,
+                    target=f"pytest.parametrize.{arg.arg}",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="pytest_parametrize_arg",
+                ),
+            )
+        elif arg.arg in indirect_parametrize_names:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="PytestFixtureInjection",
+                    affected_claim="pytest_fixture_binding",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+        elif arg.arg in fixture_names:
             add_fact(
                 facts,
                 structural_fact(
@@ -1686,21 +1753,6 @@ def collect_fixture_facts(
                     start=start,
                     end=end,
                     anchor_kind="pytest_conftest_fixture_edge",
-                ),
-            )
-        elif arg.arg in parametrize_names:
-            add_fact(
-                facts,
-                structural_fact(
-                    kind="SYMBOL",
-                    subject_unit_id=subject_unit_id,
-                    target=f"pytest.parametrize.{arg.arg}",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                    anchor_kind="pytest_parametrize_arg",
                 ),
             )
         else:
@@ -1773,12 +1825,20 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
-    fixture_names = pytest_fixture_names_from_tree(tree)
+    fixture_names = pytest_fixture_names_from_tree(tree, aliases)
 
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             start, end = node_range(starts, item)
-            units.append(unit(item.name, function_kind(item, None), start, end, ordinal))
+            units.append(
+                unit(
+                    item.name,
+                    function_kind(item, None, aliases, assignments),
+                    start,
+                    end,
+                    ordinal,
+                )
+            )
             unit_by_node[id(item)] = units[-1]
             ordinal += 1
         elif isinstance(item, ast.ClassDef):
@@ -1789,7 +1849,15 @@ def analyze_source(
             for child in item.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     start, end = node_range(starts, child)
-                    units.append(unit(child.name, function_kind(child, item.name), start, end, ordinal))
+                    units.append(
+                        unit(
+                            child.name,
+                            function_kind(child, item.name, aliases, assignments),
+                            start,
+                            end,
+                            ordinal,
+                        )
+                    )
                     unit_by_node[id(child)] = units[-1]
                     ordinal += 1
 
@@ -1807,6 +1875,9 @@ def analyze_source(
                 assignments,
                 facts,
             )
+            parametrize_names, indirect_parametrize_names = pytest_parametrize_name_sets(
+                item, aliases, assignments
+            )
             collect_fixture_facts(
                 item,
                 starts,
@@ -1816,7 +1887,8 @@ def analyze_source(
                 subject_unit_id,
                 fixture_names,
                 conftest_fixture_names,
-                pytest_parametrize_names(item, aliases, assignments),
+                parametrize_names,
+                indirect_parametrize_names,
                 facts,
             )
             collect_call_facts(
@@ -2142,7 +2214,16 @@ def pytest_fixture_names(source: str) -> set[str]:
         tree = ast.parse(source)
     except SyntaxError:
         return set()
-    return pytest_fixture_names_from_tree(tree)
+    starts = byte_line_starts(source)
+    aliases, _facts = collect_import_aliases(
+        tree,
+        starts,
+        "conftest.py",
+        "sha256:" + "0" * 64,
+        "UNKNOWN",
+        "unit:conftest.py#module:module:0-0:0",
+    )
+    return pytest_fixture_names_from_tree(tree, aliases)
 
 
 def conftest_fixture_index(file_records: list[tuple[str, str, str]]) -> dict[str, set[str]]:

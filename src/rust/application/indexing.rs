@@ -1956,6 +1956,80 @@ mod tests {
     }
 
     #[test]
+    fn exact_pytest_fixture_parser_anchors_derive_family_support() {
+        let first = indexed_python_unit("tests/conftest.py", "pytest_fixture", 0);
+        let second = indexed_python_unit("tests/conftest.py", "pytest_fixture", 1);
+        let third = indexed_python_unit("tests/conftest.py", "pytest_fixture", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = units
+            .iter()
+            .map(|unit| {
+                parser_structural_anchor_fact(unit, SemanticFactKind::Symbol, "pytest.fixture")
+            })
+            .collect::<Vec<_>>();
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pytest.fixture"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pytest fixture support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].framework_role, "framework:pytest.fixture");
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn pytest_fixture_edges_and_parametrize_args_do_not_derive_family_support() {
+        let first = indexed_python_unit("tests/test_api.py", "pytest_test", 0);
+        let second = indexed_python_unit("tests/test_api.py", "pytest_test", 1);
+        let third = indexed_python_unit("tests/test_api.py", "pytest_test", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "pytest.fixture.client",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "pytest.parametrize.client",
+            ),
+            parser_structural_anchor_fact(&third, SemanticFactKind::Symbol, "pytest.fixture.db"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pytest.test"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pytest support");
+
+        assert!(derived.is_empty());
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn exact_pydantic_parser_anchors_derive_family_support() {
         let first = indexed_python_unit("schemas.py", "pydantic_model", 0);
         let second = indexed_python_unit("schemas.py", "pydantic_model", 1);

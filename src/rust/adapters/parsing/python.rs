@@ -1384,6 +1384,8 @@ from fastapi import Depends, HTTPException
 from app.services import UserService, run_query
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 import pytest
+import pytest as pt
+from pytest import fixture as pytest_fixture
 router = APIRouter()
 
 class UserOut(BaseModel):
@@ -1430,8 +1432,16 @@ def list_orders():
     service = object()
     return service.list_orders()
 
+@pytest_fixture
+def client():
+    return object()
+
+@pt.fixture
+def db():
+    return object()
+
 @pytest.mark.parametrize("status", [200])
-def test_users(client, status):
+def test_users(client, status, missing_fixture):
     assert client.get("/users").status_code == status
 "#;
         let report = PythonAstParser::default()
@@ -1447,6 +1457,13 @@ def test_users(client, status):
         assert!(kinds.contains(&"pydantic_model"));
         assert!(kinds.contains(&"fastapi_route"));
         assert!(kinds.contains(&"pytest_test"));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == "pytest_fixture")
+                .count(),
+            2
+        );
         assert!(report.diagnostics.is_empty());
         assert!(report
             .units
@@ -1643,6 +1660,22 @@ def test_users(client, status):
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_decorator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.status")
                 && fact
                     .assumptions
@@ -1738,6 +1771,59 @@ def test_indirect_all(resource):
             })
             .count();
         assert!(fixture_unknowns >= 2);
+    }
+
+    #[test]
+    fn cpython_frontend_prefers_direct_parametrize_over_same_named_fixture() {
+        let source = r#"
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+
+@pytest.mark.parametrize("client", ["api"])
+def test_direct_client(client):
+    assert client
+
+@pytest.mark.parametrize("db", ["db"], indirect=True)
+def test_indirect_db(db):
+    assert db
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_parametrize_arg")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.parametrize.db")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("return object"));
     }
 
     #[test]
@@ -2241,7 +2327,7 @@ from acme.missing import value\n";
             python_source_roots: Vec::new(),
             python_conftest_files: vec![ParserProjectFileContext {
                 path: "tests/conftest.py".to_string(),
-                text: "import pytest\n\n@pytest.fixture\ndef client():\n    return object()\n"
+                text: "import pytest as pt\n\n@pt.fixture\ndef client():\n    return object()\n"
                     .to_string(),
             }],
         };

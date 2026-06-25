@@ -191,8 +191,10 @@ evidence contracts remain validated together.
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
 - The first CPython structural slice is implemented, including
   worker-local structural anchors for imports, decorators, class bases, simple
-  calls, `pytest.test` test-function anchors, same-file pytest fixture edges,
-  and typed dynamic/unresolved `UNKNOWN`, plus path-derived module names,
+  calls, `pytest.test` test-function anchors, alias-aware pytest fixture
+  decorators, same-file pytest fixture edges, direct
+  `pytest.mark.parametrize` argument precedence over same-name fixtures, and
+  typed dynamic/unresolved `UNKNOWN`, plus path-derived module names,
   CPython `symtable` scope anchors, and private `tomllib` project-config
   summaries. The semantic-worker-compatible
   project mode now builds a bounded module graph for requested `.py` files and
@@ -206,9 +208,11 @@ evidence contracts remain validated together.
   storage/readiness gate. Project-config summaries are default indexing
   structural context but not claim evidence. The current
   application layer can derive `DATAFLOW_DERIVED` support from exact canonical
-  anchors under the Python support >= 3 gate. Next Python slices should escalate
-  only plausible family candidates to Pyrefly and use Pyright only for
-  claim-upgrading cross-checks.
+  anchors under the Python support >= 3 gate, including bare canonical pytest
+  fixture decorators while keeping fixture-edge and parametrize-argument context
+  anchors out of support. Next Python slices should escalate only plausible
+  family candidates to Pyrefly and use Pyright only for claim-upgrading
+  cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.

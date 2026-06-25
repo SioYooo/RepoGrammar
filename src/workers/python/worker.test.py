@@ -58,6 +58,8 @@ from pydantic import BaseModel, ConfigDict, computed_field, field_validator, mod
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 import pytest
+import pytest as pt
+from pytest import fixture as pytest_fixture
 
 router = APIRouter()
 
@@ -161,8 +163,16 @@ def list_orders():
 def raises_not_found():
     raise HTTPException(status_code=404)
 
+@pytest_fixture
+def client():
+    return object()
+
+@pt.fixture
+def db():
+    return object()
+
 @pytest.mark.parametrize("status", [200])
-def test_users(client, status):
+def test_users(client, status, missing_fixture):
     assert client.get("/users").status_code == status
 """,
     }
@@ -172,6 +182,7 @@ unit_kinds = [unit["kind"] for unit in parse_messages[0]["units"]]
 assert "module" in unit_kinds
 assert "fastapi_route" in unit_kinds
 assert "pytest_test" in unit_kinds
+assert sum(1 for kind in unit_kinds if kind == "pytest_fixture") == 2
 assert "pydantic_model" in unit_kinds
 assert "sqlalchemy_model" in unit_kinds
 assert "async_function" not in unit_kinds
@@ -361,6 +372,18 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture"
+    and "python_anchor_kind=pytest_fixture_decorator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pytest.parametrize.status"
     and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
     for fact in parse_facts
@@ -466,6 +489,55 @@ assert sum(
     for fact in indirect_facts
     if fact["fact_kind"] == "UNKNOWN" and fact["target"] == "PytestFixtureInjection"
 ) >= 2
+
+parametrize_fixture_collision_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "test_parametrize_collision.py",
+        "content_hash": "sha256:" + "e" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+
+@pytest.mark.parametrize("client", ["api"])
+def test_direct_client(client):
+    assert client
+
+@pytest.mark.parametrize("db", ["db"], indirect=True)
+def test_indirect_db(db):
+    assert db
+""",
+    }
+)
+collision_facts = parametrize_fixture_collision_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.client"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in collision_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in collision_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.db"
+    for fact in collision_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in collision_facts
+)
 
 settings_parse_messages = run_worker(
     {
@@ -793,9 +865,9 @@ conftest_parse_messages = run_worker(
             {
                 "path": "tests/conftest.py",
                 "text": """
-import pytest
+import pytest as pt
 
-@pytest.fixture
+@pt.fixture
 def client():
     return object()
 """,
@@ -987,9 +1059,9 @@ with tempfile.TemporaryDirectory() as root:
     Path(root, "tests/sub").mkdir(parents=True)
     Path(root, "tests/conftest.py").write_text(
         """
-import pytest
+import pytest as pt
 
-@pytest.fixture
+@pt.fixture
 def client():
     return object()
 """,

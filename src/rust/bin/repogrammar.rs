@@ -691,7 +691,7 @@ mod tests {
             "response_model=",
             "BaseModel",
             "mapped_column",
-            "pytest.fixture",
+            "@pytest.fixture",
             "importlib.import_module",
             "client.get(",
             "return {",
@@ -751,6 +751,13 @@ mod tests {
             support_target: "pytest.test",
             evidence_path: "test_api.py",
             member_role: "framework:pytest.test",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "pytest-fixture-alias-strong-evidence",
+            family_id: "family:python:pytest_fixture:framework_pytest_fixture",
+            support_target: "pytest.fixture",
+            evidence_path: "conftest.py",
+            member_role: "framework:pytest.fixture",
         },
         PythonExactAnchorSmokeCase {
             fixture: "pydantic-basic",

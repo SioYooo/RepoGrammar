@@ -36,6 +36,11 @@
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
   HTTPException status-code structural anchors remain auxiliary
   schema/context/effect metadata and are not membership support targets.
+  Pytest fixture decorators are now alias-aware in same-file and `conftest.py`
+  contexts. Direct parametrize arguments take precedence over same-name fixtures,
+  indirect parametrize arguments stay typed `PytestFixtureInjection` `UNKNOWN`,
+  and fixture-edge/parametrize-argument anchors remain context metadata rather
+  than family support.
   Pydantic field, field-type, `model_config`, nested `Config`,
   computed-field, and model-validator anchors likewise remain schema/config/member
   metadata and are not membership support targets.
@@ -73,8 +78,9 @@ TypeScript/JavaScript discovery, Python `.py` discovery with Python
 virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
-bases, simple calls, `pytest.test` test-function anchors, same-file pytest
-fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
+bases, simple calls, `pytest.test` test-function anchors, alias-aware pytest
+fixture decorators, same-file pytest fixture edges, and typed dynamic or
+unresolved `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
 HTTPException status codes, literal pytest parametrize arguments, Pydantic
@@ -129,9 +135,10 @@ discovery, hash-checked source reads, dependency-free TS/JS syntax-only
 code-unit extraction, CPython AST-backed Python structural code-unit
 extraction, worker-local Python structural fact payloads for import bindings,
 decorator anchors, class bases, simple call targets, `pytest.test`
-test-function anchors, same-file pytest fixture edges, parent-directory
-`conftest.py` fixture hierarchy edges, FastAPI dependency/error anchors, pytest
-parametrize argument anchors that are not treated as fixture injection UNKNOWNs,
+test-function anchors, alias-aware pytest fixture decorators, same-file pytest
+fixture edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
+dependency/error anchors, pytest parametrize argument anchors that are not
+treated as fixture injection UNKNOWNs,
 Pydantic field/config/member anchors, and typed dynamic/unresolved `UNKNOWN`
 cases, plus bounded same-function FastAPI service-call anchors with reassignment
 invalidation,
@@ -154,10 +161,12 @@ Release fixture smoke coverage copies committed TS/JS and Python fixtures into
 temporary workspaces and checks product CLI JSON paths, no absolute-path
 leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
-direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
+direct FastAPI, FastAPI alias, pytest, alias-aware pytest fixtures,
+Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
-FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
-SQLAlchemy session/repository including scalar/scalars fixtures now validate the
+FastAPI alias, pytest tests, pytest fixtures, Pydantic model/settings,
+SQLAlchemy model-field, and SQLAlchemy session/repository including
+scalar/scalars fixtures now validate the
 no-worker exact-anchor derived-support family path, exact-anchor target variation metadata,
 metadata-only evidence modes, MCP parity, and stale-evidence query refusal. A
 separate

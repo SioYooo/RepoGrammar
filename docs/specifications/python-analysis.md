@@ -82,9 +82,9 @@ The current implementation covers the first structural slice only:
 - CPython `ast` parse-document worker output for code-unit extraction;
 - CPython `ast` structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, bounded same-function application call
-  targets, pytest test-function anchors, same-file pytest fixture edges, literal
-  pytest parametrize argument anchors, and typed dynamic/unresolved `UNKNOWN`
-  facts;
+  targets, pytest test-function anchors, alias-aware pytest fixture decorators,
+  same-file pytest fixture edges, literal pytest parametrize argument anchors,
+  and typed dynamic/unresolved `UNKNOWN` facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -118,14 +118,17 @@ The current implementation covers the first structural slice only:
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
   static `Depends(get_db)` dependency target slots, `HTTPException(...)`, and
-  literal `HTTPException(status_code=...)` status-code effect slots, pytest
-  `fixture` and `mark.parametrize` decorators plus literal parametrize
-  arguments, and Pydantic model-member anchors for fields, field annotation
-  targets, `model_config`, nested `Config`, `computed_field`, validator, and
-  `model_validator` declarations. These remain CPython `ast` structural facts;
-  they do not become provider-backed semantic facts, do not make parametrized
-  pytest arguments look like unresolved fixture injections, and do not make
-  Pydantic member/config metadata into family membership support;
+  literal `HTTPException(status_code=...)` status-code effect slots, alias-aware
+  pytest `fixture` decorators and `mark.parametrize` decorators plus literal
+  parametrize arguments, and Pydantic model-member anchors for fields, field
+  annotation targets, `model_config`, nested `Config`, `computed_field`,
+  validator, and `model_validator` declarations. These remain CPython `ast`
+  structural facts; they do not become provider-backed semantic facts. Direct
+  pytest parametrize arguments take precedence over same-name fixture bindings,
+  indirect parametrize arguments remain typed `PytestFixtureInjection`
+  `UNKNOWN`, fixture-edge and parametrize-argument anchors stay out of family
+  membership support, and Pydantic member/config metadata likewise does not
+  become support;
 - bounded same-function application call recovery for import-resolved static forms such as
   `service = UserService(); service.list_users()` and
   `runner = run_query; runner()` inside FastAPI route units. These produce
@@ -157,11 +160,13 @@ The current implementation covers the first structural slice only:
   stays inside the same code-unit path/hash/range, and the target exact-matches
   the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
-  for FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown,
-  low-support, strong-evidence, and stale-evidence smoke coverage;
+  for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
+  dynamic-unknown, low-support, strong-evidence, and stale-evidence smoke
+  coverage;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
-  exact FastAPI, FastAPI router-alias, pytest, Pydantic model,
+  exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,
+  Pydantic model,
   Pydantic settings, SQLAlchemy model, and SQLAlchemy session/repository
   anchors can produce default families only through separate derived support
   facts, prove exact-anchor family reads across `families`, `family`,
@@ -380,9 +385,14 @@ pytest roles:
 - `PYTEST_FIXTURE_EDGE`;
 - `PYTEST_PARAMETRIZE`.
 
-Required evidence includes test function naming, `@pytest.fixture`,
-`@pytest.mark.parametrize`, nearest `conftest.py` hierarchy, explicit fixture
-definitions, built-in/plugin fixture allowlists, and ambiguity detection.
+Required evidence includes test function naming, alias-normalized
+`@pytest.fixture`, `@pytest.mark.parametrize`, nearest `conftest.py` hierarchy,
+explicit fixture definitions, built-in/plugin fixture allowlists, and ambiguity
+detection. Bare canonical fixture decorators may become exact-anchor support for
+pytest fixture families when the compatibility table, support count, and
+freshness/readiness gates pass. `pytest.fixture.<name>` fixture-edge anchors and
+`pytest.parametrize.<name>` argument anchors are context only and must not derive
+family support.
 
 Pydantic roles:
 
@@ -477,9 +487,12 @@ Algorithm:
 1. Collect `@pytest.fixture` definitions.
 2. Collect `conftest.py` files by directory hierarchy.
 3. Collect test function parameters.
-4. Map each parameter to the nearest unique fixture definition.
-5. Mark built-in or plugin fixtures as external fixture context when known.
-6. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
+4. Classify direct `pytest.mark.parametrize` arguments before fixture lookup.
+5. Preserve indirect parametrize arguments as typed `PytestFixtureInjection`
+   `UNKNOWN`.
+6. Map each remaining parameter to the nearest unique fixture definition.
+7. Mark built-in or plugin fixtures as external fixture context when known.
+8. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
    dynamic, or plugin-defined bindings.
 
 ### Layer 8: Python EC-MVFI-lite

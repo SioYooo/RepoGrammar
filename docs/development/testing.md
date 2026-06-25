@@ -148,10 +148,12 @@ allowed.
   diagnostics, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
-  dependency-target/dependency-call/error/status-code anchors, pytest
-  parametrize decorator and literal argument anchors, Pydantic field,
-  field-type, model-config, nested Config, computed-field, validator, and
-  model-validator anchors,
+  dependency-target/dependency-call/error/status-code anchors, pytest fixture
+  decorator aliases, pytest parametrize decorator and literal argument anchors,
+  direct-parametrize-over-fixture precedence, indirect parametrize remaining
+  typed `PytestFixtureInjection` `UNKNOWN`, Pydantic field, field-type,
+  model-config, nested Config, computed-field, validator, and model-validator
+  anchors,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
@@ -197,15 +199,18 @@ allowed.
   heuristic framework-role facts staying out of family claims, raw parser-origin
   facts staying out of family construction,
   exact-anchor derived support facts producing no-worker direct FastAPI,
-  FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
-  SQLAlchemy session/repository families only when Python support reaches three
-  members, their CLI/MCP metadata-only compact/evidence/deep query paths,
+  FastAPI alias, pytest test, pytest fixture, Pydantic model/settings,
+  SQLAlchemy model-field, and SQLAlchemy session/repository families only when
+  Python support reaches three members, their CLI/MCP metadata-only
+  compact/evidence/deep query paths,
   exact-anchor target variation coverage only for already-ready Python families,
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors staying out of support derivation and support-target
-  variation metadata, SQLAlchemy relationship and Session.add structural anchors
-  staying out of family support, SQLAlchemy `Session.scalar`/`Session.scalars`
-  and async equivalents becoming exact repository-method anchors, bounded
+  variation metadata, pytest fixture-edge and parametrize-argument anchors
+  staying out of family support, SQLAlchemy relationship and Session.add
+  structural anchors staying out of family support, SQLAlchemy
+  `Session.scalar`/`Session.scalars` and async equivalents becoming exact
+  repository-method anchors, bounded
   SQLAlchemy `self.session`/`self.db` role propagation from `__init__`, and
   reassigned receivers not becoming exact session-call anchors, Pydantic field,
   field-type, model-config, nested Config,

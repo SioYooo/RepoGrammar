@@ -98,6 +98,11 @@
 - SQLAlchemy repository-method exact anchors now include direct
   `Session.scalar`/`Session.scalars` and async session equivalents, with a
   release smoke fixture proving derived family support without source snippets.
+- CPython AST worker pytest fixture detection is now alias-aware for same-file
+  and `conftest.py` contexts. Direct parametrize arguments take precedence over
+  same-name fixtures, indirect parametrize arguments stay typed
+  `PytestFixtureInjection` `UNKNOWN`, and fixture-edge/parametrize-argument
+  anchors remain excluded from family support.
 - CPython AST worker Pydantic model-member structural anchors now include
   fields, field annotation targets, `model_config`, nested `Config`,
   `computed_field`, validators, and `model_validator`. These anchors remain
