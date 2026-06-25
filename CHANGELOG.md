@@ -162,3 +162,7 @@
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
   domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
   boundaries with the current syntax-only indexing baseline.
+- Hardened generation-scoped storage writes so indexed files, code units, IR
+  nodes/edges, and semantic facts can only be recorded while a generation is
+  still building, and active generations cannot be downgraded by stale
+  validation or activation handles.

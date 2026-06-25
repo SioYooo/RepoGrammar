@@ -223,6 +223,7 @@ impl IndexStore for SqliteIndexStore {
     ) -> Result<(), IndexStoreError> {
         validate_repo_relative_path(&file.path)?;
         let connection = self.open_existing_generation(&generation.generation_id)?;
+        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
         connection
             .execute(
                 "INSERT INTO indexed_files \
@@ -248,6 +249,7 @@ impl IndexStore for SqliteIndexStore {
     ) -> Result<(), IndexStoreError> {
         validate_repo_relative_path(&unit.path)?;
         let connection = self.open_existing_generation(&generation.generation_id)?;
+        require_building_generation(&connection, &generation.generation_id, "code units")?;
         let Some((file_hash, file_size_bytes)) = connection
             .query_row(
                 "SELECT content_hash, size_bytes FROM indexed_files \
@@ -313,19 +315,7 @@ impl IndexStore for SqliteIndexStore {
             ));
         }
         let connection = self.open_existing_generation(&generation.generation_id)?;
-        match generation_status(&connection, &generation.generation_id)?.as_deref() {
-            Some("building") => {}
-            Some(_) => {
-                return Err(IndexStoreError::InvalidState(
-                    "IR nodes may only be recorded for building generations".to_string(),
-                ));
-            }
-            None => {
-                return Err(IndexStoreError::InvalidState(
-                    "generation row is missing".to_string(),
-                ));
-            }
-        }
+        require_building_generation(&connection, &generation.generation_id, "IR nodes")?;
         let code_unit_exists = connection
             .query_row(
                 "SELECT count(*) FROM code_units \
@@ -370,19 +360,7 @@ impl IndexStore for SqliteIndexStore {
             return Err(invalid_record("IR edge must not point to itself"));
         }
         let connection = self.open_existing_generation(&generation.generation_id)?;
-        match generation_status(&connection, &generation.generation_id)?.as_deref() {
-            Some("building") => {}
-            Some(_) => {
-                return Err(IndexStoreError::InvalidState(
-                    "IR edges may only be recorded for building generations".to_string(),
-                ));
-            }
-            None => {
-                return Err(IndexStoreError::InvalidState(
-                    "generation row is missing".to_string(),
-                ));
-            }
-        }
+        require_building_generation(&connection, &generation.generation_id, "IR edges")?;
         for (node_id, label) in [
             (edge.from_node_id.as_str(), "from"),
             (edge.to_node_id.as_str(), "to"),
@@ -424,19 +402,7 @@ impl IndexStore for SqliteIndexStore {
     ) -> Result<(), IndexStoreError> {
         validate_repo_relative_path(&fact.path)?;
         let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        match generation_status(&connection, &generation.generation_id)?.as_deref() {
-            Some("building") => {}
-            Some(_) => {
-                return Err(IndexStoreError::InvalidState(
-                    "semantic facts may only be recorded for building generations".to_string(),
-                ));
-            }
-            None => {
-                return Err(IndexStoreError::InvalidState(
-                    "generation row is missing".to_string(),
-                ));
-            }
-        }
+        require_building_generation(&connection, &generation.generation_id, "semantic facts")?;
         let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = connection
             .query_row(
                 "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
@@ -615,21 +581,43 @@ impl IndexStore for SqliteIndexStore {
                 "IR graph is inconsistent with indexed code units".to_string(),
             ));
         }
-        if generation_status(&connection, &generation.generation_id)?.as_deref() == Some("failed") {
-            return Err(IndexStoreError::InvalidState(
-                "failed generation cannot be activated".to_string(),
-            ));
-        }
-        let updated = connection
-            .execute(
-                "UPDATE index_generations SET status = 'validated' WHERE generation_id = ?1",
-                params![generation.generation_id],
-            )
-            .map_err(sql_unavailable)?;
-        if updated != 1 {
-            return Err(IndexStoreError::InvalidState(
-                "generation row is missing".to_string(),
-            ));
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {
+                let updated = connection
+                    .execute(
+                        "UPDATE index_generations \
+                         SET status = 'validated' \
+                         WHERE generation_id = ?1 AND status = 'building'",
+                        params![generation.generation_id],
+                    )
+                    .map_err(sql_unavailable)?;
+                if updated != 1 {
+                    return Err(IndexStoreError::InvalidState(
+                        "generation status changed during validation".to_string(),
+                    ));
+                }
+            }
+            Some("validated") => {}
+            Some("active") => {
+                return Err(IndexStoreError::InvalidState(
+                    "active generation cannot be revalidated".to_string(),
+                ));
+            }
+            Some("failed") => {
+                return Err(IndexStoreError::InvalidState(
+                    "failed generation cannot be validated".to_string(),
+                ));
+            }
+            Some(status) => {
+                return Err(IndexStoreError::InvalidState(format!(
+                    "unsupported generation status: {status}"
+                )));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -641,13 +629,13 @@ impl IndexStore for SqliteIndexStore {
             .execute(
                 "UPDATE index_generations \
                  SET status = 'active', activated_at = datetime('now') \
-                 WHERE generation_id = ?1",
+                 WHERE generation_id = ?1 AND status = 'validated'",
                 params![generation.generation_id],
             )
             .map_err(sql_unavailable)?;
         if updated != 1 {
             return Err(IndexStoreError::InvalidState(
-                "generation row is missing".to_string(),
+                "generation must be validated before activation".to_string(),
             ));
         }
         atomic_write_current_generation(
@@ -1432,6 +1420,22 @@ fn generation_status(
         )
         .optional()
         .map_err(sql_unavailable)
+}
+
+fn require_building_generation(
+    connection: &Connection,
+    generation_id: &str,
+    record_type: &str,
+) -> Result<(), IndexStoreError> {
+    match generation_status(connection, generation_id)?.as_deref() {
+        Some("building") => Ok(()),
+        Some(_) => Err(IndexStoreError::InvalidState(format!(
+            "{record_type} may only be recorded for building generations"
+        ))),
+        None => Err(IndexStoreError::InvalidState(
+            "generation row is missing".to_string(),
+        )),
+    }
 }
 
 fn atomic_write_current_generation(
@@ -3187,6 +3191,67 @@ mod tests {
     }
 
     #[test]
+    fn file_and_code_unit_records_require_building_generation() {
+        fn assert_invalid_state(error: IndexStoreError) {
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        }
+
+        let workspace = TempWorkspace::new("sqlite-file-unit-status");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file while building");
+        store
+            .validate_generation(&generation)
+            .expect("validate generation");
+
+        let error = store
+            .record_indexed_file(&generation, &file("src/b.ts"))
+            .expect_err("validated generation must reject indexed-file writes");
+        assert_invalid_state(error);
+        let error = store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect_err("validated generation must reject code-unit writes");
+        assert_invalid_state(error);
+
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let error = store
+            .record_indexed_file(&generation, &file("src/c.ts"))
+            .expect_err("active generation must reject indexed-file writes");
+        assert_invalid_state(error);
+        let error = store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect_err("active generation must reject code-unit writes");
+        assert_invalid_state(error);
+
+        let failed = store.prepare_next_generation().expect("prepare failed");
+        store
+            .record_indexed_file(&failed, &file("src/a.ts"))
+            .expect("record failed-generation file while building");
+        let connection = store
+            .open_existing_generation(&failed.generation_id)
+            .expect("open failed generation");
+        connection
+            .execute(
+                "UPDATE index_generations SET status = 'failed' WHERE generation_id = ?1",
+                params![failed.generation_id.as_str()],
+            )
+            .expect("mark failed generation");
+
+        let error = store
+            .record_indexed_file(&failed, &file("src/b.ts"))
+            .expect_err("failed generation must reject indexed-file writes");
+        assert_invalid_state(error);
+        let error = store
+            .record_code_unit(&failed, &code_unit("src/a.ts"))
+            .expect_err("failed generation must reject code-unit writes");
+        assert_invalid_state(error);
+    }
+
+    #[test]
     fn generation_validation_rejects_malformed_semantic_evidence_rows() {
         let workspace = TempWorkspace::new("sqlite-semantic-fact-validation");
         let store = store(&workspace);
@@ -3289,6 +3354,44 @@ mod tests {
         let inspection = store.inspect().expect("inspect after failed validation");
 
         assert_eq!(inspection.active_generation, Some(first.generation_id));
+    }
+
+    #[test]
+    fn validation_rejects_active_generation_without_downgrading_status() {
+        let workspace = TempWorkspace::new("sqlite-active-validation-freeze");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let validation_error = store
+            .validate_generation(&generation)
+            .expect_err("active generation must not be revalidated");
+        let activation_error = store
+            .activate_generation(&generation)
+            .expect_err("active generation must not be reactivated");
+
+        assert!(matches!(validation_error, IndexStoreError::InvalidState(_)));
+        assert!(matches!(activation_error, IndexStoreError::InvalidState(_)));
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM index_generations WHERE generation_id = ?1",
+                params![generation.generation_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("read generation status");
+        assert_eq!(status, "active");
+        assert_eq!(
+            store
+                .inspect()
+                .expect("inspect after stale validation")
+                .active_generation,
+            Some(generation.generation_id.clone())
+        );
     }
 
     #[test]

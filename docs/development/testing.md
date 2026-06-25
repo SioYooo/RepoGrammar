@@ -41,8 +41,10 @@ allowed.
   code-unit path/hash/range validation, IR node/edge storage with
   same-generation code-unit/node validation, malformed semantic evidence and IR
   graph rejection before activation, atomic rollback of failed fact writes,
-  building-generation write gates, read-only active `files`/`units` listing
-  order and tamper rejection, read-only active IR and semantic-fact listing with
+  building-generation write gates for indexed files, code units, IR nodes/edges,
+  and semantic facts, validation/activation transition guards that do not
+  downgrade active generations, read-only active `files`/`units` listing order
+  and tamper rejection, read-only active IR and semantic-fact listing with
   validation and tamper rejection, internal active claim-input snapshot reads
   from one validated generation, snapshot tamper rejection across files, units,
   IR, and semantic facts, and rejection of symlinked or malformed

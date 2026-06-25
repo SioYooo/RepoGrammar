@@ -148,6 +148,12 @@ worker-produced facts through this same-generation gate. Worker unavailable,
 unsupported-version, timeout, crash, or protocol-violation results fall back to
 syntax-only indexing with sanitized warnings; evidence that conflicts with the
 building generation's indexed path/hash/range aborts the new generation.
+All generation-scoped writes for indexed files, code units, IR nodes/edges, and
+semantic facts require `status = 'building'`; validated, active, or failed
+generations are immutable even if a caller still holds an old generation handle.
+Generation validation transitions only `building` to `validated`, may recheck an
+already `validated` generation without changing it, and must not downgrade or
+reactivate an `active` generation.
 
 ## File Discovery Exclusions
 
