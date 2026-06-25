@@ -49,9 +49,10 @@ The implemented slice covers CPython `ast` structural candidates, path-derived
 module anchors, CPython `symtable` structural scope anchors, private
 `tomllib` project-config summaries, semantic-worker-compatible project-mode
 module-level repo-local import resolution, default parser-mode repo-local
-import context from discovered `.py` inventory, and framework-role heuristics
-only, plus file-local simple FastAPI router/app alias propagation and a narrow
-bounded exact-anchor derivation step that synthesizes separate
+import context from discovered `.py` inventory and sanitized root
+`pyproject.toml` source roots, and framework-role heuristics only, plus
+file-local simple FastAPI router/app alias propagation and a narrow bounded
+exact-anchor derivation step that synthesizes separate
 `DATAFLOW_DERIVED` support facts when validated parser anchors exact-match the
 canonical Python framework compatibility table for a unit with one framework
 role. Product smoke tests now prove low-support and dynamic cases remain
@@ -63,8 +64,11 @@ their already-compatible exact framework-anchor support targets differ within
 the same family; this does not imply provider-backed semantics or runtime
 equivalence. The current Python worker can also emit bounded same-function
 FastAPI route service-call anchors as structural handler/service context; those
-anchors are not membership support. It also persists root `pyproject.toml` only as structural
-project-config context or typed config `UNKNOWN`. Subsequent
+anchors are not membership support. Dynamic decorator factories and
+`setattr(...)` monkey-patching become typed `UNKNOWN`s rather than inferred
+framework identity or call-target evidence. It also persists root
+`pyproject.toml` only as structural project-config context or typed config
+`UNKNOWN`. Subsequent
 slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
 bounded role propagation, cross-function target-centered call recovery, richer

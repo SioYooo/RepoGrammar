@@ -1017,10 +1017,23 @@ def collect_decorator_facts(
     facts: list[dict[str, Any]],
 ) -> None:
     for decorator in getattr(node, "decorator_list", []):
+        start, end = node_range(starts, decorator)
         name = dotted_name(decorator)
         if not name:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_framework_identity",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
             continue
-        start, end = node_range(starts, decorator)
         target = canonical_name(name, aliases, assignments)
         anchor_kind = decorator_anchor_kind(target)
         add_fact(
@@ -1037,6 +1050,20 @@ def collect_decorator_facts(
                 anchor_kind=anchor_kind,
             ),
         )
+        if isinstance(decorator, ast.Call) and anchor_kind == "decorator_binding":
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_framework_identity",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
         if anchor_kind == "fastapi_route_decorator" and isinstance(decorator, ast.Call):
             collect_fastapi_response_model_facts(
                 decorator,
@@ -1402,6 +1429,15 @@ def is_dynamic_call(node: ast.Call) -> bool:
     return False
 
 
+def is_monkey_patch_call(node: ast.Call, canonical: str | None) -> bool:
+    if canonical != "setattr":
+        return False
+    if not node.args:
+        return True
+    target = dotted_name(node.args[0])
+    return target not in {"self", "cls"}
+
+
 def collect_call_facts(
     node: ast.AST,
     unit_kind: str,
@@ -1451,6 +1487,21 @@ def collect_call_facts(
             ):
                 receiver = ".".join(parts[:-1])
                 canonical = f"{parameter_roles[receiver]}.{parts[-1]}"
+        if is_monkey_patch_call(call, canonical):
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="MonkeyPatch",
+                    affected_claim="python_call_target",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
         if canonical in {"sys.path.append", "sys.path.insert"}:
             add_fact(
                 facts,

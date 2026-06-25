@@ -197,7 +197,8 @@ evidence contracts remain validated together.
   calls, `pytest.test` test-function anchors, alias-aware pytest fixture
   decorators, same-file pytest fixture edges, direct
   `pytest.mark.parametrize` argument precedence over same-name fixtures, and
-  typed dynamic/unresolved `UNKNOWN`, plus path-derived module names,
+  typed dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
+  monkey-patch, and unresolved import `UNKNOWN`, plus path-derived module names,
   CPython `symtable` scope anchors, and private `tomllib` project-config
   summaries. The semantic-worker-compatible
   project mode now builds a bounded module graph for requested `.py` files and

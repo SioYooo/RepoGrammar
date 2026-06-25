@@ -700,6 +700,16 @@ def load(name, obj, method):
     sys.path.append("/tmp/secret")
     getattr(obj, method)()
     globals()[name]()
+    setattr(obj, method, object())
+
+def decorator_factory(name):
+    def inner(function):
+        return function
+    return inner
+
+@decorator_factory("secret")
+def decorated():
+    return None
 """,
     }
 )
@@ -718,11 +728,25 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "MonkeyPatch"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_framework_identity" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
     and fact["target"] == "RuntimeDependencyInjection"
     and "affected_claim=python_import_resolution" in fact["assumptions"]
     for fact in dynamic_facts
 )
 assert "importlib.import_module(name)" not in json.dumps(dynamic_messages)
+assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
+assert "setattr(obj" not in json.dumps(dynamic_messages)
 assert "/tmp/secret" not in json.dumps(dynamic_messages)
 
 unsafe_literal_import = run_worker(

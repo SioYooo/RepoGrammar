@@ -57,6 +57,10 @@
   context for import-resolved static local forms such as `service = UserService();
   service.list_users()` and `runner = run_query; runner()`, with reassignment
   invalidation and dynamic `getattr(...)` calls preserved as typed `UNKNOWN`.
+  Dynamic decorator factories now produce typed `FrameworkMagic` UNKNOWNs for
+  `python_framework_identity`, and `setattr(...)` monkey-patching produces typed
+  `MonkeyPatch` UNKNOWNs for `python_call_target`; neither path becomes family
+  evidence.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming

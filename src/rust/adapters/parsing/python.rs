@@ -1224,6 +1224,7 @@ fn python_affected_claim_is_supported(value: &str) -> bool {
         value,
         "python_import_resolution"
             | "python_call_target"
+            | "python_framework_identity"
             | "pytest_fixture_binding"
             | "python_project_config"
     )
@@ -1733,6 +1734,44 @@ def test_users(client, status, missing_fixture):
         assert!(!debug.contains("Depends(get_db"));
         assert!(!debug.contains("HTTPException("));
         assert!(!debug.contains("assert client.get"));
+    }
+
+    #[test]
+    fn cpython_frontend_marks_dynamic_decorators_and_monkey_patches_unknown() {
+        let source = r#"
+def decorator_factory(name):
+    def inner(function):
+        return function
+    return inner
+
+@decorator_factory("secret")
+def decorated(target, method):
+    setattr(target, method, object())
+    return target
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_framework_identity")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("MonkeyPatch")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_call_target")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("decorator_factory(\"secret\")"));
+        assert!(!debug.contains("setattr(target"));
     }
 
     #[test]

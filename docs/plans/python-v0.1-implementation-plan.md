@@ -77,17 +77,22 @@ Current progress: `.py` discovery, CPython `ast` code-unit extraction,
 path-derived module-name anchors, CPython `symtable` structural scope anchors,
 private `tomllib` project-config summaries, and semantic-worker-compatible
 project-mode module-level repo-local import resolution are implemented. Default
-indexing now passes discovered repo-relative `.py` inventory into private
-parse-document requests so source-tied repo-local import facts can be persisted
-as structural parser-origin facts. Default indexing also discovers root
+indexing now passes discovered repo-relative `.py` inventory, sanitized root
+`pyproject.toml` source roots from parser/tomllib project-config facts, and
+bounded discovered `conftest.py` context into private parse-document requests
+so source-tied repo-local import and fixture-edge facts can be persisted as
+structural parser-origin facts. Default indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
 input. The worker performs file-local simple FastAPI router/app alias
-propagation with same-name top-level reassignment invalidation, and the
-application layer derives separate `DATAFLOW_DERIVED` support facts from exact
-canonical CPython anchors when a unit has one Python framework role; raw parser
-facts and framework heuristics still remain blocked from direct claim input.
+propagation with same-name top-level reassignment invalidation, emits typed
+`UNKNOWN` for dynamic decorators, monkey-patching, dynamic calls, dynamic
+imports, `sys.path` mutation, unresolved imports, and fixture ambiguity, and
+the application layer derives separate `DATAFLOW_DERIVED` support facts from
+exact canonical CPython anchors when a unit has one Python framework role; raw
+parser facts and framework heuristics still remain blocked from direct claim
+input.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but

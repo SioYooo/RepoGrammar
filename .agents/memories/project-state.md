@@ -5,7 +5,8 @@
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error anchors, pytest
   parametrize argument anchors, Pydantic field/config/member anchors, typed
-  dynamic/unresolved `UNKNOWN` facts, private
+  dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
+  monkey-patch, and unresolved import `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
   import context from discovered `.py` inventory and sanitized root
@@ -81,8 +82,9 @@ virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, `pytest.test` test-function anchors, alias-aware pytest
-fixture decorators, same-file pytest fixture edges, and typed dynamic or
-unresolved `UNKNOWN` cases persisted as
+fixture decorators, same-file pytest fixture edges, and typed dynamic
+decorator, dynamic call, monkey-patch, dynamic import, `sys.path` mutation, or
+unresolved import `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
 HTTPException status codes, literal pytest parametrize arguments, Pydantic
@@ -143,9 +145,10 @@ test-function anchors, alias-aware pytest fixture decorators, same-file pytest
 fixture edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
 dependency/error anchors, pytest parametrize argument anchors that are not
 treated as fixture injection UNKNOWNs,
-Pydantic field/config/member anchors, and typed dynamic/unresolved `UNKNOWN`
-cases, plus bounded same-function FastAPI service-call anchors with reassignment
-invalidation,
+Pydantic field/config/member anchors, typed dynamic decorator
+framework-identity `UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed
+dynamic/unresolved import `UNKNOWN` cases, plus bounded same-function FastAPI
+service-call anchors with reassignment invalidation,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,

@@ -158,7 +158,8 @@ allowed.
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
   same-function FastAPI service-call context anchors with reassignment
-  invalidation, typed `UNKNOWN` output for dynamic and unresolved cases,
+  invalidation, typed `UNKNOWN` output for dynamic decorators, monkey patches,
+  dynamic calls, and unresolved cases,
   oversized request
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, and absence of source snippets, absolute paths, or unsafe
@@ -230,11 +231,11 @@ allowed.
   Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed
-  `UNKNOWN` for dynamic imports, monkey patching, pytest fixture injection,
-  runtime dependency injection, unresolved imports, missing dependencies, stale
-  evidence, and framework magic. Tests must not expect future cross-checked or
-  observed certainty tokens until Rust domain, protocol, storage, CLI, MCP, and
-  schema support are added.
+  `UNKNOWN` for pytest fixture injection, runtime dependency injection, missing
+  dependencies, stale evidence, and framework magic beyond the current dynamic
+  decorator/call slice. Tests must not expect future cross-checked or observed
+  certainty tokens until Rust domain, protocol, storage, CLI, MCP, and schema
+  support are added.
 - Optional provider tests, once added, must cover provider absent, present,
   stale, and conflicting states without making CodeGraph or any other provider
   required for default tests.

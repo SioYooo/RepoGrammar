@@ -218,8 +218,8 @@ and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, path-derived module names, CPython `symtable`
-scope anchors, and typed
-dynamic/unresolved/ambiguous `UNKNOWN` cases. The semantic-worker-compatible
+scope anchors, and typed dynamic decorator, dynamic call, monkey-patch,
+dynamic/unresolved/ambiguous import, and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
 parser adapter validates and persists parse-document payloads as internal
