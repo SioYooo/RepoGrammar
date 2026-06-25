@@ -2,6 +2,10 @@
 
 use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
 use crate::error::RepoGrammarError;
+use crate::ports::family_store::{
+    ActiveFamilies, ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord,
+    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+};
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
@@ -67,6 +71,62 @@ pub fn record_semantic_fact(
     store
         .record_semantic_fact(generation, fact)
         .map_err(index_store_error)
+}
+
+pub fn record_family(
+    store: &impl FamilyStore,
+    generation: &GenerationHandle,
+    family: &IndexedFamilyRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family(family)?;
+    store
+        .record_family(generation, family)
+        .map_err(family_store_error)
+}
+
+pub fn record_family_member(
+    store: &impl FamilyStore,
+    generation: &GenerationHandle,
+    member: &IndexedFamilyMemberRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_member(member)?;
+    store
+        .record_family_member(generation, member)
+        .map_err(family_store_error)
+}
+
+pub fn record_variation_slot(
+    store: &impl FamilyStore,
+    generation: &GenerationHandle,
+    slot: &IndexedVariationSlotRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_variation_slot(slot)?;
+    store
+        .record_variation_slot(generation, slot)
+        .map_err(family_store_error)
+}
+
+pub fn record_family_evidence(
+    store: &impl FamilyStore,
+    generation: &GenerationHandle,
+    evidence: &IndexedFamilyEvidenceRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_evidence(evidence)?;
+    store
+        .record_family_evidence(generation, evidence)
+        .map_err(family_store_error)
+}
+
+pub fn list_active_families(store: &impl FamilyStore) -> Result<ActiveFamilies, RepoGrammarError> {
+    store.list_active_families().map_err(family_store_error)
+}
+
+pub fn show_family(
+    store: &impl FamilyStore,
+    family_id: &str,
+) -> Result<Option<ActiveFamily>, RepoGrammarError> {
+    validate_semantic_text_field("family id", family_id)?;
+    store.show_family(family_id).map_err(family_store_error)
 }
 
 pub fn validate_index_generation(
@@ -261,6 +321,55 @@ fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGr
     Ok(())
 }
 
+fn validate_family(family: &IndexedFamilyRecord) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("family id", &family.family_id)?;
+    match family.classification.as_str() {
+        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
+        _ => Err(RepoGrammarError::InvalidInput(
+            "family classification is unsupported".to_string(),
+        )),
+    }
+}
+
+fn validate_family_member(member: &IndexedFamilyMemberRecord) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("family member family id", &member.family_id)?;
+    validate_family_text_field("family member code unit id", &member.code_unit_id)?;
+    validate_family_text_field("family member role", &member.role)?;
+    Ok(())
+}
+
+fn validate_variation_slot(slot: &IndexedVariationSlotRecord) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("variation slot family id", &slot.family_id)?;
+    validate_family_text_field("variation slot id", &slot.slot_id)?;
+    validate_family_text_field("variation slot description", &slot.description)?;
+    Ok(())
+}
+
+fn validate_family_evidence(
+    evidence: &IndexedFamilyEvidenceRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("family evidence id", &evidence.evidence_id)?;
+    validate_family_text_field("family evidence family id", &evidence.family_id)?;
+    validate_family_text_field("family evidence code unit id", &evidence.code_unit_id)?;
+    validate_repo_relative_path(&evidence.path)?;
+    validate_family_text_field("family evidence note", &evidence.note)?;
+    if evidence.start_byte > evidence.end_byte {
+        return Err(RepoGrammarError::InvalidInput(
+            "family evidence source range start must not exceed end".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_family_text_field(field_name: &str, value: &str) -> Result<(), RepoGrammarError> {
+    if value.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "{field_name} must not be empty"
+        )));
+    }
+    validate_semantic_text_field(field_name, value)
+}
+
 fn validate_empty_object_payload(
     field_name: &str,
     payload_json: &str,
@@ -345,10 +454,22 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     }
 }
 
+fn family_store_error(error: StoreError) -> RepoGrammarError {
+    match error {
+        StoreError::Unavailable(message)
+        | StoreError::InvalidState(message)
+        | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
+    use crate::ports::family_store::{
+        ActiveFamilies, ActiveFamily, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+        IndexedFamilyRecord, IndexedVariationSlotRecord,
+    };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
         ActiveSemanticFacts, STORAGE_SCHEMA_VERSION,
@@ -473,6 +594,61 @@ mod tests {
         }
     }
 
+    impl FamilyStore for FakeStore {
+        fn record_family(
+            &self,
+            _generation: &GenerationHandle,
+            _family: &IndexedFamilyRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn record_family_member(
+            &self,
+            _generation: &GenerationHandle,
+            _member: &IndexedFamilyMemberRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn record_variation_slot(
+            &self,
+            _generation: &GenerationHandle,
+            _slot: &IndexedVariationSlotRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn record_family_evidence(
+            &self,
+            _generation: &GenerationHandle,
+            _evidence: &IndexedFamilyEvidenceRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn list_active_families(&self) -> Result<ActiveFamilies, StoreError> {
+            Ok(ActiveFamilies {
+                generation_id: "gen-000001".to_string(),
+                families: vec![family()],
+            })
+        }
+
+        fn show_family(&self, family_id: &str) -> Result<Option<ActiveFamily>, StoreError> {
+            if family_id == family().family_id {
+                Ok(Some(ActiveFamily {
+                    generation_id: "gen-000001".to_string(),
+                    family: family(),
+                    members: vec![family_member()],
+                    variation_slots: vec![variation_slot()],
+                    evidence: vec![family_evidence()],
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
     fn file(path: &str) -> IndexedFileRecord {
         IndexedFileRecord {
             path: path.to_string(),
@@ -523,6 +699,42 @@ mod tests {
         }
     }
 
+    fn family() -> IndexedFamilyRecord {
+        IndexedFamilyRecord {
+            family_id: "family:routes:read".to_string(),
+            classification: "DOMINANT_PATTERN".to_string(),
+        }
+    }
+
+    fn family_member() -> IndexedFamilyMemberRecord {
+        IndexedFamilyMemberRecord {
+            family_id: family().family_id,
+            code_unit_id: "unit:src/a.ts#module:0-1".to_string(),
+            role: "member".to_string(),
+        }
+    }
+
+    fn variation_slot() -> IndexedVariationSlotRecord {
+        IndexedVariationSlotRecord {
+            family_id: family().family_id,
+            slot_id: "slot:handler".to_string(),
+            description: "handler choice".to_string(),
+        }
+    }
+
+    fn family_evidence() -> IndexedFamilyEvidenceRecord {
+        IndexedFamilyEvidenceRecord {
+            evidence_id: "evidence:family:routes:read:src/a.ts".to_string(),
+            family_id: family().family_id,
+            code_unit_id: "unit:src/a.ts#module:0-1".to_string(),
+            path: "src/a.ts".to_string(),
+            content_hash: file("src/a.ts").content_hash,
+            start_byte: 0,
+            end_byte: 1,
+            note: "same framework role and shape".to_string(),
+        }
+    }
+
     #[test]
     fn generation_use_cases_delegate_through_storage_port() {
         let store = FakeStore;
@@ -545,12 +757,24 @@ mod tests {
         record_ir_node(&store, &generation, &ir_node()).expect("record IR node");
         record_ir_edge(&store, &generation, &ir_edge()).expect("record IR edge");
         record_semantic_fact(&store, &generation, &semantic_fact()).expect("record semantic fact");
+        record_family(&store, &generation, &family()).expect("record family");
+        record_family_member(&store, &generation, &family_member()).expect("record family member");
+        record_variation_slot(&store, &generation, &variation_slot())
+            .expect("record variation slot");
+        record_family_evidence(&store, &generation, &family_evidence())
+            .expect("record family evidence");
         validate_index_generation(&store, &generation).expect("validate generation");
         activate_index_generation(&store, &generation).expect("activate generation");
         let inspection = inspect_index_storage(&store).expect("inspect storage");
+        let active_families = list_active_families(&store).expect("list families");
+        let active_family = show_family(&store, &family().family_id)
+            .expect("show family")
+            .expect("family exists");
 
         assert_eq!(generation.generation_id, "gen-000001");
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
+        assert_eq!(active_families.families, vec![family()]);
+        assert_eq!(active_family.members, vec![family_member()]);
     }
 
     #[test]
@@ -781,5 +1005,70 @@ mod tests {
 
         record_semantic_fact(&store, &generation, &fact)
             .expect("null target and empty assumptions remain valid");
+    }
+
+    #[test]
+    fn family_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+
+        let mut missing_id = family();
+        missing_id.family_id = " ".to_string();
+        assert!(record_family(&store, &generation, &missing_id)
+            .expect_err("missing family id")
+            .to_string()
+            .contains("family id"));
+
+        let mut invalid_classification = family();
+        invalid_classification.classification = "SIMILAR".to_string();
+        assert!(record_family(&store, &generation, &invalid_classification)
+            .expect_err("invalid classification")
+            .to_string()
+            .contains("classification"));
+
+        let mut leaky_member = family_member();
+        leaky_member.role = "see /tmp/secret".to_string();
+        assert!(record_family_member(&store, &generation, &leaky_member)
+            .expect_err("leaky role")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut source_like_slot = variation_slot();
+        source_like_slot.description = "const handler = route;".to_string();
+        assert!(
+            record_variation_slot(&store, &generation, &source_like_slot)
+                .expect_err("source-like variation")
+                .to_string()
+                .contains("unsupported content")
+        );
+
+        let mut absolute_path = family_evidence();
+        absolute_path.path = "/tmp/a.ts".to_string();
+        assert!(record_family_evidence(&store, &generation, &absolute_path)
+            .expect_err("absolute path")
+            .to_string()
+            .contains("repository-relative"));
+
+        let mut traversal = family_evidence();
+        traversal.path = "../a.ts".to_string();
+        assert!(record_family_evidence(&store, &generation, &traversal)
+            .expect_err("traversal path")
+            .to_string()
+            .contains("outside repository"));
+
+        let mut uri_note = family_evidence();
+        uri_note.note = "file:///tmp/secret".to_string();
+        assert!(record_family_evidence(&store, &generation, &uri_note)
+            .expect_err("URI note")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut reversed = family_evidence();
+        reversed.start_byte = 2;
+        reversed.end_byte = 1;
+        assert!(record_family_evidence(&store, &generation, &reversed)
+            .expect_err("reversed range")
+            .to_string()
+            .contains("range"));
     }
 }

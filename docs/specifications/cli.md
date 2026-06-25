@@ -246,7 +246,10 @@ family commands remain fallback-only until family evidence exists, while
 `files` and `units` are treated as implemented inventory commands whose fallback
 means an active inventory index precondition is missing or unreadable.
 Semantic-fact freshness/readiness checks remain internal and must not introduce
-semantic-fact CLI output before family claim builders exist.
+semantic-fact CLI output before family claim builders exist. The presence of
+FamilyStore tables or stored family records is not by itself a CLI success
+contract; pattern-family commands become implemented only after the query layer
+applies freshness, support, compatibility, and evidence selection rules.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:

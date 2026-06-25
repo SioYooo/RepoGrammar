@@ -69,6 +69,11 @@ allowed.
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
   snippets or absolute paths in CLI output and stored metadata.
+- Family storage tests must cover generation-scoped family records, members,
+  variation slots, family-bound evidence, building-only writes, non-`UNKNOWN`
+  family validation requiring evidence, active-generation list/show reads,
+  tampered family/evidence row rejection, and no source snippet or absolute path
+  leakage.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,

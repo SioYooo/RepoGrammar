@@ -1,9 +1,13 @@
 //! SQLite persistence adapter.
 //!
 //! SQL, migrations, PRAGMAs, and generation filesystem layout stay in this
-//! adapter. Application code talks to it through `ports::index_store`.
+//! adapter. Application code talks to it through storage ports.
 
 use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::ports::family_store::{
+    ActiveFamilies, ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord,
+    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
     ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
@@ -458,8 +462,8 @@ impl IndexStore for SqliteIndexStore {
         transaction
             .execute(
                 "INSERT INTO evidence \
-                 (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     generation.generation_id,
                     fact.evidence_id,
@@ -569,6 +573,11 @@ impl IndexStore for SqliteIndexStore {
         if !required_schema_is_present(&connection)? {
             return Err(IndexStoreError::InvalidState(
                 "required storage schema is missing or malformed".to_string(),
+            ));
+        }
+        if family_evidence_violation_count(&connection, &generation.generation_id)? != 0 {
+            return Err(IndexStoreError::InvalidState(
+                "family evidence is inconsistent with indexed code units".to_string(),
             ));
         }
         if semantic_evidence_violation_count(&connection, &generation.generation_id)? != 0 {
@@ -683,6 +692,569 @@ impl IndexStore for SqliteIndexStore {
         }
         inspect_connection(&connection, Some(&generation_id))
     }
+}
+
+impl FamilyStore for SqliteIndexStore {
+    fn record_family(
+        &self,
+        generation: &GenerationHandle,
+        family: &IndexedFamilyRecord,
+    ) -> Result<(), StoreError> {
+        record_family_sqlite(self, generation, family).map_err(family_store_error)
+    }
+
+    fn record_family_member(
+        &self,
+        generation: &GenerationHandle,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), StoreError> {
+        record_family_member_sqlite(self, generation, member).map_err(family_store_error)
+    }
+
+    fn record_variation_slot(
+        &self,
+        generation: &GenerationHandle,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), StoreError> {
+        record_variation_slot_sqlite(self, generation, slot).map_err(family_store_error)
+    }
+
+    fn record_family_evidence(
+        &self,
+        generation: &GenerationHandle,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), StoreError> {
+        record_family_evidence_sqlite(self, generation, evidence).map_err(family_store_error)
+    }
+
+    fn list_active_families(&self) -> Result<ActiveFamilies, StoreError> {
+        let (generation_id, connection) = self
+            .open_active_generation_read_only()
+            .map_err(family_store_error)?;
+        let families = query_families(&connection, &generation_id).map_err(family_store_error)?;
+        for family in &families {
+            query_family_evidence(&connection, &generation_id, &family.family_id)
+                .map_err(family_store_error)?;
+        }
+        Ok(ActiveFamilies {
+            generation_id,
+            families,
+        })
+    }
+
+    fn show_family(&self, family_id: &str) -> Result<Option<ActiveFamily>, StoreError> {
+        validate_index_text_field(family_id, "family id").map_err(family_store_error)?;
+        let (generation_id, connection) = self
+            .open_active_generation_read_only()
+            .map_err(family_store_error)?;
+        let Some(family) =
+            query_family(&connection, &generation_id, family_id).map_err(family_store_error)?
+        else {
+            return Ok(None);
+        };
+        let members = query_family_members(&connection, &generation_id, family_id)
+            .map_err(family_store_error)?;
+        let variation_slots = query_variation_slots(&connection, &generation_id, family_id)
+            .map_err(family_store_error)?;
+        let evidence = query_family_evidence(&connection, &generation_id, family_id)
+            .map_err(family_store_error)?;
+        Ok(Some(ActiveFamily {
+            generation_id,
+            family,
+            members,
+            variation_slots,
+            evidence,
+        }))
+    }
+}
+
+fn record_family_sqlite(
+    store: &SqliteIndexStore,
+    generation: &GenerationHandle,
+    family: &IndexedFamilyRecord,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(&family.family_id, "family id")?;
+    validate_family_classification(&family.classification)?;
+    let connection = store.open_existing_generation(&generation.generation_id)?;
+    require_building_generation(&connection, &generation.generation_id, "families")?;
+    connection
+        .execute(
+            "INSERT INTO families (generation_id, family_id, classification) VALUES (?1, ?2, ?3)",
+            params![
+                generation.generation_id,
+                family.family_id,
+                family.classification,
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn record_family_member_sqlite(
+    store: &SqliteIndexStore,
+    generation: &GenerationHandle,
+    member: &IndexedFamilyMemberRecord,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(&member.family_id, "family member family id")?;
+    validate_index_text_field(&member.code_unit_id, "family member code unit id")?;
+    validate_index_text_field(&member.role, "family member role")?;
+    let connection = store.open_existing_generation(&generation.generation_id)?;
+    require_building_generation(&connection, &generation.generation_id, "family members")?;
+    require_family_row(&connection, &generation.generation_id, &member.family_id)?;
+    require_code_unit_row(&connection, &generation.generation_id, &member.code_unit_id)?;
+    connection
+        .execute(
+            "INSERT INTO family_members (generation_id, family_id, code_unit_id, role) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                generation.generation_id,
+                member.family_id,
+                member.code_unit_id,
+                member.role,
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn record_variation_slot_sqlite(
+    store: &SqliteIndexStore,
+    generation: &GenerationHandle,
+    slot: &IndexedVariationSlotRecord,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(&slot.family_id, "variation slot family id")?;
+    validate_index_text_field(&slot.slot_id, "variation slot id")?;
+    validate_index_text_field(&slot.description, "variation slot description")?;
+    let connection = store.open_existing_generation(&generation.generation_id)?;
+    require_building_generation(&connection, &generation.generation_id, "variation slots")?;
+    require_family_row(&connection, &generation.generation_id, &slot.family_id)?;
+    connection
+        .execute(
+            "INSERT INTO variation_slots (generation_id, family_id, slot_id, description) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                generation.generation_id,
+                slot.family_id,
+                slot.slot_id,
+                slot.description,
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn record_family_evidence_sqlite(
+    store: &SqliteIndexStore,
+    generation: &GenerationHandle,
+    evidence: &IndexedFamilyEvidenceRecord,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
+    validate_index_text_field(&evidence.family_id, "family evidence family id")?;
+    validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
+    validate_repo_relative_path(&evidence.path)?;
+    validate_index_text_field(&evidence.note, "family evidence note")?;
+    let connection = store.open_existing_generation(&generation.generation_id)?;
+    require_building_generation(&connection, &generation.generation_id, "family evidence")?;
+    require_family_row(&connection, &generation.generation_id, &evidence.family_id)?;
+    let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
+        code_unit_evidence_bounds(
+            &connection,
+            &generation.generation_id,
+            &evidence.code_unit_id,
+        )?;
+    if unit_path != evidence.path {
+        return Err(invalid_record(
+            "family evidence path must match code unit path",
+        ));
+    }
+    if unit_hash != evidence.content_hash.as_str() || file_hash != evidence.content_hash.as_str() {
+        return Err(invalid_record(
+            "family evidence content hash must match indexed file and code unit",
+        ));
+    }
+    let start_byte = i64::try_from(evidence.start_byte)
+        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+    let end_byte = i64::try_from(evidence.end_byte)
+        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+    if start_byte > end_byte {
+        return Err(invalid_record(
+            "family evidence range start must not exceed end",
+        ));
+    }
+    if start_byte < unit_start_byte || end_byte > unit_end_byte || end_byte > file_size {
+        return Err(invalid_record(
+            "family evidence range must stay within code unit range",
+        ));
+    }
+    connection
+        .execute(
+            "INSERT INTO evidence \
+             (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                generation.generation_id,
+                evidence.evidence_id,
+                evidence.family_id,
+                evidence.code_unit_id,
+                evidence.path,
+                evidence.content_hash.as_str(),
+                start_byte,
+                end_byte,
+                evidence.note,
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn validate_family_classification(classification: &str) -> Result<(), IndexStoreError> {
+    match classification {
+        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
+        _ => Err(invalid_record("family classification is unsupported")),
+    }
+}
+
+fn require_family_row(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<(), IndexStoreError> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) FROM families WHERE generation_id = ?1 AND family_id = ?2",
+            params![generation_id, family_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .map_err(sql_unavailable)?;
+    if count == 1 {
+        Ok(())
+    } else {
+        Err(invalid_record(
+            "family-scoped record must reference a family in the same generation",
+        ))
+    }
+}
+
+fn require_code_unit_row(
+    connection: &Connection,
+    generation_id: &str,
+    code_unit_id: &str,
+) -> Result<(), IndexStoreError> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) FROM code_units WHERE generation_id = ?1 AND code_unit_id = ?2",
+            params![generation_id, code_unit_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .map_err(sql_unavailable)?;
+    if count == 1 {
+        Ok(())
+    } else {
+        Err(invalid_record(
+            "family member must reference an indexed code unit in the same generation",
+        ))
+    }
+}
+
+fn code_unit_evidence_bounds(
+    connection: &Connection,
+    generation_id: &str,
+    code_unit_id: &str,
+) -> Result<(String, String, i64, i64, String, i64), IndexStoreError> {
+    connection
+        .query_row(
+            "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
+                    code_units.end_byte, indexed_files.content_hash, indexed_files.size_bytes \
+             FROM code_units \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = code_units.generation_id \
+              AND indexed_files.path = code_units.path \
+             WHERE code_units.generation_id = ?1 \
+               AND code_units.code_unit_id = ?2",
+            params![generation_id, code_unit_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_unavailable)?
+        .ok_or_else(|| {
+            invalid_record(
+                "family evidence must reference an indexed code unit in the same generation",
+            )
+        })
+}
+
+fn query_families(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFamilyRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT family_id, classification \
+             FROM families \
+             WHERE generation_id = ?1 \
+             ORDER BY family_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql_unavailable)?;
+    let mut families = Vec::new();
+    for row in rows {
+        let (family_id, classification) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored family id", &family_id)?;
+        validate_stored_family_classification(&classification)?;
+        families.push(IndexedFamilyRecord {
+            family_id,
+            classification,
+        });
+    }
+    Ok(families)
+}
+
+fn query_family(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Option<IndexedFamilyRecord>, IndexStoreError> {
+    let record = connection
+        .query_row(
+            "SELECT family_id, classification \
+             FROM families \
+             WHERE generation_id = ?1 AND family_id = ?2",
+            params![generation_id, family_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    let Some((family_id, classification)) = record else {
+        return Ok(None);
+    };
+    validate_stored_semantic_text_field("stored family id", &family_id)?;
+    validate_stored_family_classification(&classification)?;
+    Ok(Some(IndexedFamilyRecord {
+        family_id,
+        classification,
+    }))
+}
+
+fn query_family_members(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Vec<IndexedFamilyMemberRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT family_members.family_id, family_members.code_unit_id, family_members.role, code_units.path \
+             FROM family_members \
+             JOIN code_units \
+               ON code_units.generation_id = family_members.generation_id \
+              AND code_units.code_unit_id = family_members.code_unit_id \
+             WHERE family_members.generation_id = ?1 AND family_members.family_id = ?2 \
+             ORDER BY code_units.path COLLATE BINARY, code_units.start_byte, \
+                      code_units.end_byte, family_members.code_unit_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id, family_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut members = Vec::new();
+    for row in rows {
+        let (family_id, code_unit_id, role, path) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored family member family id", &family_id)?;
+        validate_stored_code_unit_id(&code_unit_id, &path)?;
+        validate_stored_semantic_text_field("stored family member role", &role)?;
+        members.push(IndexedFamilyMemberRecord {
+            family_id,
+            code_unit_id,
+            role,
+        });
+    }
+    Ok(members)
+}
+
+fn query_variation_slots(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Vec<IndexedVariationSlotRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT family_id, slot_id, description \
+             FROM variation_slots \
+             WHERE generation_id = ?1 AND family_id = ?2 \
+             ORDER BY slot_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id, family_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut slots = Vec::new();
+    for row in rows {
+        let (family_id, slot_id, description) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored variation slot family id", &family_id)?;
+        validate_stored_semantic_text_field("stored variation slot id", &slot_id)?;
+        validate_stored_semantic_text_field("stored variation slot description", &description)?;
+        slots.push(IndexedVariationSlotRecord {
+            family_id,
+            slot_id,
+            description,
+        });
+    }
+    Ok(slots)
+}
+
+fn query_family_evidence(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Vec<IndexedFamilyEvidenceRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT evidence.evidence_id, evidence.family_id, evidence.code_unit_id, evidence.path, \
+                    evidence.content_hash, evidence.start_byte, evidence.end_byte, evidence.note, \
+                    code_units.path, code_units.content_hash, code_units.start_byte, \
+                    code_units.end_byte, indexed_files.content_hash, indexed_files.size_bytes \
+             FROM evidence \
+             JOIN code_units \
+               ON code_units.generation_id = evidence.generation_id \
+              AND code_units.code_unit_id = evidence.code_unit_id \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = evidence.generation_id \
+              AND indexed_files.path = evidence.path \
+             WHERE evidence.generation_id = ?1 AND evidence.family_id = ?2 \
+             ORDER BY evidence.path COLLATE BINARY, evidence.start_byte, evidence.end_byte, \
+                      evidence.code_unit_id COLLATE BINARY, evidence.evidence_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id, family_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, i64>(13)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut evidence_records = Vec::new();
+    for row in rows {
+        let (
+            evidence_id,
+            row_family_id,
+            code_unit_id,
+            path,
+            content_hash,
+            start_byte,
+            end_byte,
+            note,
+            unit_path,
+            unit_hash,
+            unit_start_byte,
+            unit_end_byte,
+            file_hash,
+            file_size,
+        ) = row.map_err(sql_unavailable)?;
+        let Some(row_family_id) = row_family_id else {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence is not linked to a family".to_string(),
+            ));
+        };
+        let Some(code_unit_id) = code_unit_id else {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence is not linked to a code unit".to_string(),
+            ));
+        };
+        validate_stored_semantic_text_field("stored family evidence id", &evidence_id)?;
+        validate_stored_semantic_text_field("stored family evidence family id", &row_family_id)?;
+        validate_stored_semantic_text_field("stored family evidence note", &note)?;
+        validate_stored_repo_relative_path(&path, "stored family evidence path")?;
+        if path != unit_path {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence path does not match code unit".to_string(),
+            ));
+        }
+        validate_stored_code_unit_id(&code_unit_id, &path)?;
+        if content_hash != unit_hash || content_hash != file_hash {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence content hash does not match indexed evidence".to_string(),
+            ));
+        }
+        let start_byte = usize::try_from(start_byte).map_err(|_| {
+            IndexStoreError::InvalidState(
+                "stored family evidence start byte is invalid".to_string(),
+            )
+        })?;
+        let end_byte = usize::try_from(end_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored family evidence end byte is invalid".to_string())
+        })?;
+        let unit_start_byte = usize::try_from(unit_start_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit start byte is invalid".to_string())
+        })?;
+        let unit_end_byte = usize::try_from(unit_end_byte).map_err(|_| {
+            IndexStoreError::InvalidState("stored code unit end byte is invalid".to_string())
+        })?;
+        let file_size = usize::try_from(file_size).map_err(|_| {
+            IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+        })?;
+        if start_byte > end_byte
+            || start_byte < unit_start_byte
+            || end_byte > unit_end_byte
+            || end_byte > file_size
+        {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence range is invalid".to_string(),
+            ));
+        }
+        evidence_records.push(IndexedFamilyEvidenceRecord {
+            evidence_id,
+            family_id: row_family_id,
+            code_unit_id,
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored family evidence content hash is invalid".to_string(),
+                )
+            })?,
+            start_byte,
+            end_byte,
+            note,
+        });
+    }
+    Ok(evidence_records)
 }
 
 fn query_indexed_files(
@@ -1138,6 +1710,11 @@ fn validate_generation_for_read(
             "required storage schema is missing or malformed".to_string(),
         ));
     }
+    if family_evidence_violation_count(connection, generation_id)? != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "family evidence is inconsistent with indexed code units".to_string(),
+        ));
+    }
     if semantic_evidence_violation_count(connection, generation_id)? != 0 {
         return Err(IndexStoreError::InvalidState(
             "semantic fact evidence is inconsistent with indexed code units".to_string(),
@@ -1320,6 +1897,77 @@ fn foreign_key_violation_count(connection: &Connection) -> Result<usize, IndexSt
     Ok(count)
 }
 
+fn family_evidence_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let row_violation_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM evidence \
+             LEFT JOIN families \
+               ON families.generation_id = evidence.generation_id \
+              AND families.family_id = evidence.family_id \
+             LEFT JOIN code_units \
+               ON code_units.generation_id = evidence.generation_id \
+              AND code_units.code_unit_id = evidence.code_unit_id \
+             LEFT JOIN indexed_files \
+               ON indexed_files.generation_id = evidence.generation_id \
+              AND indexed_files.path = evidence.path \
+             WHERE evidence.generation_id = ?1 \
+               AND evidence.family_id IS NOT NULL \
+               AND (families.family_id IS NULL \
+                    OR evidence.code_unit_id IS NULL \
+                    OR code_units.code_unit_id IS NULL \
+                    OR indexed_files.path IS NULL \
+                    OR evidence.path <> code_units.path \
+                    OR evidence.content_hash <> code_units.content_hash \
+                    OR evidence.content_hash <> indexed_files.content_hash \
+                    OR evidence.start_byte < code_units.start_byte \
+                    OR evidence.end_byte > code_units.end_byte)",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let missing_evidence_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM families \
+             WHERE families.generation_id = ?1 \
+               AND families.classification <> 'UNKNOWN' \
+               AND NOT EXISTS (\
+                   SELECT 1 \
+                   FROM evidence \
+                   WHERE evidence.generation_id = families.generation_id \
+                     AND evidence.family_id = families.family_id\
+               )",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let invalid_classification_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM families \
+             WHERE generation_id = ?1 \
+               AND classification NOT IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let total = row_violation_count
+        .checked_add(missing_evidence_count)
+        .and_then(|count| count.checked_add(invalid_classification_count))
+        .ok_or_else(|| {
+            IndexStoreError::InvalidState("family evidence violation count overflow".to_string())
+        })?;
+    usize::try_from(total).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "family evidence violation count is outside valid range".to_string(),
+        )
+    })
+}
+
 fn semantic_evidence_violation_count(
     connection: &Connection,
     generation_id: &str,
@@ -1338,7 +1986,8 @@ fn semantic_evidence_violation_count(
                ON indexed_files.generation_id = evidence.generation_id \
               AND indexed_files.path = evidence.path \
              WHERE semantic_facts.generation_id = ?1 \
-               AND (evidence.code_unit_id IS NULL \
+               AND (evidence.family_id IS NOT NULL \
+                    OR evidence.code_unit_id IS NULL \
                     OR code_units.code_unit_id IS NULL \
                     OR indexed_files.path IS NULL \
                     OR evidence.path <> code_units.path \
@@ -1644,6 +2293,15 @@ fn validate_stored_semantic_text_field(
     }
 }
 
+fn validate_stored_family_classification(classification: &str) -> Result<(), IndexStoreError> {
+    match classification {
+        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
+        _ => Err(IndexStoreError::InvalidState(
+            "stored family classification is invalid".to_string(),
+        )),
+    }
+}
+
 fn looks_like_embedded_absolute_path(value: &str) -> bool {
     value
         .split_whitespace()
@@ -1672,6 +2330,14 @@ fn unavailable(message: &'static str) -> IndexStoreError {
 
 fn invalid_record(message: &'static str) -> IndexStoreError {
     IndexStoreError::InvalidRecord(message.to_string())
+}
+
+fn family_store_error(error: IndexStoreError) -> StoreError {
+    match error {
+        IndexStoreError::Unavailable(message) => StoreError::Unavailable(message),
+        IndexStoreError::InvalidState(message) => StoreError::InvalidState(message),
+        IndexStoreError::InvalidRecord(message) => StoreError::InvalidRecord(message),
+    }
 }
 
 struct TableDetails {
@@ -1783,7 +2449,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         columns: &["generation_id", "family_id", "classification"],
         primary_key_columns: &["generation_id", "family_id"],
         minimum_foreign_key_rows: 1,
-        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY"],
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
     RequiredTableSchema {
         name: "family_members",
@@ -1804,6 +2470,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         columns: &[
             "generation_id",
             "evidence_id",
+            "family_id",
             "code_unit_id",
             "path",
             "content_hash",
@@ -1812,7 +2479,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
             "note",
         ],
         primary_key_columns: &["generation_id", "evidence_id"],
-        minimum_foreign_key_rows: 4,
+        minimum_foreign_key_rows: 6,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
 ];
@@ -1899,7 +2566,7 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
 CREATE TABLE IF NOT EXISTS families (
     generation_id TEXT NOT NULL,
     family_id TEXT NOT NULL,
-    classification TEXT NOT NULL,
+    classification TEXT NOT NULL CHECK (classification IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')),
     PRIMARY KEY (generation_id, family_id),
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
 );
@@ -1926,6 +2593,7 @@ CREATE TABLE IF NOT EXISTS variation_slots (
 CREATE TABLE IF NOT EXISTS evidence (
     generation_id TEXT NOT NULL,
     evidence_id TEXT NOT NULL,
+    family_id TEXT,
     code_unit_id TEXT,
     path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -1934,6 +2602,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     note TEXT NOT NULL,
     PRIMARY KEY (generation_id, evidence_id),
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, family_id) REFERENCES families(generation_id, family_id) ON DELETE CASCADE,
     FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE,
     FOREIGN KEY (generation_id, code_unit_id) REFERENCES code_units(generation_id, code_unit_id) ON DELETE CASCADE
 );
@@ -2014,6 +2683,74 @@ mod tests {
         }
     }
 
+    fn family() -> IndexedFamilyRecord {
+        IndexedFamilyRecord {
+            family_id: "family:routes:read".to_string(),
+            classification: "DOMINANT_PATTERN".to_string(),
+        }
+    }
+
+    fn family_member(path: &str) -> IndexedFamilyMemberRecord {
+        IndexedFamilyMemberRecord {
+            family_id: family().family_id,
+            code_unit_id: code_unit(path).id,
+            role: "member".to_string(),
+        }
+    }
+
+    fn variation_slot() -> IndexedVariationSlotRecord {
+        IndexedVariationSlotRecord {
+            family_id: family().family_id,
+            slot_id: "slot:handler".to_string(),
+            description: "handler choice".to_string(),
+        }
+    }
+
+    fn family_evidence(path: &str) -> IndexedFamilyEvidenceRecord {
+        IndexedFamilyEvidenceRecord {
+            evidence_id: format!("evidence:family:routes:read:{path}"),
+            family_id: family().family_id,
+            code_unit_id: code_unit(path).id,
+            path: path.to_string(),
+            content_hash: file(path).content_hash,
+            start_byte: 0,
+            end_byte: 10,
+            note: "same framework role and shape".to_string(),
+        }
+    }
+
+    fn store_with_active_family(name: &str) -> (TempWorkspace, SqliteIndexStore, GenerationHandle) {
+        let workspace = TempWorkspace::new(name);
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        store
+            .record_variation_slot(&generation, &variation_slot())
+            .expect("record variation slot");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        (workspace, store, generation)
+    }
+
     fn store_with_active_semantic_fact(
         name: &str,
     ) -> (TempWorkspace, SqliteIndexStore, GenerationHandle) {
@@ -2053,6 +2790,211 @@ mod tests {
             })
             .expect("migration count");
         assert_eq!(migration_count, 1);
+    }
+
+    #[test]
+    fn family_records_round_trip_from_active_generation_without_leaks() {
+        let (workspace, store, generation) = store_with_active_family("sqlite-family-round-trip");
+
+        let families = store.list_active_families().expect("list active families");
+        let detail = store
+            .show_family(&family().family_id)
+            .expect("show family")
+            .expect("family exists");
+        let missing = store.show_family("family:missing").expect("show missing");
+
+        assert_eq!(families.generation_id, generation.generation_id);
+        assert_eq!(families.families, vec![family()]);
+        assert_eq!(detail.generation_id, generation.generation_id);
+        assert_eq!(detail.family, family());
+        assert_eq!(
+            detail.members,
+            vec![family_member("src/a.ts"), family_member("src/b.ts")]
+        );
+        assert_eq!(detail.variation_slots, vec![variation_slot()]);
+        assert_eq!(
+            detail.evidence,
+            vec![family_evidence("src/a.ts"), family_evidence("src/b.ts")]
+        );
+        assert!(missing.is_none());
+        assert!(!format!("{detail:?}").contains(&workspace.path().display().to_string()));
+        assert!(!format!("{detail:?}").contains("const secret"));
+    }
+
+    #[test]
+    fn family_records_require_building_generation() {
+        let (_workspace, store, generation) = store_with_active_family("sqlite-family-immutable");
+
+        for error in [
+            store
+                .record_family(&generation, &family())
+                .expect_err("active family write fails"),
+            store
+                .record_family_member(&generation, &family_member("src/a.ts"))
+                .expect_err("active member write fails"),
+            store
+                .record_variation_slot(&generation, &variation_slot())
+                .expect_err("active slot write fails"),
+            store
+                .record_family_evidence(&generation, &family_evidence("src/a.ts"))
+                .expect_err("active evidence write fails"),
+        ] {
+            assert!(format!("{error:?}").contains("building generations"));
+        }
+    }
+
+    #[test]
+    fn family_evidence_must_match_same_generation_code_unit() {
+        let workspace = TempWorkspace::new("sqlite-family-evidence-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+
+        let mut wrong_hash = family_evidence("src/a.ts");
+        wrong_hash.content_hash = ContentHash::new(
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .expect("valid hash");
+        let error = store
+            .record_family_evidence(&generation, &wrong_hash)
+            .expect_err("wrong hash");
+        assert!(format!("{error:?}").contains("content hash"));
+
+        let mut wrong_path = family_evidence("src/a.ts");
+        wrong_path.path = "src/other.ts".to_string();
+        let error = store
+            .record_family_evidence(&generation, &wrong_path)
+            .expect_err("wrong path");
+        assert!(format!("{error:?}").contains("path"));
+
+        let mut out_of_range = family_evidence("src/a.ts");
+        out_of_range.end_byte = 41;
+        let error = store
+            .record_family_evidence(&generation, &out_of_range)
+            .expect_err("out of range");
+        assert!(format!("{error:?}").contains("range"));
+
+        let mut reversed_range = family_evidence("src/a.ts");
+        reversed_range.start_byte = 6;
+        reversed_range.end_byte = 5;
+        let error = store
+            .record_family_evidence(&generation, &reversed_range)
+            .expect_err("reversed range");
+        assert!(format!("{error:?}").contains("range"));
+
+        let mut missing_family = family_evidence("src/a.ts");
+        missing_family.family_id = "family:missing".to_string();
+        let error = store
+            .record_family_evidence(&generation, &missing_family)
+            .expect_err("missing family");
+        assert!(format!("{error:?}").contains("same generation"));
+    }
+
+    #[test]
+    fn validation_rejects_non_unknown_family_without_evidence() {
+        let workspace = TempWorkspace::new("sqlite-family-no-evidence");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("family claim without evidence fails validation");
+
+        assert!(format!("{error:?}").contains("family evidence"));
+    }
+
+    #[test]
+    fn list_active_family_reads_reject_tampered_rows() {
+        let (_workspace, store, generation) = store_with_active_family("sqlite-family-tamper");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+
+        connection
+            .execute(
+                "UPDATE evidence SET content_hash = ?1 WHERE generation_id = ?2 AND family_id = ?3",
+                params![
+                    "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    generation.generation_id,
+                    family().family_id,
+                ],
+            )
+            .expect("tamper family evidence");
+
+        let error = store
+            .show_family(&family().family_id)
+            .expect_err("tampered family evidence is rejected");
+
+        assert!(format!("{error:?}").contains("family evidence"));
+    }
+
+    #[test]
+    fn list_active_families_validates_family_evidence_payloads() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-list-validates-evidence");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+
+        connection
+            .execute(
+                "UPDATE evidence SET note = 'file:///tmp/secret' \
+                 WHERE generation_id = ?1 AND family_id = ?2",
+                params![generation.generation_id, family().family_id],
+            )
+            .expect("tamper family evidence note");
+
+        let error = store
+            .list_active_families()
+            .expect_err("tampered family evidence payload is rejected by list");
+
+        assert!(format!("{error:?}").contains("family evidence"));
+    }
+
+    #[test]
+    fn semantic_fact_evidence_must_not_be_family_bound() {
+        let (_workspace, store, generation) =
+            store_with_active_semantic_fact("sqlite-semantic-family-bound-evidence");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+
+        connection
+            .execute(
+                "INSERT INTO families (generation_id, family_id, classification) \
+                 VALUES (?1, ?2, 'UNKNOWN')",
+                params![generation.generation_id, family().family_id],
+            )
+            .expect("insert tamper family");
+        connection
+            .execute(
+                "UPDATE evidence SET family_id = ?1 WHERE generation_id = ?2",
+                params![family().family_id, generation.generation_id],
+            )
+            .expect("tamper semantic evidence family link");
+
+        let error = store
+            .list_active_semantic_facts()
+            .expect_err("family-bound semantic evidence is rejected");
+
+        assert!(format!("{error:?}").contains("semantic fact evidence"));
     }
 
     #[test]
@@ -3469,7 +4411,7 @@ mod tests {
             .execute_batch(
                 r#"
                 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
-                INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'weak', 'now');
+                INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'weak', 'now');
                 CREATE TABLE index_generations (generation_id TEXT PRIMARY KEY, status TEXT, created_at TEXT, activated_at TEXT, repogrammar_version TEXT, repository_revision TEXT, worktree_hash TEXT);
                 INSERT INTO index_generations (generation_id, status, created_at, repogrammar_version) VALUES ('gen-000001', 'building', 'now', '0.1.0');
                 CREATE TABLE indexed_files (generation_id TEXT, path TEXT, content_hash TEXT, size_bytes INTEGER, language TEXT);
@@ -3490,6 +4432,7 @@ mod tests {
             .expect_err("weakened schema must fail validation");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(format!("{error:?}").contains("required storage schema"));
     }
 
     #[test]

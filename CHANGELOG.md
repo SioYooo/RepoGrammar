@@ -169,10 +169,14 @@
   forms, fixture validation rejects unsafe evidence paths and source-like text,
   and the worker stub rejects Windows drive-prefix changed-file paths without
   echoing request data.
-- Bumped the pre-release storage schema to version 3 for IR node code-unit
-  linkage and semantic-fact/evidence constraints; stale schema 1 and 2
+- Bumped the pre-release storage schema to version 4 for IR node code-unit
+  linkage, semantic-fact/evidence constraints, and family-bound evidence
+  constraints; stale schema 1, 2, and 3
   generation databases must be rebuilt rather than silently treated as
   compatible.
+- Added the FamilyStore storage substrate for generation-scoped family records,
+  members, variation slots, and family-bound evidence without enabling
+  pattern-family query commands yet.
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
   domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
   boundaries with the current syntax-only indexing baseline.

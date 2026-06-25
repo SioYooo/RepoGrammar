@@ -36,8 +36,9 @@ command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
 This slice does not use Tree-sitter, call a TypeScript compiler, align
-structures, anti-unify templates, cluster families, persist family evidence, or
-answer pattern-family query commands from stored evidence. The current
+structures, anti-unify templates, cluster families, populate family evidence
+from indexing, or answer pattern-family query commands from stored evidence. The
+current
 syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -138,7 +139,10 @@ fact kinds or weak certainty block as `InsufficientSupport`, and conflicting
 certainty blocks as `ConflictingFacts`. This does not classify families or
 expose semantic facts through CLI/MCP. No semantic fact may influence family
 claims until full
-family-evidence claim builders exist. Other languages should use their own
+family-evidence claim builders exist. The storage layer can persist
+generation-scoped family records, members, variation slots, and family-bound
+evidence when a future claim builder supplies them, but `index` and `sync` do
+not yet produce those rows. Other languages should use their own
 compiler, type-checker, or LSP where that is the most authoritative source.
 
 The first official language scope is TypeScript/JavaScript. Python should remain

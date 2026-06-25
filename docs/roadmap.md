@@ -19,9 +19,9 @@
   hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
   and deterministic ordering.
 - SQLite storage substrate with generation-scoped migrations, WAL settings,
-  foreign-key enforcement, semantic-fact/evidence write validation for building
-  generations, validation before activation, and rollback preservation for
-  failed generations.
+  foreign-key enforcement, semantic-fact/evidence and family-evidence write
+  validation for building generations, validation before activation, and
+  rollback preservation for failed generations.
 - Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
   structural code units in active SQLite generations without source snippets,
   absolute paths, or family evidence.
@@ -39,6 +39,9 @@
   hashes and blocks stale facts, weak certainty, conflicting certainty, and
   `UNKNOWN` fact kinds with typed `UNKNOWN` before any future family claim
   builder can consume them.
+- FamilyStore substrate for generation-scoped family records, members,
+  variation slots, and family-bound evidence. It is not yet populated by
+  `index`/`sync` and does not make pattern-family query commands implemented.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.

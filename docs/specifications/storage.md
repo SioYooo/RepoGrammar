@@ -122,8 +122,10 @@ The bootstrap `init` implementation creates the lifecycle directories,
 metadata plus syntax-only code-unit records, CodeUnit-derived IR nodes, and
 conservative IR containment edges, then activates
 `.repogrammar/current-generation` after validation. It does not yet create a
-top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, families,
-freshness manifests, or family-evidence query execution. The CLI can read the
+top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, freshness
+manifests, or family-evidence query execution. The current storage adapter has
+generation-scoped family tables and a FamilyStore port for future claim
+builders, but `index` and `sync` do not populate families. The CLI can read the
 active generation for `files` and `units` inventory/debugging output only. The
 storage port can also list the active structural IR graph and load an internal
 active-generation claim-input snapshot containing files, code units, IR
@@ -273,8 +275,10 @@ least:
 
 Database source paths must be repository-relative. Manifest and telemetry may
 store a hash of the canonical repository root, but telemetry must not upload the
-raw path. Every family and evidence row must carry file content hash, source
-range, generation id, and repository revision metadata.
+raw path. Every family and evidence row must carry generation id; every evidence
+row must carry file content hash and source range. Full repository revision
+metadata for family evidence remains deferred until repository/worktree
+freshness metadata is implemented.
 Unknown facts must retain reason code, affected claim, freshness status, and
 recovery guidance where applicable.
 
@@ -306,18 +310,22 @@ syntax-only code-unit records, IR nodes and edges, semantic facts, families,
 family members, variation slots, and evidence links. The current `index` and
 `sync` command path populates indexed files, syntax-only code units,
 CodeUnit-derived IR nodes, conservative IR containment edges, and optional
-semantic-worker facts. The storage port also exposes a semantic-fact writer for
-future frontend integration; it accepts only building generations and requires
-evidence to match an indexed code unit's repository-relative path, content hash,
-and byte range in the same generation. Generation validation must reject
-malformed semantic evidence rows before activation. The storage adapter enforces
-foreign keys, repo-relative paths at the Rust port boundary, matching
-file/code-unit content hashes, code-unit byte ranges bounded by indexed file
-size, IR node references to same-generation code units, IR edge references to
-same-generation IR nodes, and validation before activation.
-The current storage schema version is `3`. Existing pre-release schema `1` and
-`2` generation databases are treated as stale and must be rebuilt rather than
-silently upgraded in place.
+semantic-worker facts. The storage ports also expose semantic-fact and family
+evidence writers for future frontend and claim-builder integration. These
+writers accept only building generations and require evidence to match an
+indexed code unit's repository-relative path, content hash, and byte range in
+the same generation. Family evidence rows must be linked to a family; semantic
+fact evidence rows must remain unlinked to a family. Generation validation must
+reject malformed semantic or family evidence rows before activation. The storage
+adapter enforces foreign keys, repo-relative paths at the Rust port boundary,
+matching file/code-unit content hashes, code-unit byte ranges bounded by indexed
+file size, IR node references to same-generation code units, IR edge references
+to same-generation IR nodes, family/member/slot/evidence generation binding,
+family-evidence presence for non-`UNKNOWN` family classifications, and
+validation before activation.
+The current storage schema version is `4`. Existing pre-release schema `1`,
+`2`, and `3` generation databases are treated as stale and must be rebuilt
+rather than silently upgraded in place.
 The database must later store repository revision, worktree hash, language
 adapter versions, freshness metadata, canonical templates, exception records,
 and richer provenance once those producers exist. Searchable source evidence

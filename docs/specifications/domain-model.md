@@ -47,7 +47,9 @@ heuristics, unknown certainty, and `UNKNOWN` fact kind are blocked with typed
 ## PatternFamily
 
 A `PatternFamily` will group related code units that share an implementation
-pattern. The bootstrap only defines `FamilyId` and classification vocabulary.
+pattern. The current storage substrate can persist generation-scoped family
+records, family members, variation slots, and family-bound evidence for future
+claim builders. It does not yet mine families or make CLI/MCP family claims.
 
 ## CanonicalTemplate
 
@@ -63,6 +65,8 @@ remaining inside the same family.
 
 Evidence links a conclusion to a code unit, source range, provenance record, and
 note. Every future family conclusion must carry auditable source evidence.
+Family evidence storage must remain linked to a family and same-generation code
+unit; semantic-fact evidence must not be treated as family evidence by itself.
 
 ## Provenance
 
