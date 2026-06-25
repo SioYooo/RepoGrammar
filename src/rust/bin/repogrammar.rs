@@ -1192,6 +1192,20 @@ mod tests {
                 member_role: "framework:pydantic.model",
             },
             ExactAnchorCase {
+                fixture: "pydantic-settings-strong-evidence",
+                family_id: "family:python:pydantic_model:framework_pydantic_model",
+                support_target: "pydantic.BaseSettings",
+                evidence_path: "settings.py",
+                member_role: "framework:pydantic.model",
+            },
+            ExactAnchorCase {
+                fixture: "pydantic-settings-package-strong-evidence",
+                family_id: "family:python:pydantic_model:framework_pydantic_model",
+                support_target: "pydantic_settings.BaseSettings",
+                evidence_path: "settings.py",
+                member_role: "framework:pydantic.model",
+            },
+            ExactAnchorCase {
                 fixture: "sqlalchemy-strong-evidence",
                 family_id: "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
                 support_target: "sqlalchemy.select",

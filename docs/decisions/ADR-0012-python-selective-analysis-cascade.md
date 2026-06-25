@@ -60,8 +60,8 @@ propagation resolves canonical framework facts such as:
   `fastapi.APIRouter.*` route methods;
 - pytest fixtures resolving to `pytest.fixture` or a provider-resolved fixture
   binding;
-- Pydantic models resolving to `pydantic.BaseModel` or
-  `pydantic_settings.BaseSettings`;
+- Pydantic models/settings resolving to `pydantic.BaseModel`,
+  `pydantic.BaseSettings`, or `pydantic_settings.BaseSettings`;
 - SQLAlchemy 2.0 typed mappings resolving to `sqlalchemy.orm.DeclarativeBase`,
   `Mapped`, or `mapped_column`.
 

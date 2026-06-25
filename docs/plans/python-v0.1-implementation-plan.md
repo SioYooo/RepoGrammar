@@ -195,8 +195,8 @@ Minimum positive fixture groups:
   calls, and error mapping.
 - pytest fixture/test families with `conftest.py` hierarchy and parametrized
   tests.
-- Pydantic model families with fields, validators, config, and response schema
-  reuse.
+- Pydantic model/settings families with fields, validators, config, and
+  response schema reuse.
 - SQLAlchemy repository/model families with session usage and transaction
   boundaries.
 

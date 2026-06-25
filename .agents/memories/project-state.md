@@ -119,11 +119,12 @@ Release fixture smoke coverage copies committed TS/JS and Python fixtures into
 temporary workspaces and checks product CLI JSON paths, no absolute-path
 leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
-direct FastAPI, FastAPI alias, pytest, Pydantic, SQLAlchemy, mixed,
-dynamic-unknown, and low-support examples. Positive direct FastAPI, FastAPI
-alias, pytest, Pydantic, and SQLAlchemy fixtures now validate the no-worker
-exact-anchor derived-support family path. A separate test-only strong FastAPI
-semantic-support fixture injects compatible `SEMANTIC` facts through the
+direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
+mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
+FastAPI alias, pytest, Pydantic model/settings, and SQLAlchemy fixtures now
+validate the no-worker exact-anchor derived-support family path. A separate
+test-only strong FastAPI semantic-support fixture injects compatible `SEMANTIC`
+facts through the
 existing worker boundary to validate family reads and stale-evidence fallback
 without claiming production Python semantic-provider support.
 Family detail reads now use compact/evidence/deep output modes. Compact omits

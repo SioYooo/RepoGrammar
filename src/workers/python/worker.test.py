@@ -117,6 +117,40 @@ for fact in parse_facts:
 assert "from fastapi" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
 
+settings_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "settings.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import BaseSettings as LegacyBaseSettings
+from pydantic_settings import BaseSettings
+
+
+class LegacySettings(LegacyBaseSettings):
+    debug: bool = False
+
+
+class AppSettings(BaseSettings):
+    debug: bool = False
+""",
+    }
+)
+settings_units = settings_parse_messages[0]["units"]
+settings_facts = settings_parse_messages[0]["facts"]
+assert sum(1 for unit in settings_units if unit["kind"] == "pydantic_model") == 2
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseSettings"
+    for fact in settings_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic_settings.BaseSettings"
+    for fact in settings_facts
+)
+assert "from pydantic import" not in json.dumps(settings_parse_messages)
+
 alias_parse_messages = run_worker(
     {
         "protocol_version": 1,

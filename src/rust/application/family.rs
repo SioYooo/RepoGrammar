@@ -395,6 +395,7 @@ pub(crate) fn python_support_target_is_role_compatible(
         "framework:pydantic.model" => Some(matches!(
             target,
             "pydantic.BaseModel"
+                | "pydantic.BaseSettings"
                 | "pydantic_settings.BaseSettings"
                 | "pydantic.field_validator"
                 | "pydantic.validator"

@@ -1519,6 +1519,43 @@ def list_users():
     }
 
     #[test]
+    fn cpython_frontend_extracts_pydantic_settings_bases() {
+        let source = r#"
+from pydantic import BaseSettings as LegacyBaseSettings
+from pydantic_settings import BaseSettings
+
+class LegacySettings(LegacyBaseSettings):
+    debug: bool = False
+
+class AppSettings(BaseSettings):
+    debug: bool = False
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .filter(|unit| unit.kind.as_str() == "pydantic_model")
+                .count(),
+            2
+        );
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.BaseSettings")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("pydantic_settings.BaseSettings")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("from pydantic import"));
+    }
+
+    #[test]
     fn project_config_frontend_synthesizes_structural_unit_and_facts_without_leaks() {
         let source = r#"
 [project]

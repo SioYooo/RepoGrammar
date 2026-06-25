@@ -43,9 +43,9 @@
   payloads fall back to contextless parsing. The worker now performs file-local
   simple FastAPI router/app alias propagation with same-name reassignment
   invalidation. No-worker release smoke now covers direct FastAPI, FastAPI
-  alias, pytest, Pydantic, and SQLAlchemy exact-anchor derived-support family
-  paths without claiming provider-backed Python semantics. Default indexing
-  validates and persists parser-origin
+  alias, pytest, Pydantic model/settings, and SQLAlchemy exact-anchor
+  derived-support family paths without claiming provider-backed Python
+  semantics. Default indexing validates and persists parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.
 - Default Python indexing discovers root `pyproject.toml` as `python-config`,

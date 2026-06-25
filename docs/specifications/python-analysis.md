@@ -118,7 +118,7 @@ The current implementation covers the first structural slice only:
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
   note, assumption, and source-snippet validation;
 - syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
-  pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy
+  pytest tests/fixtures, Pydantic model/settings-shaped classes, SQLAlchemy
   model-shaped classes, and SQLAlchemy repository method-shaped functions;
 - an application-layer bounded exact-anchor derivation step that consumes
   validated parser-origin structural anchors plus syntax-origin framework-role
@@ -131,10 +131,10 @@ The current implementation covers the first structural slice only:
   low-support, strong-evidence, and stale-evidence smoke coverage;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
-  exact FastAPI, FastAPI router-alias, pytest, Pydantic, and SQLAlchemy anchors
-  can produce default families only through separate derived support facts, and
-  keep the test-injected `SEMANTIC` worker fixture as coverage for the explicit
-  worker boundary;
+  exact FastAPI, FastAPI router-alias, pytest, Pydantic model,
+  Pydantic settings, and SQLAlchemy anchors can produce default families only
+  through separate derived support facts, and keep the test-injected
+  `SEMANTIC` worker fixture as coverage for the explicit worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored
   repo-relative evidence metadata under an optional token budget and explicitly
@@ -257,8 +257,8 @@ Compatibility examples:
   `fastapi.APIRouter.post`, or another supported FastAPI route method.
 - pytest fixture: decorator resolves to `pytest.fixture`, or the provider
   resolves a fixture binding.
-- Pydantic model: subclass relation resolves to `pydantic.BaseModel` or
-  `pydantic_settings.BaseSettings`.
+- Pydantic model/settings: subclass relation resolves to `pydantic.BaseModel`,
+  `pydantic.BaseSettings`, or `pydantic_settings.BaseSettings`.
 - SQLAlchemy model: base or mapped members resolve to
   `sqlalchemy.orm.DeclarativeBase`, `sqlalchemy.orm.Mapped`, or
   `sqlalchemy.orm.mapped_column`.
