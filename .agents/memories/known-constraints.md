@@ -7,7 +7,8 @@
   `repo-guard` checks.
 - Related canonical docs: `AGENTS.md`, `docs/architecture/dependency-rules.md`,
   `docs/specifications/product.md`,
-  `docs/decisions/ADR-0011-python-first-v0-1.md`
+  `docs/decisions/ADR-0011-python-first-v0-1.md`,
+  `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
 - Supersedes: None
 - Superseded by: None
 
@@ -62,6 +63,18 @@ analysis rules.
   native platform features, and installed dependencies where they already solve
   the problem. Do not hand-roll a Python parser, whole-program call graph, or
   type inference engine.
+- Python v0.1 analysis must follow the ADR-0012 selective cascade: CPython
+  `ast`/`symtable`/`tomllib` as primary frontend, Tree-sitter fallback only,
+  Pyrefly through public provider boundaries for plausible family candidates,
+  Pyright only for claim-upgrading cross-checks, and RightTyper-style observed
+  evidence only behind explicit opt-in.
+- Python framework compatibility must use typed canonical identities and an
+  explicit compatibility table. Do not infer FastAPI, pytest, Pydantic,
+  SQLAlchemy, or TS/JS framework compatibility from framework-name substrings in
+  fact text, paths, notes, targets, or assumptions.
+- Cross-checked and observed Python certainty labels are planned only; do not
+  emit or test them as current protocol/storage/CLI/MCP tokens until all those
+  contracts are updated together.
 - v0.1 CLI is pattern-family-first; CodeGraph-style graph navigation command
   names are not top-level commands.
 - CodeGraph is a possible optional lower-layer provider. It is not a

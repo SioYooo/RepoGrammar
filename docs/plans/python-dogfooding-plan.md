@@ -7,7 +7,9 @@
 ADR-0011 promotes Python to the official v0.1 implementation target. This file
 is retained for historical context only. Use
 `docs/specifications/python-analysis.md` and
-`docs/plans/python-v0.1-implementation-plan.md` for current Python v0.1 work.
+`docs/plans/python-v0.1-implementation-plan.md` for current Python v0.1 work;
+the refined provider cascade is recorded in
+`docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
 
 ## Boundary
 

@@ -147,6 +147,11 @@ and owned by the installation workflow.
 - Core types must not depend on MCP SDK types.
 - MCP responses may include semantic-worker-derived facts only after they have
   been translated into RepoGrammar-owned evidence and certainty categories.
+- Future Python provider facts from Pyrefly, Pyright, or RightTyper-style
+  observed runs may appear in MCP only after translation into RepoGrammar-owned
+  facts with provider provenance, freshness metadata, and current supported
+  certainty tokens. MCP must not expose raw provider graphs, Python AST nodes,
+  LSP payloads, or runtime traces as product results.
 - Optional provider facts, including any future CodeGraph-derived facts, may
   appear only after translation into RepoGrammar-owned evidence with provider
   provenance and freshness metadata. Provider facts cannot independently prove

@@ -126,6 +126,11 @@
   ADR-0011.
 - Python-first v0.1 analysis specification, implementation plan, ADR, and
   durable memory for FastAPI, pytest, SQLAlchemy, and Pydantic family evidence.
+- Python selective analysis cascade ADR and documentation, defining CPython
+  `ast`/`symtable`/`tomllib` as the primary frontend, Pyrefly as the future
+  primary static provider, Pyright as a selective claim-upgrading cross-check,
+  typed canonical framework identities, RightTyper-style observed evidence as
+  explicit opt-in only, and precision-first evidence compression.
 - Optional CodeGraph provider plan and ADR that allow future auxiliary provider
   evidence without making CodeGraph a dependency or product wrapper.
 - UNKNOWN governance specification with typed unknown classes, reason codes,

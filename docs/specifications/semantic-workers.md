@@ -32,19 +32,39 @@ work should serve repository-local family evidence for FastAPI, pytest,
 SQLAlchemy, and Pydantic rather than trying to build a full Python analyzer.
 
 The canonical Python algorithm contract is
-`docs/specifications/python-analysis.md`. The worker strategy should combine:
+`docs/specifications/python-analysis.md`, refined by
+`docs/decisions/ADR-0012-python-selective-analysis-cascade.md`. The worker
+strategy should combine:
 
-- Python `ast` or another public parser for syntax facts where useful;
+- CPython `ast`, `symtable`, and `tomllib` for primary syntax, scope, and
+  configuration facts;
+- Tree-sitter Python only as tolerant structural fallback when CPython parsing
+  fails or the worker is unavailable;
 - conservative repo-local import and alias resolution;
+- Pyrefly as the primary static semantic provider behind a public CLI or
+  LSP-style boundary;
+- selective Pyright cross-checks only for facts that would upgrade or materially
+  change family claims;
 - framework-role facts for decorators, base classes, calls, and fixture
   bindings;
 - usage-driven fixpoint-lite context propagation;
-- target-centered call recovery;
+- Pyrefly call hierarchy followed by bounded JARVIS-lite target recovery when
+  needed;
 - typed `UNKNOWN` for dynamic behavior.
 
-Potential language-native helpers include Pyright, Mypy, or an LSP adapter, but
-they must be optional adapter details until an implementation decision accepts
-them. Their concrete types must not enter Rust core.
+Provider facts must be translated into RepoGrammar-owned facts before entering
+Rust core or storage. Concrete Pyrefly, Pyright, Python AST, LSP, or runtime
+objects must not enter Rust core. Provider provenance and freshness metadata
+must include provider name/version, command or API operation, provider config
+hash, Python version, environment fingerprint, input file hashes, source ranges,
+and query operation.
+
+Pyrefly and Pyright agreement may support a future cross-checked certainty tier
+only after Rust domain, protocol schemas, storage, CLI, MCP, and tests define
+that token. Until then, worker output must use current certainty tokens and keep
+cross-check status in assumptions/provenance. RightTyper-style runtime evidence
+is deferred, explicit opt-in, and observed-only; it must never run during
+default `index` or `sync`.
 
 Dynamic imports, monkey patching, decorator rewrites, pytest fixture injection,
 settings/framework magic, runtime dependency injection, missing dependencies,

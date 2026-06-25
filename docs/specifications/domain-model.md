@@ -56,6 +56,20 @@ Python v0.1 facts should follow the same owned model for FastAPI, pytest,
 SQLAlchemy, and Pydantic evidence; parser, type-checker, LSP, or Python runtime
 objects must not enter the core domain.
 
+Python framework compatibility must use typed canonical identities rather than
+free-text matching. Python facts should map provider output into owned records
+such as resolved symbol, subclass, decorator binding, call target, and fixture
+binding facts with canonical fully qualified names. A framework claim must be
+checked against an explicit compatibility table for FastAPI, pytest, Pydantic,
+and SQLAlchemy. Do not infer Python framework compatibility from substrings in
+fact kind, engine, method, target, assumptions, path, or note fields.
+
+Future Python provider states such as cross-checked static facts or observed
+runtime facts require explicit domain/protocol/storage changes before becoming
+public certainty tokens. Until then, cross-check status and observed provenance
+must stay in owned assumptions/provenance and use the current certainty
+vocabulary.
+
 ## PatternFamily
 
 A `PatternFamily` will group related code units that share an implementation

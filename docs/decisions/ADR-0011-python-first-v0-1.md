@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-06-25
 - Supersedes: ADR-0005, ADR-0009
+- Refined by: ADR-0012
 
 ## Context
 

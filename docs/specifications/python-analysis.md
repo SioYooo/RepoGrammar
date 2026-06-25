@@ -30,18 +30,19 @@ bad v0.1 target.
 
 RepoGrammar also does not need a general-purpose Python analyzer. It needs
 enough auditable, repo-local evidence to compress recurring implementation
-families for coding agents. The right design is therefore a conservative,
-research-informed method stack:
+families for coding agents. The right design is therefore a claim-driven
+selective cascade:
 
 ```text
-syntax structure
--> repo-local import resolution
--> framework role extraction
--> usage-driven context propagation
--> target-centered call recovery
--> framework-specific evidence views
--> EC-MVFI-lite family induction
--> typed UNKNOWN for unresolved claims
+CPython ast + symtable + tomllib
+-> low-cost structural candidate grouping
+-> Pyrefly only for candidates that may become families
+-> selective Pyright cross-check for claim-upgrading facts
+-> bounded framework-role propagation
+-> Pyrefly call hierarchy, then JARVIS-lite fallback when needed
+-> optional RightTyper observed evidence behind explicit opt-in
+-> precision-first constrained family induction
+-> selective retrieval and token-budget evidence selection
 ```
 
 This stack is reasonable because it uses mature parser and language-native
@@ -49,23 +50,63 @@ facts for stable evidence, borrows useful ideas from Python type and call-graph
 research, and rejects unsupported certainty. It deliberately does not attempt a
 whole-program sound Python semantic model.
 
+Static analysis precision and token reduction are related but separate goals.
+Stronger analysis usually creates more facts. RepoGrammar only forwards the
+minimum evidence needed for the current family claim.
+
+## Claim-driven Selective Cascade
+
+RepoGrammar should not run every analyzer over every file. The cascade is:
+
+1. Use CPython `ast`, `symtable`, and `tomllib` to produce cheap syntax, scope,
+   configuration, import, decorator, class-base, and call-shape candidates.
+2. Group candidates with low-cost structural and framework-anchor features.
+3. Invoke Pyrefly only for candidate groups whose support and shape make a
+   family plausible.
+4. Invoke Pyright only for facts that would upgrade a candidate into a family
+   claim or materially change an exception or variation classification.
+5. Apply bounded framework-role propagation and target-centered call recovery
+   only where the result affects a claim.
+6. Emit typed `UNKNOWN` for unresolved, stale, conflicting, dynamic, or
+   unsupported facts.
+7. Select compact evidence under the query's token budget instead of returning
+   a static-analysis graph.
+
 ## Adopted v0.1 Method Stack
 
-### Layer 0: Syntax Extraction
+### Layer 0: Authoritative Frontend
 
-Use existing parsers instead of hand-written Python parsing:
+Use existing native and public parsers instead of hand-written Python parsing.
+Normal, parseable Python files should use:
 
-- Rust adapter: `tree-sitter-python` once the Tree-sitter adapter boundary is
-  accepted.
-- Python worker: Python standard-library `ast` for language-native syntax facts
-  where executing a Python analyzer process is useful.
-- Future formatting-sensitive option: LibCST, only if preserving comments or
-  exact concrete syntax becomes necessary.
+- Python standard-library `ast` for syntax nodes and UTF-8 byte offsets.
+- Python standard-library `symtable` for compiler scope facts.
+- Python standard-library `tomllib` for bounded reads of `pyproject.toml` and
+  related configuration.
 
 Extract modules, functions, async functions, classes, methods, decorators, call
 expressions, imports, assignments, class bases, annotations, and source ranges.
 Syntax facts are `STRUCTURAL` or `FRAMEWORK_HEURISTIC`. They cannot prove
 semantic family membership by themselves.
+
+Tree-sitter Python is a fallback adapter only:
+
+```text
+ast.parse success
+  -> authoritative structural facts
+
+ast.parse SyntaxError + tree-sitter parse success
+  -> STRUCTURAL candidates + ParseDiagnostic
+  -> no family claim
+
+both fail
+  -> UnsupportedSyntax UNKNOWN
+```
+
+The worker Python version must be recorded in provenance because Python AST
+shape changes across Python releases. Long-term, the Python worker should emit
+code units, structural facts, semantic anchors, and diagnostics in one pass so
+Rust does not need to parse the same file a second time.
 
 ### Layer 1: Repo-local Import Resolution
 
@@ -82,7 +123,75 @@ may become external dependency context. Ambiguous namespace packages, missing
 project configuration, non-literal `importlib.import_module`, mutated
 `sys.path`, or runtime import hooks must produce typed `UNKNOWN`.
 
-### Layer 2: Framework Role Extraction
+### Layer 2: Typed Canonical Framework Identity
+
+Python framework compatibility must use typed canonical identities. Do not
+reuse substring matching over fact kind, engine, method, target, or assumptions.
+For example, a user module named `myproject.react_utils` must not become React
+evidence merely because a string contains `react`.
+
+The Python fact model should distinguish framework identity from textual fact
+fields:
+
+```text
+Framework = FastApi | Pytest | Pydantic | SqlAlchemy
+
+PythonSemanticFact =
+  ResolvedSymbol(canonical_fqn)
+  SubclassOf(canonical_base_fqn)
+  DecoratorBinding(canonical_decorator_fqn)
+  CallTarget(canonical_target_fqn)
+  FixtureBinding(fixture_fqn)
+```
+
+Compatibility examples:
+
+- FastAPI route: decorator or call target resolves to
+  `fastapi.FastAPI.get`, `fastapi.FastAPI.post`, `fastapi.APIRouter.get`,
+  `fastapi.APIRouter.post`, or another supported FastAPI route method.
+- pytest fixture: decorator resolves to `pytest.fixture`, or the provider
+  resolves a fixture binding.
+- Pydantic model: subclass relation resolves to `pydantic.BaseModel` or
+  `pydantic_settings.BaseSettings`.
+- SQLAlchemy model: base or mapped members resolve to
+  `sqlalchemy.orm.DeclarativeBase`, `sqlalchemy.orm.Mapped`, or
+  `sqlalchemy.orm.mapped_column`.
+
+Unresolved canonical identity blocks only the claim that depends on that
+identity. A FastAPI route family may still exist when a specific dependency
+target is unknown, but the dependency-target claim must remain `UNKNOWN`.
+
+### Layer 3: Selective Semantic Providers
+
+Pyrefly is the primary Python semantic provider for v0.1. Use it through public
+CLI or LSP-style boundaries for definition, type definition, references, hover
+or type text, call hierarchy, and type hierarchy. Do not depend on Pyrefly
+private Rust crates or internal data structures.
+
+Pyrefly facts must carry:
+
+- provider name and exact pinned provider version;
+- Python version;
+- provider config hash;
+- environment fingerprint;
+- file content hash;
+- source range;
+- query operation;
+- freshness status.
+
+Pyright is the selective cross-check provider. Use it only for facts that would
+upgrade a candidate to a family claim or materially change a variation or
+exception. If Pyrefly and Pyright agree, the future implementation may classify
+the fact as cross-checked semantic evidence after domain/protocol support is
+added. If they disagree, preserve `ConflictingFacts` and block the affected
+claim. If Pyright is unavailable, Pyrefly-primary facts may still be used only
+with stricter support thresholds.
+
+Mypy is project-native auxiliary evidence only when the repository already uses
+mypy. `ty` is an experimental benchmark provider until validated on the
+RepoGrammar Python fixture corpus.
+
+### Layer 4: Framework Role Extraction
 
 Framework-role extraction is the highest-value Python v0.1 layer. It should not
 wait for full type inference.
@@ -124,12 +233,14 @@ SQLAlchemy roles:
 - `SQLALCHEMY_REPOSITORY_METHOD`;
 - `SQLALCHEMY_TRANSACTION_BOUNDARY`.
 
-Required evidence includes declarative base patterns, `DeclarativeBase`,
-`mapped_column`, `Column`, `relationship`, `Session` or `AsyncSession` context,
-`select(...)`, `session.execute(...)`, `commit`, and rollback/error handling
-where statically visible.
+The first SQLAlchemy slice should prioritize SQLAlchemy 2.0 typed mappings:
+`DeclarativeBase`, `Mapped`, `mapped_column`, `relationship`, `Session` or
+`AsyncSession`, `select(...)`, `session.execute(...)`, `commit`, and
+rollback/error handling where statically visible. Legacy dynamic
+`declarative_base()` support may be recognized with lower certainty, but the
+deprecated SQLAlchemy mypy plugin must not become a default provider.
 
-### Layer 3: Usage-driven Fixpoint-lite Context Propagation
+### Layer 5: Usage-driven Fixpoint-lite Context Propagation
 
 Use a small, bounded version of usage-driven propagation inspired by modern
 Python type-inference research. The v0.1 goal is not full type inference; it is
@@ -148,11 +259,19 @@ The initial propagation budget should be file-local plus simple import-linked
 cross-file edges. Deep symbolic execution, broad project-wide type inference,
 and outcome-driven special cases are deferred.
 
-### Layer 4: Application-centered Call Recovery
+Recommended bounds:
 
-Borrow from PyCG/JARVIS-style assignment and type-graph ideas, but do not build
-a whole-repository call graph. RepoGrammar needs target-centered recovery for
-the current candidate family.
+- max fixpoint iterations: 4;
+- max cross-file propagation depth: 2;
+- site-packages traversal: disabled;
+- dynamic `getattr`, `setattr`, `globals`, `locals`, `eval`, and `exec`:
+  typed `UNKNOWN`.
+
+### Layer 6: Application-centered Call Recovery
+
+Use Pyrefly call hierarchy first. Borrow from JARVIS-style application-centered
+analysis only as a bounded fallback. Do not build a whole-repository call graph;
+RepoGrammar needs target-centered recovery for the current candidate family.
 
 Recover at most one to two hops for high-value edges:
 
@@ -161,11 +280,19 @@ Recover at most one to two hops for high-value edges:
 - fixture to fixture dependency;
 - repository method to `session.execute`, `select`, `commit`, or rollback.
 
-If the target comes from dynamic dependency injection, runtime registries,
-monkey patching, plugin hooks, or unresolved imports, emit
-`CALL_TARGET_UNKNOWN` as a typed `UNKNOWN` for that claim.
+The JARVIS-lite fallback should support only simple high-value forms:
 
-### Layer 5: pytest Fixture Graph
+- `x = Constructor(); x.method()`;
+- `x = imported_symbol; x(...)`;
+- `return service.method(...)`;
+- `self.service = service; self.service.method(...)`.
+
+If the target comes from dynamic dependency injection, runtime registries,
+monkey patching, plugin hooks, `getattr`, metaclass-generated methods, or
+unresolved imports, emit `CALL_TARGET_UNKNOWN` as a typed `UNKNOWN` for that
+claim.
+
+### Layer 7: pytest Fixture Graph
 
 Build a dedicated pytest fixture graph because fixture injection is a core
 source of Python test-family evidence.
@@ -180,7 +307,7 @@ Algorithm:
 6. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
    dynamic, or plugin-defined bindings.
 
-### Layer 6: Python EC-MVFI-lite
+### Layer 8: Python EC-MVFI-lite
 
 Candidate grouping key:
 
@@ -196,27 +323,102 @@ path_context
 
 Family claim gates:
 
-- support count is at least the configured threshold, default 2;
+- support count satisfies the configured threshold and the initial support
+  policy below;
 - framework role is identical or explicitly compatible;
+- canonical framework identity is provider-resolved or cross-checked when the
+  claim depends on it;
 - evidence is fresh against current source hashes;
 - import/context facts are resolved or non-blocking for the specific claim;
 - semantic support is role-compatible;
 - blocking `UNKNOWN` is absent for the emitted claim;
 - source evidence remains repo-relative and snippet-free.
 
+Hard blocking conditions:
+
+- different language;
+- different code-unit kind;
+- different typed framework role;
+- incompatible provider-resolved framework identity;
+- stale source, config, or provider evidence;
+- blocking `UNKNOWN`.
+
+Initial fingerprint features:
+
+- canonical decorators;
+- canonical base classes;
+- normalized parameter and type signature;
+- framework API calls;
+- bounded repo-local call targets;
+- import multiset;
+- fixture dependencies;
+- effect-lite markers such as `HTTPException`, `Depends`, `session.execute`,
+  `commit`, rollback, response model, and fixture client use;
+- path context;
+- normalized AST shape.
+
+For retrieval, small and medium repositories may use an inverted index over
+framework role, code-unit kind, canonical API, decorator, and base class.
+Larger repositories may later add SourcererCC-style rare-feature-first and
+prefix-filtering ideas to reduce pairwise comparisons.
+
+For clustering, prefer complete-link constrained agglomerative clustering over
+single-link or raw connected components. Complete-link is more conservative
+because every pair inside a family must satisfy the threshold. Initial support
+policy:
+
+- support >= 3: primary family candidate if all hard gates pass;
+- support == 2: only allowed after the Rust domain, protocol, storage, CLI,
+  MCP, and tests define a cross-checked semantic certainty; until then use a
+  stricter support threshold or return `UNKNOWN`;
+- otherwise: `UNKNOWN`.
+
 Output remains one of `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or
 `UNKNOWN`. Syntax-only or framework-heuristic-only Python observations can rank
 candidates but cannot prove a family.
 
-### Layer 7: Optional Runtime Trace Refinement
+### Layer 9: Optional Runtime Trace Refinement
 
-Runtime tracing is deferred and opt-in. A future bounded trace command may
-record observed behavior for selected pytest tests or FastAPI app entrypoints,
-but observed evidence must be labeled separately, such as
-`OBSERVED_SEMANTIC`, and must not be generalized to unobserved executions.
+Runtime tracing is deferred and opt-in. A future RightTyper-style bounded trace
+command may record observed behavior for selected pytest tests or FastAPI app
+entrypoints, but observed evidence must be labeled separately, such as a future
+`OBSERVED_SEMANTIC` certainty tier, and must not be generalized to unobserved
+executions.
 
 Runtime tracing requires an explicit consent and safety boundary. It must never
 run during default `index` or `sync`.
+
+Observed evidence must carry test command hash, run id, Python version,
+environment hash, observed timestamp, and source content hash. It must use a
+no-mutation execution mode when available.
+
+## Template and Evidence Compression
+
+Python family output should use Aroma-style cluster-and-intersect rather than
+returning top-k similar files. Preserve common AST node kinds and introduce
+slots for identifiers, literals, type annotations, decorator arguments, and
+service calls. Do not slot away framework decorators, canonical base classes,
+critical API calls, effect markers, or fixture dependencies.
+
+Default query output has three levels:
+
+- `compact`: family id, classification, support, invariants, variation slots,
+  exception summary, and unknowns. No source snippets.
+- `evidence`: compact output plus one canonical medoid, one representative
+  variation, and one exception when present, using repo-relative path, byte
+  range, and hash. No source snippets by default.
+- `deep`: minimum source spans only when explicitly requested.
+
+Evidence selection should be budgeted. Each evidence item records the claims it
+covers, such as route decorator invariant, dependency variation, response model
+variation, service call invariant, transaction exception, or runtime unknown.
+Under token budget `B`, choose evidence greedily by marginal weighted coverage
+per estimated token cost, with these constraints:
+
+- at least one canonical evidence item;
+- at most one or two variation items unless explicitly requested;
+- at least one exception when exceptions exist;
+- at most one evidence item from the same file by default.
 
 ## Rejected v0.1 Routes
 
@@ -229,6 +431,9 @@ run during default `index` or `sync`.
 - Default runtime tracing: too much execution risk and environment dependency.
 - Django in v0.1: framework magic and settings/runtime configuration are
   deferred until the focused backend subset is validated.
+- Neural type prediction and LLM semantic inference as production evidence:
+  useful as baselines or explanations, but not auditable static facts for
+  family membership.
 
 ## UNKNOWN Rules
 
@@ -264,7 +469,24 @@ dependencies by themselves.
   <https://arxiv.org/abs/2305.05949>.
 - RightTyper: hybrid runtime-observed Python type inference,
   <https://arxiv.org/abs/2507.16051>.
+- Pyrefly documentation and repository,
+  <https://pyrefly.org/en/docs/>,
+  <https://github.com/facebook/pyrefly>.
+- Pyright repository,
+  <https://github.com/microsoft/pyright>.
 - Tree-sitter Python grammar,
   <https://github.com/tree-sitter/tree-sitter-python>.
 - Python `ast` module,
   <https://docs.python.org/3/library/ast.html>.
+- Python `symtable` module,
+  <https://docs.python.org/3/library/symtable.html>.
+- Python `tomllib` module,
+  <https://docs.python.org/3/library/tomllib.html>.
+- SQLAlchemy mypy plugin deprecation and SQLAlchemy 2.0 typing guidance,
+  <https://docs.sqlalchemy.org/en/20/orm/extensions/mypy.html>.
+- SourcererCC: inverted-index clone retrieval,
+  <https://arxiv.org/abs/1512.06448>.
+- Aroma: structural code search with clustering and intersection,
+  <https://arxiv.org/abs/1812.01158>.
+- Repoformer: selective retrieval for repository-level code completion,
+  <https://arxiv.org/abs/2403.10059>.

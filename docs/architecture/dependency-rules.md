@@ -67,11 +67,21 @@ When a semantic worker is unavailable, version-incompatible, conflicting with
 another analyzer, or unable to decide a dynamic behavior, the result must be
 `UNKNOWN` or abstention.
 
-Python v0.1 worker/adapters may use public parser, type-checker, or LSP
-facilities such as CPython `ast`, Pyright, Mypy, or a language server only
-behind the adapter/worker boundary. Do not reimplement a Python parser or
-whole-program call graph when existing tooling and a bounded adapter can provide
-the needed evidence.
+Python v0.1 worker/adapters should use CPython `ast`, `symtable`, and
+`tomllib` as the primary frontend. Tree-sitter Python is a fallback for
+syntax-error, incomplete-file, or worker-unavailable cases; it is not the
+primary Python semantic frontend. Pyrefly may become the primary static
+semantic provider only through public CLI/LSP-style boundaries. Pyright may be
+used as a selective cross-check provider for claim-upgrading facts. Mypy is
+project-native auxiliary evidence only when the target repository already uses
+it. RightTyper-style observed evidence is deferred, explicitly opt-in, and must
+not run during default indexing because it executes user code.
+
+Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
+internals, Python AST nodes, and runtime trace payloads must be translated into
+RepoGrammar-owned facts at the adapter boundary before entering `core`. Do not
+reimplement a Python parser, whole-program call graph, or general type checker
+when existing tooling and a bounded adapter can provide the needed evidence.
 
 ## SQLite boundary
 

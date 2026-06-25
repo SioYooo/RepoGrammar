@@ -4,6 +4,7 @@
 - Last updated: 2026-06-25
 - Scope: Durable non-normative summary of the Python-first v0.1 algorithm plan
 - Evidence: `docs/decisions/ADR-0011-python-first-v0-1.md`,
+  `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`,
   `docs/specifications/python-analysis.md`,
   `docs/plans/python-v0.1-implementation-plan.md`
 - Supersedes: `.agents/memories/python-dogfooding-plan.md`
@@ -15,17 +16,24 @@ SQLAlchemy, and Pydantic. Existing TS/JS bootstrap code remains transitional
 substrate, but agents must not describe TS/JS as the official v0.1 target unless
 a later ADR changes the scope again.
 
-The accepted Python algorithm stack is:
+The accepted Python algorithm stack is the ADR-0012 claim-driven selective
+cascade:
 
-1. public parser-backed syntax extraction;
-2. conservative repo-local import resolution;
-3. framework-role extraction;
-4. usage-driven fixpoint-lite context propagation;
-5. target-centered call recovery;
-6. pytest fixture graph construction;
-7. Python EC-MVFI-lite family induction;
-8. typed `UNKNOWN` governance;
-9. optional bounded runtime trace later, never by default.
+1. CPython `ast`, `symtable`, and `tomllib` for primary syntax, scope, and
+   config facts;
+2. low-cost structural and framework-anchor candidate grouping;
+3. Pyrefly through public CLI/LSP-style boundaries only for plausible family
+   candidates;
+4. Pyright cross-checks only for claim-upgrading facts;
+5. typed canonical framework identities instead of framework-name substring
+   matching;
+6. usage-driven fixpoint-lite context propagation;
+7. Pyrefly call hierarchy first, then JARVIS-lite bounded call recovery when
+   needed;
+8. Python EC-MVFI-lite family induction with complete-link constrained
+   clustering and Aroma-style template intersection;
+9. selective compact/evidence/deep output with token-budget evidence selection;
+10. optional RightTyper-style observed evidence later, explicit opt-in only.
 
 Do not implement a hand-written Python parser, whole-program call graph, full
 sound Python analyzer, LLM-evidence path, default runtime trace, Django adapter,
@@ -37,6 +45,10 @@ Python syntax and framework heuristics can rank candidates but cannot prove
 family membership alone. Family claims require fresh source evidence,
 role-compatible semantic/dataflow support, sufficient repeated support, and no
 blocking unknown for the emitted claim.
+
+Future cross-checked or observed semantic certainty labels are not current Rust,
+protocol, CLI, MCP, or storage tokens. Until those layers change together,
+cross-check and observed-runtime details must remain in assumptions/provenance.
 
 Dynamic imports, monkey patching, unresolved decorators, ambiguous pytest
 fixtures, runtime dependency injection, missing dependencies, stale evidence,

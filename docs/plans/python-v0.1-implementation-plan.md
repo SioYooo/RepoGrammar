@@ -4,6 +4,7 @@
 - Last updated: 2026-06-25
 - Scope: Python-first v0.1 implementation coordination
 - Canonical algorithm spec: `docs/specifications/python-analysis.md`
+- Provider cascade decision: `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
 - Supersedes: `docs/plans/python-dogfooding-plan.md`
 
 ## Goal
@@ -25,6 +26,12 @@ query reads, and conservative EC-MVFI-lite gates.
 That substrate is useful and should not be thrown away, but the next v0.1
 implementation work should pivot toward Python. Existing TS/JS behavior must be
 described as transitional until a later release re-promotes it.
+
+ADR-0012 refines the Python route as a claim-driven selective cascade. Do not
+run all analyzers over the whole repository. Start with cheap CPython syntax,
+scope, and config facts; escalate only candidate groups and claim-upgrading
+facts to Pyrefly, Pyright, bounded propagation, call recovery, or optional
+observed runtime evidence.
 
 ## Optimized Phase Sequence
 
@@ -52,70 +59,101 @@ test agents own support-level and `UNKNOWN` regression tests.
 Validation gate: Python can be represented as the v0.1 target in domain types,
 but unimplemented analysis remains fallback or typed `UNKNOWN`.
 
-### Phase P2: Python Discovery and Module Graph
+### Phase P2: Python Discovery and Authoritative Frontend
 
 Goal: discover `.py` files, package roots, `__init__.py`, safe project config,
-and deterministic repo-local module names.
+deterministic repo-local module names, and CPython `ast`/`symtable`/`tomllib`
+frontend output.
 
 Non-goals: full `sys.path` emulation, dynamic import execution, dependency
-installation.
+installation, or hand-written parsing.
 
 Validation gate: deterministic paths and hashes, skip virtual environments and
-generated/dependency directories, no source snippets or absolute paths.
+generated/dependency directories, no source snippets or absolute paths, Python
+version recorded in provenance, and malformed Python producing bounded
+diagnostics.
 
-### Phase P3: Syntax Extraction
+### Phase P3: Tree-sitter Fallback and Code-unit Emission
 
-Goal: extract Python modules, functions, async functions, classes, methods,
-decorators, imports, assignments, calls, annotations, and class bases through
-public parsers.
+Goal: emit RepoGrammar-owned Python code units, structural facts, semantic
+anchors, and diagnostics from the Python worker. Use Tree-sitter only as a
+tolerant fallback for syntax errors, incomplete files, or worker
+unavailability.
 
-Non-goals: hand-written parser, semantic certainty from syntax alone.
+Non-goals: semantic certainty from syntax alone, duplicate primary parsing in
+Rust and Python, or treating Tree-sitter as a Python semantic frontend.
 
 Validation gate: malformed syntax produces bounded diagnostics and partial
 structural output; syntax-only output cannot create family claims.
 
-### Phase P4: Import and Framework Role Evidence
+### Phase P4: Pyrefly Provider and Framework Role Evidence
 
-Goal: implement repo-local import/alias resolution plus framework-role
-extraction for FastAPI, pytest, SQLAlchemy, and Pydantic.
+Goal: implement repo-local import/alias resolution, Pyrefly primary provider
+queries, typed canonical framework identity, and framework-role extraction for
+FastAPI, pytest, SQLAlchemy, and Pydantic. Add selective Pyright cross-checks
+only for facts that would upgrade a family claim or materially change a
+variation/exception.
 
-Non-goals: Django, plugin execution, runtime DI resolution, full type checker.
+Non-goals: Django, plugin execution, runtime DI resolution, whole-project
+dual-provider analysis, private Pyrefly API use, or substring framework
+compatibility.
 
-Validation gate: unique static evidence produces framework/context facts;
-dynamic or ambiguous evidence produces typed `UNKNOWN`.
+Validation gate: unique static evidence produces framework/context facts with
+provider provenance and freshness; Pyrefly/Pyright disagreement produces
+`ConflictingFacts`; dynamic or ambiguous evidence produces typed `UNKNOWN`.
 
 ### Phase P5: Usage Propagation and Target-centered Calls
 
-Goal: add fixpoint-lite role propagation and application-centered call recovery
-for family compatibility.
+Goal: add bounded fixpoint-lite role propagation, Pyrefly call hierarchy, and
+JARVIS-lite fallback recovery for family compatibility.
 
 Non-goals: whole-program call graph, sound alias analysis, complete symbolic
 execution.
 
 Validation gate: recovery is bounded, deterministic, and role-specific; unknown
-targets remain visible as typed `UNKNOWN`.
+targets remain visible as typed `UNKNOWN`; site-packages traversal stays
+disabled by default.
 
 ### Phase P6: Python EC-MVFI-lite Families
 
 Goal: build Python family records only from repeated compatible candidates with
-fresh source evidence and no blocking unknown for the emitted claim.
+fresh source/provider/config evidence and no blocking unknown for the emitted
+claim.
 
-Non-goals: full anti-unification, broad clustering, token-savings claims.
+Non-goals: broad clustering, single-link chaining, token-savings claims, or
+neural/LLM evidence.
 
 Validation gate: positive fixtures prove at least one FastAPI/pytest/Pydantic
 or SQLAlchemy family can be emitted; negative fixtures prove dynamic imports,
-fixture ambiguity, stale evidence, and insufficient support abstain.
+fixture ambiguity, stale evidence, provider conflict, substring false matches,
+and insufficient support abstain. Clustering is complete-link constrained, and
+template extraction uses Aroma-style intersection only after hard gates pass.
 
-### Phase P7: Query, MCP, and Release Smoke
+### Phase P7: Token Selector, Query, MCP, and Release Smoke
 
 Goal: expose Python family evidence through existing pattern-family CLI and MCP
-contracts without changing the product into graph navigation.
+contracts without changing the product into graph navigation. Default output is
+`compact`; `evidence` and `deep` modes expand only under explicit query or
+budget.
 
 Non-goals: new top-level graph commands, automatic user-code edits, runtime
-trace by default.
+trace by default, or source snippets in compact/evidence output.
 
 Validation gate: human and JSON outputs distinguish fallback, stale evidence,
 typed `UNKNOWN`, `CONTEXT_ONLY`, and confident family classifications.
+
+### Phase P8: Optional Observed Runtime Evidence
+
+Goal: add an explicit, bounded RightTyper-style observed evidence path only
+after static family evidence exists.
+
+Non-goals: default runtime execution, mutation of user source, generalizing
+observed behavior to unexecuted paths, or using runtime evidence as universal
+truth.
+
+Validation gate: command/test provenance, coverage/run id, Python version,
+environment hash, source hash, and no-mutation behavior are recorded; observed
+facts are labeled separately and never bypass static conflict/UNKNOWN gates.
 
 ## Required Python Fixtures
 
@@ -141,6 +179,8 @@ Minimum negative fixture groups:
 - runtime dependency injection;
 - missing dependencies or project config;
 - stale evidence;
+- provider disagreement;
+- substring framework-name false positives;
 - low support.
 
 ## Agent Ownership

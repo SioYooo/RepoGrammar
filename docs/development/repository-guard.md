@@ -21,7 +21,7 @@ The check command verifies:
 - both guides are byte-identical.
 - required bootstrap docs and workflows exist, including
   `docs/decisions/ADR-0008-repo-local-state-boundary.md`, the v0.1 planning
-  documents, the Python v0.1 analysis specification and ADR-0011, the
+  documents, the Python v0.1 analysis specification, ADR-0011, ADR-0012, the
   substrate hardening checkpoint, typed UNKNOWN specification, ADR-0009/ADR-0010,
   and their durable memory mirrors under
   `.agents/memories/`.

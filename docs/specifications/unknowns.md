@@ -69,6 +69,13 @@ conflicts when the losing fact would change behavior, security, persistence,
 authorization, transactionality, idempotency, async lifecycle, error mapping, or
 external side effects.
 
+Future provider agreement or runtime observation states, such as Python
+cross-checks or RightTyper-style observed traces, must not become public
+certainty tokens until the Rust domain, protocol schemas, storage, CLI, MCP,
+and tests define those tokens together. Until then, agreement and observation
+details remain provenance or assumptions, while disagreements still surface as
+`ConflictingFacts` or typed `UNKNOWN`.
+
 Some unknowns block only specific claims:
 
 - unresolved auth middleware may block a conformance claim about authorization

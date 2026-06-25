@@ -31,6 +31,11 @@
   builders. It is not a pattern-family classification or conformance result.
 - Tests for new analyzers should include uncertain, conflicting, stale,
   unsupported, and dynamic cases.
+- Python provider agreement, provider disagreement, and runtime observation are
+  not current certainty tokens. Until the Rust domain, protocol, storage, CLI,
+  MCP, and schemas change together, cross-check and observed-runtime details
+  remain provenance/assumptions and conflicts still surface as
+  `ConflictingFacts` or typed `UNKNOWN`.
 
 ## Revalidation conditions
 

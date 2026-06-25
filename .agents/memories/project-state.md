@@ -6,7 +6,8 @@
   freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
   serving, and narrow global explicit-target installer writes. ADR-0011 now
   makes Python-first analysis the official v0.1 implementation target, but the
-  Python analyzer is not implemented yet.
+  Python analyzer is not implemented yet. ADR-0012 defines the planned
+  claim-driven selective Python analysis cascade.
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -15,7 +16,8 @@
   `docs/specifications/cli.md`, `docs/specifications/storage.md`,
   `docs/specifications/indexing-pipeline.md`,
   `docs/specifications/python-analysis.md`,
-  `docs/decisions/ADR-0011-python-first-v0-1.md`
+  `docs/decisions/ADR-0011-python-first-v0-1.md`,
+  `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
 - Supersedes: None
 - Superseded by: None
 
@@ -42,9 +44,10 @@ unsupported fact kinds, weak certainty, or conflicting certainty with typed
 smoke gate that exercises `init`, `index`, `files`, `units`, pattern-family
 queries, and `doctor` without treating syntax-only evidence as a family claim.
 ADR-0011 pivots the official v0.1 implementation target to Python-first
-analysis for FastAPI, pytest, SQLAlchemy, and Pydantic; the current TS/JS
-substrate remains useful scaffolding but must not be described as the official
-v0.1 target.
+analysis for FastAPI, pytest, SQLAlchemy, and Pydantic; ADR-0012 defines that
+the implementation should use a claim-driven selective cascade rather than
+running every analyzer over every file. The current TS/JS substrate remains
+useful scaffolding but must not be described as the official v0.1 target.
 
 ## Durable knowledge
 

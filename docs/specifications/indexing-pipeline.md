@@ -103,8 +103,10 @@ failing indexing.
 
 Python discovery is the next official v0.1 implementation target. It must
 discover `.py` files, package roots, safe project configuration, and
-repo-local module names without executing repository code. Python syntax-only
-facts still cannot become semantic claims or family evidence by themselves.
+repo-local module names without executing repository code. The Python frontend
+uses CPython `ast`, `symtable`, and `tomllib` as primary sources and
+Tree-sitter as tolerant structural fallback only. Python syntax-only facts still
+cannot become semantic claims or family evidence by themselves.
 
 ## Tree-sitter parsing
 
@@ -135,10 +137,13 @@ or test fixture binding.
 Language-native frontends provide project models, module resolution, symbol
 resolution, type information, inheritance, and resolved calls where available.
 The next official semantic-frontend design target is Python. Python analysis
-should combine parser-backed syntax facts, repo-local import resolution,
-framework-role extraction, usage-driven fixpoint-lite context propagation,
-target-centered call recovery, and pytest fixture graph construction as
-specified in `docs/specifications/python-analysis.md`.
+should follow the claim-driven selective cascade in
+`docs/specifications/python-analysis.md` and
+`docs/decisions/ADR-0012-python-selective-analysis-cascade.md`: cheap CPython
+syntax/scope/config facts first, Pyrefly only for plausible family candidates,
+selective Pyright cross-checks for claim-upgrading facts, bounded role
+propagation and call recovery, and compact evidence selection under token
+budget.
 
 The existing Rust-side TypeScript process adapter can validate NDJSON worker
 output and translate facts into RepoGrammar-owned semantic facts. The
@@ -159,8 +164,9 @@ through CLI/MCP. The storage layer can persist generation-scoped family records,
 members, variation slots, and family-bound evidence when the EC-MVFI-lite
 builder supplies them. Default syntax-origin framework-role facts do not produce
 those rows; an explicit semantic worker or future framework adapter must supply
-stronger compatible evidence before a family is stored. Other languages should use their own
-compiler, type-checker, or LSP where that is the most authoritative source.
+stronger compatible evidence before a family is stored. Other languages should
+use their own compiler, type-checker, or LSP where that is the most
+authoritative source.
 Not every stored semantic fact is worker-originated: syntax-origin framework
 role facts may be recorded by the current TS/JS framework adapter with
 `FRAMEWORK_HEURISTIC` certainty. Those facts remain blocked from family-claim
@@ -221,6 +227,8 @@ families. These algorithms are deliberately deferred.
 Initial Python v0.1 framework adapters are scoped to FastAPI, pytest,
 SQLAlchemy, and Pydantic. Framework rules belong in
 `src/rust/adapters/frameworks/`.
+Python framework compatibility must use typed canonical identities and explicit
+compatibility tables, never framework-name substring matching.
 
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
 Express routes, React components, React hooks, Jest/Vitest suites, and

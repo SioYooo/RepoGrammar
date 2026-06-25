@@ -31,10 +31,10 @@ Open questions include:
 - MCP response schema stability.
 - Optional CodeGraph provider integration mechanism, freshness model, and
   conflict behavior.
-- Python v0.1 analyzer implementation details after ADR-0011: exact public
-  parser API boundary, whether the first worker uses Python `ast`,
-  tree-sitter-python, or both, and whether Pyright, Mypy, or an LSP-backed
-  worker should appear after framework-role evidence lands.
+- Python v0.1 analyzer implementation details after ADR-0012: exact Python
+  worker transport, Pyrefly CLI/LSP adapter shape, provider cache-key storage,
+  Pyright cross-check thresholds, fixture corpus selection, and how to surface
+  provider disagreement without introducing future certainty tokens early.
 - Runtime trace policy and consent boundary if traces are ever used to recover
   unknowns.
 - Python v0.1 fixture selection for FastAPI, pytest, SQLAlchemy, and Pydantic,

@@ -43,10 +43,12 @@ local Python analysis for recurring repository pattern families in:
 - SQLAlchemy;
 - Pydantic.
 
-The first Python implementation phase should use parser-backed syntax
-extraction, repo-local import resolution, framework role extraction,
-usage-driven fixpoint-lite context propagation, target-centered call recovery,
-pytest fixture graph construction, EC-MVFI-lite family induction, and typed
+The first Python implementation phase should follow the claim-driven selective
+cascade in `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`:
+CPython `ast`/`symtable`/`tomllib` for cheap structural candidates, selective
+Pyrefly provider queries for plausible family candidates, Pyright cross-checks
+only for claim-upgrading facts, bounded framework-role propagation,
+target-centered call recovery, EC-MVFI-lite family induction, and typed
 `UNKNOWN` governance. The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 

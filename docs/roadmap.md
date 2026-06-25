@@ -72,10 +72,11 @@ The substrate hardening checkpoint now covers generation immutability,
 lifecycle doctor hygiene, repo-guard coverage, bounded reads, parent Git ignore
 behavior, manifest/status/doctor schema clarity, semantic-worker request
 limits, index-lock cleanup/unlock gates, conservative family query reads, and
-read-only MCP serving over `repogrammar_context`. With ADR-0011 accepted, the
-next analysis implementation slice should pivot to Python v0.1 while preserving
-the family claim input contract and EC-MVFI-lite readiness gates rather than
-exposing substrate records as overclaimed user-visible family claims.
+read-only MCP serving over `repogrammar_context`. With ADR-0011 and ADR-0012
+accepted, the next analysis implementation slice should pivot to Python v0.1
+through a claim-driven selective cascade while preserving the family claim input
+contract and EC-MVFI-lite readiness gates rather than exposing substrate records
+as overclaimed user-visible family claims.
 
 1. Phase 1: repo-local lifecycle.
 2. Phase 1.5: language and provider abstraction.
@@ -138,7 +139,11 @@ evidence contracts remain validated together.
 ## Python path
 
 - Python is the v0.1 implementation target.
-- Use the method stack in `docs/specifications/python-analysis.md`.
+- Use the method stack in `docs/specifications/python-analysis.md` and
+  `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
+- Start with CPython `ast`/`symtable`/`tomllib`, escalate only plausible
+  family candidates to Pyrefly, and use Pyright only for claim-upgrading
+  cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.

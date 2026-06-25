@@ -141,11 +141,17 @@ allowed.
   output is parseable and does not leak source snippets or absolute paths, and
   family query commands return typed `UNKNOWN`/`InsufficientSupport` unless a
   test explicitly injects strong semantic or dataflow support.
-- Python v0.1 tests, once implementation begins, must cover FastAPI, pytest,
-  SQLAlchemy, and Pydantic positive fixtures plus typed `UNKNOWN` for dynamic
-  imports, monkey patching, pytest fixture injection, runtime dependency
-  injection, unresolved imports, missing dependencies, stale evidence, and
-  framework magic.
+- Python v0.1 tests, once implementation begins, must cover CPython
+  `ast`/`symtable`/`tomllib` frontend output, Tree-sitter fallback not creating
+  family claims, FastAPI, pytest, SQLAlchemy, and Pydantic positive fixtures,
+  typed canonical framework identities rather than framework-name substring
+  matching, Pyrefly/Pyright disagreement becoming `ConflictingFacts`, provider
+  provenance/freshness cache keys, and typed `UNKNOWN` for dynamic imports,
+  monkey patching, pytest fixture injection, runtime dependency injection,
+  unresolved imports, missing dependencies, stale evidence, and framework
+  magic. Tests must not expect future cross-checked or observed certainty
+  tokens until Rust domain, protocol, storage, CLI, MCP, and schema support are
+  added.
 - Optional provider tests, once added, must cover provider absent, present,
   stale, and conflicting states without making CodeGraph or any other provider
   required for default tests.

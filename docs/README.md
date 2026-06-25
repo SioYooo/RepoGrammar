@@ -34,6 +34,7 @@ context lives under `.agents/memories/`.
   later broad product slices:
   `plans/v0.1-substrate-hardening-checkpoint.md`.
 - Python v0.1 analysis: `decisions/ADR-0011-python-first-v0-1.md`,
+  `decisions/ADR-0012-python-selective-analysis-cascade.md`,
   `specifications/python-analysis.md`, and
   `plans/python-v0.1-implementation-plan.md`.
 - Historical Python dogfooding boundary:
@@ -80,6 +81,7 @@ context lives under `.agents/memories/`.
 - Semantic worker change: read `specifications/semantic-workers.md` and
   `decisions/ADR-0004-rust-core-language-native-workers.md`.
 - Language support change: read `decisions/ADR-0011-python-first-v0-1.md`,
+  `decisions/ADR-0012-python-selective-analysis-cascade.md`,
   `specifications/python-analysis.md`, `specifications/product.md`,
   `docs/roadmap.md`, and the relevant plan under `plans/`.
 - Optional graph/provider change: read

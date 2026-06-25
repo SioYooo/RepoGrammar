@@ -26,7 +26,10 @@ The official v0.1 implementation target has pivoted to Python-first analysis
 for FastAPI, pytest, SQLAlchemy, and Pydantic. The current TS/JS code remains
 transitional substrate from the earlier bootstrap while Python discovery,
 parser, framework-role, import-resolution, and family-evidence work is
-implemented.
+implemented. The Python plan uses a claim-driven selective cascade: cheap
+CPython syntax/scope/config facts first, Pyrefly only for plausible family
+candidates, Pyright only for claim-upgrading cross-checks, and typed `UNKNOWN`
+when evidence cannot support a claim.
 
 It does not yet implement TypeScript compiler analysis, broad installer writes,
 or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter

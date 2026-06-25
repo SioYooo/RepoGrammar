@@ -21,3 +21,4 @@ Current accepted ADRs:
 - ADR-0009: Experimental Python dogfooding (superseded by ADR-0011).
 - ADR-0010: Optional CodeGraph provider.
 - ADR-0011: Python-first v0.1.
+- ADR-0012: Python selective analysis cascade.
