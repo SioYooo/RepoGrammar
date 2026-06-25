@@ -122,6 +122,8 @@
 - Changed TS/JS discovery to resolve parent Git worktrees before running
   `check-ignore`, so subdirectory project roots honor parent `.gitignore`
   rules while reports stay project-relative.
+- Changed bootstrap manifest validation to parse JSON fields instead of relying
+  on literal string layout.
 - Documented JSON-parsed semantic-worker protocol fixture tests without
   claiming a running TypeScript worker or runtime indexing integration.
 - Documented request-side semantic-worker fixture validation without claiming a

@@ -26,6 +26,8 @@ const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
 .repogrammar-*/\n\
 # END RepoGrammar local state\n";
 const LIFECYCLE_TEXT_MAX_BYTES: u64 = 1024 * 1024;
+const BOOTSTRAP_STORAGE_STATUSES: &[&str] = &["not_implemented"];
+const BOOTSTRAP_INDEXING_STATUSES: &[&str] = &["not_implemented"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryInitRequest {
@@ -1276,13 +1278,34 @@ fn init_receipt_contents() -> String {
 }
 
 fn is_valid_bootstrap_manifest(manifest: &str) -> bool {
-    let trimmed = manifest.trim();
-    trimmed.starts_with('{')
-        && trimmed.ends_with('}')
-        && manifest.contains("\"schema_version\": 1")
-        && manifest.contains("\"state\": \"initialized\"")
-        && manifest.contains("\"storage\": { \"status\": \"not_implemented\" }")
-        && manifest.contains("\"indexing\": { \"status\": \"not_implemented\" }")
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(manifest) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+        && object
+            .get("repogrammar_version")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|version| !version.trim().is_empty())
+        && object.get("state").and_then(serde_json::Value::as_str) == Some("initialized")
+        && manifest_status_is(object.get("storage"), BOOTSTRAP_STORAGE_STATUSES)
+        && manifest_status_is(object.get("indexing"), BOOTSTRAP_INDEXING_STATUSES)
+}
+
+fn manifest_status_is(value: Option<&serde_json::Value>, allowed: &[&str]) -> bool {
+    let Some(status) = value
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("status"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    allowed.contains(&status)
 }
 
 fn is_valid_init_receipt(receipt: &str) -> bool {
@@ -1545,6 +1568,156 @@ mod tests {
         );
         assert_eq!(status.manifest, RepositoryManifestStatus::Valid);
         assert!(status.missing_subdirs.is_empty());
+    }
+
+    #[test]
+    fn status_accepts_valid_manifest_with_different_json_order_and_formatting() {
+        let workspace = TempWorkspace::new("repository-status-reordered-manifest");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        fs::write(
+            workspace
+                .path()
+                .join(DEFAULT_STATE_DIR)
+                .join("manifest.json"),
+            r#"{
+  "indexing": {
+    "status": "not_implemented"
+  },
+  "state": "initialized",
+  "repogrammar_version": "0.1.0",
+  "storage": {
+    "status": "not_implemented"
+  },
+  "schema_version": 1
+}
+"#,
+        )
+        .expect("rewrite manifest");
+
+        let status = repository_status(RepositoryStatusRequest::new(root_string(workspace.path())))
+            .expect("status after manifest rewrite");
+
+        assert_eq!(
+            status.status,
+            RepositoryStatus::Initialized {
+                active_generation: "not implemented".to_string()
+            }
+        );
+        assert_eq!(status.manifest, RepositoryManifestStatus::Valid);
+    }
+
+    #[test]
+    fn bootstrap_manifest_validation_rejects_invalid_required_fields() {
+        let valid = manifest_contents();
+        let invalid_cases = [
+            (
+                "not json",
+                "schema_version: 1, state: initialized".to_string(),
+            ),
+            (
+                "invalid schema version",
+                valid.replace("\"schema_version\": 1", "\"schema_version\": 2"),
+            ),
+            (
+                "invalid state",
+                valid.replace("\"state\": \"initialized\"", "\"state\": \"ready\""),
+            ),
+            (
+                "empty version",
+                valid.replace(
+                    &format!("\"repogrammar_version\": \"{}\"", env!("CARGO_PKG_VERSION")),
+                    "\"repogrammar_version\": \"\"",
+                ),
+            ),
+            (
+                "whitespace version",
+                valid.replace(
+                    &format!("\"repogrammar_version\": \"{}\"", env!("CARGO_PKG_VERSION")),
+                    "\"repogrammar_version\": \"   \"",
+                ),
+            ),
+            (
+                "missing version",
+                valid.replace(
+                    &format!(
+                        "  \"repogrammar_version\": \"{}\",\n",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                    "",
+                ),
+            ),
+            (
+                "string schema version",
+                valid.replace("\"schema_version\": 1", "\"schema_version\": \"1\""),
+            ),
+            (
+                "float schema version",
+                valid.replace("\"schema_version\": 1", "\"schema_version\": 1.0"),
+            ),
+            (
+                "invalid storage status",
+                valid.replace(
+                    "\"storage\": { \"status\": \"not_implemented\" }",
+                    "\"storage\": { \"status\": \"available\" }",
+                ),
+            ),
+            (
+                "storage not object",
+                valid.replace(
+                    "\"storage\": { \"status\": \"not_implemented\" }",
+                    "\"storage\": \"not_implemented\"",
+                ),
+            ),
+            (
+                "storage status not string",
+                valid.replace(
+                    "\"storage\": { \"status\": \"not_implemented\" }",
+                    "\"storage\": { \"status\": 1 }",
+                ),
+            ),
+            (
+                "invalid indexing status",
+                valid.replace(
+                    "\"indexing\": { \"status\": \"not_implemented\" }",
+                    "\"indexing\": { \"status\": \"syntax_only_code_units\" }",
+                ),
+            ),
+            (
+                "indexing not object",
+                valid.replace(
+                    "\"indexing\": { \"status\": \"not_implemented\" }",
+                    "\"indexing\": \"not_implemented\"",
+                ),
+            ),
+            (
+                "indexing status not string",
+                valid.replace(
+                    "\"indexing\": { \"status\": \"not_implemented\" }",
+                    "\"indexing\": { \"status\": 1 }",
+                ),
+            ),
+            (
+                "missing storage status",
+                valid.replace(
+                    "\"storage\": { \"status\": \"not_implemented\" }",
+                    "\"storage\": {}",
+                ),
+            ),
+            (
+                "missing indexing status",
+                valid.replace(
+                    "\"indexing\": { \"status\": \"not_implemented\" }",
+                    "\"indexing\": {}",
+                ),
+            ),
+        ];
+
+        for (case, manifest) in invalid_cases {
+            assert!(
+                !is_valid_bootstrap_manifest(&manifest),
+                "expected invalid manifest for {case}"
+            );
+        }
     }
 
     #[test]

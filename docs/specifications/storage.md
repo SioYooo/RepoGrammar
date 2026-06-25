@@ -157,6 +157,11 @@ generations are immutable even if a caller still holds an old generation handle.
 Generation validation transitions only `building` to `validated`, may recheck an
 already `validated` generation without changing it, and must not downgrade or
 reactivate an `active` generation.
+Bootstrap manifest validation parses `manifest.json` as JSON rather than
+matching literal text. Field order and formatting are not meaningful, but
+`schema_version`, non-empty `repogrammar_version`, `state`, `storage.status`,
+and `indexing.status` must match the current bootstrap contract before status,
+doctor, init repair, or index preflight treat the repository as initialized.
 
 ## File Discovery Exclusions
 

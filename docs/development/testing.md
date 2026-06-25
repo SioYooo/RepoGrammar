@@ -25,9 +25,11 @@ allowed.
 - Repo-local lifecycle tests must use temporary workspaces and cover init
   layout, idempotent repair, Git exclude hygiene, optional root `.gitignore`
   marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
-  human and JSON status/doctor output, corrupted manifests, missing subdirs,
-  diagnostic-only doctor findings for missing or invalid `.repogrammar/.gitignore`,
-  `.git/info/exclude`, root `.gitignore` markers, and `receipts/init.json`,
+  human and JSON status/doctor output, JSON-parsed manifest validation with
+  reordered valid fields and invalid required fields, corrupted manifests,
+  missing subdirs, diagnostic-only doctor findings for missing or invalid
+  `.repogrammar/.gitignore`, `.git/info/exclude`, root `.gitignore` markers,
+  and `receipts/init.json`,
   `uninit --yes`, conservative unlock behavior, and redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   unsupported module extensions, default dependency/build/generated/state-dir
@@ -119,6 +121,7 @@ worker request and NDJSON fixture coverage, Rust-side TypeScript semantic-worker
 process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
+JSON-parsed bootstrap manifest validation,
 TS/JS file discovery filtering/hash/path-safety behavior, SQLite storage
 migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
