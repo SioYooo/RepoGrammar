@@ -45,6 +45,8 @@
 ## Engineering Standards
 
 - Prefer explicit types, deterministic behavior, small modules, typed errors, and dependency inversion at external boundaries.
+- Before writing custom logic, first reuse existing public APIs, repo-local helpers, native platform features, or installed dependency functionality when they already solve the problem.
+- Keep new code minimal and necessary. Do not duplicate behavior already present in this repository or dependencies, and do not add logic unless the requirement genuinely needs it.
 - Treat inputs, paths, repository contents, database values, and MCP payloads as untrusted.
 - Avoid hidden global state, silent fallback, swallowed errors, speculative abstractions, and unsupported claims.
 - Mark unresolved static-analysis facts as `UNKNOWN`; do not convert heuristics into certainty.
