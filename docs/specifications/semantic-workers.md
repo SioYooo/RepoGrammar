@@ -272,9 +272,13 @@ request, so unique repo-local module imports can be recorded as
 `STRUCTURAL` source-tied parser facts and ambiguous/missing imports can remain
 typed `UNKNOWN`s. The default product indexing path validates and stores those
 private parse-document payloads as internal parser-origin semantic facts with
-`STRUCTURAL` or `UNKNOWN` certainty, but does not expose them through CLI/MCP
-query commands and does not pass them to family construction. The worker also
-has a private `parse_project_config` mode that uses standard-library `tomllib`
+`STRUCTURAL` or `UNKNOWN` certainty, but does not expose raw facts through
+CLI/MCP query commands and does not pass raw facts to family construction. The
+application layer may synthesize separate `DATAFLOW_DERIVED` support facts from
+exact canonical Python anchors plus a single framework role; those derived
+facts are RepoGrammar-owned and are not emitted by the CPython worker itself.
+The worker also has a private `parse_project_config` mode that uses
+standard-library `tomllib`
 when available to return sanitized `pyproject.toml` summaries and typed
 project-config `UNKNOWN` values. Default indexing uses that private mode for a
 root `pyproject.toml`, while Rust still reads the file through the source-store

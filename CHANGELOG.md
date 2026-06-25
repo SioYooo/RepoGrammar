@@ -44,11 +44,18 @@
   `project_config` unit with sanitized `PROJECT_CONFIG`/`STRUCTURAL` metadata
   or typed config `UNKNOWN` facts; these records stay out of family construction
   and claim-input readiness.
+- Bounded Python exact-anchor support derivation: validated CPython structural
+  anchors can now produce separate `DATAFLOW_DERIVED` support facts when their
+  target exact-matches the Python framework compatibility table for a unit with
+  one framework role. Raw parser facts and framework heuristics remain
+  insufficient, project-config facts stay blocked, and Python still requires
+  three compatible support members before the EC-MVFI-lite family builder writes
+  a family.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale
-  evidence fallback, and leakage guards without claiming production Python
-  semantic-provider support.
+  evidence fallback, leakage guards, and a no-worker exact-anchor FastAPI
+  positive path without claiming production Python semantic-provider support.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

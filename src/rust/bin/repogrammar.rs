@@ -545,6 +545,7 @@ mod tests {
     use repogrammar::ports::parser::{SourceDocument, SourceParser};
     use repogrammar::ports::source_store::{SourceReadRequest, SourceStore};
     use serde_json::Value;
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -965,12 +966,6 @@ mod tests {
                 "test_users.py",
                 &["pytest_fixture", "pytest_test"],
             ),
-            ("pydantic-basic", "schemas.py", &["pydantic_model"]),
-            (
-                "sqlalchemy-basic",
-                "models.py",
-                &["sqlalchemy_model", "sqlalchemy_repository_method"],
-            ),
             (
                 "mixed-python",
                 "api.py",
@@ -1155,6 +1150,98 @@ mod tests {
             stale_json["unknowns"][0]["recovery"],
             "run repogrammar sync"
         );
+    }
+
+    #[test]
+    fn python_release_fixture_exact_anchors_produce_family_without_worker() {
+        let workspace = TempWorkspace::new("python-release-derived-family");
+        copy_python_release_fixture("positive-strong-evidence", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["command"], "index");
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        let derived_support_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-python-derived"
+                    && fact.origin_method == "bounded_ast_anchor_v1"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(derived_support_facts.len(), 3);
+        assert!(derived_support_facts.iter().all(|fact| {
+            matches!(fact.kind.as_str(), "RESOLVED_CALL" | "SYMBOL")
+                && fact.certainty == "DATAFLOW_DERIVED"
+                && fact.target.as_deref() == Some("fastapi.APIRouter.get")
+                && fact.path == "routes.py"
+                && fact.start_byte < fact.end_byte
+        }));
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "DATAFLOW_DERIVED")
+        }));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert_eq!(
+            families_json["families"]
+                .as_array()
+                .expect("families")
+                .len(),
+            1
+        );
+        let family_id = families_json["families"][0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .to_string();
+        assert_eq!(
+            family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert_eq!(families_json["families"][0]["support"], 3);
+
+        let family = run_with_runtime(
+            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            &runtime,
+        );
+        let family_json = parse_machine_output("family", &family, &workspace);
+        assert_eq!(family_json["status"], "ok");
+        assert_eq!(family_json["family"]["family_id"], family_id);
+        assert_eq!(family_json["members"].as_array().expect("members").len(), 3);
+        assert_eq!(
+            family_json["evidence"].as_array().expect("evidence").len(),
+            3
+        );
+        assert_eq!(family_json["unknowns"][0]["reason"], "FrameworkMagic");
     }
 
     #[cfg(unix)]
@@ -1725,11 +1812,40 @@ project_includes = ["src"]
         .expect("assess Python fact readiness");
         assert_eq!(readiness.active_generation, "gen-000001");
         assert_eq!(readiness.facts.len(), facts.facts.len());
+        let mut derived_targets = BTreeSet::new();
+        let derived_fact_ids = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-python-derived"
+                    && fact.origin_method == "bounded_ast_anchor_v1"
+            })
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                let target = fact.target.as_deref().expect("derived target");
+                assert!(matches!(
+                    target,
+                    "fastapi.APIRouter.get" | "pydantic.BaseModel"
+                ));
+                derived_targets.insert(target.to_string());
+                assert!(fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false"));
+                fact.fact_id.clone()
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(derived_targets.contains("fastapi.APIRouter.get"));
+        assert!(derived_targets.contains("pydantic.BaseModel"));
         for fact in readiness.facts {
-            let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
-                panic!("Python structural facts must not become family claim input");
-            };
-            assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+            if derived_fact_ids.contains(&fact.fact_id) {
+                assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));
+            } else {
+                let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
+                    panic!("raw Python parser, framework, and config facts must stay blocked");
+                };
+                assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+            }
         }
 
         let families = run_with_runtime(

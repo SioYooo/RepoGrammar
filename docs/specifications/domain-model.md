@@ -68,7 +68,14 @@ family membership. Current default Python indexing can also persist CPython
 `ast` parse-document structural facts for import bindings, decorator anchors,
 class bases, simple calls, and typed dynamic/unresolved `UNKNOWN` cases. These
 facts remain `STRUCTURAL` or `UNKNOWN`, are blocked from family-claim input, and
-are not fed to the current family builder. It can also persist
+are not fed to the current family builder as raw facts. A separate
+application-layer derivation step may synthesize `DATAFLOW_DERIVED` support
+facts from those validated structural anchors only when the unit has exactly
+one Python framework role, evidence stays in the same code-unit path/hash/range,
+and the target exact-matches the canonical Python compatibility table. Those
+derived facts use `provider_resolved=false`; they are bounded support for
+EC-MVFI-lite, not provider-backed semantic identity or runtime-equivalence
+proof. It can also persist
 `PROJECT_CONFIG` facts for sanitized root `pyproject.toml` project name, safe
 source roots, and recognized tool sections, or typed config `UNKNOWN`s when
 `tomllib` or valid TOML is unavailable. `PROJECT_CONFIG` facts are structural

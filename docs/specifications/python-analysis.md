@@ -112,23 +112,34 @@ The current implementation covers the first structural slice only:
 - syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
   pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy
   model-shaped classes, and SQLAlchemy repository method-shaped functions;
+- an application-layer bounded exact-anchor derivation step that consumes
+  validated parser-origin structural anchors plus syntax-origin framework-role
+  facts and synthesizes separate `DATAFLOW_DERIVED` support facts only when the
+  code unit has exactly one Python framework role, the structural evidence
+  stays inside the same code-unit path/hash/range, and the target exact-matches
+  the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown,
   low-support, strong-evidence, and stale-evidence smoke coverage;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
-  prove default Python indexing remains syntax-only/no-claim, and prove strong
-  FastAPI family reads only through test-injected compatible `SEMANTIC` facts;
+  prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
+  exact FastAPI anchors can produce a default family only through separate
+  derived support facts, and keep the test-injected `SEMANTIC` worker fixture as
+  coverage for the explicit worker boundary;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
-  gate for future strong facts.
+  gate for derived and future provider-backed strong facts.
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and
 `UNKNOWN` with `STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative,
 hash-backed, and snippet-free, but they are still worker-local structural
 anchors or config metadata. Default product indexing persists them only as
-internal structural/`UNKNOWN` semantic fact records. It does not expose them
-through CLI/MCP query commands, feed them to the family builder, or treat them
-as semantic-provider claims.
+internal structural/`UNKNOWN` semantic fact records. It does not expose raw
+parser facts through CLI/MCP query commands or treat them as semantic-provider
+claims. The current product path may feed only separately synthesized
+`repogrammar-python-derived` / `bounded_ast_anchor_v1` facts to EC-MVFI-lite,
+and those facts use `DATAFLOW_DERIVED`, `provider_resolved=false`, and
+same-generation code-unit evidence.
 
 The strong Python release smoke path is test-only. It uses the existing
 transitional worker executable boundary to inject fixture-controlled
@@ -139,7 +150,7 @@ support.
 
 This slice does not implement Pyrefly, Pyright, provider cache keys, usage
 propagation, call hierarchy recovery, Tree-sitter fallback, runtime
-observation, Python family claims, or source snippet retrieval. Persisted
+observation, broad Python family mining, or source snippet retrieval. Persisted
 project configuration facts are structural context only and remain blocked from
 family-claim input.
 
@@ -449,6 +460,12 @@ policy:
   MCP, and tests define a cross-checked semantic certainty; until then use a
   stricter support threshold or return `UNKNOWN`;
 - otherwise: `UNKNOWN`.
+
+The current `repogrammar-python-derived` support facts satisfy only the
+bounded-propagation side of this policy. They can support a family when at
+least three same-role members have exact canonical anchors, but they do not
+prove provider-resolved identity, dependency binding, transaction behavior,
+fixture graph completeness, or runtime equivalence.
 
 Output remains one of `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or
 `UNKNOWN`. Syntax-only or framework-heuristic-only Python observations can rank

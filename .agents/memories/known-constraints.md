@@ -35,14 +35,17 @@ analysis rules.
 - `index` and `sync` currently store repo-relative file metadata and
   syntax-only code units in generation-scoped SQLite. They may also store
   syntax-origin framework-role facts for recognized Express, React, and
-  Jest/Vitest code-unit shapes with `FRAMEWORK_HEURISTIC` certainty. By default
-  they do not launch a semantic worker. When `REPOGRAMMAR_TYPESCRIPT_WORKER`
+  Jest/Vitest code-unit shapes with `FRAMEWORK_HEURISTIC` certainty, plus
+  exact-anchor Python `DATAFLOW_DERIVED` support facts only after the
+  application-layer derivation gate validates canonical targets and one
+  framework role. By default they do not launch a semantic worker. When
+  `REPOGRAMMAR_TYPESCRIPT_WORKER`
   names an explicit worker executable, optional
   `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies a JSON argv vector.
   Accepted worker facts may be stored only through same-generation
-  path/hash/range evidence validation. Source snippets, absolute paths,
-  families, pattern-family evidence, and query read-path state must not be
-  assumed present.
+  path/hash/range evidence validation. Source snippets and absolute paths must
+  not be stored; family rows must still be treated as absent unless the
+  EC-MVFI-lite support gate has enough compatible evidence.
 - `index` and `sync` must acquire `.repogrammar/locks/index.lock` before
   discovery, source reads, generation preparation, validation, and activation.
   They must clean up partial lock metadata writes and only remove the lock
@@ -88,7 +91,9 @@ analysis rules.
   guessed away.
 - Syntax-origin framework-role facts must not be upgraded into resolved
   framework semantics, family evidence, conformance results, or query success
-  without stronger compatible evidence and family claim builders.
+  without stronger compatible evidence and family claim builders. Raw Python
+  parser facts remain structural; only separately synthesized exact-anchor
+  support or future provider-backed facts can become family support.
 
 ## Implications
 

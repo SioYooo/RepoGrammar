@@ -357,6 +357,13 @@ fn python_support_fact_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     let target = fact.target.as_ref().map(|target| target.as_str())?;
+    python_support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn python_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
     match framework_role {
         "framework:fastapi.route" => Some(matches!(
             target,

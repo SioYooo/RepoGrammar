@@ -9,16 +9,20 @@
   import context from discovered `.py` inventory, default-indexed root
   `pyproject.toml` structural project-config records, structural IR storage,
   opt-in syntax-origin framework-role fact storage, semantic fact ingestion,
+  bounded exact-anchor Python `DATAFLOW_DERIVED` support derivation,
   internal active claim-input snapshot reads, semantic-fact
   freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
   serving, and narrow global
   explicit-target installer writes. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current
-  Python slice is structural/framework-heuristic only; parser-origin Python
-  facts and structural project-config records are persisted but blocked from
-  family construction and claim-input readiness. Pyrefly/Pyright,
-  provider-backed canonical evidence, and Python family claims remain deferred.
+  Python slice persists parser-origin Python facts and structural project-config
+  records but blocks them from direct family construction and claim-input
+  readiness. A separate
+  `repogrammar-python-derived` step can synthesize support from exact canonical
+  anchors for units with one framework role, so narrow Python family rows can be
+  produced without claiming provider-backed semantics. Pyrefly/Pyright and
+  provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -44,7 +48,8 @@ bases, simple calls, same-file pytest fixture edges, and typed dynamic or
 unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts,
 root `pyproject.toml` persisted as a `python-config` file and `project_config`
 unit with sanitized structural config metadata or typed config `UNKNOWN`,
-syntax-origin TS/JS and Python framework-role fact storage,
+syntax-origin TS/JS and Python framework-role fact storage, bounded exact-anchor
+Python support derivation,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
 TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
@@ -66,7 +71,8 @@ analysis for FastAPI, pytest, SQLAlchemy, and Pydantic; ADR-0012 defines that
 the implementation should use a claim-driven selective cascade rather than
 running every analyzer over every file. The current Python implementation is
 the first CPython AST structural slice with worker-local structural anchors and
-typed dynamic/unresolved `UNKNOWN` output only. The current TS/JS substrate remains
+typed dynamic/unresolved `UNKNOWN` output plus narrow exact-anchor derived
+support for canonical framework targets. The current TS/JS substrate remains
 useful scaffolding but must not be described as the official v0.1 target.
 
 ## Durable knowledge
@@ -87,6 +93,8 @@ framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config
 records,
+bounded `DATAFLOW_DERIVED` support facts derived only from exact canonical
+Python parser anchors and a single framework role,
 CodeUnit-derived structural IR nodes and
 conservative containment edges, generation-scoped SQLite
 migrations/storage/validation/activation, product runtime wiring for `index`
@@ -100,10 +108,11 @@ temporary workspaces and checks product CLI JSON paths, no absolute-path
 leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
 FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support
-examples. A separate test-only strong FastAPI semantic-support fixture injects
-compatible `SEMANTIC` facts through the existing worker boundary to validate
-family reads and stale-evidence fallback without claiming production Python
-semantic-provider support.
+examples. The positive FastAPI fixture now also validates the no-worker
+exact-anchor derived-support family path. A separate test-only strong FastAPI
+semantic-support fixture injects compatible `SEMANTIC` facts through the
+existing worker boundary to validate family reads and stale-evidence fallback
+without claiming production Python semantic-provider support.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed

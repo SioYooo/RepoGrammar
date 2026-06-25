@@ -1,9 +1,11 @@
 //! Indexing use-case boundary.
 
-use crate::application::family::{build_family_claims, family_storage_records};
+use crate::application::family::{
+    build_family_claims, family_storage_records, python_support_target_is_role_compatible,
+};
 use crate::core::model::{
-    CodeUnit, FactCertainty, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact,
-    SemanticFactKind, SymbolId,
+    CodeUnit, CodeUnitId, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode, Language,
+    Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::FamilyStore;
@@ -21,7 +23,7 @@ use crate::ports::parser::{
 };
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingRequest {
@@ -377,6 +379,18 @@ fn index_repository_with_optional_semantic_worker(
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
         record_semantic_facts(store, &generation, parser_fact_count, &framework_role_facts)?;
+    let mut derived_python_support_facts = derive_python_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_python_support_facts);
+    let derived_python_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        parser_fact_count + framework_fact_count,
+        &derived_python_support_facts,
+    )?;
 
     let (semantic_worker, worker_facts) = record_semantic_worker_facts(
         &request,
@@ -385,13 +399,16 @@ fn index_repository_with_optional_semantic_worker(
         options.semantic_worker,
         store,
         &mut warnings,
-        parser_fact_count + framework_fact_count,
+        parser_fact_count + framework_fact_count + derived_python_support_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
 
     if let Some(family_store) = options.family_store {
-        let mut family_facts = Vec::with_capacity(framework_role_facts.len() + worker_facts.len());
+        let mut family_facts = Vec::with_capacity(
+            framework_role_facts.len() + derived_python_support_facts.len() + worker_facts.len(),
+        );
         family_facts.extend(framework_role_facts.iter().cloned());
+        family_facts.extend(derived_python_support_facts);
         family_facts.extend(worker_facts);
         record_family_claims(
             family_store,
@@ -406,7 +423,10 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        semantic_facts: parser_fact_count + framework_fact_count + worker_semantic_facts,
+        semantic_facts: parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -566,6 +586,142 @@ fn record_family_claims(
         }
     }
     Ok(report.claims.len())
+}
+
+fn derive_python_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_python_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "python" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if python_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_python_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn framework_role_targets_by_unit(facts: &[SemanticFact]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut roles = BTreeMap::new();
+    for fact in facts {
+        if fact.kind != SemanticFactKind::FrameworkRole
+            || fact.certainty != FactCertainty::FrameworkHeuristic
+        {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref() else {
+            continue;
+        };
+        roles
+            .entry(fact.subject.clone())
+            .or_insert_with(BTreeSet::new)
+            .insert(target.as_str().to_string());
+    }
+    roles
+}
+
+fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
+    if roles.len() == 1 {
+        roles.iter().next().map(String::as_str)
+    } else {
+        None
+    }
+}
+
+fn is_python_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall
+            | SemanticFactKind::ResolvedImport
+            | SemanticFactKind::Symbol
+            | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == "python"
+        && fact.origin.method == "cpython_ast"
+        && fact.target.is_some()
+}
+
+fn parser_fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
+    fact.evidence.provenance.path == unit.path
+        && fact.evidence.provenance.content_hash == unit.content_hash
+        && fact.evidence.range.start_byte >= unit.start_byte
+        && fact.evidence.range.end_byte <= unit.end_byte
+}
+
+fn derived_python_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    Ok(SemanticFact {
+        kind,
+        subject: unit.id.clone(),
+        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
+        origin: FactOrigin {
+            engine: "repogrammar-python-derived".to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: "bounded_ast_anchor_v1".to_string(),
+        },
+        certainty: FactCertainty::DataflowDerived,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(unit.start_byte, unit.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &unit.path,
+                unit.content_hash.clone(),
+                repository_revision.clone(),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            "bounded Python framework anchor support",
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions: vec![
+            "provider_resolved=false".to_string(),
+            "derived_from=cpython_ast_structural_anchors".to_string(),
+            format!("framework_role={framework_role}"),
+        ],
+    })
 }
 
 fn record_semantic_worker_facts(
@@ -1219,6 +1375,92 @@ mod tests {
         }
     }
 
+    fn indexed_python_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#{kind}:{index}:0-20:{index}"),
+            path: path.to_string(),
+            language: "python".to_string(),
+            kind: kind.to_string(),
+            start_byte: 0,
+            end_byte: 20,
+            content_hash: strict_hash(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+        }
+    }
+
+    fn parser_structural_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        kind: SemanticFactKind,
+        target: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "3.13.0".to_string(),
+                method: "cpython_ast".to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte + 1, unit.end_byte - 1).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "CPython ast structural decorator_binding",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "python_anchor_kind=decorator_binding".to_string(),
+                "binding unresolved without provider".to_string(),
+            ],
+        }
+    }
+
+    fn parser_project_config_anchor_fact(unit: &IndexedCodeUnitRecord) -> SemanticFact {
+        let mut fact = parser_structural_anchor_fact(
+            unit,
+            SemanticFactKind::ResolvedImport,
+            "fastapi.APIRouter.get",
+        );
+        fact.kind = SemanticFactKind::ProjectConfig;
+        fact.origin.method = "tomllib".to_string();
+        fact
+    }
+
+    fn framework_role_fact_for_unit(unit: &IndexedCodeUnitRecord, role: &str) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::FrameworkRole,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(role).expect("valid role")),
+            origin: FactOrigin {
+                engine: "repogrammar-frameworks".to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: "syntax_code_unit_kind".to_string(),
+            },
+            certainty: FactCertainty::FrameworkHeuristic,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "CPython ast code unit indicates framework role",
+            )
+            .expect("valid evidence"),
+            assumptions: vec!["binding unresolved without provider".to_string()],
+        }
+    }
+
     fn semantic_support_facts_for_express_routes(
         workspace: &TempWorkspace,
     ) -> (Vec<String>, Vec<SemanticFact>) {
@@ -1591,6 +1833,126 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn exact_python_parser_anchors_derive_family_support_without_promoting_raw_facts() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.get",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.FastAPI.post",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.delete",
+            ),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(parser_facts
+            .iter()
+            .all(|fact| fact.certainty == FactCertainty::Structural));
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false")
+                && fact.evidence.range.start_byte == 0
+                && fact.evidence.range.end_byte == 20
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn python_parser_anchor_derivation_rejects_substrings_and_non_claim_inputs() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+        let parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "myproject.fastapi.APIRouter.get",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.get_extra",
+            ),
+            parser_project_config_anchor_fact(&third),
+        ];
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert!(derived.is_empty());
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_parser_anchor_derivation_requires_single_framework_role() {
+        let unit = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let parser_facts = vec![parser_structural_anchor_fact(
+            &unit,
+            SemanticFactKind::Symbol,
+            "fastapi.APIRouter.get",
+        )];
+
+        let no_role =
+            derive_python_framework_support_facts(std::slice::from_ref(&unit), &parser_facts, &[])
+                .expect("derive exact Python support");
+        assert!(no_role.is_empty());
+
+        let multi_role = vec![
+            framework_role_fact_for_unit(&unit, "framework:fastapi.route"),
+            framework_role_fact_for_unit(&unit, "framework:pytest.test"),
+        ];
+        let derived = derive_python_framework_support_facts(
+            std::slice::from_ref(&unit),
+            &parser_facts,
+            &multi_role,
+        )
+        .expect("derive exact Python support");
+        assert!(derived.is_empty());
     }
 
     #[test]

@@ -36,7 +36,11 @@ tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
 emits worker-local structural anchors for imports/decorators/class bases/simple
 calls/fixture edges, stores those anchors as internal parser-origin
 `STRUCTURAL`/`UNKNOWN` facts, and stores framework-role heuristic facts without
-turning any of them into family claims. The Python plan still uses a
+turning raw facts into family claims. A bounded application-layer derivation
+step can now synthesize separate `DATAFLOW_DERIVED` support facts only when
+validated CPython anchors exact-match the Python framework compatibility table
+for a unit with one framework role; low-support and dynamic cases still return
+typed `UNKNOWN`. The Python plan still uses a
 claim-driven selective
 cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
 plausible family candidates, Pyright only for claim-upgrading cross-checks, and
@@ -63,9 +67,11 @@ syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
 recognized Express, React, and Jest/Vitest code-unit shapes, without launching a
 semantic worker. The Python path may also store root `pyproject.toml` as a
 `python-config` inventory file and `project_config` unit with sanitized
-`PROJECT_CONFIG`/`STRUCTURAL` metadata or typed config `UNKNOWN`s. They do not
-store source snippets, absolute paths, families, or pattern-family evidence by
-default. `files` and `units` can read the active file-manifest-only or
+`PROJECT_CONFIG`/`STRUCTURAL` metadata or typed config `UNKNOWN`s. It may write
+Python family records for exact-anchor derived support when the current
+EC-MVFI-lite gate has enough compatible support, but it does not store source
+snippets or absolute paths and does not claim provider-backed Python semantics.
+`files` and `units` can read the active file-manifest-only or
 syntax-only generation for inventory/debugging. Pattern
 family query commands are wired to the active FamilyStore read path: with no
 active index they still return fallback guidance, and with an active index but
@@ -139,7 +145,7 @@ active file-manifest-only or syntax-only index metadata.
 | Language scope | v0.1 target is Python-first; current code still contains TS/JS bootstrap substrate | Production-quality Python pattern-family evidence for FastAPI, pytest, SQLAlchemy, and Pydantic |
 | TS/JS | Transitional substrate from the earlier bootstrap | Deferred production-quality TS/JS pattern-family evidence after Python v0.1 unless a later ADR changes scope |
 | Parsing | Dependency-free syntax-only TS/JS extractor and CPython `ast`/`symtable`-backed Python extractor store structural code-unit, module, scope, and source-tied repo-local import candidates; private `tomllib` config summaries, semantic-worker-compatible project-mode repo-local module import facts, and Python release fixtures smoke this path without creating claims by default | Public parser-backed syntax candidates, not final semantic truth |
-| Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
+| Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty and separate exact-anchor Python `DATAFLOW_DERIVED` support facts; compiler/provider worker implementation remains deferred | Language-native semantic workers provide compiler/API facts |
 | Discovery | TS/JS and `.py` discovery feed syntax-only `index`/`sync` generations; Python virtualenv/cache/dependency dirs are skipped | Git-aware Python source inventory plus package/import context feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, Python fixture smoke for stale evidence, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |

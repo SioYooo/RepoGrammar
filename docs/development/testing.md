@@ -152,9 +152,10 @@ allowed.
   `family`, `member`, `find`, `explain`, `check`, and `doctor` JSON paths.
   Default smoke expectations must remain conservative: syntax-only indexing
   succeeds, machine output is parseable and does not leak source snippets,
-  parser/provider internals, or absolute paths, and family query commands return
-  typed `UNKNOWN`/`InsufficientSupport` unless a test explicitly injects strong
-  semantic or dataflow support.
+  parser/provider internals, or absolute paths, low-support and dynamic cases
+  return typed `UNKNOWN`/`InsufficientSupport`, and positive family cases require
+  either exact-anchor derived `DATAFLOW_DERIVED` support or an explicitly
+  injected compatible semantic/dataflow support fixture.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
@@ -167,12 +168,13 @@ allowed.
   `RuntimeDependencyInjection` `UNKNOWN`, persisted parser-origin structural
   facts and typed `UNKNOWN`, persisted project-config facts staying out of
   claim-input readiness, heuristic framework-role facts staying out of family
-  claims, parser-origin facts staying out of family construction, Python
-  release fixtures preserving
-  `UNKNOWN` by default, test-only strong support facts proving family read paths
-  only when compatible `SEMANTIC` evidence is injected, stale evidence fallback,
-  and typed canonical framework identities rather than framework-name substring
-  matching. Future Python slices must add
+  claims, raw parser-origin facts staying out of family construction,
+  exact-anchor derived support facts producing a no-worker FastAPI family only
+  when Python support reaches three members, low-support Python release fixtures
+  preserving `UNKNOWN`, test-only strong support facts proving explicit worker
+  family read paths only when compatible `SEMANTIC` evidence is injected, stale
+  evidence fallback, and typed canonical framework identities rather than
+  framework-name substring matching. Future Python slices must add
   coverage for default-index import context, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed

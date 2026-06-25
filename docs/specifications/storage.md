@@ -338,9 +338,10 @@ The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,
 family members, variation slots, and evidence links. The current `index` and
 `sync` command path populates indexed files, syntax-only code units,
-CodeUnit-derived IR nodes, conservative IR containment edges, and optional
-semantic-worker facts. The storage ports also expose semantic-fact and family
-evidence writers for future frontend and claim-builder integration. These
+CodeUnit-derived IR nodes, conservative IR containment edges, optional
+semantic-worker facts, and exact-anchor Python `DATAFLOW_DERIVED` support facts
+derived in the application layer. The storage ports also expose semantic-fact
+and family evidence writers for frontend and claim-builder integration. These
 writers accept only building generations and require evidence to match an
 indexed code unit's repository-relative path, content hash, and byte range in
 the same generation. Family evidence rows must be linked to a family; semantic

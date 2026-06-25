@@ -83,7 +83,10 @@ as structural parser-origin facts. Default indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
-input.
+input. The application layer now also derives separate
+`DATAFLOW_DERIVED` support facts from exact canonical CPython anchors when a
+unit has one Python framework role; raw parser facts and framework heuristics
+still remain blocked from direct claim input.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 
@@ -105,6 +108,11 @@ queries, typed canonical framework identity, and framework-role extraction for
 FastAPI, pytest, SQLAlchemy, and Pydantic. Add selective Pyright cross-checks
 only for facts that would upgrade a family claim or materially change a
 variation/exception.
+
+Current progress: a pre-provider exact-anchor derivation slice is implemented
+for canonical Python framework targets already emitted by the CPython frontend.
+It records `provider_resolved=false` `DATAFLOW_DERIVED` support and keeps the
+Pyrefly/Pyright provider layer deferred.
 
 Non-goals: Django, plugin execution, runtime DI resolution, whole-project
 dual-provider analysis, private Pyrefly API use, or substring framework
@@ -170,9 +178,10 @@ facts are labeled separately and never bypass static conflict/UNKNOWN gates.
 ## Required Python Fixtures
 
 Initial release-smoke fixtures now live under `src/fixtures/python/release/v0_1/`.
-They cover default syntax-only/no-claim behavior plus a test-only strong FastAPI
-semantic-support fixture for family read and stale-evidence smoke coverage.
-They are not yet the full Python provider corpus.
+They cover low-support and dynamic `UNKNOWN` behavior, a no-worker exact-anchor
+FastAPI family path through derived support, and a test-only strong FastAPI
+semantic-support fixture for explicit worker family read and stale-evidence
+smoke coverage. They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 

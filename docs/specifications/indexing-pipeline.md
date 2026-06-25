@@ -46,6 +46,10 @@ a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, but it writes family rows
 only when each supporting member also has compatible same-generation `SEMANTIC`
 or `DATAFLOW_DERIVED` non-framework evidence. The current
+Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
+layer from exact CPython structural anchors plus a single syntax-origin Python
+framework role; raw parser facts and framework heuristics remain insufficient by
+themselves.
 syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -116,9 +120,10 @@ Default parser-mode indexing now passes discovered repo-relative
 `.py` inventory into private parse-document requests, so source-tied unique
 repo-local imports can be persisted as `STRUCTURAL` parser facts and
 ambiguous/missing imports can remain typed `UNKNOWN`s. Future slices should add
-persisted safe project-configuration facts and Tree-sitter as a tolerant
-structural fallback only. Python syntax-only facts still cannot become semantic
-claims or family evidence by themselves.
+Tree-sitter as a tolerant structural fallback only. Python syntax-only facts
+still cannot become semantic claims or family evidence by themselves; only
+separately synthesized exact-anchor `DATAFLOW_DERIVED` support facts or future
+provider-backed facts may enter the EC-MVFI-lite support gate.
 
 ## Tree-sitter parsing
 

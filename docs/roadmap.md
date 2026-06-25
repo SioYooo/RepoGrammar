@@ -39,7 +39,10 @@
 - Lightweight Python framework-role fact storage for CPython AST-origin
   FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
-  enabling family claims.
+  enabling family claims by themselves.
+- Bounded exact-anchor Python support derivation that creates separate
+  `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
+  Python framework compatibility table for a unit with one framework role.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
   argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
@@ -67,8 +70,11 @@
   behavior by default.
 - Python v0.1 release fixture smoke gate that exercises committed FastAPI,
   pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support fixture
-  shapes through product CLI JSON paths while preserving syntax-only
-  `UNKNOWN` query behavior by default.
+  shapes through product CLI JSON paths while preserving low-support/dynamic
+  `UNKNOWN` query behavior.
+- No-worker exact-anchor FastAPI family smoke that proves derived support can
+  reach the EC-MVFI-lite family read path without claiming provider-backed
+  Python semantics.
 - Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
   facts through the existing worker boundary to prove family reads, stale
   evidence fallback, and leakage guards without claiming production Python
@@ -122,8 +128,9 @@ pattern-family query read paths with typed `UNKNOWN`, internal active
 claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
-ingestion through the storage gate, plus an internal semantic-fact file-hash
-freshness and claim-input readiness gate, and read-only MCP serving through the
+ingestion through the storage gate, bounded exact-anchor Python support
+derivation, plus an internal semantic-fact file-hash freshness and claim-input
+readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
 v0.1 TS/JS and Python release fixture smoke gates. Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
@@ -177,9 +184,10 @@ evidence contracts remain validated together.
   mutation. Default indexing now passes discovered `.py` inventory to the
   private parser request so source-tied repo-local import facts can be
   persisted through the Rust storage/readiness gate. Project-config summaries
-  are not yet default indexing claim evidence. Next Python slices should persist
-  safe project-config facts, then escalate only plausible family candidates to
-  Pyrefly and use Pyright only for
+  are default indexing structural context but not claim evidence. The current
+  application layer can derive `DATAFLOW_DERIVED` support from exact canonical
+  anchors under the Python support >= 3 gate. Next Python slices should escalate
+  only plausible family candidates to Pyrefly and use Pyright only for
   claim-upgrading cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the

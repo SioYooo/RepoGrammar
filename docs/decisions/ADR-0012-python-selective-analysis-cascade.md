@@ -65,6 +65,13 @@ propagation resolves canonical framework facts such as:
 - SQLAlchemy 2.0 typed mappings resolving to `sqlalchemy.orm.DeclarativeBase`,
   `Mapped`, or `mapped_column`.
 
+The first bounded propagation slice may run before Pyrefly by deriving separate
+`DATAFLOW_DERIVED` support facts from validated CPython structural anchors, but
+only when the target exact-matches this compatibility table, the code unit has
+one Python framework role, and the derived fact records
+`provider_resolved=false`. Raw `STRUCTURAL` parser facts and
+`FRAMEWORK_HEURISTIC` role facts remain insufficient by themselves.
+
 RightTyper-style runtime evidence is deferred and optional. It may produce
 observed evidence after an explicit command, but observed facts cannot prove
 universal runtime equivalence or replace static freshness/provenance checks.

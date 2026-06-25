@@ -146,8 +146,10 @@ During the current TS/JS and Python framework-role slices, `semantic_facts` may
 be greater than zero even when `semantic_worker` is `deferred`; those records
 are syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty,
 Python parser-origin structural/`UNKNOWN` facts, or root `pyproject.toml`
-`PROJECT_CONFIG`/config-`UNKNOWN` records, not compiler/provider-backed facts
-or family evidence.
+`PROJECT_CONFIG`/config-`UNKNOWN` records. Python exact-anchor derivation may
+also add separate `DATAFLOW_DERIVED` support facts without running a semantic
+worker. These are bounded RepoGrammar support facts, not compiler/provider-backed
+facts.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
@@ -258,9 +260,11 @@ when repository state or an active index generation is missing or unreadable.
 `status` and `doctor` may report a clean not-initialized state without opening
 storage. Stored syntax-only code units are not family evidence; stored
 syntax-origin framework-role facts remain insufficient support unless stronger
-compatible semantic/dataflow evidence exists. Query commands must not imply that
+compatible semantic/dataflow evidence exists. Exact-anchor Python
+`DATAFLOW_DERIVED` support may produce narrow EC-MVFI-lite family rows when the
+family support threshold is met, but query commands must not imply that
 provider-backed Python v0.1 analysis, TypeScript compiler analysis, full
-mining, or production family evidence has run. The
+mining, or broad production family evidence has run. The
 `files` and `units` commands are a limited exception: when an active
 file-manifest-only or syntax-only generation exists, they may read and return
 repo-relative indexed-file metadata and code-unit records for inventory/debugging
@@ -368,19 +372,21 @@ FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes; these may increase
 `semantic_facts` while `semantic_worker: deferred` remains true. Python
 parser-origin structural facts and root `pyproject.toml` project-config records
 may also increase `semantic_facts` without changing `semantic_worker:
-deferred`. By default the
+deferred`. Exact-anchor Python `DATAFLOW_DERIVED` support facts may also be
+stored in this default path. By default the
 commands do not launch a semantic worker and report
 `semantic_worker: deferred`. When
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies the worker argv vector. The
 commands pass the discovered repo-relative TS/JS file set to that worker, record
 only worker facts that match the active building-generation code-unit
-path/hash/range gate, and still make no family or query claims.
+path/hash/range gate.
 They do not store source snippets or absolute paths. The product indexing path
 now runs a conservative EC-MVFI-lite family builder before activation. That
 builder can write family records only when compatible framework-role candidates
 also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support; the
-default syntax-origin framework-role facts alone still produce no family rows.
+default syntax-origin framework-role facts and raw parser facts alone still
+produce no family rows.
 `files` and `units` now read only active file-manifest-only or syntax-only index
 metadata and, when present, code-unit records. Pattern-family query commands
 return missing-index fallback before an active generation exists, typed
@@ -390,6 +396,8 @@ MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
 self-test. The CLI now includes the first Python structural indexing slice, but
-repo-local import resolution, Pyrefly/Pyright provider evidence, and Python
-family claims remain deferred. Unsupported live target/scope combinations return explicit deferred
-errors; dry-run planning remains available for all targets and scopes.
+Pyrefly/Pyright provider evidence, richer repo-local import semantics, and broad
+Python family mining remain deferred. Narrow exact-anchor Python family rows may
+exist when EC-MVFI-lite has enough derived support. Unsupported live target/scope
+combinations return explicit deferred errors; dry-run planning remains available
+for all targets and scopes.
