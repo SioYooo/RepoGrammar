@@ -518,6 +518,194 @@ mod tests {
         args
     }
 
+    fn release_fixture_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("typescript")
+            .join("release")
+            .join("v0_1")
+    }
+
+    fn copy_release_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&release_fixture_root().join(name), destination);
+    }
+
+    fn copy_dir_contents(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).expect("create fixture destination");
+        let mut entries = fs::read_dir(source)
+            .unwrap_or_else(|error| panic!("read fixture directory {source:?}: {error}"))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect fixture entries");
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let file_type = entry.file_type().expect("fixture entry file type");
+            let target = destination.join(entry.file_name());
+            if file_type.is_dir() {
+                copy_dir_contents(&entry.path(), &target);
+            } else if file_type.is_file() {
+                fs::copy(entry.path(), target).expect("copy fixture file");
+            }
+        }
+    }
+
+    fn parse_machine_output(
+        command: &str,
+        output: &repogrammar::interfaces::cli::CliOutput,
+        workspace: &TempWorkspace,
+    ) -> Value {
+        assert_eq!(output.status, 0, "{command} stderr: {}", output.stderr);
+        assert!(
+            output.stderr.is_empty(),
+            "{command} wrote stderr: {}",
+            output.stderr
+        );
+        assert_no_output_leakage(command, &output.stdout, workspace);
+        serde_json::from_str(output.stdout.trim())
+            .unwrap_or_else(|error| panic!("parse {command} JSON: {error}"))
+    }
+
+    fn assert_no_output_leakage(command: &str, output: &str, workspace: &TempWorkspace) {
+        assert!(
+            !output.contains(workspace.path().to_string_lossy().as_ref()),
+            "{command} leaked absolute workspace path: {output}"
+        );
+        assert!(
+            !output.contains(release_fixture_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute fixture path: {output}"
+        );
+        for snippet in [
+            "app.get(",
+            "export function",
+            "describe(",
+            "expect(",
+            "return <",
+            "/accounts",
+            "/users",
+            "/health",
+            "/lonely",
+            "accounts: []",
+            "users: []",
+            "ok: true",
+            "loading: false",
+            "Promise.resolve",
+            "props.name",
+            "props.status",
+            "toHaveLength",
+            "toBe(true)",
+        ] {
+            assert!(
+                !output.contains(snippet),
+                "{command} leaked source-like snippet {snippet}: {output}"
+            );
+        }
+    }
+
+    fn assert_unknown_query_json(command: &str, value: &Value) {
+        assert_eq!(value["command"], command);
+        assert_eq!(value["status"], "UNKNOWN");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
+    }
+
+    #[test]
+    fn release_fixtures_default_product_smoke_returns_json_without_claim_inflation() {
+        const RELEASE_FIXTURES: &[(&str, &str)] = &[
+            ("express-basic", "users.ts"),
+            ("react-basic", "UserCard.tsx"),
+            ("jest-vitest-basic", "users.test.ts"),
+            ("mixed-js-ts", "routes.js"),
+            ("unknown-low-support", "lonely-route.ts"),
+        ];
+        const QUERY_COMMANDS: &[&str] =
+            &["families", "family", "member", "find", "explain", "check"];
+
+        for (fixture, target) in RELEASE_FIXTURES {
+            let workspace = TempWorkspace::new(&format!("release-{fixture}"));
+            copy_release_fixture(fixture, workspace.path());
+            let runtime = ProductCliRuntime;
+
+            let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+            let init_json = parse_machine_output("init", &init, &workspace);
+            assert_eq!(init_json["status"], "initialized");
+
+            let index = run_with_runtime(
+                cli_args(
+                    "index",
+                    workspace.path(),
+                    &["--json", "--progress", "never"],
+                ),
+                &runtime,
+            );
+            let index_json = parse_machine_output("index", &index, &workspace);
+            assert_eq!(index_json["command"], "index");
+            assert_eq!(index_json["status"], "complete");
+            assert_eq!(index_json["generation_id"], "gen-000001");
+            assert_eq!(index_json["indexing"], "syntax_only_code_units");
+            assert_eq!(index_json["parser"], "syntax_only");
+            assert_eq!(index_json["semantic_worker"], "deferred");
+            assert_eq!(index_json["mining"], "deferred");
+            assert!(
+                index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+                "fixture {fixture} should index at least one unit"
+            );
+
+            let files =
+                run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+            let files_json = parse_machine_output("files", &files, &workspace);
+            assert_eq!(files_json["command"], "files");
+            assert_eq!(files_json["status"], "ok");
+            assert_eq!(files_json["implemented"], true);
+            assert_eq!(files_json["active_generation"], "gen-000001");
+            assert_eq!(files_json["indexing"], "syntax_only_code_units");
+            assert!(
+                !files_json["files"]
+                    .as_array()
+                    .expect("files array")
+                    .is_empty(),
+                "fixture {fixture} should report indexed files"
+            );
+
+            let units =
+                run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+            let units_json = parse_machine_output("units", &units, &workspace);
+            assert_eq!(units_json["command"], "units");
+            assert_eq!(units_json["status"], "ok");
+            assert_eq!(units_json["implemented"], true);
+            assert_eq!(units_json["active_generation"], "gen-000001");
+            assert_eq!(units_json["indexing"], "syntax_only_code_units");
+            assert_eq!(units_json["semantic_worker"], "deferred");
+            assert_eq!(units_json["mining"], "deferred");
+            assert!(
+                !units_json["units"]
+                    .as_array()
+                    .expect("units array")
+                    .is_empty(),
+                "fixture {fixture} should report indexed units"
+            );
+
+            for command in QUERY_COMMANDS {
+                let output = if *command == "families" {
+                    run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime)
+                } else {
+                    run_with_runtime(
+                        cli_args(command, workspace.path(), &[target, "--json"]),
+                        &runtime,
+                    )
+                };
+                let value = parse_machine_output(command, &output, &workspace);
+                assert_unknown_query_json(command, &value);
+            }
+
+            let doctor =
+                run_with_runtime(cli_args("doctor", workspace.path(), &["--json"]), &runtime);
+            let doctor_json = parse_machine_output("doctor", &doctor, &workspace);
+            assert_eq!(doctor_json["command"], "doctor");
+            assert_eq!(doctor_json["checks"]["storage"], "available");
+            assert!(doctor_json["checks"].get("schema_version").is_none());
+        }
+    }
+
     #[test]
     fn product_runtime_indexes_and_reports_storage_status() {
         let workspace = TempWorkspace::new("product-runtime");

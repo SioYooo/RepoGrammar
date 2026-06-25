@@ -49,6 +49,10 @@
 - FamilyStore-backed `families`, `family`, `member`, `find`, `explain`, and
   `check` CLI read paths that return stored family detail or typed
   `UNKNOWN`; missing active indexes still use fallback guidance.
+- v0.1 TS/JS release fixture smoke gate that exercises product CLI JSON paths
+  across committed Express, React, Jest/Vitest, mixed JS/TS, low-support, and
+  mixed-language fixture shapes while preserving syntax-only `UNKNOWN` query
+  behavior by default.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -97,15 +101,16 @@ semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash
 freshness and claim-input readiness gate, and read-only MCP serving through the
-same query layer. Continue one boundary at a time: TypeScript compiler toolchain
-preparation, richer family-claim gates, or installer self-test groundwork. Keep
+same query layer, narrow global Codex/Claude MCP installer writes, and the
+v0.1 TS/JS release fixture smoke gate. Continue one boundary at a time:
+TypeScript compiler toolchain preparation or richer family-claim gates. Keep
 syntax-only code units, structural IR, syntax-origin framework-role facts, and
 weak stored semantic facts out of family claims unless the conservative builder
 has stronger compatible support.
 
 Do not advance full mining or broad installer writes until parser output,
-family-evidence read paths, freshness checks, MCP self-tests, and evidence
-contracts remain validated together.
+family-evidence read paths, full public freshness checks, MCP self-tests, and
+evidence contracts remain validated together.
 
 ## Command implementation path
 

@@ -127,6 +127,14 @@ allowed.
   output for valid requests, accept large changed-file requests below the
   shared 1 MiB stdin envelope, reject malformed requests, and prove request
   paths are not echoed in errors.
+- Release fixture smoke tests must copy committed TS/JS source fixtures from
+  `src/fixtures/typescript/release/v0_1/` into temporary workspaces and run the
+  product CLI through `init`, `index`, `files`, `units`, `families`, `family`,
+  `member`, `find`, `explain`, `check`, and `doctor` JSON paths. Default smoke
+  expectations must remain conservative: syntax-only indexing succeeds, machine
+  output is parseable and does not leak source snippets or absolute paths, and
+  family query commands return typed `UNKNOWN`/`InsufficientSupport` unless a
+  test explicitly injects strong semantic or dataflow support.
 - Experimental Python dogfooding tests, once added, must be opt-in and must
   assert experimental support level plus typed `UNKNOWN` for dynamic imports,
   monkey patching, pytest fixture injection, runtime dependency injection,
@@ -172,6 +180,7 @@ conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
 read-only MCP `repogrammar_context` schema/JSON-RPC serving,
 installer live-write gating through native MCP CLIs and managed receipts,
+v0.1 TS/JS release fixture smoke coverage for product CLI JSON paths,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store

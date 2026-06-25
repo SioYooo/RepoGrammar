@@ -107,6 +107,10 @@
   MCP targets through native agent CLIs, gated by `--yes`, MCP self-test, and
   RepoGrammar-owned receipts while keeping broad target and unsupported scope
   writes deferred.
+- v0.1 TS/JS release fixture corpus and product CLI smoke gate that runs
+  `init`, `index`, `files`, `units`, pattern-family query commands, and
+  `doctor` JSON paths without upgrading syntax-only evidence into family
+  claims.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.

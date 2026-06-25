@@ -4,7 +4,8 @@
   syntax-origin framework-role fact storage, semantic fact ingestion, internal
   active claim-input snapshot reads, semantic-fact freshness/readiness gating,
   FamilyStore-backed query reads, read-only MCP serving, and narrow global
-  explicit-target installer writes
+  explicit-target installer writes, with v0.1 TS/JS release fixture smoke
+  coverage
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -33,7 +34,9 @@ global Codex and Claude Code MCP targets through native agent CLIs, gated by
 active-generation claim-input snapshot read path for future claim builders and
 an internal file-hash freshness/readiness gate that blocks stale facts,
 unsupported fact kinds, weak certainty, or conflicting certainty with typed
-`UNKNOWN`.
+`UNKNOWN`. It also has committed TS/JS release fixtures and a product CLI JSON
+smoke gate that exercises `init`, `index`, `files`, `units`, pattern-family
+queries, and `doctor` without treating syntax-only evidence as a family claim.
 
 ## Durable knowledge
 
@@ -54,6 +57,9 @@ and `sync`, and the dependency-free
 `files`/`units` reads from active file-manifest-only or syntax-only generations.
 Those reads revalidate active-generation health plus stored paths, hashes,
 languages, unit ids, and byte ranges before returning repo-relative metadata.
+Release fixture smoke coverage copies committed TS/JS fixtures into temporary
+workspaces and checks product CLI JSON paths, no absolute-path leakage, no
+source-snippet leakage, and conservative `UNKNOWN` query results by default.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed
