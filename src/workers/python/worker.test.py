@@ -53,7 +53,7 @@ parse_messages = run_worker(
         "repository_revision": "UNKNOWN",
         "text": """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 import pytest
@@ -61,12 +61,26 @@ import pytest
 router = APIRouter()
 
 class UserOut(BaseModel):
+    model_config: ConfigDict = ConfigDict(from_attributes=True)
     id: int
+    display_name: str
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value):
         return value
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        return self.display_name
+
+    @model_validator(mode="after")
+    def validate_model(self):
+        return self
+
+    class Config:
+        arbitrary_types_allowed = True
 
 class Base(DeclarativeBase):
     pass
@@ -123,6 +137,32 @@ assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.imported.A
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.namespace.UserOut" for fact in parse_facts)
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.assigned.router" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field.id"
+    and "python_anchor_kind=pydantic_field" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "pydantic.field_type.int"
+    and "python_anchor_kind=pydantic_field_type" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.model_config"
+    and "python_anchor_kind=pydantic_model_config" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert not any(fact.get("target") == "pydantic.field.model_config" for fact in parse_facts)
+assert not any(fact.get("target") == "pydantic.field_type.pydantic.ConfigDict" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.Config"
+    and "python_anchor_kind=pydantic_config_class" in fact["assumptions"]
+    for fact in parse_facts
+)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.DeclarativeBase" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped" for fact in parse_facts)
 assert any(
@@ -204,6 +244,18 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.computed_field"
+    and "python_anchor_kind=pydantic_computed_field" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.model_validator"
+    and "python_anchor_kind=pydantic_model_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pytest.mark.parametrize"
     and "python_anchor_kind=pytest_parametrize" in fact["assumptions"]
     for fact in parse_facts
@@ -236,6 +288,8 @@ for fact in parse_facts:
     assert "start_byte" in fact["evidence"]
     assert "end_byte" in fact["evidence"]
 assert "from fastapi" not in json.dumps(parse_messages)
+assert "model_config =" not in json.dumps(parse_messages)
+assert "arbitrary_types_allowed" not in json.dumps(parse_messages)
 assert "@router.get" not in json.dumps(parse_messages)
 assert "response_model=" not in json.dumps(parse_messages)
 assert "list[UserOut]" not in json.dumps(parse_messages)

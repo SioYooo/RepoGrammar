@@ -119,10 +119,12 @@ The current implementation covers the first structural slice only:
   static `Depends(get_db)` dependency target slots, `HTTPException(...)`, and
   literal `HTTPException(status_code=...)` status-code effect slots, pytest
   `fixture` and `mark.parametrize` decorators plus literal parametrize
-  arguments, and Pydantic validator decorators. These remain CPython `ast`
-  structural facts; they do not become provider-backed semantic facts and do
-  not make parametrized pytest arguments look like unresolved fixture
-  injections;
+  arguments, and Pydantic model-member anchors for fields, field annotation
+  targets, `model_config`, nested `Config`, `computed_field`, validator, and
+  `model_validator` declarations. These remain CPython `ast` structural facts;
+  they do not become provider-backed semantic facts, do not make parametrized
+  pytest arguments look like unresolved fixture injections, and do not make
+  Pydantic member/config metadata into family membership support;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
@@ -175,7 +177,10 @@ The current implementation covers the first structural slice only:
   `response_model=...`, static `Depends(get_db)` dependency-target,
   `Depends(...)`, `HTTPException(...)`, and literal HTTPException status-code
   anchors remain route schema/context/effect metadata and are explicitly
-  excluded from membership support derivation.
+  excluded from membership support derivation. Pydantic field, field-type,
+  `model_config`, nested `Config`, `computed_field`, and `model_validator`
+  anchors remain model schema/config/member metadata and are also excluded from
+  membership support derivation.
 - a Rust `ports::python_provider` boundary for future candidate-scoped
   Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
   provider cache-key dimensions, and recoverable provider-unavailable
@@ -378,7 +383,10 @@ Pydantic roles:
 
 Required evidence includes `BaseModel` inheritance, field annotations,
 `model_config` or `Config`, `@field_validator`, legacy `@validator`, and
-`computed_field`.
+`computed_field` / `@model_validator` declarations. In the current
+implementation slice, fields, field types, config, computed fields, and model
+validators are structural schema/member anchors only; they do not derive family
+support without an exact compatible model/base/validator support target.
 
 SQLAlchemy roles:
 

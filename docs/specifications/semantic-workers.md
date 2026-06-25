@@ -270,19 +270,23 @@ The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
-anchors, class bases, SQLAlchemy mapped fields, `relationship(...)` calls,
-typed SQLAlchemy session calls including `add` and bounded
+anchors, class bases, Pydantic model-member anchors for fields, field
+annotation targets, `model_config`, nested `Config`, `computed_field`,
+validator, and `model_validator` declarations, SQLAlchemy mapped fields,
+`relationship(...)` calls, typed SQLAlchemy session calls including `add` and bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple call targets, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, `pytest.test`
 test-function anchors, same-file pytest fixture edges, literal pytest
-parametrize argument anchors, Pydantic validator decorators, path-derived
-module names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for
+parametrize argument anchors, path-derived module names, and CPython `symtable`
+scope anchors, plus typed `UNKNOWN` facts for
 dynamic import, unresolved import, framework magic, and unresolved pytest
 fixture injection cases. Literal pytest parametrize arguments are structural
-parametrize facts, not unresolved fixture injections. Default indexing passes the
+parametrize facts, not unresolved fixture injections. Pydantic field,
+field-type, config, computed-field, and model-validator anchors are
+schema/config/member context only, not exact family-support targets. Default indexing passes the
 discovered repo-relative `.py` inventory plus bounded, hash-checked discovered
 `conftest.py` file contents into that private parse-document request, so unique
 repo-local module imports and parent-directory pytest fixture bindings can be

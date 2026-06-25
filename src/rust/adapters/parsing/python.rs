@@ -1237,6 +1237,12 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_route_decorator"
             | "class_base"
             | "call_target"
+            | "pydantic_computed_field"
+            | "pydantic_config_class"
+            | "pydantic_field"
+            | "pydantic_field_type"
+            | "pydantic_model_config"
+            | "pydantic_model_validator"
             | "pydantic_validator"
             | "pytest_fixture_decorator"
             | "pytest_parametrize"
@@ -1374,17 +1380,31 @@ mod tests {
         let source = r#"
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 import pytest
 router = APIRouter()
 
 class UserOut(BaseModel):
+    model_config: ConfigDict = ConfigDict(from_attributes=True)
     id: int
+    display_name: str
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value):
         return value
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        return self.display_name
+
+    @model_validator(mode="after")
+    def validate_model(self):
+        return self
+
+    class Config:
+        arbitrary_types_allowed = True
 
 def get_db():
     return object()
@@ -1438,6 +1458,48 @@ def test_users(client, status):
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Type
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.BaseModel")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field.id")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_field")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field_type.int")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_field_type")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.model_config")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_model_config")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| fact
+            .target
+            .as_ref()
+            .map(SymbolId::as_str)
+            == Some("pydantic.field.model_config")));
+        assert!(!report.semantic_facts.iter().any(|fact| fact
+            .target
+            .as_ref()
+            .map(SymbolId::as_str)
+            == Some("pydantic.field_type.pydantic.ConfigDict")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.Config")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_config_class")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
@@ -1501,6 +1563,22 @@ def test_users(client, status):
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.computed_field")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_computed_field")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.model_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_model_validator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.mark.parametrize")
                 && fact
                     .assumptions
@@ -1550,6 +1628,8 @@ def test_users(client, status):
         }
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("from fastapi"));
+        assert!(!debug.contains("model_config ="));
+        assert!(!debug.contains("arbitrary_types_allowed"));
         assert!(!debug.contains("@router.get"));
         assert!(!debug.contains("response_model="));
         assert!(!debug.contains("list[UserOut]"));

@@ -2028,6 +2028,55 @@ mod tests {
     }
 
     #[test]
+    fn pydantic_member_anchors_do_not_derive_family_support() {
+        let first = indexed_python_unit("schemas.py", "pydantic_model", 0);
+        let second = indexed_python_unit("schemas.py", "pydantic_model", 1);
+        let third = indexed_python_unit("schemas.py", "pydantic_model", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pydantic.model"))
+            .collect::<Vec<_>>();
+        let parser_facts = vec![
+            parser_structural_anchor_fact(&first, SemanticFactKind::Symbol, "pydantic.field.id"),
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Type,
+                "pydantic.field_type.int",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "pydantic.model_config",
+            ),
+            parser_structural_anchor_fact(&second, SemanticFactKind::Symbol, "pydantic.Config"),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "pydantic.computed_field",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "pydantic.model_validator",
+            ),
+        ];
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pydantic support");
+
+        assert!(derived.is_empty());
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn exact_sqlalchemy_repository_parser_anchors_derive_family_support() {
         for target in [
             "sqlalchemy.select",

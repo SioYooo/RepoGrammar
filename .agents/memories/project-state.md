@@ -4,7 +4,7 @@
   discovery, CPython AST structural indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error anchors, pytest
-  parametrize argument anchors, Pydantic validator anchors, typed
+  parametrize argument anchors, Pydantic field/config/member anchors, typed
   dynamic/unresolved `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
@@ -36,6 +36,9 @@
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
   HTTPException status-code structural anchors remain auxiliary
   schema/context/effect metadata and are not membership support targets.
+  Pydantic field, field-type, `model_config`, nested `Config`,
+  computed-field, and model-validator anchors likewise remain schema/config/member
+  metadata and are not membership support targets.
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
   metadata, not family membership support. SQLAlchemy session call anchors now
@@ -72,8 +75,8 @@ fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
 HTTPException status codes, literal pytest parametrize arguments, and Pydantic
-validator decorators as structural parser-origin anchors without upgrading them
-to provider-backed semantics.
+field/config/member declarations as structural parser-origin anchors without
+upgrading them to provider-backed semantics.
 Default parser-mode indexing now also carries bounded discovered `conftest.py`
 context into the CPython parse-document request so parent-directory pytest
 fixture-edge facts can be persisted structurally; those facts are still not
@@ -125,7 +128,8 @@ decorator anchors, class bases, simple call targets, `pytest.test`
 test-function anchors, same-file pytest fixture edges, parent-directory
 `conftest.py` fixture hierarchy edges, FastAPI dependency/error anchors, pytest
 parametrize argument anchors that are not treated as fixture injection UNKNOWNs,
-Pydantic validator anchors, and typed dynamic/unresolved `UNKNOWN` cases,
+Pydantic field/config/member anchors, and typed dynamic/unresolved `UNKNOWN`
+cases,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,

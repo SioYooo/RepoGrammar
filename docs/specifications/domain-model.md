@@ -67,7 +67,9 @@ resolve imports, decorator targets, fixture bindings, SQLAlchemy mappings, or
 family membership. Current default Python indexing can also persist CPython
 `ast` parse-document structural facts for import bindings, decorator anchors,
 class bases, simple calls, FastAPI static response-model/dependency-target/error
-anchors including literal HTTPException status-code effect anchors, and typed
+anchors including literal HTTPException status-code effect anchors, Pydantic
+field, field-type, `model_config`, nested `Config`, computed-field, validator,
+and model-validator anchors, and typed
 dynamic/unresolved `UNKNOWN` cases. These facts remain `STRUCTURAL` or
 `UNKNOWN`, are blocked from family-claim input, and are not fed to the current
 family builder as raw facts. A separate
@@ -82,7 +84,9 @@ proof. It can also persist
 source roots, and recognized tool sections, or typed config `UNKNOWN`s when
 `tomllib` or valid TOML is unavailable. `PROJECT_CONFIG` facts are structural
 context only and are blocked from claim-input readiness even if a future bug
-marks them with stronger certainty. Future Python facts should follow the
+marks them with stronger certainty. Pydantic member/config/computed anchors are
+also structural model metadata only; they do not exact-match the support table
+and cannot prove family membership. Future Python facts should follow the
 same owned model for FastAPI, pytest, SQLAlchemy, and Pydantic evidence; parser,
 type-checker, LSP, or Python runtime objects must not enter the core domain.
 

@@ -1019,6 +1019,10 @@ def decorator_anchor_kind(target: str) -> str:
         return "pytest_fixture_decorator"
     if target == "pytest.mark.parametrize":
         return "pytest_parametrize"
+    if target == "pydantic.computed_field":
+        return "pydantic_computed_field"
+    if target == "pydantic.model_validator":
+        return "pydantic_model_validator"
     if target in PYDANTIC_VALIDATOR_TARGETS:
         return "pydantic_validator"
     if (
@@ -1124,6 +1128,124 @@ def collect_class_base_facts(
                 anchor_kind="class_base",
             ),
         )
+
+
+def collect_pydantic_model_member_facts(
+    node: ast.ClassDef,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    if not is_pydantic_model(node):
+        return
+    for item in node.body:
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            field_name = item.target.id
+            if field_name == "model_config":
+                add_pydantic_model_config_fact(
+                    item.target,
+                    starts,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    subject_unit_id,
+                    facts,
+                )
+                continue
+            if is_python_identifier(field_name):
+                start, end = node_range(starts, item.target)
+                add_fact(
+                    facts,
+                    structural_fact(
+                        kind="SYMBOL",
+                        subject_unit_id=subject_unit_id,
+                        target=f"pydantic.field.{field_name}",
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="pydantic_field",
+                    ),
+                )
+            annotation = static_type_name(item.annotation)
+            if annotation:
+                canonical_annotation = canonical_name(annotation, aliases, {})
+                target = f"pydantic.field_type.{canonical_annotation}"
+                if is_safe_fact_target(target) and len(target) <= MAX_RUST_PARSE_FACT_TARGET_CHARS:
+                    start, end = node_range(starts, item.annotation)
+                    add_fact(
+                        facts,
+                        structural_fact(
+                            kind="TYPE",
+                            subject_unit_id=subject_unit_id,
+                            target=target,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                            anchor_kind="pydantic_field_type",
+                        ),
+                    )
+        elif isinstance(item, ast.Assign):
+            for target in item.targets:
+                if isinstance(target, ast.Name) and target.id == "model_config":
+                    add_pydantic_model_config_fact(
+                        target,
+                        starts,
+                        path,
+                        content_hash_value,
+                        repository_revision,
+                        subject_unit_id,
+                        facts,
+                    )
+        elif isinstance(item, ast.ClassDef) and item.name == "Config":
+            start, end = node_range(starts, item)
+            add_fact(
+                facts,
+                structural_fact(
+                    kind="SYMBOL",
+                    subject_unit_id=subject_unit_id,
+                    target="pydantic.Config",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                    anchor_kind="pydantic_config_class",
+                ),
+            )
+
+
+def add_pydantic_model_config_fact(
+    target: ast.AST,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    facts: list[dict[str, Any]],
+) -> None:
+    start, end = node_range(starts, target)
+    add_fact(
+        facts,
+        structural_fact(
+            kind="SYMBOL",
+            subject_unit_id=subject_unit_id,
+            target="pydantic.model_config",
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind="pydantic_model_config",
+        ),
+    )
 
 
 def collect_sqlalchemy_model_field_facts(
@@ -1643,6 +1765,16 @@ def analyze_source(
         elif isinstance(item, ast.ClassDef):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
             collect_class_base_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                facts,
+            )
+            collect_pydantic_model_member_facts(
                 item,
                 starts,
                 path,

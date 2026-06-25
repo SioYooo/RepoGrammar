@@ -202,9 +202,12 @@ hash-checked discovered `conftest.py` file contents into that private mode,
 letting the worker build a bounded module and fixture context for the current
 parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
-SQLAlchemy mapped field and relationship anchors, typed SQLAlchemy session calls
-including `add`, bounded `__init__`-assigned `self.session`/`self.db`
-receiver propagation with same-method reassignment invalidation, simple calls,
+Pydantic model-member anchors for fields, field annotation targets,
+`model_config`, nested `Config`, `computed_field`, validator, and
+`model_validator` declarations, SQLAlchemy mapped field and relationship
+anchors, typed SQLAlchemy session calls including `add`, bounded
+`__init__`-assigned `self.session`/`self.db` receiver propagation with
+same-method reassignment invalidation, simple calls,
 `pytest.test` test-function anchors, same-file
 and parent-directory `conftest.py` pytest fixture edges, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
@@ -217,7 +220,9 @@ through pytest's directory hierarchy as structural fixture-edge facts. The Rust
 parser adapter validates and persists parse-document payloads as internal
 `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same code-unit
 evidence. They are not passed to the family builder and remain blocked from
-claim-input readiness as insufficient support.
+claim-input readiness as insufficient support. Pydantic member/config/computed
+anchors are schema/config/member context only and do not synthesize family
+support facts.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store
@@ -334,7 +339,9 @@ exact-match the canonical route-method table. Static `response_model=...`,
 static `Depends(get_db)` dependency-target, `Depends(...)`, and
 `HTTPException(...)` parser anchors, including literal status-code effect
 anchors, stay schema/context/effect metadata and do not prove membership
-support.
+support. Pydantic field, field-type, `model_config`, nested `Config`,
+computed-field, and model-validator anchors likewise stay model
+schema/config/member metadata and do not prove membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

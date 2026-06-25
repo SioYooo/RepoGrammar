@@ -46,7 +46,9 @@
   static `Depends(get_db)` dependency-target anchors plus `HTTPException`
   call and literal status-code anchors, treats literal
   `pytest.mark.parametrize` arguments as parametrize facts rather than
-  fixture-injection UNKNOWNs, and labels Pydantic validator decorators.
+  fixture-injection UNKNOWNs, and labels Pydantic field, field-type,
+  model-config, nested Config, computed-field, validator, and model-validator
+  anchors as structural model metadata.
   SQLAlchemy parser anchors now include `Mapped[...]`, `mapped_column(...)`,
   typed `Session`/`AsyncSession` call targets, and bounded propagation from
   `__init__`-assigned `self.session`/`self.db` attributes into repository
@@ -89,6 +91,11 @@
   `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
   calls. These anchors remain structural context and are explicitly excluded
   from family membership support.
+- CPython AST worker Pydantic model-member structural anchors now include
+  fields, field annotation targets, `model_config`, nested `Config`,
+  `computed_field`, validators, and `model_validator`. These anchors remain
+  schema/config/member context and are explicitly excluded from family
+  membership support.
 - Rust `ports::python_provider` contract for future candidate-scoped
   Pyrefly/Pyright/RightTyper provider requests, provenance assumptions,
   cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. This

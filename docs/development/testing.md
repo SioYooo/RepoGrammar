@@ -149,7 +149,9 @@ allowed.
   bases/calls/pytest test anchors/fixture edges, bounded parse-document
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
   dependency-target/dependency-call/error/status-code anchors, pytest
-  parametrize decorator and literal argument anchors, Pydantic validator anchors,
+  parametrize decorator and literal argument anchors, Pydantic field,
+  field-type, model-config, nested Config, computed-field, validator, and
+  model-validator anchors,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
@@ -202,7 +204,8 @@ allowed.
   variation metadata, SQLAlchemy relationship and Session.add structural anchors
   staying out of family support, bounded SQLAlchemy `self.session`/`self.db`
   role propagation from `__init__`, and reassigned receivers not becoming exact
-  session-call anchors,
+  session-call anchors, Pydantic field, field-type, model-config, nested Config,
+  computed-field, and model-validator anchors staying out of support derivation,
   low-support Python release fixtures preserving `UNKNOWN`, test-only strong
   support facts proving explicit worker family read paths only when compatible
   `SEMANTIC` evidence is injected, stale evidence fallback, and typed canonical
