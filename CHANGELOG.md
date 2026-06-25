@@ -119,6 +119,9 @@
   `sha256:<64 hex>` content hashes.
 - Bound discovery hashing and source-store reads to `max_file_bytes + 1` bytes
   so oversized files are classified without allocating the full file.
+- Changed TS/JS discovery to resolve parent Git worktrees before running
+  `check-ignore`, so subdirectory project roots honor parent `.gitignore`
+  rules while reports stay project-relative.
 - Documented JSON-parsed semantic-worker protocol fixture tests without
   claiming a running TypeScript worker or runtime indexing integration.
 - Documented request-side semantic-worker fixture validation without claiming a

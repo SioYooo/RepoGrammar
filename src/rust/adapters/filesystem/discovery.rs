@@ -278,51 +278,95 @@ impl DiscoveryState {
 
 #[derive(Debug, Clone)]
 struct GitIgnoreChecker {
-    root: String,
+    git_root: Option<PathBuf>,
+    project_prefix: String,
     status: GitIgnoreStatus,
 }
 
 impl GitIgnoreChecker {
     fn new(root: &str) -> Self {
-        let has_git_metadata = Path::new(root).join(".git").exists();
-        if !has_git_metadata {
-            return Self {
-                root: root.to_string(),
-                status: GitIgnoreStatus::NotRepository,
-            };
-        }
-
-        let status = match Command::new("git")
-            .args(["-C", root, "rev-parse", "--is-inside-work-tree"])
-            .output()
-        {
-            Ok(output) if output.status.success() => GitIgnoreStatus::Applied,
-            Ok(_) | Err(_) => GitIgnoreStatus::Unavailable,
+        let root_path = Path::new(root);
+        let canonical_root = match fs::canonicalize(root_path) {
+            Ok(canonical_root) => canonical_root,
+            Err(_) => {
+                return Self {
+                    git_root: None,
+                    project_prefix: String::new(),
+                    status: GitIgnoreStatus::Unavailable,
+                };
+            }
         };
 
+        let git_root = match resolve_git_root(root) {
+            GitRootResolution::Root(git_root) => git_root,
+            GitRootResolution::NotRepository if has_git_metadata_in_ancestors(&canonical_root) => {
+                return Self {
+                    git_root: None,
+                    project_prefix: String::new(),
+                    status: GitIgnoreStatus::Unavailable,
+                };
+            }
+            GitRootResolution::NotRepository => {
+                return Self {
+                    git_root: None,
+                    project_prefix: String::new(),
+                    status: GitIgnoreStatus::NotRepository,
+                };
+            }
+            GitRootResolution::Unavailable => {
+                return Self {
+                    git_root: None,
+                    project_prefix: String::new(),
+                    status: GitIgnoreStatus::Unavailable,
+                };
+            }
+        };
+
+        let Some(project_prefix) = project_prefix(&canonical_root, &git_root) else {
+            return Self {
+                git_root: None,
+                project_prefix: String::new(),
+                status: GitIgnoreStatus::Unavailable,
+            };
+        };
         Self {
-            root: root.to_string(),
-            status,
+            git_root: Some(git_root),
+            project_prefix,
+            status: GitIgnoreStatus::Applied,
         }
     }
 
     fn is_ignored(&mut self, relative_path: &str, warnings: &mut Vec<String>) -> bool {
         match self.status {
-            GitIgnoreStatus::Applied => match Command::new("git")
-                .args(["-C", &self.root, "check-ignore", "-q", "--", relative_path])
-                .status()
-            {
-                Ok(status) if status.success() => true,
-                Ok(status) if status.code() == Some(1) => false,
-                Ok(_) | Err(_) => {
+            GitIgnoreStatus::Applied => {
+                let Some(git_root) = &self.git_root else {
                     self.status = GitIgnoreStatus::Unavailable;
                     warnings.push(
                         "git ignore checks became unavailable; using safe non-git fallback"
                             .to_string(),
                     );
-                    false
+                    return false;
+                };
+                let git_relative_path = self.git_relative_path(relative_path);
+                match Command::new("git")
+                    .arg("-C")
+                    .arg(git_root)
+                    .args(["check-ignore", "-q", "--"])
+                    .arg(&git_relative_path)
+                    .status()
+                {
+                    Ok(status) if status.success() => true,
+                    Ok(status) if status.code() == Some(1) => false,
+                    Ok(_) | Err(_) => {
+                        self.status = GitIgnoreStatus::Unavailable;
+                        warnings.push(
+                            "git ignore checks became unavailable; using safe non-git fallback"
+                                .to_string(),
+                        );
+                        false
+                    }
                 }
-            },
+            }
             GitIgnoreStatus::Unavailable => {
                 warnings.push(
                     "git ignore checks are unavailable; using safe non-git fallback".to_string(),
@@ -332,6 +376,53 @@ impl GitIgnoreChecker {
             GitIgnoreStatus::NotRepository => false,
         }
     }
+
+    fn git_relative_path(&self, relative_path: &str) -> String {
+        if self.project_prefix.is_empty() {
+            relative_path.to_string()
+        } else {
+            format!("{}/{}", self.project_prefix, relative_path)
+        }
+    }
+}
+
+fn has_git_metadata_in_ancestors(root: &Path) -> bool {
+    root.ancestors()
+        .any(|ancestor| ancestor.join(".git").exists())
+}
+
+enum GitRootResolution {
+    Root(PathBuf),
+    NotRepository,
+    Unavailable,
+}
+
+fn resolve_git_root(root: &str) -> GitRootResolution {
+    let Ok(output) = Command::new("git")
+        .args(["-C", root, "rev-parse", "--show-toplevel"])
+        .output()
+    else {
+        return GitRootResolution::Unavailable;
+    };
+    if !output.status.success() {
+        return GitRootResolution::NotRepository;
+    }
+    let Ok(git_root) = String::from_utf8(output.stdout) else {
+        return GitRootResolution::Unavailable;
+    };
+    let git_root = git_root.trim();
+    if git_root.is_empty() {
+        return GitRootResolution::Unavailable;
+    }
+    match fs::canonicalize(git_root) {
+        Ok(git_root) => GitRootResolution::Root(git_root),
+        Err(_) => GitRootResolution::Unavailable,
+    }
+}
+
+fn project_prefix(canonical_root: &Path, git_root: &Path) -> Option<String> {
+    let relative = canonical_root.strip_prefix(git_root).ok()?;
+    repo_relative_string(relative)
 }
 
 fn is_repogrammar_state_dir(name: Option<&str>) -> bool {
@@ -475,6 +566,15 @@ mod tests {
     use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
     use crate::test_support::TempWorkspace;
     use std::fs;
+
+    fn git_init(workspace: &TempWorkspace) -> bool {
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 
     #[test]
     fn sha256_matches_standard_vectors() {
@@ -706,13 +806,7 @@ mod tests {
     #[test]
     fn git_ignored_ts_files_are_skipped_when_git_is_available() {
         let workspace = TempWorkspace::new("discovery-git-ignore");
-        if Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(workspace.path())
-            .status()
-            .map(|status| !status.success())
-            .unwrap_or(true)
-        {
+        if !git_init(&workspace) {
             return;
         }
         fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
@@ -740,5 +834,57 @@ mod tests {
             .skipped
             .iter()
             .any(|skip| skip.path == "ignored.ts" && skip.reason == SkippedReason::GitIgnored));
+    }
+
+    #[test]
+    fn parent_git_ignore_rules_apply_to_project_subdirectories() {
+        let workspace = TempWorkspace::new("discovery-parent-git-ignore");
+        if !git_init(&workspace) {
+            return;
+        }
+        fs::create_dir_all(workspace.path().join("packages/app")).expect("create project");
+        fs::write(
+            workspace.path().join(".gitignore"),
+            "packages/app/ignored.ts\npackages/app/secrets/\n",
+        )
+        .expect("write parent gitignore");
+        fs::create_dir_all(workspace.path().join("packages/app/secrets"))
+            .expect("create ignored directory");
+        fs::write(
+            workspace.path().join("packages/app/ignored.ts"),
+            "export const ignored = true;\n",
+        )
+        .expect("write ignored");
+        fs::write(
+            workspace.path().join("packages/app/secrets/hidden.ts"),
+            "export const hidden = true;\n",
+        )
+        .expect("write ignored directory file");
+        fs::write(
+            workspace.path().join("packages/app/included.ts"),
+            "export const included = true;\n",
+        )
+        .expect("write included");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().join("packages/app").display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Applied);
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].path, "included.ts");
+        assert!(report
+            .skipped
+            .iter()
+            .any(|skip| skip.path == "ignored.ts" && skip.reason == SkippedReason::GitIgnored));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "secrets/hidden.ts" && skip.reason == SkippedReason::GitIgnored
+        }));
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("packages/app/ignored.ts"));
+        assert!(!debug.contains("packages/app/secrets/hidden.ts"));
     }
 }

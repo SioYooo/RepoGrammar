@@ -167,7 +167,8 @@ exclusions. At minimum, RepoGrammar must skip:
 - dependency, build, cache, coverage, virtual environment, and generated output
   directories such as `node_modules`, `vendor`, `dist`, `build`, `target`,
   `.venv`, `Pods`, `.next`, and `coverage`;
-- files ignored by Git or by nested `.gitignore` rules;
+- files ignored by Git or by nested `.gitignore` rules, including parent
+  worktree ignore rules when the project path is below the Git top-level;
 - files larger than the configured size limit, with 1 MB as the default limit.
 
 Explicit project configuration may opt in additional files, but ignored

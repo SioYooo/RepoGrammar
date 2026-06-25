@@ -32,8 +32,9 @@ allowed.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   unsupported module extensions, default dependency/build/generated/state-dir
   exclusions, Git-ignored files when Git is available, safe Git-unavailable
-  warnings, the inclusive 1 MB size boundary, oversized skips, strict SHA-256
-  hash generation, bounded max-plus-one content reads for hashing,
+  warnings, parent Git worktree ignore rules for subdirectory projects, the
+  inclusive 1 MB size boundary, oversized skips, strict SHA-256 hash
+  generation, bounded max-plus-one content reads for hashing,
   deterministic ordering, symlink escape skips, invalid roots, and absence of
   source snippets or absolute paths in reports.
 - SQLite storage tests must use temporary workspaces and cover idempotent
@@ -135,5 +136,5 @@ conflicting facts, and `UNKNOWN` fact kind,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store
-hash-checked reads, and `repo-guard` sync/path/diff/ADR-0008 required document
-logic.
+hash-checked reads, parent Git worktree ignore handling for subdirectory
+projects, and `repo-guard` sync/path/diff/ADR-0008 required document logic.
