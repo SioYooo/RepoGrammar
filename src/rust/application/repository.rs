@@ -411,9 +411,8 @@ pub fn acquire_index_lock(
             .create_new(true)
             .open(&lock_path)
         {
-            Ok(mut file) => {
-                file.write_all(contents.as_bytes())
-                    .map_err(|_| invalid_input("failed to write repository-local index lock"))?;
+            Ok(file) => {
+                write_index_lock_contents(file, &lock_path, &contents)?;
                 return Ok(IndexLockGuard {
                     path: lock_path,
                     contents,
@@ -462,6 +461,19 @@ pub fn acquire_index_lock(
     Err(invalid_input(
         "index lock changed during acquisition; retry repogrammar index",
     ))
+}
+
+fn write_index_lock_contents<W: Write>(
+    mut writer: W,
+    lock_path: &Path,
+    contents: &str,
+) -> Result<(), RepoGrammarError> {
+    if writer.write_all(contents.as_bytes()).is_err() {
+        drop(writer);
+        let _ = fs::remove_file(lock_path);
+        return Err(invalid_input("failed to write repository-local index lock"));
+    }
+    Ok(())
 }
 
 pub fn repository_status_with_storage(
@@ -1120,15 +1132,49 @@ pub fn unlock_repository(
         }
     }
 
+    let mut removed_locks = 0usize;
     let message = if request.force && request.yes {
-        "unlock refused: lock ownership validation is not implemented, so no locks were removed"
+        let lock_path = locks_dir.join(INDEX_LOCK_FILE);
+        match inspect_index_lock_path_with_contents(&lock_path) {
+            IndexLockInspection {
+                state: IndexLockState::Stale,
+                contents: Some(contents),
+            } => {
+                if remove_index_lock_if_contents_match(&lock_path, &contents)? {
+                    removed_locks = 1;
+                    "unlock removed confirmed stale index lock"
+                } else {
+                    "unlock skipped: stale index lock changed before removal"
+                }
+            }
+            IndexLockInspection {
+                state: IndexLockState::Stale,
+                contents: None,
+            } => "unlock refused: stale index lock metadata is invalid",
+            IndexLockInspection {
+                state: IndexLockState::Active,
+                ..
+            } => "unlock refused: index lock is active",
+            IndexLockInspection {
+                state: IndexLockState::Unknown,
+                ..
+            } => "unlock refused: index lock ownership is unknown",
+            IndexLockInspection {
+                state: IndexLockState::Invalid,
+                ..
+            } => "unlock refused: index lock metadata is invalid",
+            IndexLockInspection {
+                state: IndexLockState::Missing,
+                ..
+            } => "unlock complete: no index lock is present",
+        }
     } else {
-        "unlock is inspection-only until stale-lock validation is implemented"
+        "unlock inspected repository-local locks; pass --force --yes to remove a confirmed stale index lock"
     };
 
     Ok(RepositoryUnlockReport {
         state_dir: resolved.relative,
-        removed_locks: 0,
+        removed_locks,
         inspected_locks,
         message: message.to_string(),
     })
@@ -1751,6 +1797,7 @@ mod tests {
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::test_support::TempWorkspace;
     use std::fs;
+    use std::io;
     use std::path::Path;
 
     fn root_string(path: &Path) -> String {
@@ -2290,9 +2337,145 @@ mod tests {
         assert!(workspace.path().join("keep.txt").is_file());
     }
 
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("forced write failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
-    fn unlock_placeholder_inspects_known_locks_without_deleting_them() {
-        let workspace = TempWorkspace::new("repository-unlock");
+    fn failed_index_lock_write_removes_partial_lock_file() {
+        let workspace = TempWorkspace::new("repository-index-lock-write-failure");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        fs::write(&lock_path, b"partial").expect("create partial lock");
+
+        let error = write_index_lock_contents(FailingWriter, &lock_path, "replacement")
+            .expect_err("write failure should be reported");
+
+        assert!(error.to_string().contains("failed to write"));
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn unlock_force_yes_removes_only_confirmed_stale_index_lock() {
+        let workspace = TempWorkspace::new("repository-unlock-stale");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let locks_dir = workspace.path().join(DEFAULT_STATE_DIR).join("locks");
+        let lock = locks_dir.join(INDEX_LOCK_FILE);
+        let stale = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "stale-token".to_string(),
+        }
+        .to_json();
+        fs::write(&lock, stale).expect("write stale lock");
+        fs::write(locks_dir.join("daemon.lock"), b"daemon").expect("write daemon lock");
+        fs::write(locks_dir.join("sqlite.lock"), b"sqlite").expect("write sqlite lock");
+
+        let report = unlock_repository(RepositoryUnlockRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            force: true,
+            yes: true,
+        })
+        .expect("unlock report");
+
+        assert_eq!(report.removed_locks, 1);
+        assert_eq!(
+            report.inspected_locks,
+            vec![
+                "index.lock".to_string(),
+                "daemon.lock".to_string(),
+                "sqlite.lock".to_string()
+            ]
+        );
+        assert!(!lock.exists());
+        assert!(locks_dir.join("daemon.lock").exists());
+        assert!(locks_dir.join("sqlite.lock").exists());
+        assert!(report.message.contains("confirmed stale index lock"));
+        assert!(!report.message.contains(&root_string(workspace.path())));
+    }
+
+    #[test]
+    fn unlock_force_yes_refuses_active_unknown_and_invalid_index_locks() {
+        let cases = [
+            (
+                "active",
+                IndexLockMetadata {
+                    pid: std::process::id(),
+                    host: current_host(),
+                    os: std::env::consts::OS.to_string(),
+                    started_unix_seconds: 1,
+                    repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+                    token: "active-token".to_string(),
+                }
+                .to_json(),
+                "active",
+            ),
+            (
+                "unknown",
+                IndexLockMetadata {
+                    pid: 0,
+                    host: current_host(),
+                    os: "other-os".to_string(),
+                    started_unix_seconds: 1,
+                    repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+                    token: "unknown-token".to_string(),
+                }
+                .to_json(),
+                "unknown",
+            ),
+            ("invalid", "{}\n".to_string(), "invalid"),
+        ];
+
+        for (case, contents, expected_message) in cases {
+            let workspace = TempWorkspace::new(&format!("repository-unlock-{case}"));
+            init_repository(init_request(workspace.path())).expect("init repository");
+            let lock = workspace
+                .path()
+                .join(DEFAULT_STATE_DIR)
+                .join("locks")
+                .join(INDEX_LOCK_FILE);
+            fs::write(&lock, contents).expect("write lock");
+
+            let report = unlock_repository(RepositoryUnlockRequest {
+                path: root_string(workspace.path()),
+                state_dir_override: None,
+                force: true,
+                yes: true,
+            })
+            .expect("unlock report");
+
+            assert_eq!(report.removed_locks, 0);
+            assert_eq!(report.inspected_locks, vec!["index.lock".to_string()]);
+            assert!(lock.exists(), "{case} lock must not be removed");
+            assert!(
+                report.message.contains(expected_message),
+                "unexpected message for {case}: {}",
+                report.message
+            );
+            assert!(!report.message.contains("not implemented"));
+            assert!(!report.message.contains(&root_string(workspace.path())));
+        }
+    }
+
+    #[test]
+    fn unlock_without_force_is_inspection_only() {
+        let workspace = TempWorkspace::new("repository-unlock-inspection");
         init_repository(init_request(workspace.path())).expect("init repository");
         let lock = workspace
             .path()
@@ -2304,14 +2487,16 @@ mod tests {
         let report = unlock_repository(RepositoryUnlockRequest {
             path: root_string(workspace.path()),
             state_dir_override: None,
-            force: true,
-            yes: true,
+            force: false,
+            yes: false,
         })
         .expect("unlock report");
 
         assert_eq!(report.removed_locks, 0);
         assert_eq!(report.inspected_locks, vec!["index.lock".to_string()]);
         assert!(lock.is_file());
+        assert!(report.message.contains("inspected"));
+        assert!(!report.message.contains("not implemented"));
         assert!(!report.message.contains(&root_string(workspace.path())));
     }
 
@@ -2438,6 +2623,30 @@ mod tests {
         }));
 
         drop(guard);
+    }
+
+    #[test]
+    fn index_lock_refuses_invalid_lock_and_doctor_reports_it() {
+        let workspace = TempWorkspace::new("repository-index-lock-invalid");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        fs::write(&lock_path, "{}\n").expect("write invalid lock");
+
+        let error = acquire_index_lock(&root_string(workspace.path()), None)
+            .expect_err("invalid lock must be refused");
+
+        assert!(error.to_string().contains("metadata is invalid"));
+        assert!(lock_path.exists());
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report.findings.iter().any(|finding| {
+            finding.code == RepositoryDoctorCode::IndexLockInvalid
+                && finding.severity == RepositoryDoctorSeverity::Error
+        }));
     }
 
     #[test]

@@ -363,7 +363,9 @@ and must distinguish the bootstrap manifest schema from the active SQLite
 storage schema in both human and JSON output.
 `repogrammar doctor` must run SQLite integrity checks, verify schema version,
 verify active generation consistency, report missing storage layout without
-recreating it, and report lock state.
+recreating it, and report lock state. Doctor JSON must distinguish
+`checks.manifest_schema_version` from `checks.storage_schema_version` and must
+not emit an ambiguous `checks.schema_version` field.
 
 ## Index Generations
 
@@ -403,8 +405,9 @@ are separate controls.
 ## Locks and Unlock
 
 RepoGrammar uses explicit lock files under `.repogrammar/locks/`. An index lock
-is acquired before generation preparation, so the current lock metadata does
-not include a generation id yet. The lock must contain:
+is acquired before discovery, source reads, generation preparation, validation,
+and activation, so the current lock metadata does not include a generation id
+yet. The lock must contain:
 
 ```json
 {
@@ -420,14 +423,15 @@ not include a generation id yet. The lock must contain:
 
 `host` may be `null` when no local host identifier is available. The current
 `index` and `sync` implementation creates `index.lock` with atomic
-create-new semantics immediately before `prepare_next_generation`, holds it
-through validation and active-generation pointer update, and removes only the
-lock content it wrote. Stale-lock replacement also requires the lock bytes to
-match the inspected stale bytes before deletion, so a concurrently replaced lock
-is rechecked instead of removed. A live same-host lock is refused. A lock whose
-same-host process is confirmed dead may be replaced during acquisition;
-malformed, cross-host, cross-OS, or otherwise unknown locks are refused and
-surfaced by `doctor`.
+create-new semantics before discovery, holds it through validation and
+active-generation pointer update, and removes only the lock content it wrote.
+If lock metadata creation fails after the file is created, RepoGrammar must
+remove the partial `index.lock` before returning the write error. Stale-lock
+replacement also requires the lock bytes to match the inspected stale bytes
+before deletion, so a concurrently replaced lock is rechecked instead of
+removed. A live same-host lock is refused. A lock whose same-host process is
+confirmed dead may be replaced during acquisition; malformed, cross-host,
+cross-OS, or otherwise unknown locks are refused and surfaced by `doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 
@@ -435,9 +439,9 @@ surfaced by `doctor`.
 - check whether the recorded process is still alive;
 - check whether the lock belongs to the same OS and host;
 - try to acquire an advisory lock;
-- delete only confirmed stale locks;
-- refuse to delete an active process lock;
-- output the reason a lock was removed;
+- delete only a confirmed stale `index.lock`;
+- refuse to delete active, unknown, invalid, daemon, or SQLite locks;
+- output the reason a lock was removed or refused;
 - support `--force` only with explicit confirmation;
 - run or recommend `repogrammar doctor --storage` after removal.
 

@@ -119,11 +119,11 @@ pub fn index_repository_with_discovery_and_store(
     discovery: &impl FileDiscovery,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
-    let report = discover_repository_files(request.clone(), discovery)?;
     let _index_lock = crate::application::repository::acquire_index_lock(
         &request.repository_root,
         request.state_dir_override.as_deref(),
     )?;
+    let report = discover_repository_files(request.clone(), discovery)?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
     for file in &report.files {
         crate::application::storage::record_indexed_file(
@@ -236,11 +236,11 @@ fn index_repository_with_optional_semantic_worker(
     semantic_worker: Option<&dyn SemanticWorker>,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
-    let report = discover_repository_files(request.clone(), discovery)?;
     let _index_lock = crate::application::repository::acquire_index_lock(
         &request.repository_root,
         request.state_dir_override.as_deref(),
     )?;
+    let report = discover_repository_files(request.clone(), discovery)?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
     for file in &report.files {
         crate::application::storage::record_indexed_file(
@@ -764,6 +764,7 @@ mod tests {
     use rusqlite::Connection;
     use std::fs;
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
@@ -856,6 +857,25 @@ mod tests {
             _request: SemanticWorkerRequest,
         ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
             panic!("semantic worker must not run when no files are discovered")
+        }
+    }
+
+    struct CountingDiscovery<'a> {
+        calls: &'a AtomicUsize,
+    }
+
+    impl FileDiscovery for CountingDiscovery<'_> {
+        fn discover(
+            &self,
+            _request: FileDiscoveryRequest,
+        ) -> Result<FileDiscoveryReport, FileDiscoveryError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(FileDiscoveryReport {
+                files: Vec::new(),
+                skipped: Vec::new(),
+                warnings: Vec::new(),
+                git_ignore_status: GitIgnoreStatus::NotRepository,
+            })
         }
     }
 
@@ -970,6 +990,36 @@ mod tests {
             .expect_err("empty root must fail");
 
         assert!(error.to_string().contains("repository root"));
+    }
+
+    #[test]
+    fn index_lock_is_acquired_before_expensive_discovery() {
+        let workspace = TempWorkspace::new("indexing-lock-before-discovery");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let _guard = crate::application::repository::acquire_index_lock(
+            &workspace.path().display().to_string(),
+            None,
+        )
+        .expect("hold index lock");
+        let discovery_calls = AtomicUsize::new(0);
+        let discovery = CountingDiscovery {
+            calls: &discovery_calls,
+        };
+
+        let error = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &discovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &store,
+        )
+        .expect_err("live lock must fail before discovery");
+
+        assert!(error.to_string().contains("index lock is held"));
+        assert_eq!(discovery_calls.load(Ordering::SeqCst), 0);
+        assert!(!state.join("current-generation").exists());
     }
 
     #[test]

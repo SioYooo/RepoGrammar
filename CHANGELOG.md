@@ -190,8 +190,11 @@
   validation or activation handles.
 - Hardened `index` and `sync` generation updates with
   `.repogrammar/locks/index.lock`, including active-lock refusal, confirmed
-  stale-lock replacement during acquisition, cleanup of successful runs, and
-  doctor lock-state reporting.
+  stale-lock replacement during acquisition, lock acquisition before discovery,
+  cleanup of partial metadata writes, cleanup of successful runs, and doctor
+  lock-state reporting.
+- Implemented `unlock --force --yes` for confirmed stale `index.lock` removal
+  while preserving active, unknown, invalid, daemon, and SQLite locks.
 - Expanded `repo-guard` required-document coverage to include v0.1 planning
   artifacts, the substrate hardening checkpoint, ADR-0009/ADR-0010, typed
   UNKNOWN governance, and the matching durable memory mirrors.
@@ -201,3 +204,6 @@
 - Split `status` schema reporting into explicit `manifest_schema_version` and
   `storage_schema_version` human/JSON fields, removing the ambiguous status
   JSON `schema_version` field.
+- Split `doctor` JSON schema reporting into explicit
+  `checks.manifest_schema_version` and `checks.storage_schema_version`, removing
+  the ambiguous `checks.schema_version` field.

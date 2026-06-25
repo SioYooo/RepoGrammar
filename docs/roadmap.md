@@ -59,12 +59,13 @@ The detailed coordination artifacts are
 `docs/plans/v0.1-parallel-development-plan.md` and the immediate hardening
 checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
 
-Before new mining, MCP, installer, Python, or CodeGraph runtime feature work,
-complete the hardening checkpoint or record a source-backed blocker. The
-checkpoint covers generation immutability, lifecycle doctor hygiene,
-repo-guard coverage, bounded reads, parent Git ignore behavior, manifest/status
-schema clarity, semantic-worker request limits, and the index-lock release
-gate.
+The substrate hardening checkpoint now covers generation immutability,
+lifecycle doctor hygiene, repo-guard coverage, bounded reads, parent Git ignore
+behavior, manifest/status/doctor schema clarity, semantic-worker request
+limits, and index-lock cleanup/unlock gates. Before new MCP, installer, Python,
+or CodeGraph runtime feature work, the next implementation slice should tighten
+the family claim input contract and EC-MVFI-lite readiness gates rather than
+exposing substrate records as user-visible family claims.
 
 1. Phase 1: repo-local lifecycle.
 2. Phase 1.5: language and provider abstraction.

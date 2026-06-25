@@ -1361,7 +1361,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"locks\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
+        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"locks\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"manifest_schema_version\":{},\"storage_schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
         matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         json_string(&report.status.state_dir),
         repository_status_value(&report.status.status),
@@ -1377,6 +1377,7 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
         lock_check(report),
         implementation_status(report.status.storage),
         implementation_status(report.status.indexing),
+        optional_json_number(report.status.manifest_schema_version),
         report
             .status
             .storage_inspection
@@ -1648,6 +1649,30 @@ mod tests {
     use rusqlite::Connection;
     use serde_json::Value;
     use std::fs;
+
+    fn current_lock_host_json() -> String {
+        let host = ["HOSTNAME", "COMPUTERNAME"]
+            .iter()
+            .find_map(|key| std::env::var(key).ok())
+            .filter(|value| {
+                !value.trim().is_empty()
+                    && !value.contains('/')
+                    && !value.contains('\\')
+                    && !value.chars().any(char::is_control)
+            });
+        host.map(|value| format!("\"{}\"", json_string(&value)))
+            .unwrap_or_else(|| "null".to_string())
+    }
+
+    fn stale_index_lock_json(token: &str) -> String {
+        format!(
+            "{{\"kind\":\"index\",\"pid\":0,\"host\":{},\"os\":\"{}\",\"started_unix_seconds\":1,\"repogrammar_version\":\"{}\",\"token\":\"{}\"}}\n",
+            current_lock_host_json(),
+            std::env::consts::OS,
+            env!("CARGO_PKG_VERSION"),
+            json_string(token)
+        )
+    }
 
     struct TestRuntime;
 
@@ -2580,18 +2605,21 @@ mod tests {
         assert_eq!(value["semantic_facts"], 1);
         assert_eq!(value["mining"], "deferred");
 
-        let find =
-            run_with_context_and_runtime(["find", "--json"], workspace.path(), &env, &runtime);
-        assert_eq!(find.status, 2);
-        assert!(find.stdout.is_empty());
-        let fallback: Value =
-            serde_json::from_str(find.stderr.trim()).expect("query fallback JSON");
-        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
-        assert_eq!(
-            fallback["reason"],
-            "query execution requires pattern-family evidence"
-        );
-        assert_eq!(fallback["implemented"], false);
+        for command in ["find", "families", "family", "member", "explain", "check"] {
+            let output =
+                run_with_context_and_runtime([command, "--json"], workspace.path(), &env, &runtime);
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            let fallback: Value =
+                serde_json::from_str(output.stderr.trim()).expect("query fallback JSON");
+            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+            assert_eq!(
+                fallback["reason"],
+                "query execution requires pattern-family evidence"
+            );
+            assert_eq!(fallback["command"], command);
+            assert_eq!(fallback["implemented"], false);
+        }
     }
 
     #[test]
@@ -2786,6 +2814,9 @@ mod tests {
         let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
         assert_eq!(value["checks"]["storage"], "available");
         assert_eq!(value["checks"]["indexing"], "not_implemented");
+        assert!(value["checks"].get("schema_version").is_none());
+        assert_eq!(value["checks"]["manifest_schema_version"], 1);
+        assert_eq!(value["checks"]["storage_schema_version"], Value::Null);
         assert!(value["findings"]
             .as_array()
             .expect("findings")
@@ -2822,6 +2853,9 @@ mod tests {
         assert_eq!(doctor.status, 0);
         let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
         assert_eq!(value["checks"]["required_subdirectories"], "fail");
+        assert!(value["checks"].get("schema_version").is_none());
+        assert_eq!(value["checks"]["manifest_schema_version"], 1);
+        assert_eq!(value["checks"]["storage_schema_version"], Value::Null);
         assert_eq!(value["checks"]["storage"], "unhealthy");
         assert!(value["findings"]
             .as_array()
@@ -2972,6 +3006,12 @@ mod tests {
         let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
         assert_eq!(value["checks"]["storage"], "available");
         assert_eq!(value["checks"]["indexing"], "syntax_only_code_units");
+        assert!(value["checks"].get("schema_version").is_none());
+        assert_eq!(value["checks"]["manifest_schema_version"], 1);
+        assert_eq!(
+            value["checks"]["storage_schema_version"],
+            STORAGE_SCHEMA_VERSION
+        );
         assert_eq!(value["checks"]["integrity_check"], "ok");
         assert!(value["findings"]
             .as_array()
@@ -3095,7 +3135,7 @@ mod tests {
             .path()
             .join(DEFAULT_STATE_DIR)
             .join("locks/index.lock");
-        fs::write(&lock_path, "{}").expect("write lock");
+        fs::write(&lock_path, "{}").expect("write invalid lock");
 
         let output = run_with_context(["unlock", "--json"], workspace.path(), &env);
         assert_eq!(output.status, 0);
@@ -3103,10 +3143,57 @@ mod tests {
         assert_eq!(value["removed_locks"], 0);
         assert_eq!(value["inspected_locks"][0], "index.lock");
         assert!(lock_path.exists());
+        assert!(value["message"]
+            .as_str()
+            .expect("unlock message")
+            .contains("inspected"));
 
         let force = run_with_context(["unlock", "--force"], workspace.path(), &env);
         assert_eq!(force.status, 2);
         assert!(force.stderr.contains("--force requires --yes"));
+
+        let invalid = run_with_context(
+            ["unlock", "--force", "--yes", "--json"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(invalid.status, 0);
+        let value: Value = serde_json::from_str(invalid.stdout.trim()).expect("unlock JSON");
+        assert_eq!(value["removed_locks"], 0);
+        assert!(lock_path.exists());
+        assert!(value["message"]
+            .as_str()
+            .expect("unlock message")
+            .contains("invalid"));
+        assert!(!invalid.stdout.contains("not implemented"));
+        assert!(!invalid
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let locks_dir = workspace.path().join(DEFAULT_STATE_DIR).join("locks");
+        fs::write(&lock_path, stale_index_lock_json("cli-stale")).expect("write stale lock");
+        fs::write(locks_dir.join("daemon.lock"), b"daemon").expect("write daemon lock");
+        fs::write(locks_dir.join("sqlite.lock"), b"sqlite").expect("write sqlite lock");
+
+        let stale = run_with_context(
+            ["unlock", "--force", "--yes", "--json"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(stale.status, 0);
+        let value: Value = serde_json::from_str(stale.stdout.trim()).expect("unlock JSON");
+        assert_eq!(value["removed_locks"], 1);
+        assert!(!lock_path.exists());
+        assert!(locks_dir.join("daemon.lock").exists());
+        assert!(locks_dir.join("sqlite.lock").exists());
+        assert!(value["message"]
+            .as_str()
+            .expect("unlock message")
+            .contains("confirmed stale index lock"));
+        assert!(!stale.stdout.contains("not implemented"));
+        assert!(!stale
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]

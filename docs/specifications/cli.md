@@ -121,6 +121,9 @@ Doctor must validate generated lifecycle hygiene without mutating state:
 rather than silently repaired. JSON output must expose this as
 `checks.lifecycle_hygiene`. JSON output must expose index-lock diagnostics as
 `checks.locks` with `pass`, `warning`, `fail`, or `not_applicable`.
+Doctor JSON must use `checks.manifest_schema_version` and
+`checks.storage_schema_version`; it must not expose an ambiguous
+`checks.schema_version` field.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
@@ -153,8 +156,9 @@ conflicts with the indexed code-unit path, content hash, or range must abort the
 new generation rather than silently dropping or accepting stale evidence. If
 storage health is already unhealthy, index and sync must refuse and direct the
 user to `repogrammar doctor` rather than masking the corruption with a new
-generation. Before preparing a new generation, both commands acquire
-`.repogrammar/locks/index.lock` and hold it through validation and activation.
+generation. Before discovery, source reads, generation preparation, validation,
+and activation, both commands acquire `.repogrammar/locks/index.lock` and hold
+it through validation and activation.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -162,8 +166,10 @@ during acquisition. Successful runs remove only the lock content they wrote.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`
-must require explicit confirmation. During bootstrap, unlock is inspection-only
-and must report known lock files without deleting them.
+must require explicit confirmation. Without `--force --yes`, unlock is
+inspection-only. With `--force --yes`, it may remove only a confirmed stale
+`index.lock`; active, unknown, invalid, daemon, and SQLite locks must remain in
+place with a stable refusal reason.
 
 `repogrammar logs` reads repo-local diagnostic logs. It supports:
 

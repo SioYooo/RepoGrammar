@@ -47,6 +47,12 @@ and `sync`, and the dependency-free
 `files`/`units` reads from active file-manifest-only or syntax-only generations.
 Those reads revalidate active-generation health plus stored paths, hashes,
 languages, unit ids, and byte ranges before returning repo-relative metadata.
+`index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
+hold it through validation and activation. Partial lock metadata write failures
+must remove the partial lock file. `unlock --force --yes` removes only confirmed
+stale `index.lock`; active, unknown, invalid, daemon, and SQLite locks remain
+in place. Status and doctor JSON use explicit manifest/storage schema-version
+fields and do not expose ambiguous `schema_version` fields.
 The storage port and SQLite adapter can persist already-validated semantic facts
 and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default

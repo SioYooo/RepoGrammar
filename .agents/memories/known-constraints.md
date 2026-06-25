@@ -40,6 +40,15 @@ analysis rules.
   path/hash/range evidence validation. Source snippets, absolute paths,
   families, pattern-family evidence, and query read-path state must not be
   assumed present.
+- `index` and `sync` must acquire `.repogrammar/locks/index.lock` before
+  discovery, source reads, generation preparation, validation, and activation.
+  They must clean up partial lock metadata writes and only remove the lock
+  bytes they wrote. `unlock --force --yes` may remove confirmed stale
+  `index.lock` only; active, unknown, invalid, daemon, and SQLite locks must not
+  be deleted.
+- Status and doctor JSON must keep manifest schema version and storage schema
+  version separate. Do not reintroduce ambiguous `schema_version` fields in
+  status output or `doctor.checks`.
 - Tree-sitter is the intended syntax technology, but AST types must stay in
   adapters and Tree-sitter facts are not final semantic truth.
 - v0.1 official language scope is TypeScript/JavaScript only. Python is planned

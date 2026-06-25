@@ -26,13 +26,17 @@ allowed.
   layout, idempotent repair, Git exclude hygiene, optional root `.gitignore`
   marker writes, `REPOGRAMMAR_DIR` override validation, symlink/file conflicts,
   human and JSON status/doctor output, explicit status
-  `manifest_schema_version` and `storage_schema_version` fields without an
-  ambiguous status `schema_version` field, JSON-parsed manifest validation with
-  reordered valid fields and invalid required fields, corrupted manifests,
+  `manifest_schema_version` and `storage_schema_version` fields, explicit
+  doctor `checks.manifest_schema_version` and `checks.storage_schema_version`
+  fields, no ambiguous status or doctor `schema_version` fields, JSON-parsed
+  manifest validation with reordered valid fields and invalid required fields,
+  corrupted manifests,
   missing subdirs, diagnostic-only doctor findings for missing or invalid
   `.repogrammar/.gitignore`, `.git/info/exclude`, root `.gitignore` markers,
   and `receipts/init.json`,
-  `uninit --yes`, conservative unlock behavior, and redacted logs metadata.
+  `uninit --yes`, unlock inspection without `--force --yes`, confirmed stale
+  `index.lock` removal with `--force --yes`, active/unknown/invalid lock
+  refusal, daemon/SQLite lock preservation, and redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   unsupported module extensions, default dependency/build/generated/state-dir
   exclusions, Git-ignored files when Git is available, safe Git-unavailable
@@ -62,9 +66,11 @@ allowed.
   extraction and storage, source ranges, language/kind/content-hash metadata,
   malformed syntax returning partial units plus diagnostics, unsupported or
   invalid source behavior, generation preservation after source/parser/storage
-  failure, `index.lock` acquisition before generation preparation, active-lock
-  refusal for both `index` and `sync`, confirmed stale-lock replacement,
-  successful lock cleanup, status/doctor storage and lock health, corrupt
+  failure, `index.lock` acquisition before discovery and generation
+  preparation, no discovery when lock acquisition fails, active-lock refusal for
+  both `index` and `sync`, confirmed stale-lock replacement, failed lock
+  metadata write cleanup, successful lock cleanup, status/doctor storage and
+  lock health, corrupt
   manifests, missing state subdirectories without implicit repair, active
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
