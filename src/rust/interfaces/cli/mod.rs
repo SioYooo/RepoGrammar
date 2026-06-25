@@ -7,8 +7,8 @@ use crate::application::install::{
 };
 use crate::application::query::{
     query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyListReport,
-    FamilyLookupReport, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+    FamilyLookupMode, FamilyLookupReport, FamilyQueryUnknown, FamilyUnknownReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -74,6 +74,7 @@ pub trait CliRuntime {
         &self,
         _request: RepositoryStatusRequest,
         _target: Option<&str>,
+        _mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
     }
@@ -382,7 +383,11 @@ where
             ),
         },
         "family" | "member" | "find" | "explain" | "check" => {
-            match runtime.family_lookup(request, options.target.as_deref()) {
+            match runtime.family_lookup(
+                request,
+                options.target.as_deref(),
+                lookup_mode_for_command(command),
+            ) {
                 Ok(report) if options.json => {
                     CliOutput::success(family_lookup_json(command, &report))
                 }
@@ -403,6 +408,15 @@ where
             "run repogrammar index after pattern-family indexing is implemented",
             false,
         ),
+    }
+}
+
+fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
+    match command {
+        "family" => FamilyLookupMode::ExactFamilyId,
+        "member" => FamilyLookupMode::ExactMemberId,
+        "find" | "explain" | "check" => FamilyLookupMode::FuzzyQuery,
+        _ => FamilyLookupMode::FuzzyQuery,
     }
 }
 
@@ -576,10 +590,17 @@ fn families_json(command: &str, report: &FamilyListReport) -> String {
 fn family_lookup_human(command: &str, report: &FamilyLookupReport) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
-            let mut output = format!(
-                "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
-                family.active_generation, family.family_id, family.classification, family.support
-            );
+            let mut output = if command == "check" {
+                format!(
+                    "{command}: CONTEXT_ONLY\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
+                    family.active_generation, family.family_id, family.classification, family.support
+                )
+            } else {
+                format!(
+                    "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
+                    family.active_generation, family.family_id, family.classification, family.support
+                )
+            };
             if command == "check" {
                 output.push_str("advisory_status: UNKNOWN\n");
                 output.push_str("reason: runtime equivalence remains unproven\n");
@@ -666,7 +687,7 @@ fn family_detail_json(command: &str, family: &FamilyDetailReport) -> String {
     };
     json_line(json!({
         "command": command,
-        "status": "ok",
+        "status": if command == "check" { "CONTEXT_ONLY" } else { "ok" },
         "implemented": true,
         "active_generation": family.active_generation,
         "family": {
@@ -2181,8 +2202,9 @@ mod tests {
             &self,
             _request: RepositoryStatusRequest,
             target: Option<&str>,
+            mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
-            if target == Some("src/routes/a.ts") {
+            if mode == FamilyLookupMode::FuzzyQuery && target == Some("src/routes/a.ts") {
                 Ok(FamilyLookupReport::Found(Self::detail()))
             } else {
                 Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -2301,9 +2323,10 @@ mod tests {
             &self,
             request: RepositoryStatusRequest,
             target: Option<&str>,
+            mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
-            lookup_family(&store, target)
+            lookup_family(&store, target, mode)
         }
     }
 
@@ -2673,6 +2696,53 @@ mod tests {
     }
 
     #[test]
+    fn family_and_member_commands_do_not_use_fuzzy_targets() {
+        let workspace = TempWorkspace::new("cli-family-exact-targets");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        for command in ["family", "member"] {
+            let output = run_with_context_and_runtime(
+                [command, "src/routes/a.ts", "--json"],
+                workspace.path(),
+                &env,
+                &runtime,
+            );
+
+            assert_eq!(output.status, 0);
+            let value: Value = serde_json::from_str(output.stdout.trim()).expect("UNKNOWN JSON");
+            assert_eq!(value["command"], command);
+            assert_eq!(value["status"], "UNKNOWN");
+            assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
+        }
+    }
+
+    #[test]
+    fn family_check_json_is_context_only_when_conformance_is_unproven() {
+        let workspace = TempWorkspace::new("cli-family-check-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            ["check", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("check JSON");
+        assert_eq!(value["command"], "check");
+        assert_eq!(value["status"], "CONTEXT_ONLY");
+        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
+        assert_eq!(
+            value["check"]["reason"],
+            "runtime equivalence remains unproven"
+        );
+    }
+
+    #[test]
     fn family_check_human_remains_advisory_when_runtime_equivalence_is_unknown() {
         let workspace = TempWorkspace::new("cli-family-check-human");
         let env = |_: &str| None;
@@ -2687,7 +2757,7 @@ mod tests {
 
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
-        assert!(output.stdout.contains("check: evidence-backed family"));
+        assert!(output.stdout.contains("check: CONTEXT_ONLY"));
         assert!(output.stdout.contains("advisory_status: UNKNOWN"));
         assert!(output
             .stdout

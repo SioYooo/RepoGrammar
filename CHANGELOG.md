@@ -238,3 +238,15 @@
 - Split `doctor` JSON schema reporting into explicit
   `checks.manifest_schema_version` and `checks.storage_schema_version`, removing
   the ambiguous `checks.schema_version` field.
+- Tightened EC-MVFI-lite support compatibility so arbitrary semantic facts do
+  not prove Express, React, Jest, or Vitest framework-role families.
+- Tightened pattern-family query matching so `family` and `member` use exact
+  ids, while fuzzy matching remains limited to `find`, `explain`, and `check`
+  and rejects short-substring false positives.
+- Changed advisory `check` and MCP `check_conformance` success contexts to
+  report top-level `CONTEXT_ONLY` with nested advisory `UNKNOWN` instead of
+  implying conformance is proven.
+- Added public family-evidence freshness checks so stale source hashes block or
+  omit CLI/MCP family detail with typed `StaleEvidence` `UNKNOWN`.
+- Hardened MCP install self-tests with a bounded timeout that kills and reaps
+  hanging self-test processes before native agent configuration.

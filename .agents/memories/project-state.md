@@ -84,9 +84,17 @@ The query application layer can check snapshot semantic facts against current
 source hashes and classify fresh supported facts as eligible inputs for future
 claim builders or typed `UNKNOWN` blockers (`StaleEvidence`,
 `InsufficientSupport`, or `ConflictingFacts`). Fresh eligible facts are still not
-family evidence. Syntax-origin framework-role facts use
-`FRAMEWORK_HEURISTIC` certainty and remain blocked from family-claim input as
-insufficient support until stronger evidence and claim builders exist.
+family evidence by themselves. The current EC-MVFI-lite builder can persist a
+family only when repeated framework-role candidates also have fresh
+same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support that is compatible
+with the framework role; arbitrary unrelated semantic facts remain
+`InsufficientSupport`. Public CLI/MCP family reads now exact-match `family` and
+`member` targets, keep fuzzy matching limited to find/explain/check style
+queries, gate rendered family evidence against current source hashes, and
+report stale evidence as typed `StaleEvidence` `UNKNOWN`. Syntax-origin
+framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
+from family-claim input as insufficient support without stronger compatible
+evidence.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
 full repository/worktree freshness metadata, typed IR attributes beyond the
@@ -96,9 +104,11 @@ integration, and telemetry network transport are not implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
 behavior before an active index and typed `UNKNOWN` when active evidence is
-insufficient. `files` and `units` can return active file-manifest-only or
-syntax-only index metadata, but stored syntax-only units must not be described
-as query-ready family evidence.
+insufficient. Advisory `check`/`check_conformance` responses may return matched
+family context as `CONTEXT_ONLY`, but conformance remains nested `UNKNOWN`
+because runtime equivalence is unproven. `files` and `units` can return active
+file-manifest-only or syntax-only index metadata, but stored syntax-only units
+must not be described as query-ready family evidence.
 
 ## Implications
 

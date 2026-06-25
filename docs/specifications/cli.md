@@ -57,6 +57,9 @@ similar files.
 operation.
 
 `repogrammar check` is the CLI equivalent of the `check_conformance` operation.
+Because this slice does not prove runtime equivalence, a matched `check`
+response must use `CONTEXT_ONLY` for machine-readable context success and keep
+the conformance result advisory `UNKNOWN`.
 
 All query commands must support:
 
@@ -322,11 +325,24 @@ For active pattern-family commands, `families --json` returns `status: ok` and a
 `families` array when family rows exist; otherwise it returns `status: UNKNOWN`,
 `implemented: true`, and a typed `InsufficientSupport` unknown on stdout.
 `family`, `member`, `find`, `explain`, and `check` accept the first positional
-operand as their target. A matched family response includes family id,
-classification, support, members, variation slots, evidence ranges, content
-hashes, and typed unknowns, without source snippets or absolute paths. `check`
-is advisory in this slice and reports runtime-equivalence uncertainty instead
-of a hard conformance claim.
+operand as their target. `family <target>` is an exact family-id lookup.
+`member <target>` is an exact code-unit/member-id lookup. `find`, `explain`,
+and `check` may use fuzzy matching over supported query-safe path suffixes,
+exact member roles, and exact ids, but must not treat short substrings such as a
+framework name, classification label, or directory fragment as a successful
+family match. A matched family response includes family id, classification,
+support, members, variation slots, evidence ranges, content hashes, and typed
+unknowns, without source snippets or absolute paths. `check` is advisory in
+this slice: it may return matched family context as `CONTEXT_ONLY`, but the
+check-specific conformance status remains `UNKNOWN` with reason `runtime
+equivalence remains unproven`.
+
+Before public pattern-family output is returned, stored family evidence must be
+fresh against the current repository source hashes. If an evidence source is
+missing or its content hash no longer matches the active generation, public
+`families`, `family`, `member`, `find`, `explain`, and `check` output must
+refuse or omit the stale claim and return typed `StaleEvidence` `UNKNOWN`
+guidance instead of rendering stale family detail.
 
 ## Current implementation status
 

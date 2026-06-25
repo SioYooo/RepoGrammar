@@ -90,7 +90,8 @@ Live `install` and `uninstall` writes are intentionally narrow:
   commands with `user` scope;
 - live project-local writes remain deferred until ownership, receipt, and native
   config semantics are specified for each supported agent;
-- install runs a read-only MCP self-test before native agent configuration;
+- install runs a read-only MCP self-test before native agent configuration, with
+  a bounded timeout that kills and reaps a hanging self-test process;
 - install writes a RepoGrammar-owned receipt under the user install data
   directory after native configuration succeeds and rolls back the native entry
   if receipt writing fails;

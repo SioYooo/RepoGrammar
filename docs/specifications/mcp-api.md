@@ -51,6 +51,8 @@ CLI equivalent: `repogrammar find`.
 
 Show the canonical template, variation points, exceptions, representative
 implementations, and provenance for a known family.
+The target is an exact family id. `show_family` must not resolve arbitrary
+path, framework-role, classification, or substring targets.
 
 CLI equivalent: `repogrammar family`.
 
@@ -64,6 +66,10 @@ CLI equivalent: `repogrammar explain`.
 ### check_conformance
 
 Check whether a target conforms to a selected family or abstain with a reason.
+In the current v0.1 candidate, matched family context is not proof of runtime
+equivalence. `check_conformance` must therefore return top-level
+`CONTEXT_ONLY` or typed `UNKNOWN` when conformance is unproven, and its nested
+check result must remain advisory `UNKNOWN`.
 
 CLI equivalent: `repogrammar check`.
 
@@ -83,6 +89,9 @@ If an index is stale, MCP responses must include a stale warning or refuse
 family claims whose evidence changed. Freshness checks must compare the active
 index generation and repository state described in
 `docs/specifications/storage.md`.
+The same freshness gate applies to public MCP family detail and conformance
+responses: stale family evidence must become typed `StaleEvidence` `UNKNOWN`
+rather than a top-level successful claim.
 
 Typed analysis uncertainty must not be flattened into transport failure. MCP
 responses preserve `UNKNOWN` class, reason code, affected claim, and suggested

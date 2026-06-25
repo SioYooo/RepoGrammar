@@ -82,19 +82,25 @@ allowed.
   leakage.
 - Family builder and query tests must cover framework-heuristic-only groups
   staying `UNKNOWN`, semantic/dataflow-supported repeated candidates becoming
-  eligible family records, no-family active generations returning typed
-  `InsufficientSupport`, family id/path lookup, JSON/human CLI output, advisory
-  `check` behavior, and absence of source snippets or absolute paths.
+  eligible family records, role-incompatible semantic facts staying
+  insufficient, no-family active generations returning typed
+  `InsufficientSupport`, exact family/member lookup versus fuzzy
+  find/explain/check lookup, short-substring false-match rejection, stale
+  family-evidence refusal with `StaleEvidence`, JSON/human CLI output,
+  advisory `check` behavior, and absence of source snippets or absolute paths.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
   no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
-  `check_conformance`, JSON-RPC initialize/tools/list/tools/call/shutdown
-  handling, and absence of source snippets or absolute paths.
+  `check_conformance` with `CONTEXT_ONLY` context success when conformance is
+  unproven, exact `show_family` target handling, JSON-RPC
+  initialize/tools/list/tools/call/shutdown handling, and absence of source
+  snippets or absolute paths.
 - Installer live-write tests must cover `--yes` gating, MCP self-test before
-  native configuration, unsupported broad `--target all`, unsupported native
-  scopes, receipt writing, receipt-write rollback, receipt-owned uninstall,
-  foreign receipt refusal, and no `.repogrammar/` mutation.
+  native configuration, hanging MCP self-test timeout/kill behavior,
+  unsupported broad `--target all`, unsupported native scopes, receipt writing,
+  receipt-write rollback, receipt-owned uninstall, foreign receipt refusal, and
+  no `.repogrammar/` mutation.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,

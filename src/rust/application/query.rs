@@ -3,9 +3,7 @@
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
-use crate::core::model::{
-    FactCertainty, PatternClassification, SemanticFactKind, UnknownClass, UnknownReasonCode,
-};
+use crate::core::model::{FactCertainty, SemanticFactKind, UnknownClass, UnknownReasonCode};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
@@ -19,20 +17,6 @@ use crate::ports::index_store::{
     IndexedSemanticFactRecord,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalogueQuery {
-    pub target_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalogueResult {
-    pub classification: PatternClassification,
-}
-
-pub fn find_analogues(_query: AnalogueQuery) -> Result<Vec<AnalogueResult>, RepoGrammarError> {
-    Err(RepoGrammarError::NotImplemented("find_analogues"))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryPreflightOperation {
@@ -207,6 +191,19 @@ pub struct FamilyQueryUnknown {
     pub recovery: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyLookupMode {
+    ExactFamilyId,
+    ExactMemberId,
+    FuzzyQuery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyEvidenceFreshnessRequest {
+    pub repository_root: String,
+    pub max_file_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticFactReadinessRequest {
     pub repository_root: String,
@@ -289,9 +286,49 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
     })
 }
 
+pub fn list_families_with_freshness(
+    request: FamilyEvidenceFreshnessRequest,
+    store: &impl FamilyStore,
+    source_store: &impl SourceStore,
+) -> Result<FamilyListReport, RepoGrammarError> {
+    let active = store.list_active_families().map_err(family_store_error)?;
+    let mut families = Vec::with_capacity(active.families.len());
+    let mut unknowns = Vec::new();
+    for family in &active.families {
+        let Some(active_family) = store
+            .show_family(&family.family_id)
+            .map_err(family_store_error)?
+        else {
+            continue;
+        };
+        if family_evidence_is_fresh(&request, source_store, &active_family)? {
+            families.push(FamilySummary {
+                family_id: family.family_id.clone(),
+                classification: family.classification.clone(),
+                support: active_family.members.len(),
+            });
+        } else {
+            unknowns.push(stale_evidence_unknown(format!(
+                "{}:evidence_freshness",
+                family.family_id
+            )));
+        }
+    }
+    families.sort_by(|left, right| left.family_id.cmp(&right.family_id));
+    if families.is_empty() && unknowns.is_empty() {
+        unknowns.push(insufficient_support_unknown("repository pattern families"));
+    }
+    Ok(FamilyListReport {
+        active_generation: active.generation_id,
+        families,
+        unknowns,
+    })
+}
+
 pub fn lookup_family(
     store: &impl FamilyStore,
     target: Option<&str>,
+    mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
     let active = store.list_active_families().map_err(family_store_error)?;
     let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
@@ -307,9 +344,50 @@ pub fn lookup_family(
         else {
             continue;
         };
-        if family_matches_target(&active_family, target) {
+        if family_matches_target(&active_family, target, mode) {
             return Ok(FamilyLookupReport::Found(family_detail(active_family)));
         }
+    }
+    Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation: active.generation_id,
+        unknowns: vec![insufficient_support_unknown("query target")],
+    }))
+}
+
+pub fn lookup_family_with_freshness(
+    request: FamilyEvidenceFreshnessRequest,
+    store: &impl FamilyStore,
+    source_store: &impl SourceStore,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let active = store.list_active_families().map_err(family_store_error)?;
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: active.generation_id,
+            unknowns: vec![insufficient_support_unknown("query target")],
+        }));
+    };
+    for family in active.families {
+        let Some(active_family) = store
+            .show_family(&family.family_id)
+            .map_err(family_store_error)?
+        else {
+            continue;
+        };
+        if !family_matches_target(&active_family, target, mode) {
+            continue;
+        }
+        if family_evidence_is_fresh(&request, source_store, &active_family)? {
+            return Ok(FamilyLookupReport::Found(family_detail(active_family)));
+        }
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: active.generation_id,
+            unknowns: vec![stale_evidence_unknown(format!(
+                "{}:evidence_freshness",
+                active_family.family.family_id
+            ))],
+        }));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation: active.generation_id,
@@ -400,17 +478,61 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
     }
 }
 
-fn family_matches_target(family: &ActiveFamily, target: &str) -> bool {
-    family.family.family_id == target
-        || family.family.classification == target
-        || family
+fn family_matches_target(family: &ActiveFamily, target: &str, mode: FamilyLookupMode) -> bool {
+    match mode {
+        FamilyLookupMode::ExactFamilyId => family.family.family_id == target,
+        FamilyLookupMode::ExactMemberId => family
             .members
             .iter()
-            .any(|member| member.code_unit_id.contains(target) || member.role.contains(target))
-        || family
-            .evidence
-            .iter()
-            .any(|evidence| evidence.path == target || evidence.path.contains(target))
+            .any(|member| member.code_unit_id == target),
+        FamilyLookupMode::FuzzyQuery => {
+            family.family.family_id == target
+                || family
+                    .members
+                    .iter()
+                    .any(|member| member.code_unit_id == target || member.role == target)
+                || family
+                    .evidence
+                    .iter()
+                    .any(|evidence| path_matches_target(&evidence.path, target))
+        }
+    }
+}
+
+fn path_matches_target(path: &str, target: &str) -> bool {
+    path == target || (target.contains('/') && path.ends_with(&format!("/{target}")))
+}
+
+fn family_evidence_is_fresh(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    family: &ActiveFamily,
+) -> Result<bool, RepoGrammarError> {
+    for evidence in &family.evidence {
+        let source = source_store.read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: evidence.path.clone(),
+            expected_content_hash: evidence.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        });
+        match source {
+            Ok(source)
+                if source.path == evidence.path && source.content_hash == evidence.content_hash => {
+            }
+            Ok(_) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "source freshness response is invalid".to_string(),
+                ));
+            }
+            Err(SourceStoreError::InvalidRequest(_)) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "stored family evidence path is invalid".to_string(),
+                ));
+            }
+            Err(_) => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 fn insufficient_support_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnknown {
@@ -419,6 +541,15 @@ fn insufficient_support_unknown(affected_claim: impl Into<String>) -> FamilyQuer
         reason: UnknownReasonCode::InsufficientSupport,
         affected_claim: affected_claim.into(),
         recovery: Some("run repogrammar index after adding compatible implementations".to_string()),
+    }
+}
+
+fn stale_evidence_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnknown {
+    FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::StaleEvidence,
+        affected_claim: affected_claim.into(),
+        recovery: Some("run repogrammar sync".to_string()),
     }
 }
 
@@ -733,6 +864,20 @@ mod tests {
         }
     }
 
+    struct FamilyEvidenceSourceStore {
+        path: String,
+        result: Result<SourceText, SourceStoreError>,
+    }
+
+    impl SourceStore for FamilyEvidenceSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            assert_eq!(request.repository_root, "/repo");
+            assert_eq!(request.path, self.path);
+            assert_eq!(request.max_file_bytes, 1024);
+            self.result.clone()
+        }
+    }
+
     fn source_store_with_hash(content_hash: ContentHash) -> StaticSourceStore {
         StaticSourceStore {
             result: Ok(SourceText {
@@ -757,6 +902,13 @@ mod tests {
 
     fn readiness_request() -> SemanticFactReadinessRequest {
         SemanticFactReadinessRequest {
+            repository_root: "/repo".to_string(),
+            max_file_bytes: 1024,
+        }
+    }
+
+    fn family_freshness_request() -> FamilyEvidenceFreshnessRequest {
+        FamilyEvidenceFreshnessRequest {
             repository_root: "/repo".to_string(),
             max_file_bytes: 1024,
         }
@@ -961,7 +1113,12 @@ mod tests {
             UnknownReasonCode::InsufficientSupport
         );
 
-        let lookup = lookup_family(&store, Some("/repo/secret.ts")).expect("lookup family");
+        let lookup = lookup_family(
+            &store,
+            Some("/repo/secret.ts"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup family");
         let FamilyLookupReport::Unknown(report) = lookup else {
             panic!("missing family evidence must be UNKNOWN");
         };
@@ -983,8 +1140,18 @@ mod tests {
         assert_eq!(families.families.len(), 1);
         assert_eq!(families.families[0].support, 1);
 
-        for target in ["family:typescript:express_route:express", "src/routes/a.ts"] {
-            let lookup = lookup_family(&store, Some(target)).expect("lookup family");
+        for (target, mode) in [
+            (
+                "family:typescript:express_route:express",
+                FamilyLookupMode::ExactFamilyId,
+            ),
+            (
+                "unit:src/routes/a.ts#express_route:0-20",
+                FamilyLookupMode::ExactMemberId,
+            ),
+            ("routes/a.ts", FamilyLookupMode::FuzzyQuery),
+        ] {
+            let lookup = lookup_family(&store, Some(target), mode).expect("lookup family");
             let FamilyLookupReport::Found(report) = lookup else {
                 panic!("expected family detail");
             };
@@ -995,6 +1162,65 @@ mod tests {
             assert!(!debug.contains("/repo"));
             assert!(!debug.contains("function"));
         }
+    }
+
+    #[test]
+    fn family_lookup_rejects_short_substring_false_matches() {
+        let store = FakeFamilyStore::with_family();
+
+        for (target, mode) in [
+            ("express", FamilyLookupMode::ExactFamilyId),
+            ("src/routes/a.ts", FamilyLookupMode::ExactMemberId),
+            ("routes", FamilyLookupMode::FuzzyQuery),
+            ("DOMINANT_PATTERN", FamilyLookupMode::FuzzyQuery),
+            ("framework:express", FamilyLookupMode::FuzzyQuery),
+        ] {
+            let lookup = lookup_family(&store, Some(target), mode).expect("lookup family");
+            let FamilyLookupReport::Unknown(report) = lookup else {
+                panic!("short target {target} must not match");
+            };
+            assert_eq!(
+                report.unknowns[0].reason,
+                UnknownReasonCode::InsufficientSupport
+            );
+        }
+    }
+
+    #[test]
+    fn stale_family_evidence_blocks_public_family_claims() {
+        let store = FakeFamilyStore::with_family();
+        let source_store = FamilyEvidenceSourceStore {
+            path: "src/routes/a.ts".to_string(),
+            result: Err(SourceStoreError::HashMismatch(
+                "source content changed after discovery".to_string(),
+            )),
+        };
+
+        let lookup = lookup_family_with_freshness(
+            family_freshness_request(),
+            &store,
+            &source_store,
+            Some("family:typescript:express_route:express"),
+            FamilyLookupMode::ExactFamilyId,
+        )
+        .expect("lookup with freshness");
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("stale family evidence must block public detail");
+        };
+        assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
+        assert_eq!(
+            report.unknowns[0].recovery.as_deref(),
+            Some("run repogrammar sync")
+        );
+
+        let families =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+        assert!(families.families.is_empty());
+        assert_eq!(
+            families.unknowns[0].reason,
+            UnknownReasonCode::StaleEvidence
+        );
     }
 
     #[test]
@@ -1014,12 +1240,6 @@ mod tests {
             report.facts[0].readiness,
             ClaimInputReadiness::EligibleInput
         );
-        assert!(matches!(
-            find_analogues(AnalogueQuery {
-                target_path: "src/a.ts".to_string()
-            }),
-            Err(RepoGrammarError::NotImplemented("find_analogues"))
-        ));
     }
 
     #[test]

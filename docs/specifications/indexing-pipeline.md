@@ -52,6 +52,9 @@ does not infer calls or dataflow, and cannot prove semantic or family claims.
 Stored semantic facts, whether syntax-origin framework-role facts or explicitly
 configured worker facts accepted by the storage gate, must still pass the claim
 builder's support and compatibility rules before they become family evidence.
+Compatibility is role-specific: unrelated semantic facts cannot satisfy
+framework-family support just because they share a code-unit id, path, content
+hash, and byte range.
 Syntax-only code units are structural candidates, not semantic or family claims.
 The `files` and `units` commands may read active file-manifest-only or
 syntax-only index metadata for inventory/debugging, but that read path is not

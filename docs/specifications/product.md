@@ -86,8 +86,10 @@ implemented.
 The current EC-MVFI-lite implementation is deliberately narrow: it can only
 store a `DOMINANT_PATTERN` family when repeated compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
-non-framework evidence. Otherwise family queries must return typed `UNKNOWN`
-rather than upgrading syntax/framework heuristics into claims.
+non-framework evidence. That support must be role-compatible: an arbitrary
+semantic fact for an unrelated package, API, or framework cannot prove an
+Express, React, Jest, or Vitest family. Otherwise family queries must return
+typed `UNKNOWN` rather than upgrading syntax/framework heuristics into claims.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

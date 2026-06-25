@@ -1,7 +1,7 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
 use crate::application::query::{
-    query_preflight, repository_status_unavailable_fallback, FamilyDetailReport,
+    query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyLookupMode,
     FamilyLookupReport, FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
@@ -73,6 +73,7 @@ pub trait McpReadOnlyRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError>;
 }
 
@@ -199,9 +200,11 @@ pub fn handle_context_call(
         QueryPreflightReport::Fallback(fallback) => {
             Ok(fallback_value(arguments.operation, fallback))
         }
-        QueryPreflightReport::Ready => match runtime
-            .family_lookup(request, arguments.target.as_deref())
-        {
+        QueryPreflightReport::Ready => match runtime.family_lookup(
+            request,
+            arguments.target.as_deref(),
+            lookup_mode_for_operation(arguments.operation),
+        ) {
             Ok(FamilyLookupReport::Found(family)) => {
                 Ok(family_detail_value(arguments.operation, &family))
             }
@@ -218,6 +221,15 @@ pub fn handle_context_call(
                 repository_status_unavailable_fallback(QueryPreflightOperation::PatternFamilyQuery),
             )),
         },
+    }
+}
+
+fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
+    match operation {
+        McpOperation::ShowFamily => FamilyLookupMode::ExactFamilyId,
+        McpOperation::FindAnalogues
+        | McpOperation::ExplainDeviation
+        | McpOperation::CheckConformance => FamilyLookupMode::FuzzyQuery,
     }
 }
 
@@ -462,7 +474,7 @@ fn family_detail_value(operation: McpOperation, family: &FamilyDetailReport) -> 
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
-        "status": "ok",
+        "status": if operation == McpOperation::CheckConformance { "CONTEXT_ONLY" } else { "ok" },
         "implemented": true,
         "active_generation": family.active_generation,
         "family": {
@@ -649,11 +661,27 @@ mod tests {
         .expect("family response");
         let text = response.to_string();
 
-        assert_eq!(response["status"], "ok");
+        assert_eq!(response["status"], "CONTEXT_ONLY");
         assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
         assert_eq!(response["evidence"][0]["path"], "src/routes/a.ts");
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn show_family_uses_exact_family_id_lookup_mode() {
+        let runtime = FakeMcpRuntime::ready_found();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "show_family", "target": "src/routes/a.ts"}),
+        )
+        .expect("UNKNOWN response");
+
+        assert_eq!(response["status"], "UNKNOWN");
+        assert_eq!(response["unknowns"][0]["reason"], "InsufficientSupport");
+        assert_eq!(runtime.lookup_calls(), 1);
     }
 
     #[test]
@@ -846,9 +874,15 @@ mod tests {
         fn family_lookup(
             &self,
             _request: RepositoryStatusRequest,
-            _target: Option<&str>,
+            target: Option<&str>,
+            mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             self.lookup_calls.set(self.lookup_calls.get() + 1);
+            if mode == FamilyLookupMode::ExactFamilyId
+                && target != Some("family:typescript:express_route:express")
+            {
+                return Ok(unknown_report());
+            }
             Ok(self.lookup.clone())
         }
     }

@@ -999,10 +999,20 @@ mod tests {
         path: &str,
         end_byte: usize,
     ) -> SemanticFact {
+        semantic_fact_for_unit_with_target(content_hash, code_unit_id, path, end_byte, None)
+    }
+
+    fn semantic_fact_for_unit_with_target(
+        content_hash: ContentHash,
+        code_unit_id: &str,
+        path: &str,
+        end_byte: usize,
+        target: Option<&str>,
+    ) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::ResolvedImport,
             subject: format!("{path}#import:express"),
-            target: None,
+            target: target.map(|target| SymbolId::new(target).expect("valid target")),
             origin: FactOrigin {
                 engine: "typescript".to_string(),
                 engine_version: "6.0.0".to_string(),
@@ -1057,11 +1067,12 @@ mod tests {
                 .into_iter()
                 .filter(|unit| unit.kind == CodeUnitKind::ExpressRoute)
             {
-                facts.push(semantic_fact_for_unit(
+                facts.push(semantic_fact_for_unit_with_target(
                     unit.provenance.content_hash,
                     unit.id.as_str(),
                     &unit.provenance.path,
                     unit.range.end_byte,
+                    Some("package:express"),
                 ));
             }
         }

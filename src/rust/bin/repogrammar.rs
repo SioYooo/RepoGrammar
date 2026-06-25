@@ -15,8 +15,9 @@ use repogrammar::application::install::{
     NativeAgentConfigurator, MCP_SERVER_NAME,
 };
 use repogrammar::application::query::{
-    list_code_units, list_families, list_indexed_files, lookup_family, FamilyListReport,
-    FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    list_code_units, list_families_with_freshness, list_indexed_files,
+    lookup_family_with_freshness, FamilyEvidenceFreshnessRequest, FamilyListReport,
+    FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -31,6 +32,7 @@ use repogrammar::interfaces::cli::{
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
+use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -167,16 +169,33 @@ impl CliRuntime for ProductCliRuntime {
         request: RepositoryStatusRequest,
     ) -> Result<FamilyListReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
-        list_families(&store)
+        list_families_with_freshness(
+            FamilyEvidenceFreshnessRequest {
+                repository_root: request.path.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &FilesystemSourceStore,
+        )
     }
 
     fn family_lookup(
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
-        lookup_family(&store, target)
+        lookup_family_with_freshness(
+            FamilyEvidenceFreshnessRequest {
+                repository_root: request.path.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &FilesystemSourceStore,
+            target,
+            mode,
+        )
     }
 
     fn install_agent_integration(
@@ -186,7 +205,7 @@ impl CliRuntime for ProductCliRuntime {
         context: InstallExecutionContext,
     ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
         let configurator = ProductNativeAgentConfigurator;
-        let self_tester = ProductMcpSelfTester;
+        let self_tester = ProductMcpSelfTester::new();
         match command {
             "install" => execute_install(&request, &context, &configurator, &self_tester),
             "uninstall" => execute_uninstall(&request, &context, &configurator),
@@ -209,8 +228,9 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
-        <Self as CliRuntime>::family_lookup(self, request, target)
+        <Self as CliRuntime>::family_lookup(self, request, target, mode)
     }
 }
 
@@ -280,7 +300,22 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
     }
 }
 
-struct ProductMcpSelfTester;
+struct ProductMcpSelfTester {
+    timeout: std::time::Duration,
+}
+
+impl ProductMcpSelfTester {
+    fn new() -> Self {
+        Self {
+            timeout: std::time::Duration::from_secs(5),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_timeout(timeout: std::time::Duration) -> Self {
+        Self { timeout }
+    }
+}
 
 impl McpSelfTestRunner for ProductMcpSelfTester {
     fn self_test(&self, executable_path: &str, current_dir: &str) -> Result<(), RepoGrammarError> {
@@ -311,9 +346,7 @@ impl McpSelfTestRunner for ProductMcpSelfTester {
                 RepoGrammarError::InvalidInput("failed to write MCP self-test shutdown".to_string())
             })?;
         }
-        let output = child.wait_with_output().map_err(|_| {
-            RepoGrammarError::InvalidInput("failed to read MCP self-test output".to_string())
-        })?;
+        let output = wait_with_timeout(child, self.timeout)?;
         if !output.status.success() {
             return Err(RepoGrammarError::InvalidInput(
                 "MCP self-test failed".to_string(),
@@ -334,6 +367,37 @@ impl McpSelfTestRunner for ProductMcpSelfTester {
             Err(RepoGrammarError::InvalidInput(
                 "MCP self-test did not expose repogrammar_context".to_string(),
             ))
+        }
+    }
+}
+
+fn wait_with_timeout(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, RepoGrammarError> {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child.wait_with_output().map_err(|_| {
+                    RepoGrammarError::InvalidInput(
+                        "failed to read MCP self-test output".to_string(),
+                    )
+                });
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(RepoGrammarError::InvalidInput(
+                    "MCP self-test timed out".to_string(),
+                ));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(_) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "failed to wait for MCP self-test".to_string(),
+                ));
+            }
         }
     }
 }
@@ -468,7 +532,13 @@ fn run_native_agent_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
     use repogrammar::interfaces::mcp::handle_context_call;
+    use repogrammar::ports::file_discovery::{
+        DiscoveredLanguage, FileDiscovery, FileDiscoveryRequest,
+    };
+    use repogrammar::ports::parser::{SourceDocument, SourceParser};
+    use repogrammar::ports::source_store::{SourceReadRequest, SourceStore};
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -608,6 +678,109 @@ mod tests {
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
+    fn language_from_discovered(language: DiscoveredLanguage) -> Language {
+        match language {
+            DiscoveredLanguage::TypeScript | DiscoveredLanguage::TypeScriptReact => {
+                Language::TypeScript
+            }
+            DiscoveredLanguage::JavaScript | DiscoveredLanguage::JavaScriptReact => {
+                Language::JavaScript
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn semantic_support_worker_script(workspace: &TempWorkspace) -> PathBuf {
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files for worker fixture");
+        let parser = SyntaxCodeUnitParser;
+        let mut messages = Vec::new();
+        for file in report.files {
+            let source = FilesystemSourceStore
+                .read_source(SourceReadRequest {
+                    repository_root: workspace.path().display().to_string(),
+                    path: file.path.clone(),
+                    expected_content_hash: file.content_hash.clone(),
+                    max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                })
+                .expect("read source for worker fixture");
+            let parsed = parser
+                .parse(SourceDocument {
+                    path: &source.path,
+                    language: language_from_discovered(file.language),
+                    content_hash: source.content_hash.clone(),
+                    repository_revision: RepositoryRevision::new("UNKNOWN")
+                        .expect("valid revision"),
+                    text: &source.text,
+                })
+                .expect("parse source for worker fixture");
+            for unit in parsed
+                .units
+                .into_iter()
+                .filter(|unit| unit.kind == CodeUnitKind::ExpressRoute)
+            {
+                messages.push(serde_json::json!({
+                    "protocol_version": 1,
+                    "message_type": "fact",
+                    "request_id": "repogrammar-typescript-semantic-worker",
+                    "fact_kind": "RESOLVED_IMPORT",
+                    "subject": format!("{}#import:express", unit.id.as_str()),
+                    "target": "package:express",
+                    "origin": {
+                        "engine": "typescript",
+                        "engine_version": "6.0.0",
+                        "method": "compiler_api"
+                    },
+                    "certainty": "SEMANTIC",
+                    "evidence": {
+                        "code_unit_id": unit.id.as_str(),
+                        "path": unit.provenance.path,
+                        "content_hash": unit.provenance.content_hash.as_str(),
+                        "repository_revision": "UNKNOWN",
+                        "start_byte": unit.range.start_byte,
+                        "end_byte": unit.range.end_byte,
+                        "note": "compiler resolved Express import target"
+                    },
+                    "assumptions": []
+                }));
+            }
+        }
+        messages.push(serde_json::json!({
+            "protocol_version": 1,
+            "message_type": "end_of_stream",
+            "request_id": "repogrammar-typescript-semantic-worker"
+        }));
+        let ndjson = messages
+            .into_iter()
+            .map(|message| message.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let worker_script = workspace.path().join("semantic-support-worker.sh");
+        fs::write(
+            &worker_script,
+            format!("#!/bin/sh\n/bin/cat >/dev/null\n/bin/cat <<'EOF'\n{ndjson}\nEOF\n"),
+        )
+        .expect("write semantic support worker");
+        worker_script
+    }
+
+    #[cfg(unix)]
+    fn executable_script(workspace: &TempWorkspace, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = workspace.path().join(name);
+        fs::write(&path, body).expect("write executable script");
+        let mut permissions = fs::metadata(&path)
+            .expect("read executable script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("set executable script mode");
+        path
+    }
+
     #[test]
     fn release_fixtures_default_product_smoke_returns_json_without_claim_inflation() {
         const RELEASE_FIXTURES: &[(&str, &str)] = &[
@@ -704,6 +877,109 @@ mod tests {
             assert_eq!(doctor_json["checks"]["storage"], "available");
             assert!(doctor_json["checks"].get("schema_version").is_none());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_runtime_strong_worker_support_produces_family_then_stale_unknown() {
+        let workspace = TempWorkspace::new("product-runtime-positive-family");
+        fs::write(
+            workspace.path().join("users.ts"),
+            "app.get('/users', function listUsers(req, res) { res.json([]); });\n",
+        )
+        .expect("write users route");
+        fs::write(
+            workspace.path().join("accounts.ts"),
+            "app.get('/accounts', function listAccounts(req, res) { res.json([]); });\n",
+        )
+        .expect("write accounts route");
+        let worker_script = semantic_support_worker_script(&workspace);
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let outcome = runtime
+            .index_repository(
+                "index",
+                CliIndexRequest {
+                    repository_root: workspace.path().display().to_string(),
+                    state_dir_override: None,
+                    max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                    semantic_worker_executable: Some("/bin/sh".to_string()),
+                    semantic_worker_args: vec![worker_script.display().to_string()],
+                },
+            )
+            .expect("index with semantic support worker");
+        assert_eq!(
+            outcome.semantic_worker,
+            repogrammar::application::indexing::SemanticWorkerRunStatus::Complete
+        );
+        assert_eq!(outcome.semantic_facts, 4);
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        let family_id = families_json["families"][0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .to_string();
+
+        let family = run_with_runtime(
+            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            &runtime,
+        );
+        let family_json = parse_machine_output("family", &family, &workspace);
+        assert_eq!(family_json["status"], "ok");
+        assert_eq!(family_json["family"]["family_id"], family_id);
+
+        let check = run_with_runtime(
+            cli_args("check", workspace.path(), &["users.ts", "--json"]),
+            &runtime,
+        );
+        let check_json = parse_machine_output("check", &check, &workspace);
+        assert_eq!(check_json["status"], "CONTEXT_ONLY");
+        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+
+        fs::write(
+            workspace.path().join("users.ts"),
+            "app.get('/users', function listChanged(req, res) { res.json(['changed']); });\n",
+        )
+        .expect("mutate users route");
+
+        let stale = run_with_runtime(
+            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_eq!(stale_json["status"], "UNKNOWN");
+        assert_eq!(stale_json["unknowns"][0]["reason"], "StaleEvidence");
+        assert_eq!(
+            stale_json["unknowns"][0]["recovery"],
+            "run repogrammar sync"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_mcp_self_test_times_out_and_reaps_hanging_child() {
+        let workspace = TempWorkspace::new("product-mcp-self-test-timeout");
+        let script = executable_script(&workspace, "hang.sh", "#!/bin/sh\nsleep 10\n");
+        let tester = ProductMcpSelfTester::with_timeout(std::time::Duration::from_millis(100));
+        let started = std::time::Instant::now();
+
+        let error = tester
+            .self_test(
+                script.to_str().expect("script path utf8"),
+                workspace.path().to_str().expect("workspace path utf8"),
+            )
+            .expect_err("hanging self-test should time out");
+
+        assert!(matches!(error, RepoGrammarError::InvalidInput(_)));
+        assert!(format!("{error}").contains("MCP self-test timed out"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

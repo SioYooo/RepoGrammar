@@ -99,7 +99,7 @@ pub fn build_family_claims(
     semantic_facts: &[SemanticFact],
 ) -> FamilyBuildReport {
     let role_by_unit = framework_roles_by_unit(semantic_facts);
-    let supported_units = eligible_support_by_unit(units, semantic_facts);
+    let supported_units = eligible_support_by_unit(units, semantic_facts, &role_by_unit);
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
     let mut unknowns = Vec::new();
 
@@ -279,6 +279,7 @@ fn framework_roles_by_unit(facts: &[SemanticFact]) -> BTreeMap<String, BTreeSet<
 fn eligible_support_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let unit_by_id = units
         .iter()
@@ -298,15 +299,50 @@ fn eligible_support_by_unit(
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
         };
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
         if fact.evidence.provenance.path == unit.path
             && fact.evidence.provenance.content_hash == unit.content_hash
             && fact.evidence.range.start_byte == unit.start_byte
             && fact.evidence.range.end_byte == unit.end_byte
+            && support_fact_is_role_compatible(fact, framework_role)
         {
             supported.insert(code_unit_id.to_string());
         }
     }
     supported
+}
+
+fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> bool {
+    let mut evidence_text = format!(
+        "{} {} {}",
+        fact.kind.as_protocol_str(),
+        fact.origin.engine,
+        fact.origin.method
+    )
+    .to_ascii_lowercase();
+    if let Some(target) = &fact.target {
+        evidence_text.push(' ');
+        evidence_text.push_str(&target.as_str().to_ascii_lowercase());
+    }
+    for assumption in &fact.assumptions {
+        evidence_text.push(' ');
+        evidence_text.push_str(&assumption.to_ascii_lowercase());
+    }
+
+    if framework_role.contains("express") {
+        evidence_text.contains("express")
+    } else if framework_role.contains("react") {
+        evidence_text.contains("react")
+    } else if framework_role.contains("jest_vitest") {
+        evidence_text.contains("jest") || evidence_text.contains("vitest")
+    } else {
+        false
+    }
 }
 
 fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
@@ -419,10 +455,17 @@ mod tests {
     }
 
     fn semantic_support_fact(unit: &IndexedCodeUnitRecord) -> SemanticFact {
+        semantic_support_fact_with_target(unit, "package:express")
+    }
+
+    fn semantic_support_fact_with_target(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+    ) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::ResolvedImport,
             subject: format!("{}#import", unit.id),
-            target: Some(SymbolId::new("package:framework").expect("valid target")),
+            target: Some(SymbolId::new(target).expect("valid target")),
             origin: FactOrigin {
                 engine: "typescript".to_string(),
                 engine_version: "6.0.0".to_string(),
@@ -488,6 +531,27 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_semantic_support_does_not_prove_framework_family() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let report = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                semantic_support_fact_with_target(&first, "package:lodash"),
+                semantic_support_fact_with_target(&second, "package:lodash"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn low_support_and_missing_roles_stay_unknown() {
         let first = unit("src/a.ts", "react_component", 0);
         let second = unit("src/b.ts", "react_component", 1);
@@ -512,8 +576,8 @@ mod tests {
             &[
                 role_fact(&first, "framework:jest_vitest.test"),
                 role_fact(&second, "framework:jest_vitest.test"),
-                semantic_support_fact(&first),
-                semantic_support_fact(&second),
+                semantic_support_fact_with_target(&first, "package:vitest"),
+                semantic_support_fact_with_target(&second, "package:vitest"),
             ],
         );
         let records = family_storage_records(&report.claims[0]);
