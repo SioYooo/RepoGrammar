@@ -48,8 +48,9 @@
   `runner = run_query; runner()`. These remain structural handler/service
   context and are not family-support targets.
 - SQLAlchemy repository-method exact anchors now include direct
-  `Session.scalar`/`Session.scalars` and async session equivalents, while
-  relationship and `Session.add` anchors remain context/effect metadata.
+  `Session.commit`, `Session.rollback`, `Session.scalar`, `Session.scalars`, and
+  async session equivalents, while relationship and `Session.add` anchors remain
+  context/effect metadata.
 - Narrow Python exact-anchor variation metadata when an already-ready family has
   multiple exact-compatible framework-anchor support targets.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
@@ -85,7 +86,8 @@
   model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
   family smoke that proves derived support can reach the
   EC-MVFI-lite family read path without claiming provider-backed Python
-  semantics, plus a FastAPI exact-anchor target variation smoke path.
+  semantics, including transaction-boundary `Session.commit`/`Session.rollback`
+  smoke coverage, plus a FastAPI exact-anchor target variation smoke path.
 - Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
   facts through the existing worker boundary to prove family reads, stale
   evidence fallback, and leakage guards without claiming production Python

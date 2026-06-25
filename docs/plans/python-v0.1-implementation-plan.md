@@ -197,9 +197,9 @@ FastAPI family path through derived support, and a test-only strong FastAPI
 semantic-support fixture for explicit worker family read and stale-evidence
 smoke coverage. They also include a no-worker FastAPI exact-anchor target
 variation fixture and SQLAlchemy session exact-anchor fixtures covering
-`execute` plus direct `scalar`/`scalars` calls, and an alias-aware pytest
-fixture exact-anchor smoke fixture. They are not yet the full Python provider
-corpus.
+`execute`, direct `scalar`/`scalars` calls, and direct sync/async
+`commit`/`rollback` transaction anchors, plus an alias-aware pytest fixture
+exact-anchor smoke fixture. They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 

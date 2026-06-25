@@ -209,8 +209,8 @@ allowed.
   variation metadata, pytest fixture-edge and parametrize-argument anchors
   staying out of family support, SQLAlchemy relationship and Session.add
   structural anchors staying out of family support, SQLAlchemy
-  `Session.scalar`/`Session.scalars` and async equivalents becoming exact
-  repository-method anchors, bounded
+  `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and
+  async equivalents becoming exact repository-method anchors, bounded
   SQLAlchemy `self.session`/`self.db` role propagation from `__init__`, and
   reassigned receivers not becoming exact session-call anchors, Pydantic field,
   field-type, model-config, nested Config,

@@ -121,6 +121,12 @@ class StoredSessionRepository:
         self.session.commit()
         return self.session.execute("select users")
 
+    def rollback_users(self):
+        self.session.rollback()
+
+    async def commit_accounts(self):
+        await self.db.commit()
+
     async def rollback_accounts(self):
         await self.db.rollback()
 
@@ -271,6 +277,18 @@ assert any(
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.orm.Session.commit"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.rollback"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.commit"
     and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
     for fact in parse_facts
 )

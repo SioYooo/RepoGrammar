@@ -2155,9 +2155,13 @@ mod tests {
         for target in [
             "sqlalchemy.select",
             "sqlalchemy.orm.Session.execute",
+            "sqlalchemy.orm.Session.commit",
+            "sqlalchemy.orm.Session.rollback",
             "sqlalchemy.orm.Session.scalar",
             "sqlalchemy.orm.Session.scalars",
+            "sqlalchemy.ext.asyncio.AsyncSession.execute",
             "sqlalchemy.ext.asyncio.AsyncSession.commit",
+            "sqlalchemy.ext.asyncio.AsyncSession.rollback",
             "sqlalchemy.ext.asyncio.AsyncSession.scalar",
             "sqlalchemy.ext.asyncio.AsyncSession.scalars",
         ] {

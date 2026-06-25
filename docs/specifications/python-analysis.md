@@ -139,13 +139,14 @@ The current implementation covers the first structural slice only:
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
-  `Session` and `AsyncSession` calls such as `session.execute(...)` and
-  `session.add(...)` to exact SQLAlchemy session targets. The same bounded pass
-  also propagates `__init__` assignments such as `self.session = session` and
-  `self.db: AsyncSession = db` into later repository methods, while any
-  same-method reassignment of that receiver blocks canonicalization. Relationship
-  and `add` anchors are effect/context metadata only and are not membership
-  support targets;
+  `Session` and `AsyncSession` calls such as `session.execute(...)`,
+  `session.commit()`, `session.rollback()`, `session.scalar(...)`,
+  `session.scalars(...)`, and `session.add(...)` to exact SQLAlchemy session
+  targets. The same bounded pass also propagates `__init__` assignments such as
+  `self.session = session` and `self.db: AsyncSession = db` into later repository
+  methods, while any same-method reassignment of that receiver blocks
+  canonicalization. Relationship and `add` anchors are effect/context metadata
+  only and are not membership support targets;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -324,10 +325,8 @@ Compatibility examples:
   `sqlalchemy.orm.mapped_column`.
 - SQLAlchemy repository method: calls on parameters annotated as
   `sqlalchemy.orm.Session` or `sqlalchemy.ext.asyncio.AsyncSession` resolve to
-  exact supported session method targets such as
-  `sqlalchemy.orm.Session.execute`, `sqlalchemy.orm.Session.scalar`,
-  `sqlalchemy.orm.Session.scalars`, or
-  `sqlalchemy.ext.asyncio.AsyncSession.commit`.
+  exact supported sync or async session method targets, including `execute`,
+  `commit`, `rollback`, `scalar`, and `scalars`.
 
 Unresolved canonical identity blocks only the claim that depends on that
 identity. A FastAPI route family may still exist when a specific dependency

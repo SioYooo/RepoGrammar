@@ -98,6 +98,10 @@
 - SQLAlchemy repository-method exact anchors now include direct
   `Session.scalar`/`Session.scalars` and async session equivalents, with a
   release smoke fixture proving derived family support without source snippets.
+- SQLAlchemy transaction-boundary exact anchors now have derivation and product
+  release-smoke coverage for sync/async `Session.commit` and
+  `Session.rollback`, while keeping transaction equivalence unclaimed and
+  `Session.add` as context/effect metadata only.
 - CPython AST worker pytest fixture detection is now alias-aware for same-file
   and `conftest.py` contexts. Direct parametrize arguments take precedence over
   same-name fixtures, indirect parametrize arguments stay typed

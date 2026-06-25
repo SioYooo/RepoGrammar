@@ -1969,6 +1969,12 @@ class StoredSessionRepository:
         self.session.commit()
         return self.session.execute("select users")
 
+    def rollback_users(self):
+        self.session.rollback()
+
+    async def commit_accounts(self):
+        await self.db.commit()
+
     async def rollback_accounts(self):
         await self.db.rollback()
 "#;
@@ -2067,6 +2073,24 @@ class StoredSessionRepository:
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str)
                     == Some("sqlalchemy.orm.Session.commit")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.rollback")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.commit")
                 && fact
                     .assumptions
                     .iter()
