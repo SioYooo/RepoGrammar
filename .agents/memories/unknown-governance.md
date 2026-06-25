@@ -19,6 +19,9 @@
   should become `UNKNOWN` or abstention for affected claims.
 - Syntax-only code units are structural candidates only; they are not semantic
   facts, framework-equivalence claims, or family evidence.
+- Syntax-origin framework-role facts are semantic fact records, but their
+  `FRAMEWORK_HEURISTIC` certainty remains insufficient support for family-claim
+  input.
 - The Rust domain now has stable typed UNKNOWN class/reason tokens, and the
   query application layer uses them for internal semantic-fact claim-input
   readiness. Stale or missing source blocks with `StaleEvidence`, weak certainty

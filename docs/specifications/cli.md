@@ -128,12 +128,17 @@ syntax-only code-unit, and future family-evidence indexing.
 `repogrammar index` and `repogrammar sync` currently require an initialized
 repository-local state directory. They run TS/JS discovery, read source through a
 repo-relative hash-checked boundary, store repo-relative file metadata and
-syntax-only code-unit records in a new generation-scoped SQLite database,
-validate the generation, and atomically activate
+syntax-only code-unit records plus any syntax-origin framework-role fact records
+in a new generation-scoped SQLite database, validate the generation, and
+atomically activate
 `.repogrammar/current-generation`. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
 and `mining: deferred`. By default, `semantic_worker` is `deferred`.
+During the current TS/JS framework-role slice, `semantic_facts` may be greater
+than zero even when `semantic_worker` is `deferred`; those records are
+syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty, not
+compiler-backed facts or family evidence.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
@@ -310,9 +315,12 @@ discovery substrate and dependency-free structural extractor. Their JSON output
 includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, the actual `semantic_facts` count, `indexing:
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
-deferred`. By default they do not launch a semantic worker and report
-`semantic_worker: deferred`. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-explicit executable, optional
+deferred`. The structural extractor can also produce syntax-origin
+framework-role fact records for recognized Express, React, and Jest/Vitest
+code-unit shapes; these may increase `semantic_facts` while
+`semantic_worker: deferred` remains true. By default the commands do not launch
+a semantic worker and report `semantic_worker: deferred`. When
+`REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies the worker argv vector. The
 commands pass the discovered repo-relative TS/JS file set to that worker, record
 only worker facts that match the active building-generation code-unit

@@ -56,6 +56,10 @@
 - CodeUnit-derived structural IR storage for syntax-only indexing, with one IR
   node per code unit, conservative containment edges, empty IR payloads, and
   same-generation SQLite validation without introducing family claims.
+- Lightweight TS/JS framework-role fact storage for syntax-origin Express,
+  React, and Jest/Vitest code-unit shapes. Stored facts use
+  `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions, and do not
+  enable pattern-family query commands.
 - Opt-in semantic-worker fact ingestion for `index` and `sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, with
   optional argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted

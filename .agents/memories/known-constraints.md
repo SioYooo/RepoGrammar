@@ -30,9 +30,11 @@ analysis rules.
 - `install` and `uninstall` must not create or remove `.repogrammar/`; `init`
   and `uninit` own project state lifecycle.
 - `index` and `sync` currently store repo-relative file metadata and
-  syntax-only code units in generation-scoped SQLite. By default they do not
-  launch a semantic worker. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-  explicit worker executable, optional
+  syntax-only code units in generation-scoped SQLite. They may also store
+  syntax-origin framework-role facts for recognized Express, React, and
+  Jest/Vitest code-unit shapes with `FRAMEWORK_HEURISTIC` certainty. By default
+  they do not launch a semantic worker. When `REPOGRAMMAR_TYPESCRIPT_WORKER`
+  names an explicit worker executable, optional
   `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies a JSON argv vector.
   Accepted worker facts may be stored only through same-generation
   path/hash/range evidence validation. Source snippets, absolute paths,
@@ -55,6 +57,9 @@ analysis rules.
 - Static uncertainty must be represented as typed `UNKNOWN`; dynamic behavior,
   conflicting facts, stale evidence, and insufficient support must not be
   guessed away.
+- Syntax-origin framework-role facts must not be upgraded into resolved
+  framework semantics, family evidence, conformance results, or query success
+  without stronger compatible evidence and family claim builders.
 
 ## Implications
 

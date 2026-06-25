@@ -27,7 +27,11 @@ dependency-free syntax-only code-unit extractor, and `index`/`sync` wiring. The
 current CLI can discover TS/JS files, read source through a hash-checked
 repo-relative boundary, store repo-relative file metadata and structural code
 units in a generation-scoped SQLite database, validate that generation, and
-activate `.repogrammar/current-generation`.
+activate `.repogrammar/current-generation`. The current default indexing path
+also stores syntax-origin `FRAMEWORK_ROLE` semantic fact records for recognized
+TS/JS framework-shaped code units. These records use `FRAMEWORK_HEURISTIC`
+certainty and same-generation code-unit evidence; they are role facts for future
+claim builders, not family evidence.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index` and `sync` can also ask that worker for facts about the discovered
 repo-relative TS/JS file set. Optional worker arguments come from
@@ -43,17 +47,18 @@ syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
 does not infer calls or dataflow, and cannot prove semantic or family claims.
-Stored semantic-worker facts, when explicitly configured and accepted by the
-storage gate, are not freshness-validated family evidence and do not enable
-query or MCP claims. Syntax-only code units are structural candidates, not
-semantic or family claims. The `files` and `units` commands may read active
-file-manifest-only or syntax-only index metadata for inventory/debugging, but
-that read path is not family-query execution. The application layer can also
-load an internal active-generation claim-input snapshot for future claim
-builders after revalidating files, code units, IR nodes/edges, semantic fact
-tokens, assumptions, repo-relative evidence, hashes, and byte ranges. That
-internal read path still does not classify families or expose semantic facts
-through CLI/MCP query commands.
+Stored semantic facts, whether syntax-origin framework-role facts or explicitly
+configured worker facts accepted by the storage gate, are not
+freshness-validated family evidence and do not enable query or MCP claims.
+Syntax-only code units are structural candidates, not semantic or family claims.
+The `files` and `units` commands may read active file-manifest-only or
+syntax-only index metadata for inventory/debugging, but that read path is not
+family-query execution. The application layer can also load an internal
+active-generation claim-input snapshot for future claim builders after
+revalidating files, code units, IR nodes/edges, semantic fact tokens,
+assumptions, repo-relative evidence, hashes, and byte ranges. That internal read
+path still does not classify families or expose semantic facts through CLI/MCP
+query commands.
 
 ## File discovery and exclusions
 
@@ -113,7 +118,7 @@ facts.
 
 Tree-sitter facts are structural evidence. They can participate in framework
 role detection and candidate ranking, but they cannot independently prove
-function identity, call targets, framework roles, type compatibility,
+function identity, call targets, framework role semantics, type compatibility,
 dependency-injection bindings, transaction semantics, authorization semantics,
 or test fixture binding.
 
@@ -144,6 +149,11 @@ generation-scoped family records, members, variation slots, and family-bound
 evidence when a future claim builder supplies them, but `index` and `sync` do
 not yet produce those rows. Other languages should use their own
 compiler, type-checker, or LSP where that is the most authoritative source.
+Not every stored semantic fact is worker-originated: syntax-origin framework
+role facts may be recorded by the current TS/JS framework adapter with
+`FRAMEWORK_HEURISTIC` certainty. Those facts remain blocked from family-claim
+input as insufficient support until claim builders can combine them with
+stronger compatible evidence.
 
 The first official language scope is TypeScript/JavaScript. Python should remain
 experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is
@@ -195,6 +205,13 @@ families. These algorithms are deliberately deferred.
 
 Initial framework adapters are scoped to Express, NestJS, React, Jest, and
 Vitest. Framework rules belong in `src/rust/adapters/frameworks/`.
+
+The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
+Express routes, React components, React hooks, Jest/Vitest suites, and
+Jest/Vitest tests into syntax-origin `FRAMEWORK_ROLE` fact records. It records
+repo-relative evidence and unresolved-binding assumptions, but it does not
+resolve handlers, runner identity, React runtime behavior, dependency
+injection, or lifecycle semantics.
 
 ## Classification
 

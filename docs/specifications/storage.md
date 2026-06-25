@@ -125,13 +125,16 @@ conservative IR containment edges, then activates
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, freshness
 manifests, or family-evidence query execution. The current storage adapter has
 generation-scoped family tables and a FamilyStore port for future claim
-builders, but `index` and `sync` do not populate families. The CLI can read the
-active generation for `files` and `units` inventory/debugging output only. The
-storage port can also list the active structural IR graph and load an internal
-active-generation claim-input snapshot containing files, code units, IR
-nodes/edges, and semantic facts for future claim builders. These paths are
-internal and are not family-query or MCP surfaces. Active-generation reads open
-one generation read-only, require a regular `current-generation` pointer,
+builders, but `index` and `sync` do not populate families. Current TS/JS
+indexing may populate semantic-fact/evidence rows with syntax-origin
+`FRAMEWORK_ROLE` records for recognized framework-shaped code units; those rows
+use `FRAMEWORK_HEURISTIC` certainty and same-generation code-unit evidence. The
+CLI can read the active generation for `files` and `units` inventory/debugging
+output only. The storage port can also list the active structural IR graph and
+load an internal active-generation claim-input snapshot containing files, code
+units, IR nodes/edges, and semantic facts for future claim builders. These paths
+are internal and are not family-query or MCP surfaces. Active-generation reads
+open one generation read-only, require a regular `current-generation` pointer,
 validate the generation schema and health, and recheck stored repo-relative
 paths, strict content hashes, languages, unit ids, byte ranges, IR node/edge
 references, semantic fact kind/certainty tokens, assumptions JSON, and
@@ -145,8 +148,9 @@ CLI/MCP.
 The storage port and SQLite adapter can persist semantic facts together with
 repo-relative evidence rows for a building generation, but only when the fact is
 already validated against an indexed code unit, matching content hash, and byte
-range in that same generation. The current `index` and `sync` commands still
-run syntax-only by default, but when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
+range in that same generation. Default `index` and `sync` still do not run a
+semantic worker, but they may store syntax-origin framework-role facts produced
+from syntax-only code-unit kinds. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
 explicit worker executable and optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` argv vector, they may record
 worker-produced facts through this same-generation gate. Worker unavailable,
@@ -191,13 +195,19 @@ generation-scoped SQLite database. The current index path also stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
 families, and pattern-family evidence are not stored by `index`/`sync`.
+Syntax-origin framework-role facts may be stored in semantic-fact/evidence rows
+for the same generation, but they remain internal framework-heuristic facts and
+must not create family rows, family-bound evidence, or query success by
+themselves.
 File metadata size checks are an optimization, not the safety boundary:
 discovery hashing and transient source-store reads must open regular files and
 read at most `max_file_bytes + 1` bytes, accepting exactly `max_file_bytes` and
 classifying observed limit-plus-one content as oversized without allocating the
 full file.
 Semantic-worker-produced facts are stored only when an explicit worker is
-configured and the facts pass same-generation evidence validation.
+configured and the facts pass same-generation evidence validation. Syntax-origin
+framework-role facts use the same storage validation path but do not imply that
+a TypeScript compiler worker ran.
 The active indexed-file and code-unit rows are exposed only through the limited
 `files`/`units` CLI read path and must not be treated as family evidence. Active
 `units` reads must revalidate stored code-unit ids against their repo-relative

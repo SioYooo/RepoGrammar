@@ -1632,10 +1632,11 @@ mod tests {
     use super::*;
     use crate::adapters::filesystem::discovery::FilesystemFileDiscovery;
     use crate::adapters::filesystem::source_store::FilesystemSourceStore;
+    use crate::adapters::frameworks::SyntaxFrameworkRoleDetector;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::application::indexing::{
-        index_repository_with_discovery_parser_and_store, IndexingRequest,
+        index_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
     use crate::application::query::{list_code_units, list_indexed_files};
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
@@ -1776,7 +1777,8 @@ mod tests {
                 ));
             }
 
-            index_repository_with_discovery_parser_and_store(
+            let framework_roles = SyntaxFrameworkRoleDetector;
+            index_repository_with_discovery_parser_frameworks_and_store(
                 IndexingRequest {
                     repository_root: request.repository_root,
                     state_dir_override: request.state_dir_override,
@@ -1785,6 +1787,7 @@ mod tests {
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &SyntaxCodeUnitParser,
+                &framework_roles,
                 &store,
             )
         }
@@ -2547,6 +2550,48 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("locks/index.lock")
             .exists());
+    }
+
+    #[test]
+    fn index_json_stores_framework_role_facts_without_query_claims() {
+        let workspace = TempWorkspace::new("cli-index-framework-role-facts");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(
+            workspace.path().join("component.tsx"),
+            "export function UserCard() { return <section />; }\n",
+        )
+        .expect("write source");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+
+        let output = run_with_context_and_runtime(
+            ["index", "--json", "--progress", "never"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["semantic_worker"], "deferred");
+        assert_eq!(value["semantic_facts"], 1);
+        assert_eq!(value["mining"], "deferred");
+
+        let find =
+            run_with_context_and_runtime(["find", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(find.status, 2);
+        assert!(find.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(find.stderr.trim()).expect("query fallback JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(
+            fallback["reason"],
+            "query execution requires pattern-family evidence"
+        );
+        assert_eq!(fallback["implemented"], false);
     }
 
     #[test]

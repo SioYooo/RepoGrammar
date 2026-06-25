@@ -1,11 +1,12 @@
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
+use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::indexing::{
-    index_repository_with_discovery_parser_and_store,
-    index_repository_with_discovery_parser_semantic_worker_and_store, IndexingOutcome,
+    index_repository_with_discovery_parser_frameworks_and_store,
+    index_repository_with_discovery_parser_frameworks_semantic_worker_and_store, IndexingOutcome,
     IndexingRequest,
 };
 use repogrammar::application::query::{
@@ -81,23 +82,26 @@ impl CliRuntime for ProductCliRuntime {
             state_dir_override: request.state_dir_override,
             max_file_bytes: request.max_file_bytes,
         };
+        let framework_roles = SyntaxFrameworkRoleDetector;
         if let Some(executable) = request.semantic_worker_executable {
             let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                 .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_semantic_worker_and_store(
+            index_repository_with_discovery_parser_frameworks_semantic_worker_and_store(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &SyntaxCodeUnitParser,
+                &framework_roles,
                 &worker,
                 &store,
             )
         } else {
-            index_repository_with_discovery_parser_and_store(
+            index_repository_with_discovery_parser_frameworks_and_store(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &SyntaxCodeUnitParser,
+                &framework_roles,
                 &store,
             )
         }
@@ -246,6 +250,51 @@ mod tests {
         assert!(!units
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn product_runtime_indexes_framework_roles_without_query_claims() {
+        let workspace = TempWorkspace::new("product-runtime-framework-roles");
+        fs::write(
+            workspace.path().join("component.tsx"),
+            "export function UserCard() { return <section />; }\n",
+        )
+        .expect("write source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0);
+        assert!(index.stderr.is_empty());
+        assert!(!index
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["semantic_worker"], "deferred");
+        assert_eq!(value["semantic_facts"], 1);
+        assert_eq!(value["mining"], "deferred");
+
+        for command in ["find", "families", "family", "explain", "check"] {
+            let output =
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime);
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            assert!(!output
+                .stderr
+                .contains(workspace.path().to_string_lossy().as_ref()));
+            let fallback: Value =
+                serde_json::from_str(output.stderr.trim()).expect("fallback JSON");
+            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+            assert_eq!(
+                fallback["reason"],
+                "query execution requires pattern-family evidence"
+            );
+            assert_eq!(fallback["implemented"], false);
+        }
     }
 
     #[test]

@@ -895,6 +895,44 @@ mod tests {
     }
 
     #[test]
+    fn worker_output_parser_accepts_framework_role_facts() {
+        let mut fact = valid_fact_message();
+        fact["fact_kind"] = json!("FRAMEWORK_ROLE");
+        fact["subject"] = json!("unit:src/handlers/user.ts#react_component:UserCard");
+        fact["target"] = json!("framework:react.component");
+        fact["origin"]["engine"] = json!("repogrammar-frameworks");
+        fact["origin"]["engine_version"] = json!(env!("CARGO_PKG_VERSION"));
+        fact["origin"]["method"] = json!("syntax_code_unit_kind");
+        fact["certainty"] = json!("FRAMEWORK_HEURISTIC");
+        fact["evidence"]["code_unit_id"] =
+            json!("unit:src/handlers/user.ts#react_component:UserCard");
+        fact["evidence"]["note"] = json!("syntax code unit indicates React component role");
+        fact["assumptions"] = json!(["component runtime behavior unresolved"]);
+
+        let facts = parse_worker_output(
+            &ndjson(vec![fact, valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &requested_fact_paths(),
+        )
+        .expect("framework role fact should parse");
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].kind, SemanticFactKind::FrameworkRole);
+        assert_eq!(facts[0].certainty, FactCertainty::FrameworkHeuristic);
+        assert_eq!(
+            facts[0].target.as_ref().map(SymbolId::as_str),
+            Some("framework:react.component")
+        );
+        assert_eq!(facts[0].origin.engine, "repogrammar-frameworks");
+        assert_eq!(facts[0].origin.method, "syntax_code_unit_kind");
+        assert_eq!(facts[0].evidence.provenance.path, "src/handlers/user.ts");
+        assert_eq!(
+            facts[0].assumptions,
+            vec!["component runtime behavior unresolved".to_string()]
+        );
+    }
+
+    #[test]
     fn worker_output_parser_rejects_unsupported_semantic_typescript_versions() {
         let mut fact = valid_fact_message();
         fact["origin"]["engine_version"] = json!("7.0.0-dev");

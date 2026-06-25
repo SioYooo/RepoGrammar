@@ -73,7 +73,11 @@ runtime behavior must lead to abstention rather than certainty.
 
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Compiler-native semantic facts take precedence over
-framework heuristics and syntax-only fingerprints.
+framework heuristics and syntax-only fingerprints. Syntax-origin framework-role
+facts can record that a code unit has a recognizable Express, React, or
+Jest/Vitest role shape, but `FRAMEWORK_HEURISTIC` certainty is not enough to
+prove family membership, resolved handler identity, runtime lifecycle
+equivalence, or conformance.
 Freshness is a required gate before semantic facts can become inputs to future
 family claim builders. A fresh supported fact kind is still only eligible input;
 it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result

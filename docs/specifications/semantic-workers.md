@@ -168,6 +168,12 @@ future claim builders. Query, MCP,
 conformance, and family membership claims remain deferred until family-evidence
 claim builders are implemented.
 
+Not every stored semantic fact is emitted by a semantic worker. The current
+TS/JS indexing path may store syntax-origin framework-role facts produced by a
+lightweight framework adapter while still reporting `semantic_worker: deferred`.
+Those facts are not TypeScript compiler analysis and do not change the worker
+protocol status.
+
 ## Certainty
 
 Facts use categorical certainty:
@@ -215,7 +221,10 @@ strict content hashes, and byte ranges. The query application layer can
 additionally check snapshot semantic facts against current source hashes and
 block stale facts, unsupported fact kinds, weak certainty, or conflicting facts
 with typed `UNKNOWN` readiness outcomes, but this is still an internal substrate
-for future claim builders.
+for future claim builders. The default TS/JS indexing path can also store
+syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
+recognized framework-shaped code units; these records are not worker facts and
+remain blocked from family claims as insufficient support.
 
 It still does not bundle a TypeScript compiler dependency, run TypeScript
 compiler APIs, use worker facts for family claims, expose semantic facts through

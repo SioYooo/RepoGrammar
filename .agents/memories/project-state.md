@@ -1,8 +1,8 @@
 # Project State
 
 - Status: Bootstrap plus syntax-only indexing, structural IR storage, opt-in
-  semantic fact ingestion, internal active claim-input snapshot reads, and
-  semantic-fact freshness/readiness gating
+  syntax-origin framework-role fact storage, semantic fact ingestion, internal
+  active claim-input snapshot reads, and semantic-fact freshness/readiness gating
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -18,15 +18,16 @@
 RepoGrammar is still pre-alpha, but it is past pure skeleton bootstrap. The
 current branch has repository-local lifecycle, TypeScript/JavaScript discovery,
 generation-scoped SQLite storage, syntax-only code-unit indexing,
-CodeUnit-derived structural IR node/containment-edge storage, Rust-side
-TypeScript semantic-worker request/output protocol validation and process
-validation, a dependency-free TypeScript worker stub that reports compiler
-analysis as unavailable, a validated semantic-fact storage writer, and opt-in
-command-level semantic-worker fact ingestion through the same-generation storage
-gate. It also has an internal active-generation claim-input snapshot read path
-for future claim builders and an internal file-hash freshness/readiness gate
-that blocks stale facts, unsupported fact kinds, weak certainty, or conflicting
-certainty with typed `UNKNOWN`.
+syntax-origin TS/JS framework-role fact storage, CodeUnit-derived structural IR
+node/containment-edge storage, Rust-side TypeScript semantic-worker
+request/output protocol validation and process validation, a dependency-free
+TypeScript worker stub that reports compiler analysis as unavailable, a
+validated semantic-fact storage writer, and opt-in command-level
+semantic-worker fact ingestion through the same-generation storage gate. It also
+has an internal active-generation claim-input snapshot read path for future
+claim builders and an internal file-hash freshness/readiness gate that blocks
+stale facts, unsupported fact kinds, weak certainty, or conflicting certainty
+with typed `UNKNOWN`.
 
 ## Durable knowledge
 
@@ -37,9 +38,11 @@ transport-neutral MCP single-tool operation boundary, repository guard checks,
 documentation, skills, memories, CI configuration, repo-local
 `init`/`uninit`/`status`/`doctor`/`unlock`/`logs`, TS/JS file discovery,
 hash-checked source reads, dependency-free syntax-only code-unit extraction,
-CodeUnit-derived structural IR nodes and conservative containment edges,
-generation-scoped SQLite migrations/storage/validation/activation, product
-runtime wiring for `index` and `sync`, and the dependency-free
+syntax-origin framework-role facts for recognized Express, React, and
+Jest/Vitest code-unit shapes, CodeUnit-derived structural IR nodes and
+conservative containment edges, generation-scoped SQLite
+migrations/storage/validation/activation, product runtime wiring for `index`
+and `sync`, and the dependency-free
 `src/workers/typescript/worker.js` unavailable fallback stub, plus limited
 `files`/`units` reads from active file-manifest-only or syntax-only generations.
 Those reads revalidate active-generation health plus stored paths, hashes,
@@ -62,11 +65,13 @@ The query application layer can check snapshot semantic facts against current
 source hashes and classify fresh supported facts as eligible inputs for future
 claim builders or typed `UNKNOWN` blockers (`StaleEvidence`,
 `InsufficientSupport`, or `ConflictingFacts`). Fresh eligible facts are still not
-family evidence.
+family evidence. Syntax-origin framework-role facts use
+`FRAMEWORK_HEURISTIC` certainty and remain blocked from family-claim input as
+insufficient support until stronger evidence and claim builders exist.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
 full repository/worktree freshness metadata, family-claim gates, typed IR
-attributes beyond the structural bootstrap graph, semantic/framework facts,
+attributes beyond the structural bootstrap graph, resolved framework semantics,
 family mining, query-ready family evidence, pattern-family query execution, MCP
 serving, installer writes, and telemetry network transport are not implemented.
 

@@ -119,7 +119,9 @@ mod tests {
     #[test]
     fn structural_certainty_does_not_prove_semantic_family_membership() {
         assert!(FactCertainty::Semantic.supports_family_membership());
+        assert!(FactCertainty::DataflowDerived.supports_family_membership());
         assert!(!FactCertainty::Structural.supports_family_membership());
+        assert!(!FactCertainty::FrameworkHeuristic.supports_family_membership());
         assert!(!FactCertainty::Conflicting.supports_family_membership());
         assert!(!FactCertainty::Unknown.supports_family_membership());
     }

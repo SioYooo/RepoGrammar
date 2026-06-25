@@ -8,6 +8,7 @@ use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
 };
+use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
     IndexedIrNodeRecord, IndexedSemanticFactRecord,
@@ -163,6 +164,26 @@ pub fn index_repository_with_discovery_parser_and_store(
         source_store,
         parser,
         None,
+        None,
+        store,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    store: &impl IndexStore,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        Some(framework_roles),
+        None,
         store,
     )
 }
@@ -180,6 +201,27 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
         discovery,
         source_store,
         parser,
+        None,
+        Some(semantic_worker),
+        store,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    semantic_worker: &dyn SemanticWorker,
+    store: &impl IndexStore,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        Some(framework_roles),
         Some(semantic_worker),
         store,
     )
@@ -190,6 +232,7 @@ fn index_repository_with_optional_semantic_worker(
     discovery: &impl FileDiscovery,
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
+    framework_roles: Option<&dyn FrameworkRoleDetector>,
     semantic_worker: Option<&dyn SemanticWorker>,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
@@ -213,6 +256,7 @@ fn index_repository_with_optional_semantic_worker(
     }
 
     let mut indexed_units = 0usize;
+    let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
     for file in &report.files {
         let source = source_store
@@ -246,23 +290,30 @@ fn index_repository_with_optional_semantic_worker(
                 )));
             }
         };
-        indexed_units += record_parse_report(
+        let parse_outcome = record_parse_report(
             store,
             &generation,
             file,
             &source.text,
             parse_report,
+            framework_roles,
             &mut warnings,
         )?;
+        indexed_units += parse_outcome.indexed_units;
+        framework_role_facts.extend(parse_outcome.framework_role_facts);
     }
 
-    let (semantic_worker, semantic_facts) = record_semantic_worker_facts(
+    sort_semantic_facts(&mut framework_role_facts);
+    let framework_fact_count = record_semantic_facts(store, &generation, 0, &framework_role_facts)?;
+
+    let (semantic_worker, worker_semantic_facts) = record_semantic_worker_facts(
         &request,
         &report,
         &generation,
         semantic_worker,
         store,
         &mut warnings,
+        framework_fact_count,
     )?;
 
     crate::application::storage::validate_index_generation(store, &generation)?;
@@ -270,7 +321,7 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        semantic_facts,
+        semantic_facts: framework_fact_count + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -279,14 +330,20 @@ fn index_repository_with_optional_semantic_worker(
     })
 }
 
+struct ParseStorageOutcome {
+    indexed_units: usize,
+    framework_role_facts: Vec<SemanticFact>,
+}
+
 fn record_parse_report(
     store: &impl IndexStore,
     generation: &crate::ports::index_store::GenerationHandle,
     file: &DiscoveredFile,
     text: &str,
     mut parse_report: ParseReport,
+    framework_roles: Option<&dyn FrameworkRoleDetector>,
     warnings: &mut Vec<String>,
-) -> Result<usize, RepoGrammarError> {
+) -> Result<ParseStorageOutcome, RepoGrammarError> {
     for _diagnostic in parse_report.diagnostics {
         warnings.push(format!(
             "parse diagnostic for {}: syntax-only parser reported a diagnostic",
@@ -321,6 +378,12 @@ fn record_parse_report(
     for edge in &parse_report.ir_edges {
         validate_parser_ir_edge(&parse_report.ir_nodes, edge)?;
     }
+    let framework_role_facts = match framework_roles {
+        Some(detector) => detector
+            .detect_roles(&parse_report.units)
+            .map_err(framework_role_error)?,
+        None => Vec::new(),
+    };
 
     let mut count = 0usize;
     for unit in &parse_report.units {
@@ -362,7 +425,10 @@ fn record_parse_report(
             },
         )?;
     }
-    Ok(count)
+    Ok(ParseStorageOutcome {
+        indexed_units: count,
+        framework_role_facts,
+    })
 }
 
 fn record_semantic_worker_facts(
@@ -372,6 +438,7 @@ fn record_semantic_worker_facts(
     semantic_worker: Option<&dyn SemanticWorker>,
     store: &impl IndexStore,
     warnings: &mut Vec<String>,
+    fact_id_offset: usize,
 ) -> Result<(SemanticWorkerRunStatus, usize), RepoGrammarError> {
     let Some(semantic_worker) = semantic_worker else {
         return Ok((SemanticWorkerRunStatus::Deferred, 0));
@@ -401,14 +468,30 @@ fn record_semantic_worker_facts(
     };
 
     sort_semantic_facts(&mut facts);
+    let count = record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    Ok((SemanticWorkerRunStatus::Complete, count))
+}
+
+fn record_semantic_facts(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    fact_id_offset: usize,
+    facts: &[SemanticFact],
+) -> Result<usize, RepoGrammarError> {
     for (index, fact) in facts.iter().enumerate() {
         crate::application::storage::record_semantic_fact(
             store,
             generation,
-            &indexed_semantic_fact_record(index, fact),
+            &indexed_semantic_fact_record(fact_id_offset + index, fact),
         )?;
     }
-    Ok((SemanticWorkerRunStatus::Complete, facts.len()))
+    Ok(facts.len())
+}
+
+fn framework_role_error(error: FrameworkRoleError) -> RepoGrammarError {
+    match error {
+        FrameworkRoleError::InvalidFact(message) => RepoGrammarError::InvalidInput(message),
+    }
 }
 
 fn semantic_worker_error_status(error: SemanticWorkerError) -> SemanticWorkerRunStatus {
@@ -656,12 +739,16 @@ mod tests {
     use super::*;
     use crate::adapters::filesystem::discovery::FilesystemFileDiscovery;
     use crate::adapters::filesystem::source_store::FilesystemSourceStore;
+    use crate::adapters::frameworks::SyntaxFrameworkRoleDetector;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
+    use crate::application::query::{assess_semantic_fact_readiness, SemanticFactReadinessRequest};
     use crate::core::model::{
         CodeUnitId, CodeUnitKind, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdgeLabel,
         IrNodeId, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
+        UnknownReasonCode,
     };
+    use crate::core::policy::freshness::ClaimInputReadiness;
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -722,6 +809,29 @@ mod tests {
         }
     }
 
+    struct ExpressRouteParser;
+
+    impl SourceParser for ExpressRouteParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let mut unit = parser_unit(
+                &document,
+                "unit:a.ts#express:0-all",
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            unit.kind = CodeUnitKind::ExpressRoute;
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            Ok(ParseReport {
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+    }
+
     struct StaticSemanticWorker {
         expected_files: Vec<String>,
         result: Result<Vec<SemanticFact>, SemanticWorkerError>,
@@ -750,9 +860,23 @@ mod tests {
     }
 
     fn semantic_fact_for_a_ts(content_hash: ContentHash) -> SemanticFact {
+        semantic_fact_for_unit(
+            content_hash,
+            "unit:a.ts#module:0-all",
+            "a.ts",
+            "import express from 'express';\n".len(),
+        )
+    }
+
+    fn semantic_fact_for_unit(
+        content_hash: ContentHash,
+        code_unit_id: &str,
+        path: &str,
+        end_byte: usize,
+    ) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::ResolvedImport,
-            subject: "a.ts#import:express".to_string(),
+            subject: format!("{path}#import:express"),
             target: None,
             origin: FactOrigin {
                 engine: "typescript".to_string(),
@@ -761,10 +885,10 @@ mod tests {
             },
             certainty: FactCertainty::Semantic,
             evidence: Evidence::new(
-                CodeUnitId::new("unit:a.ts#module:0-all").expect("valid code unit id"),
-                SourceRange::new(0, "import express from 'express';\n".len()).expect("valid range"),
+                CodeUnitId::new(code_unit_id).expect("valid code unit id"),
+                SourceRange::new(0, end_byte).expect("valid range"),
                 Provenance::new(
-                    "a.ts",
+                    path,
                     content_hash,
                     RepositoryRevision::new("UNKNOWN").expect("valid revision"),
                 )
@@ -785,6 +909,24 @@ mod tests {
         connection
             .query_row("SELECT count(*) FROM semantic_facts", [], |row| row.get(0))
             .expect("count semantic facts")
+    }
+
+    fn semantic_fact_ids(state: &Path, generation_id: &str) -> Vec<(String, String)> {
+        let database = state
+            .join("generations")
+            .join(generation_id)
+            .join("repogrammar.sqlite");
+        let connection = Connection::open(database).expect("open generation database");
+        let mut statement = connection
+            .prepare("SELECT fact_id, evidence_id FROM semantic_facts ORDER BY fact_id")
+            .expect("prepare fact id query");
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("query semantic fact ids")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect semantic fact ids")
     }
 
     fn create_index_state(state: &Path) {
@@ -1026,6 +1168,136 @@ mod tests {
     }
 
     #[test]
+    fn syntax_framework_role_facts_are_stored_but_not_family_claim_inputs() {
+        let workspace = TempWorkspace::new("indexing-framework-role-facts");
+        let sentinel = "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE";
+        fs::write(
+            workspace.path().join("component.tsx"),
+            format!(
+                "export function UserCard() {{ return <section>{sentinel}</section>; }}\n\
+                 export const useUsers = () => {{ return []; }};\n"
+            ),
+        )
+        .expect("write component");
+        fs::write(
+            workspace.path().join("routes.js"),
+            "app.get('/users', (req, res) => { res.json([]); });\n\
+             describe('users', () => { it('loads', () => {}); });\n",
+        )
+        .expect("write routes");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &detector,
+            &store,
+        )
+        .expect("index syntax framework role facts");
+
+        assert_eq!(outcome.discovered_files, 2);
+        assert_eq!(outcome.indexed_units, 7);
+        assert_eq!(outcome.semantic_facts, 5);
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Deferred);
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+
+        let facts = store
+            .list_active_semantic_facts()
+            .expect("list semantic facts");
+        assert_eq!(facts.generation_id, "gen-000001");
+        assert_eq!(facts.facts.len(), 5);
+        assert!(facts.facts.iter().all(|fact| {
+            fact.kind == "FRAMEWORK_ROLE"
+                && fact.certainty == "FRAMEWORK_HEURISTIC"
+                && fact.origin_engine == "repogrammar-frameworks"
+                && fact.origin_method == "syntax_code_unit_kind"
+                && fact.path != sentinel
+                && !fact
+                    .path
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && !fact.note.contains(sentinel)
+                && !fact
+                    .note
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && fact.content_hash.as_str().starts_with("sha256:")
+        }));
+        let targets = facts
+            .facts
+            .iter()
+            .map(|fact| fact.target.as_deref().expect("framework role target"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            targets,
+            [
+                "framework:react.component",
+                "framework:react.hook",
+                "framework:express.route_handler",
+                "framework:jest_vitest.suite",
+                "framework:jest_vitest.test"
+            ]
+        );
+        let database = state
+            .join("generations")
+            .join("gen-000001")
+            .join("repogrammar.sqlite");
+        let connection = Connection::open(database).expect("open generation database");
+        let family_bound_evidence: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM evidence WHERE family_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count family-bound evidence");
+        let families: u32 = connection
+            .query_row("SELECT count(*) FROM families", [], |row| row.get(0))
+            .expect("count families");
+        let family_members: u32 = connection
+            .query_row("SELECT count(*) FROM family_members", [], |row| row.get(0))
+            .expect("count family members");
+        assert_eq!(family_bound_evidence, 0);
+        assert_eq!(families, 0);
+        assert_eq!(family_members, 0);
+        let workspace_path = workspace.path().to_string_lossy().to_string();
+        let debug = format!("{:?}", facts.facts);
+        for forbidden in [
+            sentinel,
+            workspace_path.as_str(),
+            "app.get",
+            "res.json",
+            "return <",
+            "describe(",
+            "it(",
+        ] {
+            assert!(
+                !debug.contains(forbidden),
+                "framework facts leaked forbidden text {forbidden}"
+            );
+        }
+
+        let readiness = assess_semantic_fact_readiness(
+            SemanticFactReadinessRequest {
+                repository_root: workspace.path().display().to_string(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &FilesystemSourceStore,
+        )
+        .expect("assess framework fact readiness");
+        assert_eq!(readiness.facts.len(), 5);
+        for fact in readiness.facts {
+            let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
+                panic!("framework heuristic facts must not become family claim input");
+            };
+            assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+        }
+    }
+
+    #[test]
     fn optional_semantic_worker_records_valid_same_generation_facts() {
         let workspace = TempWorkspace::new("indexing-semantic-worker");
         let source = "import express from 'express';\n";
@@ -1060,6 +1332,60 @@ mod tests {
         assert_eq!(outcome.warnings, Vec::<String>::new());
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
         assert_eq!(semantic_fact_count(&state, "gen-000001"), 1);
+    }
+
+    #[test]
+    fn framework_and_worker_semantic_fact_ids_do_not_collide() {
+        let workspace = TempWorkspace::new("indexing-framework-worker-fact-ids");
+        let source = "app.get('/users', (req, res) => res.json([]));\n";
+        fs::write(workspace.path().join("a.ts"), source).expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let discovered = discover_repository_files(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+        )
+        .expect("discover files");
+        let fact = semantic_fact_for_unit(
+            discovered.files[0].content_hash.clone(),
+            "unit:a.ts#express:0-all",
+            "a.ts",
+            source.len(),
+        );
+        let worker = StaticSemanticWorker {
+            expected_files: vec!["a.ts".to_string()],
+            result: Ok(vec![fact]),
+        };
+        let detector = SyntaxFrameworkRoleDetector;
+
+        let outcome = index_repository_with_discovery_parser_frameworks_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &ExpressRouteParser,
+            &detector,
+            &worker,
+            &store,
+        )
+        .expect("index framework and worker facts");
+
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(outcome.semantic_facts, 2);
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(
+            semantic_fact_ids(&state, "gen-000001"),
+            vec![
+                (
+                    "semantic-fact:000000".to_string(),
+                    "semantic-evidence:000000".to_string()
+                ),
+                (
+                    "semantic-fact:000001".to_string(),
+                    "semantic-evidence:000001".to_string()
+                )
+            ]
+        );
     }
 
     #[test]

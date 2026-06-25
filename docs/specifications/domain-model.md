@@ -14,7 +14,10 @@ functions, assigned arrow functions, classes, methods, React function
 components, custom hooks, Express route calls, and Jest/Vitest suite or test
 blocks. These records are structural candidates only. They are not semantic
 facts, resolved symbols, framework-equivalence claims, or pattern-family
-membership evidence.
+membership evidence. A separate syntax-origin `SemanticFact` may be derived
+from some framework-shaped code units, but that fact remains
+framework-heuristic evidence for future claim builders, not proof of semantic
+equivalence or family membership.
 
 ## Unified IR
 
@@ -36,6 +39,7 @@ certainty, evidence, and assumptions.
 
 Certainty levels are semantic, dataflow-derived, structural,
 framework-heuristic, conflicting, and unknown. Structural certainty is not
+enough to prove family membership. Framework-heuristic certainty is also not
 enough to prove family membership.
 The current Rust domain includes an internal claim-input readiness gate for
 semantic facts: fresh supported fact kinds with `SEMANTIC` or
@@ -43,6 +47,11 @@ semantic facts: fresh supported fact kinds with `SEMANTIC` or
 while stale evidence, conflicting facts, structural certainty, framework
 heuristics, unknown certainty, and `UNKNOWN` fact kind are blocked with typed
 `UNKNOWN`. Readiness is not itself a family classification.
+Current default TS/JS indexing can store syntax-origin `FRAMEWORK_ROLE` facts
+for recognized Express, React, and Jest/Vitest code-unit shapes. These facts
+carry repo-relative code-unit evidence, `FRAMEWORK_HEURISTIC` certainty, and
+explicit unresolved-binding assumptions; they do not resolve TypeScript symbols,
+framework runtime behavior, or family membership.
 
 ## PatternFamily
 
