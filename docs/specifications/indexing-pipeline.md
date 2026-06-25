@@ -197,19 +197,20 @@ with stronger compatible evidence.
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. Default
-indexing now passes the discovered repo-relative `.py` inventory into that
-private mode, letting the worker build a bounded module index for the current
+indexing now passes the discovered repo-relative `.py` inventory and bounded,
+hash-checked discovered `conftest.py` file contents into that private mode,
+letting the worker build a bounded module and fixture context for the current
 parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
-simple calls, same-file pytest fixture edges, path-derived module names,
-CPython `symtable` scope anchors, and typed dynamic/unresolved/ambiguous
-`UNKNOWN` cases. The semantic-worker-compatible project mode can additionally
-resolve requested-project `conftest.py` fixture names through pytest's directory
-hierarchy as structural fixture-edge facts. The Rust parser adapter validates
-and persists parse-document payloads as internal `STRUCTURAL` or `UNKNOWN`
-semantic fact records tied to the same code-unit evidence. They are not passed
-to the family builder and remain blocked from claim-input readiness as
-insufficient support.
+simple calls, same-file and parent-directory `conftest.py` pytest fixture
+edges, path-derived module names, CPython `symtable` scope anchors, and typed
+dynamic/unresolved/ambiguous `UNKNOWN` cases. The semantic-worker-compatible
+project mode can also resolve requested-project `conftest.py` fixture names
+through pytest's directory hierarchy as structural fixture-edge facts. The Rust
+parser adapter validates and persists parse-document payloads as internal
+`STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same code-unit
+evidence. They are not passed to the family builder and remain blocked from
+claim-input readiness as insufficient support.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
 with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store

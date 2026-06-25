@@ -97,10 +97,11 @@ The current implementation covers the first structural slice only:
   and emits typed `UNKNOWN` for ambiguous/missing repo-local imports or
   `sys.path` mutation;
 - default parser-mode indexing now passes the discovered repo-relative `.py`
-  inventory into the private CPython parse-document request so the same
-  source-tied parse pass can emit unique repo-local import facts and typed
-  unresolved/ambiguous import `UNKNOWN`s without launching a separate Python
-  semantic worker;
+  inventory plus bounded, hash-checked discovered `conftest.py` file contents
+  into the private CPython parse-document request so the same source-tied parse
+  pass can emit unique repo-local import facts, pytest parent-directory
+  `conftest.py` fixture-edge facts, and typed unresolved/ambiguous import or
+  fixture `UNKNOWN`s without launching a separate Python semantic worker;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a

@@ -18,6 +18,13 @@ pub struct SourceDocument<'a> {
 pub struct ParserProjectContext {
     pub python_module_paths: Vec<String>,
     pub python_source_roots: Vec<String>,
+    pub python_conftest_files: Vec<ParserProjectFileContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserProjectFileContext {
+    pub path: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

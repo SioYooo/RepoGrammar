@@ -144,8 +144,9 @@ allowed.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output, syntax-error
   diagnostics, parse-document structural facts for imports/decorators/class
-  bases/calls/fixture edges, semantic-worker-compatible NDJSON structural facts
-  plus framework-role output, requested-project `conftest.py` fixture hierarchy
+  bases/calls/fixture edges, bounded parse-document `conftest.py` fixture
+  hierarchy context, semantic-worker-compatible NDJSON structural facts plus
+  framework-role output, requested-project `conftest.py` fixture hierarchy
   edges, typed `UNKNOWN` output for dynamic and unresolved cases, oversized
   request rejection, unsafe path and symlink-escape rejection, bounded
   semantic-mode source reads, and absence of source snippets, absolute

@@ -35,10 +35,12 @@
   through pytest's directory hierarchy as structural fixture-edge facts, and
   reports ambiguous/missing repo-local imports or `sys.path` mutation as typed
   `UNKNOWN`. Default parser-mode indexing now
-  passes discovered repo-relative `.py` inventory into private parse-document
-  requests so source-tied repo-local import facts can be persisted without
-  launching a Python semantic worker; oversized context payloads fall back to
-  contextless parsing. Default indexing validates and persists parser-origin
+  passes discovered repo-relative `.py` inventory and bounded discovered
+  `conftest.py` contents into private parse-document requests so source-tied
+  repo-local import facts and parent-directory pytest fixture-edge facts can be
+  persisted without launching a Python semantic worker; oversized context
+  payloads fall back to contextless parsing. Default indexing validates and
+  persists parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.
 - Default Python indexing discovers root `pyproject.toml` as `python-config`,

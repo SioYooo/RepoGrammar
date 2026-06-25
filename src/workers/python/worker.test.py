@@ -311,6 +311,51 @@ serialized_parse_context = json.dumps(parse_context_messages)
 assert "from acme.services" not in serialized_parse_context
 assert "src/acme/services/users.py" not in serialized_parse_context
 
+conftest_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/sub/test_api.py",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["tests/conftest.py", "tests/sub/test_api.py"],
+        "source_roots": [],
+        "conftest_files": [
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+            }
+        ],
+        "text": """
+def test_users(client, missing_fixture):
+    assert client is not None
+""",
+    }
+)
+conftest_parse_facts = conftest_parse_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
+serialized_conftest_parse = json.dumps(conftest_parse_messages)
+assert "tests/conftest.py" not in serialized_conftest_parse
+assert "return object" not in serialized_conftest_parse
+assert "missing_fixture" not in serialized_conftest_parse
+
 ambiguous_context_messages = run_worker(
     {
         "protocol_version": 1,
@@ -357,6 +402,26 @@ bad_parse_context = subprocess.run(
 assert bad_parse_context.returncode == 2
 assert bad_parse_context.stdout == ""
 assert "secret" not in bad_parse_context.stderr
+
+bad_conftest_context_payload = {
+    "protocol_version": 1,
+    "mode": "parse_document",
+    "path": "app.py",
+    "content_hash": "sha256:" + "a" * 64,
+    "repository_revision": "UNKNOWN",
+    "conftest_files": [{"path": "../conftest.py", "text": "def secret(): pass\n"}],
+    "text": "def test_secret(secret):\n    pass\n",
+}
+bad_conftest_context = subprocess.run(
+    [sys.executable, str(WORKER)],
+    input=json.dumps(bad_conftest_context_payload) + "\n",
+    text=True,
+    capture_output=True,
+    check=False,
+)
+assert bad_conftest_context.returncode == 2
+assert bad_conftest_context.stdout == ""
+assert "secret" not in bad_conftest_context.stderr
 
 with tempfile.TemporaryDirectory() as root:
     Path(root, "pyproject.toml").write_text(
@@ -469,7 +534,7 @@ def test_users(client, missing_fixture):
     facts = [message for message in messages if message.get("message_type") == "fact"]
     assert any(
         fact.get("fact_kind") == "SYMBOL"
-        and fact.get("target") == "fixture:client"
+        and fact.get("target") == "pytest.fixture.client"
         and "python_anchor_kind=pytest_conftest_fixture_edge" in fact.get("assumptions", [])
         for fact in facts
     )

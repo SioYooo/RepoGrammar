@@ -1622,11 +1622,22 @@ class UserOut(BaseModel):
 async def list_users():
     return []
 
-def test_users(client):
+def test_users(client, missing_fixture):
     assert client.get("/users").status_code == 200
 "#,
         )
         .expect("write source");
+        fs::write(
+            workspace.path().join("src/acme/conftest.py"),
+            r#"
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+"#,
+        )
+        .expect("write conftest");
         fs::write(
             workspace.path().join("pyproject.toml"),
             r#"
@@ -1810,6 +1821,17 @@ project_includes = ["src"]
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.fixture.client")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                })
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
                 && fact.kind == "UNKNOWN"
                 && fact.target.as_deref() == Some("PytestFixtureInjection")
                 && fact.origin_engine == "python"
@@ -1864,6 +1886,8 @@ project_includes = ["src"]
             "from acme.services",
             "@router.get",
             "assert client.get",
+            "return object",
+            "missing_fixture",
             "../secret",
             "/tmp/secret",
             "C:/secret",
@@ -1897,10 +1921,13 @@ project_includes = ["src"]
             .map(|fact| {
                 assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
                 let target = fact.target.as_deref().expect("derived target");
-                assert!(matches!(
-                    target,
-                    "fastapi.APIRouter.get" | "pydantic.BaseModel"
-                ));
+                assert!(
+                    matches!(
+                        target,
+                        "fastapi.APIRouter.get" | "pydantic.BaseModel" | "pytest.fixture"
+                    ),
+                    "unexpected derived target {target}"
+                );
                 derived_targets.insert(target.to_string());
                 assert!(fact
                     .assumptions
@@ -1911,6 +1938,7 @@ project_includes = ["src"]
             .collect::<BTreeSet<_>>();
         assert!(derived_targets.contains("fastapi.APIRouter.get"));
         assert!(derived_targets.contains("pydantic.BaseModel"));
+        assert!(derived_targets.contains("pytest.fixture"));
         for fact in readiness.facts {
             if derived_fact_ids.contains(&fact.fact_id) {
                 assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));
@@ -1958,9 +1986,9 @@ project_includes = ["src"]
         assert_eq!(facts.active_generation, "gen-000002");
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
-                && fact.kind == "UNKNOWN"
-                && fact.target.as_deref() == Some("PytestFixtureInjection")
-                && fact.certainty == "UNKNOWN"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.fixture.client")
+                && fact.certainty == "STRUCTURAL"
         }));
     }
 

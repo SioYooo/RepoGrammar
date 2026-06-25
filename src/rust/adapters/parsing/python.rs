@@ -217,6 +217,17 @@ fn parse_document_payload(
             "source_roots".to_string(),
             json!(context.python_source_roots),
         );
+        object.insert(
+            "conftest_files".to_string(),
+            json!(context
+                .python_conftest_files
+                .iter()
+                .map(|file| json!({
+                    "path": &file.path,
+                    "text": &file.text,
+                }))
+                .collect::<Vec<_>>()),
+        );
     }
     payload
 }
@@ -1221,6 +1232,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "class_base"
             | "call_target"
             | "pytest_fixture_edge"
+            | "pytest_conftest_fixture_edge"
             | "module_name"
             | "scope_imported"
             | "scope_namespace"
@@ -1309,6 +1321,7 @@ fn slug(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::model::{ContentHash, RepositoryRevision};
+    use crate::ports::parser::ParserProjectFileContext;
 
     fn document(text: &str) -> SourceDocument<'_> {
         document_at("app.py", text)
@@ -1551,6 +1564,7 @@ from acme.missing import value\n";
                 "src/acme/services/users.py".to_string(),
             ],
             python_source_roots: Vec::new(),
+            python_conftest_files: Vec::new(),
         };
         let parser = PythonAstParser::default();
         let report = parser
@@ -1607,6 +1621,51 @@ from acme.missing import value\n";
                 "parser facts leaked forbidden text {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn parse_with_context_accepts_conftest_fixture_edges_without_source_leakage() {
+        let source = "def test_users(client, missing_fixture):\n    assert client is not None\n";
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "tests/conftest.py".to_string(),
+                "tests/sub/test_api.py".to_string(),
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: vec![ParserProjectFileContext {
+                path: "tests/conftest.py".to_string(),
+                text: "import pytest\n\n@pytest.fixture\ndef client():\n    return object()\n"
+                    .to_string(),
+            }],
+        };
+        let parser = PythonAstParser::default();
+        let report = parser
+            .parse_with_context(document_at("tests/sub/test_api.py", source), &context)
+            .expect("parse with conftest context");
+
+        assert!(
+            report.semantic_facts.iter().any(|fact| {
+                fact.kind == SemanticFactKind::Symbol
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.client")
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                    })
+            }),
+            "{:?}",
+            report.semantic_facts
+        );
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }));
+        let debug = format!("{:?}", report);
+        assert!(!debug.contains("tests/conftest.py"));
+        assert!(!debug.contains("return object"));
+        assert!(!debug.contains("missing_fixture"));
     }
 
     #[test]

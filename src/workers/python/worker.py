@@ -1009,7 +1009,7 @@ def collect_fixture_facts(
                 structural_fact(
                     kind="SYMBOL",
                     subject_unit_id=subject_unit_id,
-                    target=f"fixture:{arg.arg}",
+                    target=f"pytest.fixture.{arg.arg}",
                     path=path,
                     content_hash_value=content_hash_value,
                     repository_revision=repository_revision,
@@ -1024,7 +1024,7 @@ def collect_fixture_facts(
                 structural_fact(
                     kind="SYMBOL",
                     subject_unit_id=subject_unit_id,
-                    target=f"fixture:{arg.arg}",
+                    target=f"pytest.fixture.{arg.arg}",
                     path=path,
                     content_hash_value=content_hash_value,
                     repository_revision=repository_revision,
@@ -1231,7 +1231,7 @@ def parse_document(payload: dict[str, Any]) -> int:
         "repository_revision",
         "text",
     }
-    allowed_fields = {*required_fields, "module_paths", "source_roots"}
+    allowed_fields = {*required_fields, "module_paths", "source_roots", "conftest_files"}
     if not isinstance(payload, dict) or not required_fields.issubset(payload) or set(payload) - allowed_fields:
         return 2
     if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_document":
@@ -1243,10 +1243,12 @@ def parse_document(payload: dict[str, Any]) -> int:
         return 2
     module_paths = safe_path_list(payload.get("module_paths"), require_python=True)
     source_roots = safe_path_list(payload.get("source_roots"), require_python=False)
-    if module_paths is None or source_roots is None:
+    conftest_files = safe_conftest_file_records(payload.get("conftest_files"))
+    if module_paths is None or source_roots is None or conftest_files is None:
         return 2
     source_roots = sorted(set([*source_roots, *infer_source_roots(module_paths)]))
     module_index = build_module_index(module_paths, source_roots)
+    fixture_index = conftest_fixture_index(conftest_files)
     units, diagnostics, facts = analyze_source(
         payload["path"],
         text,
@@ -1254,6 +1256,7 @@ def parse_document(payload: dict[str, Any]) -> int:
         payload["repository_revision"],
         module_index if module_paths else None,
         source_roots,
+        applicable_conftest_fixture_names(payload["path"], fixture_index),
     )
     message(
         {
@@ -1462,6 +1465,30 @@ def applicable_conftest_fixture_names(path: str, fixture_index: dict[str, set[st
             break
         current_dir = parent_path(current_dir)
     return names
+
+
+def safe_conftest_file_records(value: Any) -> list[tuple[str, str, str]] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    records: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"path", "text"}:
+            return None
+        path = item.get("path")
+        text = item.get("text")
+        if (
+            not is_safe_repo_relative_path(path)
+            or not isinstance(text, str)
+            or path in seen
+            or not (path == "conftest.py" or path.endswith("/conftest.py"))
+        ):
+            return None
+        seen.add(path)
+        records.append((path, text, ""))
+    return records
 
 
 def emit_fact_message(request_id: str, fact_payload: dict[str, Any]) -> None:

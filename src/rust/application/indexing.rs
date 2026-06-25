@@ -19,7 +19,8 @@ use crate::ports::index_store::{
     IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParser,
+    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, SourceDocument,
+    SourceParser,
 };
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
@@ -323,7 +324,7 @@ fn index_repository_with_optional_semantic_worker(
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
-    let parser_context = parser_project_context(&report);
+    let parser_context = parser_project_context(&request, &report, source_store)?;
     for file in &report.files {
         let source = source_store
             .read_source(SourceReadRequest {
@@ -449,7 +450,11 @@ struct ParseStorageOutcome {
     framework_role_facts: Vec<SemanticFact>,
 }
 
-fn parser_project_context(report: &FileDiscoveryReport) -> ParserProjectContext {
+fn parser_project_context(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<ParserProjectContext, RepoGrammarError> {
     let python_module_paths = report
         .files
         .iter()
@@ -458,10 +463,34 @@ fn parser_project_context(report: &FileDiscoveryReport) -> ParserProjectContext 
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    ParserProjectContext {
+    let mut python_conftest_files = Vec::new();
+    for file in &report.files {
+        if file.language != DiscoveredLanguage::Python || !is_python_conftest_path(&file.path) {
+            continue;
+        }
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        python_conftest_files.push(ParserProjectFileContext {
+            path: source.path,
+            text: source.text,
+        });
+    }
+    python_conftest_files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(ParserProjectContext {
         python_module_paths,
         python_source_roots: Vec::new(),
-    }
+        python_conftest_files,
+    })
+}
+
+fn is_python_conftest_path(path: &str) -> bool {
+    path == "conftest.py" || path.ends_with("/conftest.py")
 }
 
 fn record_parse_report(
@@ -2352,6 +2381,7 @@ mod tests {
     fn parser_context_receives_deterministic_python_inventory() {
         let workspace = TempWorkspace::new("indexing-python-parser-context");
         fs::create_dir_all(workspace.path().join("src/acme/services")).expect("create package");
+        fs::create_dir_all(workspace.path().join("tests")).expect("create tests");
         fs::write(
             workspace.path().join("src/acme/services/users.py"),
             "def list_users():\n    return []\n",
@@ -2363,6 +2393,11 @@ mod tests {
         )
         .expect("write api module");
         fs::write(workspace.path().join("src/acme/__init__.py"), "").expect("write init");
+        fs::write(
+            workspace.path().join("tests/conftest.py"),
+            "import pytest\n\n@pytest.fixture\ndef client():\n    return object()\n",
+        )
+        .expect("write conftest");
         fs::write(workspace.path().join("README.md"), "not source\n").expect("write readme");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
@@ -2378,17 +2413,26 @@ mod tests {
         )
         .expect("index with recording parser");
 
-        assert_eq!(outcome.discovered_files, 3);
+        assert_eq!(outcome.discovered_files, 4);
         let contexts = parser.contexts.lock().expect("recorded contexts");
-        assert_eq!(contexts.len(), 3);
+        assert_eq!(contexts.len(), 4);
         let expected = vec![
             "src/acme/__init__.py".to_string(),
             "src/acme/api.py".to_string(),
             "src/acme/services/users.py".to_string(),
+            "tests/conftest.py".to_string(),
         ];
         for context in contexts.iter() {
             assert_eq!(context.python_module_paths, expected);
             assert!(context.python_source_roots.is_empty());
+            assert_eq!(context.python_conftest_files.len(), 1);
+            assert_eq!(context.python_conftest_files[0].path, "tests/conftest.py");
+            assert!(context.python_conftest_files[0]
+                .text
+                .contains("@pytest.fixture"));
+            assert!(!context.python_conftest_files[0]
+                .path
+                .contains(workspace.path().to_string_lossy().as_ref()));
             assert!(context
                 .python_module_paths
                 .iter()

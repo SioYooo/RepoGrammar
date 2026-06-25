@@ -183,10 +183,11 @@ evidence contracts remain validated together.
   resolves requested-project `conftest.py` fixture names through pytest's
   directory hierarchy, and emits typed `UNKNOWN` for ambiguous/missing
   repo-local imports and `sys.path` mutation. Default indexing now passes
-  discovered `.py` inventory to the
-  private parser request so source-tied repo-local import facts can be
-  persisted through the Rust storage/readiness gate. Project-config summaries
-  are default indexing structural context but not claim evidence. The current
+  discovered `.py` inventory plus bounded discovered `conftest.py` contents to
+  the private parser request so source-tied repo-local import facts and
+  parent-directory pytest fixture-edge facts can be persisted through the Rust
+  storage/readiness gate. Project-config summaries are default indexing
+  structural context but not claim evidence. The current
   application layer can derive `DATAFLOW_DERIVED` support from exact canonical
   anchors under the Python support >= 3 gate. Next Python slices should escalate
   only plausible family candidates to Pyrefly and use Pyright only for
