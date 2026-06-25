@@ -90,7 +90,9 @@ propagation with same-name top-level reassignment invalidation, emits typed
 `UNKNOWN` for dynamic decorators, monkey-patching, dynamic calls, dynamic
 imports, `sys.path` mutation, unresolved imports, and fixture ambiguity, and
 emits static FastAPI request body/path/query/header/cookie marker anchors as
-route-shape context rather than family support. The application layer derives
+route-shape context rather than family support; product-path tests now verify
+these anchors are persisted, blocked from claim-input readiness, and excluded
+from derived support. The application layer derives
 separate `DATAFLOW_DERIVED` support facts from
 exact canonical CPython anchors when a unit has one Python framework role; raw
 parser facts and framework heuristics still remain blocked from direct claim
@@ -98,7 +100,9 @@ input.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but
-eligible for the bounded exact-anchor derivation gate.
+eligible for the bounded exact-anchor derivation gate. SQLAlchemy
+`relationship` and `Session.add` product-path coverage keeps those anchors as
+metadata-only context/effect facts rather than family support.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 
@@ -211,7 +215,9 @@ smoke coverage. They also include a no-worker FastAPI exact-anchor target
 variation fixture and SQLAlchemy session exact-anchor fixtures covering
 `execute`, direct `scalar`/`scalars` calls, and direct sync/async
 `commit`/`rollback` transaction anchors, plus an alias-aware pytest fixture
-exact-anchor smoke fixture. They are not yet the full Python provider corpus.
+exact-anchor smoke fixture. Product-path tests also cover auxiliary FastAPI
+request-shape and SQLAlchemy context/effect anchors as metadata-only facts.
+They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 

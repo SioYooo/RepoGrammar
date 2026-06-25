@@ -212,9 +212,10 @@ allowed.
   exact-anchor target variation coverage only for already-ready Python families,
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors and static request body/parameter anchors staying out of
-  support derivation and support-target variation metadata, pytest fixture-edge and parametrize-argument anchors
+  support derivation, claim-input readiness, and support-target variation metadata,
+  pytest fixture-edge and parametrize-argument anchors
   staying out of family support, SQLAlchemy relationship and Session.add
-  structural anchors staying out of family support, SQLAlchemy
+  structural anchors staying out of family support and claim-input readiness, SQLAlchemy
   `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and
   async equivalents becoming exact repository-method anchors, bounded
   SQLAlchemy `self.session`/`self.db` role propagation from `__init__`, and

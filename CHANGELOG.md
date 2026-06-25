@@ -103,6 +103,11 @@
   support or alter exact-anchor support targets. Family detail UNKNOWN output
   now scopes runtime-equivalence gaps to the concrete family id, and human
   `families` output preserves typed stale-evidence UNKNOWN details.
+- Product-path Python auxiliary-context regression coverage now proves FastAPI
+  request body/path/query/header/cookie anchors and SQLAlchemy
+  `relationship`/`Session.add` anchors are persisted as CPython structural
+  facts, blocked from claim-input readiness with `InsufficientSupport`, and
+  absent from derived family-support facts.
 - CPython AST worker SQLAlchemy structural anchors now include
   `sqlalchemy.orm.relationship` and `Session.add`/`AsyncSession.add` effect
   calls. These anchors remain structural context and are explicitly excluded

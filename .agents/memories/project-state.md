@@ -38,7 +38,9 @@
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
   HTTPException status-code structural anchors, plus static FastAPI
   body/path/query/header/cookie request-shape anchors, remain auxiliary
-  schema/context/effect metadata and are not membership support targets.
+  schema/context/effect metadata and are not membership support targets; product
+  runtime tests now verify these auxiliary anchors are persisted, blocked from
+  claim-input readiness, and absent from derived support facts.
   Pytest fixture decorators are now alias-aware in same-file and `conftest.py`
   contexts. Direct parametrize arguments take precedence over same-name fixtures,
   indirect parametrize arguments stay typed `PytestFixtureInjection` `UNKNOWN`,
@@ -51,7 +53,9 @@
   metadata and are not membership support targets.
   SQLAlchemy `relationship` and
   `Session.add`/`AsyncSession.add` anchors are also structural context/effect
-  metadata, not family membership support. SQLAlchemy session call anchors now
+  metadata, not family membership support; product runtime tests verify
+  `relationship` and `Session.add` stay blocked from claim-input readiness and
+  absent from derived support facts. SQLAlchemy session call anchors now
   include direct `Session.commit`, `Session.rollback`, `Session.scalar`,
   `Session.scalars`, and async equivalents plus bounded propagation from
   `__init__`-assigned `self.session`/`self.db` attributes, with same-method

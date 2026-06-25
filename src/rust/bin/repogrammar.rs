@@ -721,6 +721,90 @@ mod tests {
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
+    fn assert_stored_python_structural_fact(
+        facts: &[repogrammar::ports::index_store::IndexedSemanticFactRecord],
+        path: &str,
+        kind: &str,
+        target: &str,
+        anchor_kind: &str,
+    ) {
+        let expected_anchor = format!("python_anchor_kind={anchor_kind}");
+        assert!(
+            facts.iter().any(|fact| {
+                fact.path == path
+                    && fact.kind == kind
+                    && fact.target.as_deref() == Some(target)
+                    && fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.certainty == "STRUCTURAL"
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == &expected_anchor)
+            }),
+            "missing Python structural fact {kind} {target} with anchor {anchor_kind}"
+        );
+    }
+
+    fn assert_no_derived_python_support_for_targets(
+        facts: &[repogrammar::ports::index_store::IndexedSemanticFactRecord],
+        targets: &[&str],
+    ) {
+        for target in targets {
+            assert!(
+                facts.iter().all(|fact| {
+                    !(fact.origin_engine == "repogrammar-python-derived"
+                        && fact.origin_method == "bounded_ast_anchor_v1"
+                        && fact.target.as_deref() == Some(*target))
+                }),
+                "auxiliary target {target} must not be derived family support"
+            );
+        }
+    }
+
+    fn assert_targets_blocked_from_claim_input(
+        workspace: &TempWorkspace,
+        store: &impl repogrammar::ports::index_store::IndexStore,
+        facts: &[repogrammar::ports::index_store::IndexedSemanticFactRecord],
+        targets: &[&str],
+    ) {
+        let fact_ids = facts
+            .iter()
+            .filter(|fact| targets.contains(&fact.target.as_deref().unwrap_or_default()))
+            .map(|fact| fact.fact_id.clone())
+            .collect::<BTreeSet<_>>();
+        for target in targets {
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| fact.target.as_deref() == Some(*target)),
+                "missing persisted target {target}"
+            );
+        }
+
+        let readiness = assess_semantic_fact_readiness(
+            SemanticFactReadinessRequest {
+                repository_root: workspace.path().display().to_string(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            store,
+            &FilesystemSourceStore,
+        )
+        .expect("assess auxiliary fact readiness");
+        let mut checked = BTreeSet::new();
+        for fact in readiness.facts {
+            if !fact_ids.contains(&fact.fact_id) {
+                continue;
+            }
+            checked.insert(fact.fact_id);
+            let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
+                panic!("auxiliary fact must stay blocked from claim input");
+            };
+            assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+        }
+        assert_eq!(checked, fact_ids);
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct PythonExactAnchorSmokeCase {
         fixture: &'static str,
@@ -2603,6 +2687,274 @@ project_includes = ["src"]
                 && fact.target.as_deref() == Some("pytest.fixture.client")
                 && fact.certainty == "STRUCTURAL"
         }));
+    }
+
+    #[test]
+    fn product_runtime_persists_fastapi_request_shape_without_support_claims() {
+        let workspace = TempWorkspace::new("product-runtime-fastapi-request-shape");
+        fs::write(
+            workspace.path().join("app.py"),
+            r#"
+from typing import Annotated
+
+from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Path, Query
+from pydantic import BaseModel
+
+router = APIRouter()
+
+class UserIn(BaseModel):
+    email: str
+
+class UserOut(BaseModel):
+    id: int
+
+def get_db():
+    return object()
+
+@router.post("/users/{user_id}", response_model=UserOut)
+def create_user(
+    body: UserIn = Body(...),
+    user_id: int = Path(...),
+    query: str = Query(None),
+    request_id: str = Header(...),
+    session_id: str = Cookie(None),
+    trace_id: Annotated[str, Header()] = "",
+    db=Depends(get_db),
+):
+    if db is None:
+        raise HTTPException(status_code=409)
+    return UserOut(id=user_id)
+"#,
+        )
+        .expect("write FastAPI source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_eq!(facts.active_generation, "gen-000001");
+
+        for (kind, target, anchor_kind) in [
+            (
+                "TYPE",
+                "fastapi.request_body.UserIn",
+                "fastapi_request_body_model",
+            ),
+            (
+                "SYMBOL",
+                "fastapi.request_param.path.user_id",
+                "fastapi_path_param",
+            ),
+            (
+                "SYMBOL",
+                "fastapi.request_param.query.query",
+                "fastapi_query_param",
+            ),
+            (
+                "SYMBOL",
+                "fastapi.request_param.header.request_id",
+                "fastapi_header_param",
+            ),
+            (
+                "SYMBOL",
+                "fastapi.request_param.header.trace_id",
+                "fastapi_header_param",
+            ),
+            (
+                "SYMBOL",
+                "fastapi.request_param.cookie.session_id",
+                "fastapi_cookie_param",
+            ),
+        ] {
+            assert_stored_python_structural_fact(&facts.facts, "app.py", kind, target, anchor_kind);
+        }
+
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "app.py",
+            "TYPE",
+            "fastapi.response_model.UserOut",
+            "fastapi_response_model",
+        );
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "app.py",
+            "RESOLVED_CALL",
+            "fastapi.Depends",
+            "fastapi_dependency",
+        );
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "app.py",
+            "SYMBOL",
+            "fastapi.dependency.get_db",
+            "fastapi_dependency_target",
+        );
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "app.py",
+            "RESOLVED_CALL",
+            "fastapi.HTTPException",
+            "fastapi_http_exception",
+        );
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "app.py",
+            "SYMBOL",
+            "fastapi.http_exception.status_code.409",
+            "fastapi_http_exception_status",
+        );
+        let persisted_auxiliary_targets = [
+            "fastapi.request_body.UserIn",
+            "fastapi.request_param.path.user_id",
+            "fastapi.request_param.query.query",
+            "fastapi.request_param.header.request_id",
+            "fastapi.request_param.header.trace_id",
+            "fastapi.request_param.cookie.session_id",
+            "fastapi.response_model.UserOut",
+            "fastapi.Depends",
+            "fastapi.dependency.get_db",
+            "fastapi.HTTPException",
+            "fastapi.http_exception.status_code.409",
+        ];
+        assert_targets_blocked_from_claim_input(
+            &workspace,
+            &store,
+            &facts.facts,
+            &persisted_auxiliary_targets,
+        );
+        assert_no_derived_python_support_for_targets(
+            &facts.facts,
+            &[
+                "fastapi.request_body.UserIn",
+                "fastapi.request_param.path.user_id",
+                "fastapi.request_param.query.query",
+                "fastapi.request_param.header.request_id",
+                "fastapi.request_param.header.trace_id",
+                "fastapi.request_param.cookie.session_id",
+                "fastapi.response_model.UserOut",
+                "fastapi.dependency.get_db",
+                "fastapi.Depends",
+                "fastapi.HTTPException",
+                "fastapi.http_exception.status_code.409",
+            ],
+        );
+
+        for command in ["families", "find", "family", "explain", "check"] {
+            let output = if command == "families" {
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime)
+            } else {
+                run_with_runtime(
+                    cli_args(command, workspace.path(), &["app.py", "--json"]),
+                    &runtime,
+                )
+            };
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+        }
+    }
+
+    #[test]
+    fn python_release_sqlalchemy_auxiliary_context_stays_metadata_only() {
+        let workspace = TempWorkspace::new("python-release-sqlalchemy-auxiliary-context");
+        copy_python_release_fixture("sqlalchemy-basic", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_eq!(facts.active_generation, "gen-000001");
+
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "models.py",
+            "RESOLVED_CALL",
+            "sqlalchemy.orm.relationship",
+            "sqlalchemy_relationship",
+        );
+        assert_stored_python_structural_fact(
+            &facts.facts,
+            "repository.py",
+            "RESOLVED_CALL",
+            "sqlalchemy.orm.Session.add",
+            "sqlalchemy_session_call",
+        );
+        assert_no_derived_python_support_for_targets(
+            &facts.facts,
+            &["sqlalchemy.orm.relationship", "sqlalchemy.orm.Session.add"],
+        );
+        assert_targets_blocked_from_claim_input(
+            &workspace,
+            &store,
+            &facts.facts,
+            &["sqlalchemy.orm.relationship", "sqlalchemy.orm.Session.add"],
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .any(|family| {
+                family["family_id"] == "family:python:sqlalchemy_model:framework_sqlalchemy_model"
+                    && family["support"] == 3
+            }));
+
+        for command in ["find", "family", "explain", "check"] {
+            let output = run_with_runtime(
+                cli_args(command, workspace.path(), &["repository.py", "--json"]),
+                &runtime,
+            );
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+        }
     }
 
     #[test]

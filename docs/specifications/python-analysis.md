@@ -179,7 +179,9 @@ The current implementation covers the first structural slice only:
   facts, prove exact-anchor family reads across `families`, `family`,
   `member`, `find`, `explain`, and advisory `check`, prove token-budget
   automatic evidence selection plus explicit compact/evidence/deep modes stay
-  metadata-only, prove supported MCP operations return the same family context,
+  metadata-only, prove FastAPI request-shape and SQLAlchemy relationship/add
+  auxiliary anchors remain metadata-only and blocked from claim-input readiness,
+  prove supported MCP operations return the same family context,
   prove stale source mutation or deletion returns blocking `StaleEvidence`
   `UNKNOWN`, and keep the test-injected
   `SEMANTIC` worker fixture as coverage for the explicit worker boundary;
