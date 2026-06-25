@@ -4,6 +4,7 @@
 //! adapter. Application code talks to it through storage ports.
 
 use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     ActiveFamilies, ActiveFamily, FamilyStore, IndexedFamilyEvidenceRecord,
     IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
@@ -16,7 +17,7 @@ use crate::ports::index_store::{
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DATABASE_FILE: &str = "repogrammar.sqlite";
@@ -2164,27 +2165,19 @@ fn parse_generation_number(value: &str) -> Option<u32> {
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), IndexStoreError> {
-    if path.trim().is_empty() || path.chars().any(char::is_control) {
-        return Err(invalid_record("indexed file path must be non-empty"));
-    }
-    if path.contains('\\') || looks_like_windows_absolute_path(path) {
-        return Err(invalid_record("indexed file path must be repo-relative"));
-    }
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return Err(invalid_record("indexed file path must be repo-relative"));
-    }
-    for component in path.components() {
-        match component {
-            Component::Normal(_) => {}
-            _ => {
-                return Err(invalid_record(
-                    "indexed file path must not contain traversal or prefixes",
-                ));
-            }
+    crate::core::policy::paths::validate_repo_relative_path(path).map_err(|error| match error {
+        RepoRelativePathError::Empty | RepoRelativePathError::ControlCharacter => {
+            invalid_record("indexed file path must be non-empty")
         }
-    }
-    Ok(())
+        RepoRelativePathError::Absolute
+        | RepoRelativePathError::Backslash
+        | RepoRelativePathError::UriLike => {
+            invalid_record("indexed file path must be repo-relative")
+        }
+        RepoRelativePathError::Traversal => {
+            invalid_record("indexed file path must not contain traversal or prefixes")
+        }
+    })
 }
 
 fn validate_stored_repo_relative_path(
@@ -2313,11 +2306,6 @@ fn looks_like_source_snippet(value: &str) -> bool {
         || (value.contains('=') && value.contains(';'))
         || value.contains('{')
         || value.contains('}')
-}
-
-fn looks_like_windows_absolute_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn sql_unavailable(error: rusqlite::Error) -> IndexStoreError {

@@ -35,12 +35,7 @@ function isNonBlankString(value) {
 }
 
 function hasControlOrUriText(value) {
-  return (
-    value.includes("\0") ||
-    value.includes("\n") ||
-    value.includes("\r") ||
-    value.includes("://")
-  );
+  return /[\u0000-\u001F]/.test(value) || value.includes("://");
 }
 
 function looksLikeWindowsAbsolutePath(value) {

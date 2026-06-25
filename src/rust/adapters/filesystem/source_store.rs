@@ -3,9 +3,10 @@
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use crate::adapters::filesystem::discovery::sha256_hex;
 use crate::core::model::ContentHash;
+use crate::core::policy::paths::{repo_relative_path_buf, RepoRelativePathError};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Default)]
 pub struct FilesystemSourceStore;
@@ -102,45 +103,23 @@ fn read_repository_source(request: SourceReadRequest) -> Result<SourceText, Sour
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), SourceStoreError> {
-    if path.trim().is_empty() {
-        return Err(SourceStoreError::InvalidRequest(
-            "source path must not be empty".to_string(),
-        ));
-    }
-    if Path::new(path).is_absolute() {
-        return Err(SourceStoreError::InvalidRequest(
-            "source path must be repository-relative".to_string(),
-        ));
-    }
-    if path.contains('\\') || looks_like_windows_absolute_path(path) {
-        return Err(SourceStoreError::InvalidRequest(
-            "source path must be repository-relative".to_string(),
-        ));
-    }
-    for component in Path::new(path).components() {
-        match component {
-            Component::Normal(_) => {}
-            Component::CurDir
-            | Component::ParentDir
-            | Component::Prefix(_)
-            | Component::RootDir => {
-                return Err(SourceStoreError::InvalidRequest(
-                    "source path must not traverse outside repository".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn looks_like_windows_absolute_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+    crate::core::policy::paths::validate_repo_relative_path(path).map_err(source_path_error)
 }
 
 fn repo_relative_path(path: &str) -> Result<PathBuf, SourceStoreError> {
-    validate_repo_relative_path(path)?;
-    Ok(path.split('/').collect())
+    repo_relative_path_buf(path).map_err(source_path_error)
+}
+
+fn source_path_error(error: RepoRelativePathError) -> SourceStoreError {
+    let message = match error {
+        RepoRelativePathError::Empty => "source path must not be empty",
+        RepoRelativePathError::Traversal => "source path must not traverse outside repository",
+        RepoRelativePathError::Absolute
+        | RepoRelativePathError::Backslash
+        | RepoRelativePathError::ControlCharacter
+        | RepoRelativePathError::UriLike => "source path must be repository-relative",
+    };
+    SourceStoreError::InvalidRequest(message.to_string())
 }
 
 #[cfg(test)]

@@ -1,15 +1,16 @@
 //! Filesystem-backed repository file discovery.
 
 use super::bounded_read::{read_file_bounded, BoundedReadError};
+use super::git::{GitContext, GitContextResolution};
 use crate::adapters::languages::typescript::TypeScriptLanguageAdapter;
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, GitIgnoreStatus, SkippedPath, SkippedReason,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".git",
@@ -278,68 +279,33 @@ impl DiscoveryState {
 
 #[derive(Debug, Clone)]
 struct GitIgnoreChecker {
-    git_root: Option<PathBuf>,
-    project_prefix: String,
+    context: Option<GitContext>,
     status: GitIgnoreStatus,
 }
 
 impl GitIgnoreChecker {
     fn new(root: &str) -> Self {
         let root_path = Path::new(root);
-        let canonical_root = match fs::canonicalize(root_path) {
-            Ok(canonical_root) => canonical_root,
-            Err(_) => {
-                return Self {
-                    git_root: None,
-                    project_prefix: String::new(),
-                    status: GitIgnoreStatus::Unavailable,
-                };
-            }
-        };
-
-        let git_root = match resolve_git_root(root) {
-            GitRootResolution::Root(git_root) => git_root,
-            GitRootResolution::NotRepository if has_git_metadata_in_ancestors(&canonical_root) => {
-                return Self {
-                    git_root: None,
-                    project_prefix: String::new(),
-                    status: GitIgnoreStatus::Unavailable,
-                };
-            }
-            GitRootResolution::NotRepository => {
-                return Self {
-                    git_root: None,
-                    project_prefix: String::new(),
-                    status: GitIgnoreStatus::NotRepository,
-                };
-            }
-            GitRootResolution::Unavailable => {
-                return Self {
-                    git_root: None,
-                    project_prefix: String::new(),
-                    status: GitIgnoreStatus::Unavailable,
-                };
-            }
-        };
-
-        let Some(project_prefix) = project_prefix(&canonical_root, &git_root) else {
-            return Self {
-                git_root: None,
-                project_prefix: String::new(),
+        match GitContext::resolve(root_path) {
+            Ok(context) => Self {
+                context: Some(context),
+                status: GitIgnoreStatus::Applied,
+            },
+            Err(GitContextResolution::NotRepository) => Self {
+                context: None,
+                status: GitIgnoreStatus::NotRepository,
+            },
+            Err(GitContextResolution::Unavailable) => Self {
+                context: None,
                 status: GitIgnoreStatus::Unavailable,
-            };
-        };
-        Self {
-            git_root: Some(git_root),
-            project_prefix,
-            status: GitIgnoreStatus::Applied,
+            },
         }
     }
 
     fn is_ignored(&mut self, relative_path: &str, warnings: &mut Vec<String>) -> bool {
         match self.status {
             GitIgnoreStatus::Applied => {
-                let Some(git_root) = &self.git_root else {
+                let Some(context) = &self.context else {
                     self.status = GitIgnoreStatus::Unavailable;
                     warnings.push(
                         "git ignore checks became unavailable; using safe non-git fallback"
@@ -347,17 +313,9 @@ impl GitIgnoreChecker {
                     );
                     return false;
                 };
-                let git_relative_path = self.git_relative_path(relative_path);
-                match Command::new("git")
-                    .arg("-C")
-                    .arg(git_root)
-                    .args(["check-ignore", "-q", "--"])
-                    .arg(&git_relative_path)
-                    .status()
-                {
-                    Ok(status) if status.success() => true,
-                    Ok(status) if status.code() == Some(1) => false,
-                    Ok(_) | Err(_) => {
+                match context.check_ignore(relative_path) {
+                    Ok(ignored) => ignored,
+                    Err(()) => {
                         self.status = GitIgnoreStatus::Unavailable;
                         warnings.push(
                             "git ignore checks became unavailable; using safe non-git fallback"
@@ -376,53 +334,6 @@ impl GitIgnoreChecker {
             GitIgnoreStatus::NotRepository => false,
         }
     }
-
-    fn git_relative_path(&self, relative_path: &str) -> String {
-        if self.project_prefix.is_empty() {
-            relative_path.to_string()
-        } else {
-            format!("{}/{}", self.project_prefix, relative_path)
-        }
-    }
-}
-
-fn has_git_metadata_in_ancestors(root: &Path) -> bool {
-    root.ancestors()
-        .any(|ancestor| ancestor.join(".git").exists())
-}
-
-enum GitRootResolution {
-    Root(PathBuf),
-    NotRepository,
-    Unavailable,
-}
-
-fn resolve_git_root(root: &str) -> GitRootResolution {
-    let Ok(output) = Command::new("git")
-        .args(["-C", root, "rev-parse", "--show-toplevel"])
-        .output()
-    else {
-        return GitRootResolution::Unavailable;
-    };
-    if !output.status.success() {
-        return GitRootResolution::NotRepository;
-    }
-    let Ok(git_root) = String::from_utf8(output.stdout) else {
-        return GitRootResolution::Unavailable;
-    };
-    let git_root = git_root.trim();
-    if git_root.is_empty() {
-        return GitRootResolution::Unavailable;
-    }
-    match fs::canonicalize(git_root) {
-        Ok(git_root) => GitRootResolution::Root(git_root),
-        Err(_) => GitRootResolution::Unavailable,
-    }
-}
-
-fn project_prefix(canonical_root: &Path, git_root: &Path) -> Option<String> {
-    let relative = canonical_root.strip_prefix(git_root).ok()?;
-    repo_relative_string(relative)
 }
 
 fn is_repogrammar_state_dir(name: Option<&str>) -> bool {
@@ -459,106 +370,8 @@ fn repo_relative_string(path: &Path) -> Option<String> {
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    let mut state = [
-        0x6a09e667u32,
-        0xbb67ae85,
-        0x3c6ef372,
-        0xa54ff53a,
-        0x510e527f,
-        0x9b05688c,
-        0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let bit_len = (bytes.len() as u64) * 8;
-    let mut padded = bytes.to_vec();
-    padded.push(0x80);
-    while (padded.len() % 64) != 56 {
-        padded.push(0);
-    }
-    padded.extend_from_slice(&bit_len.to_be_bytes());
-
-    for chunk in padded.chunks_exact(64) {
-        let mut words = [0u32; 64];
-        for (index, word) in words.iter_mut().take(16).enumerate() {
-            let start = index * 4;
-            *word = u32::from_be_bytes([
-                chunk[start],
-                chunk[start + 1],
-                chunk[start + 2],
-                chunk[start + 3],
-            ]);
-        }
-        for index in 16..64 {
-            let s0 = words[index - 15].rotate_right(7)
-                ^ words[index - 15].rotate_right(18)
-                ^ (words[index - 15] >> 3);
-            let s1 = words[index - 2].rotate_right(17)
-                ^ words[index - 2].rotate_right(19)
-                ^ (words[index - 2] >> 10);
-            words[index] = words[index - 16]
-                .wrapping_add(s0)
-                .wrapping_add(words[index - 7])
-                .wrapping_add(s1);
-        }
-
-        let mut a = state[0];
-        let mut b = state[1];
-        let mut c = state[2];
-        let mut d = state[3];
-        let mut e = state[4];
-        let mut f = state[5];
-        let mut g = state[6];
-        let mut h = state[7];
-
-        for index in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(SHA256_K[index])
-                .wrapping_add(words[index]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
-    }
-
-    state
-        .iter()
-        .map(|word| format!("{word:08x}"))
-        .collect::<Vec<_>>()
-        .join("")
+    format!("{:x}", Sha256::digest(bytes))
 }
-
-const SHA256_K: [u32; 64] = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-];
 
 #[cfg(test)]
 mod tests {
@@ -566,6 +379,7 @@ mod tests {
     use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
     use crate::test_support::TempWorkspace;
     use std::fs;
+    use std::process::Command;
 
     fn git_init(workspace: &TempWorkspace) -> bool {
         Command::new("git")

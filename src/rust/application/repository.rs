@@ -1,5 +1,6 @@
 //! Repository-level initialization, indexing, status, and generation policy.
 
+use crate::adapters::filesystem::git::{GitContext, GitContextResolution};
 use crate::application::progress::{initialization_stages, ProgressStage};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{IndexStore, StorageInspection};
@@ -717,10 +718,9 @@ fn inspect_git_info_exclude(
     root: &Path,
     findings: &mut Vec<RepositoryDoctorFinding>,
 ) -> Result<(), RepoGrammarError> {
-    let Some(git_dir) = resolve_git_dir(root)? else {
+    let Some(exclude) = git_info_exclude_path(root)? else {
         return Ok(());
     };
-    let exclude = git_dir.join("info").join("exclude");
     match fs::symlink_metadata(&exclude) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             findings.push(doctor_error(
@@ -1531,61 +1531,24 @@ fn ensure_manifest(
 }
 
 fn ensure_git_info_exclude(root: &Path) -> Result<bool, RepoGrammarError> {
-    let Some(git_dir) = resolve_git_dir(root)? else {
+    let Some(exclude) = git_info_exclude_path(root)? else {
         return Ok(false);
     };
-
-    let info_dir = git_dir.join("info");
-    fs::create_dir_all(&info_dir)
+    let Some(info_dir) = exclude.parent() else {
+        return Err(invalid_input("failed to resolve Git exclude directory"));
+    };
+    fs::create_dir_all(info_dir)
         .map_err(|_| invalid_input("failed to prepare Git exclude directory"))?;
-    let exclude = info_dir.join("exclude");
     append_missing_lines(&exclude, &GIT_INFO_EXCLUDE_PATTERNS)
 }
 
-fn resolve_git_dir(root: &Path) -> Result<Option<PathBuf>, RepoGrammarError> {
-    let git_path = root.join(".git");
-    let metadata = match fs::symlink_metadata(&git_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(invalid_input("failed to inspect .git")),
-    };
-    if metadata.file_type().is_symlink() {
-        return Err(invalid_input(".git must not be a symlink"));
-    }
-    if metadata.is_dir() {
-        return Ok(Some(git_path));
-    }
-    if !metadata.is_file() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&git_path)
-        .map_err(|_| invalid_input("failed to read Git directory pointer"))?;
-    let Some(raw_git_dir) = content
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("gitdir:"))
-        .map(str::trim)
-    else {
-        return Ok(None);
-    };
-    if raw_git_dir.is_empty() {
-        return Err(invalid_input("Git directory pointer must not be empty"));
-    }
-
-    let git_dir = PathBuf::from(raw_git_dir);
-    let git_dir = if git_dir.is_absolute() {
-        git_dir
-    } else {
-        root.join(git_dir)
-    };
-    match fs::symlink_metadata(&git_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(invalid_input("Git directory pointer must not be a symlink"))
+fn git_info_exclude_path(root: &Path) -> Result<Option<PathBuf>, RepoGrammarError> {
+    match GitContext::resolve(root) {
+        Ok(context) => Ok(Some(context.info_exclude_path())),
+        Err(GitContextResolution::NotRepository) => Ok(None),
+        Err(GitContextResolution::Unavailable) => {
+            Err(invalid_input("failed to resolve Git directory"))
         }
-        Ok(metadata) if metadata.is_dir() => Ok(Some(git_dir)),
-        Ok(_) => Err(invalid_input("Git directory pointer is not a directory")),
-        Err(_) => Err(invalid_input("Git directory pointer is not readable")),
     }
 }
 
@@ -1799,6 +1762,7 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::Path;
+    use std::process::Command;
 
     fn root_string(path: &Path) -> String {
         path.display().to_string()
@@ -1806,6 +1770,25 @@ mod tests {
 
     fn init_request(path: &Path) -> RepositoryInitRequest {
         RepositoryInitRequest::new(root_string(path))
+    }
+
+    fn git_init(workspace: &TempWorkspace) -> bool {
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn git_init_with_separate_git_dir(workspace: &TempWorkspace, git_dir: &Path) -> bool {
+        Command::new("git")
+            .args(["init", "-q", "--separate-git-dir"])
+            .arg(git_dir)
+            .arg(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     #[test]
@@ -1828,7 +1811,9 @@ mod tests {
     #[test]
     fn init_creates_repo_local_state_layout_and_git_exclude() {
         let workspace = TempWorkspace::new("repository-init");
-        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        if !git_init(&workspace) {
+            return;
+        }
 
         let outcome = init_repository(init_request(workspace.path())).expect("init repository");
 
@@ -1854,7 +1839,9 @@ mod tests {
     #[test]
     fn init_is_idempotent_and_repairs_missing_generated_entries() {
         let workspace = TempWorkspace::new("repository-init-idempotent");
-        fs::create_dir_all(workspace.path().join(".git/info")).expect("create git info");
+        if !git_init(&workspace) {
+            return;
+        }
 
         let first = init_repository(init_request(workspace.path())).expect("first init");
         assert!(first.created);
@@ -1913,11 +1900,9 @@ mod tests {
     fn init_updates_git_info_exclude_for_worktree_gitdir_pointer() {
         let workspace = TempWorkspace::new("repository-worktree");
         let git_storage = TempWorkspace::new("repository-worktree-gitdir");
-        fs::write(
-            workspace.path().join(".git"),
-            format!("gitdir: {}\n", git_storage.path().display()),
-        )
-        .expect("write gitdir pointer");
+        if !git_init_with_separate_git_dir(&workspace, git_storage.path()) {
+            return;
+        }
 
         let outcome = init_repository(init_request(workspace.path())).expect("init repository");
 
@@ -2228,7 +2213,9 @@ mod tests {
     #[test]
     fn doctor_reports_missing_lifecycle_hygiene_without_repairing() {
         let workspace = TempWorkspace::new("repository-doctor-missing-hygiene");
-        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        if !git_init(&workspace) {
+            return;
+        }
         init_repository(init_request(workspace.path())).expect("init repository");
         let state = workspace.path().join(DEFAULT_STATE_DIR);
         let state_gitignore = state.join(".gitignore");
@@ -2261,7 +2248,9 @@ mod tests {
     #[test]
     fn doctor_reports_invalid_lifecycle_hygiene_without_repairing() {
         let workspace = TempWorkspace::new("repository-doctor-invalid-hygiene");
-        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        if !git_init(&workspace) {
+            return;
+        }
         init_repository(init_request(workspace.path())).expect("init repository");
         let state = workspace.path().join(DEFAULT_STATE_DIR);
         let state_gitignore = state.join(".gitignore");

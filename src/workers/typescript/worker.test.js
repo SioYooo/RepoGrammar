@@ -83,6 +83,8 @@ for (const changedFiles of [
   ["src/../secret.ts"],
   ["./src/a.ts"],
   ["src\\a.ts"],
+  ["src//a.ts"],
+  ["src/\u0008/a.ts"],
   ["file:///tmp/secret.ts"],
   ["C:tmp/source.ts"],
   ["C:tmp"],

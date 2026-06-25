@@ -36,6 +36,12 @@ application layer may orchestrate discovery through ports and may classify
 deferred indexing outcomes, but it must not expose absolute paths, source text,
 or concrete process payloads across the port boundary.
 
+Content hashes must use the accepted `sha2` production dependency rather than a
+hand-written SHA-256 implementation. Native Git context such as worktree root
+and `info/exclude` location must be resolved through the shared filesystem Git
+helper, which shells out to `git rev-parse`; repository lifecycle hygiene must
+not manually parse `.git` files when native Git can provide the same fact.
+
 ## Tree-sitter boundary
 
 Tree-sitter is the intended universal syntax technology, but parser AST nodes stay in

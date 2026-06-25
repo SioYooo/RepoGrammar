@@ -144,6 +144,7 @@ migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
 status/doctor reporting, active file-manifest-only or syntax-only
+readback, shared repo-relative path policy, native Git context resolution,
 `files`/`units` read paths, product runtime wiring, optional semantic-worker
 fact ingestion through the
 same-generation storage gate, sanitized worker fallback during indexing,

@@ -82,6 +82,9 @@ deferred until language-mode policy is defined. Discovery reports contain
 repository-relative paths, language classification, strict
 `sha256:<64 hex>` content hashes, file sizes, skip reasons, Git ignore status,
 and warnings. They must not contain source snippets or absolute paths.
+Repository-relative paths are lexical, slash-separated, non-empty paths; they
+must reject absolute paths, Windows drive prefixes, backslashes, URI-like text,
+control characters, `.`/`..` traversal segments, and empty path segments.
 
 Skip reasons include RepoGrammar state directories, default excluded
 directories, unsupported extensions, Git-ignored files, oversized files,

@@ -16,6 +16,7 @@ use crate::application::repository::{
     RepositoryUnlockReport, RepositoryUnlockRequest,
 };
 use crate::error::RepoGrammarError;
+use serde_json::json;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,13 +358,13 @@ fn query_fallback(
     if json {
         return CliOutput::failure(
             2,
-            format!(
-                "{{\"status\":\"FALLBACK_TO_CODE_SEARCH\",\"reason\":\"{}\",\"guidance\":\"{}\",\"command\":\"{}\",\"implemented\":{}}}\n",
-                json_string(reason),
-                json_string(guidance),
-                json_string(command),
-                implemented,
-            ),
+            json_line(json!({
+                "status": "FALLBACK_TO_CODE_SEARCH",
+                "reason": reason,
+                "guidance": guidance,
+                "command": command,
+                "implemented": implemented,
+            })),
         );
     }
 
@@ -408,22 +409,22 @@ fn indexed_files_json(report: &IndexedFilesReport) -> String {
         .files
         .iter()
         .map(|file| {
-            format!(
-                "{{\"path\":\"{}\",\"language\":\"{}\",\"size_bytes\":{},\"content_hash\":\"{}\"}}",
-                json_string(&file.path),
-                json_string(&file.language),
-                file.size_bytes,
-                json_string(file.content_hash.as_str())
-            )
+            json!({
+                "path": file.path,
+                "language": file.language,
+                "size_bytes": file.size_bytes,
+                "content_hash": file.content_hash.as_str(),
+            })
         })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"command\":\"files\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"{}\",\"files\":[{}]}}\n",
-        json_string(&report.active_generation),
-        json_string(&report.indexing),
-        files
-    )
+        .collect::<Vec<_>>();
+    json_line(json!({
+        "command": "files",
+        "status": "ok",
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "indexing": report.indexing,
+        "files": files,
+    }))
 }
 
 fn indexed_units_human(report: &IndexedCodeUnitsReport) -> String {
@@ -453,25 +454,27 @@ fn indexed_units_json(report: &IndexedCodeUnitsReport) -> String {
         .units
         .iter()
         .map(|unit| {
-            format!(
-                "{{\"id\":\"{}\",\"path\":\"{}\",\"language\":\"{}\",\"kind\":\"{}\",\"start_byte\":{},\"end_byte\":{},\"content_hash\":\"{}\"}}",
-                json_string(&unit.id),
-                json_string(&unit.path),
-                json_string(&unit.language),
-                json_string(&unit.kind),
-                unit.start_byte,
-                unit.end_byte,
-                json_string(unit.content_hash.as_str())
-            )
+            json!({
+                "id": unit.id,
+                "path": unit.path,
+                "language": unit.language,
+                "kind": unit.kind,
+                "start_byte": unit.start_byte,
+                "end_byte": unit.end_byte,
+                "content_hash": unit.content_hash.as_str(),
+            })
         })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"command\":\"units\",\"status\":\"ok\",\"implemented\":true,\"active_generation\":\"{}\",\"indexing\":\"{}\",\"semantic_worker\":\"deferred\",\"mining\":\"deferred\",\"units\":[{}]}}\n",
-        json_string(&report.active_generation),
-        json_string(&report.indexing),
-        units
-    )
+        .collect::<Vec<_>>();
+    json_line(json!({
+        "command": "units",
+        "status": "ok",
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "indexing": report.indexing,
+        "semantic_worker": "deferred",
+        "mining": "deferred",
+        "units": units,
+    }))
 }
 
 fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
@@ -545,10 +548,16 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
 }
 
 fn stats_json() -> String {
-    format!(
-        "{{\"command\":\"stats\",\"status\":\"deferred\",\"implemented\":false,\"metrics\":[],\"metric_kinds\":[\"MEASURED\",\"DERIVED\",\"ESTIMATED\",\"CAUSAL_EXPERIMENT\"],\"token_savings\":null,\"context_compression_ratio\":null,\"guidance\":\"{}\"}}\n",
-        json_string("run repogrammar index after metrics collection is implemented")
-    )
+    json_line(json!({
+        "command": "stats",
+        "status": "deferred",
+        "implemented": false,
+        "metrics": [],
+        "metric_kinds": ["MEASURED", "DERIVED", "ESTIMATED", "CAUSAL_EXPERIMENT"],
+        "token_savings": null,
+        "context_compression_ratio": null,
+        "guidance": "run repogrammar index after metrics collection is implemented",
+    }))
 }
 
 fn handle_telemetry(rest: &[String]) -> CliOutput {
@@ -773,11 +782,13 @@ fn handle_deferred_long_running(command: &str, options: &LifecycleOptions) -> Cl
     if options.json {
         return CliOutput::failure(
             2,
-            format!(
-                "{{\"command\":\"{}\",\"status\":\"not_implemented\",\"implemented\":false,\"progress\":\"{}\",\"reason\":\"indexing and sync require discovery, storage, and generation validation\"}}\n",
-                json_string(command),
-                options.progress.as_str()
-            ),
+            json_line(json!({
+                "command": command,
+                "status": "not_implemented",
+                "implemented": false,
+                "progress": options.progress.as_str(),
+                "reason": "indexing and sync require discovery, storage, and generation validation",
+            })),
         );
     }
 
@@ -1150,14 +1161,17 @@ fn init_outcome_human(outcome: &RepositoryInitOutcome) -> String {
 }
 
 fn init_outcome_json(outcome: &RepositoryInitOutcome) -> String {
-    format!(
-        "{{\"command\":\"init\",\"status\":\"initialized\",\"state_dir\":\"{}\",\"created\":{},\"git_info_exclude_updated\":{},\"root_gitignore_updated\":{},\"storage\":\"not_implemented\",\"indexing\":\"not_implemented\",\"repaired_entries\":{}}}\n",
-        json_string(&outcome.state_dir),
-        outcome.created,
-        outcome.git_info_exclude_updated,
-        outcome.root_gitignore_updated,
-        json_array(&outcome.repaired_entries)
-    )
+    json_line(json!({
+        "command": "init",
+        "status": "initialized",
+        "state_dir": outcome.state_dir,
+        "created": outcome.created,
+        "git_info_exclude_updated": outcome.git_info_exclude_updated,
+        "root_gitignore_updated": outcome.root_gitignore_updated,
+        "storage": "not_implemented",
+        "indexing": "not_implemented",
+        "repaired_entries": outcome.repaired_entries,
+    }))
 }
 
 fn uninit_outcome_human(outcome: &RepositoryUninitOutcome) -> String {
@@ -1173,12 +1187,12 @@ fn uninit_outcome_human(outcome: &RepositoryUninitOutcome) -> String {
 }
 
 fn uninit_outcome_json(outcome: &RepositoryUninitOutcome) -> String {
-    format!(
-        "{{\"command\":\"uninit\",\"state_dir\":\"{}\",\"removed\":{},\"logs_removed\":{}}}\n",
-        json_string(&outcome.state_dir),
-        outcome.removed,
-        outcome.removed
-    )
+    json_line(json!({
+        "command": "uninit",
+        "state_dir": outcome.state_dir,
+        "removed": outcome.removed,
+        "logs_removed": outcome.removed,
+    }))
 }
 
 fn index_outcome_human(
@@ -1210,19 +1224,22 @@ fn index_outcome_json(
     outcome: &IndexingOutcome,
     options: &LifecycleOptions,
 ) -> String {
-    format!(
-        "{{\"command\":\"{}\",\"status\":\"complete\",\"generation_id\":{},\"discovered_files\":{},\"stored_files\":{},\"skipped_paths\":{},\"indexed_units\":{},\"semantic_facts\":{},\"indexing\":\"syntax_only_code_units\",\"parser\":\"syntax_only\",\"semantic_worker\":\"{}\",\"mining\":\"deferred\",\"progress\":\"{}\",\"warnings\":{}}}\n",
-        json_string(command),
-        optional_json_string(outcome.active_generation.as_deref()),
-        outcome.discovered_files,
-        outcome.discovered_files,
-        outcome.skipped_paths,
-        outcome.indexed_units,
-        outcome.semantic_facts,
-        outcome.semantic_worker.as_str(),
-        options.progress.as_str(),
-        json_array(&outcome.warnings)
-    )
+    json_line(json!({
+        "command": command,
+        "status": "complete",
+        "generation_id": outcome.active_generation,
+        "discovered_files": outcome.discovered_files,
+        "stored_files": outcome.discovered_files,
+        "skipped_paths": outcome.skipped_paths,
+        "indexed_units": outcome.indexed_units,
+        "semantic_facts": outcome.semantic_facts,
+        "indexing": "syntax_only_code_units",
+        "parser": "syntax_only",
+        "semantic_worker": outcome.semantic_worker.as_str(),
+        "mining": "deferred",
+        "progress": options.progress.as_str(),
+        "warnings": outcome.warnings,
+    }))
 }
 
 fn status_human(report: &RepositoryStatusReport) -> String {
@@ -1289,50 +1306,32 @@ fn status_human(report: &RepositoryStatusReport) -> String {
 }
 
 fn status_json(report: &RepositoryStatusReport) -> String {
-    format!(
-        "{{\"command\":\"status\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"manifest\":\"{}\",\"active_generation\":{},\"manifest_schema_version\":{},\"storage_schema_version\":{},\"journal_mode\":{},\"integrity_check\":{},\"foreign_keys_enabled\":{},\"storage\":\"{}\",\"indexing\":\"{}\",\"storage_error\":{},\"missing_subdirs\":{}}}\n",
-        matches!(report.status, RepositoryStatus::Initialized { .. }),
-        json_string(&report.state_dir),
-        repository_status_value(&report.status),
-        manifest_status(report.manifest),
-        match &report.status {
-            RepositoryStatus::Initialized { active_generation }
-                if active_generation != "none" && active_generation != "not implemented" =>
-            {
-                optional_json_string(Some(active_generation.as_str()))
-            }
-            _ => "null".to_string(),
-        },
-        optional_json_number(report.manifest_schema_version),
-        report
-            .storage_inspection
-            .as_ref()
-            .and_then(|inspection| inspection.schema_version)
-            .map(|version| version.to_string())
-            .unwrap_or_else(|| "null".to_string()),
-        optional_json_string(
-            report
-                .storage_inspection
-                .as_ref()
-                .and_then(|inspection| inspection.journal_mode.as_deref())
-        ),
-        optional_json_string(
-            report
-                .storage_inspection
-                .as_ref()
-                .and_then(|inspection| inspection.integrity_check.as_deref())
-        ),
-        report
-            .storage_inspection
-            .as_ref()
-            .and_then(|inspection| inspection.foreign_keys_enabled)
-            .map(|enabled| enabled.to_string())
-            .unwrap_or_else(|| "null".to_string()),
-        implementation_status(report.storage),
-        implementation_status(report.indexing),
-        optional_json_string(report.storage_error.as_deref()),
-        json_array(&report.missing_subdirs)
-    )
+    let active_generation = match &report.status {
+        RepositoryStatus::Initialized { active_generation }
+            if active_generation != "none" && active_generation != "not implemented" =>
+        {
+            Some(active_generation.as_str())
+        }
+        _ => None,
+    };
+    let storage_inspection = report.storage_inspection.as_ref();
+    json_line(json!({
+        "command": "status",
+        "initialized": matches!(report.status, RepositoryStatus::Initialized { .. }),
+        "state_dir": report.state_dir,
+        "status": repository_status_value(&report.status),
+        "manifest": manifest_status(report.manifest),
+        "active_generation": active_generation,
+        "manifest_schema_version": report.manifest_schema_version,
+        "storage_schema_version": storage_inspection.and_then(|inspection| inspection.schema_version),
+        "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
+        "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
+        "foreign_keys_enabled": storage_inspection.and_then(|inspection| inspection.foreign_keys_enabled),
+        "storage": implementation_status(report.storage),
+        "indexing": implementation_status(report.indexing),
+        "storage_error": report.storage_error,
+        "missing_subdirs": report.missing_subdirs,
+    }))
 }
 
 fn doctor_human(report: &RepositoryDoctorReport) -> String {
@@ -1354,53 +1353,35 @@ fn doctor_human(report: &RepositoryDoctorReport) -> String {
 }
 
 fn doctor_json(report: &RepositoryDoctorReport) -> String {
-    let findings = report
-        .findings
-        .iter()
-        .map(finding_json)
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"command\":\"doctor\",\"initialized\":{},\"state_dir\":\"{}\",\"status\":\"{}\",\"checks\":{{\"manifest\":\"{}\",\"required_subdirectories\":\"{}\",\"lifecycle_hygiene\":\"{}\",\"locks\":\"{}\",\"storage\":\"{}\",\"indexing\":\"{}\",\"manifest_schema_version\":{},\"storage_schema_version\":{},\"journal_mode\":{},\"integrity_check\":{}}},\"findings\":[{}]}}\n",
-        matches!(report.status.status, RepositoryStatus::Initialized { .. }),
-        json_string(&report.status.state_dir),
-        repository_status_value(&report.status.status),
-        manifest_status(report.status.manifest),
+    let findings = report.findings.iter().map(finding_json).collect::<Vec<_>>();
+    let storage_inspection = report.status.storage_inspection.as_ref();
+    let required_subdirectories =
         if matches!(report.status.status, RepositoryStatus::NotInitialized) {
             "not_applicable"
         } else if report.status.missing_subdirs.is_empty() {
             "pass"
         } else {
             "fail"
+        };
+    json_line(json!({
+        "command": "doctor",
+        "initialized": matches!(report.status.status, RepositoryStatus::Initialized { .. }),
+        "state_dir": report.status.state_dir,
+        "status": repository_status_value(&report.status.status),
+        "checks": {
+            "manifest": manifest_status(report.status.manifest),
+            "required_subdirectories": required_subdirectories,
+            "lifecycle_hygiene": lifecycle_hygiene_check(report),
+            "locks": lock_check(report),
+            "storage": implementation_status(report.status.storage),
+            "indexing": implementation_status(report.status.indexing),
+            "manifest_schema_version": report.status.manifest_schema_version,
+            "storage_schema_version": storage_inspection.and_then(|inspection| inspection.schema_version),
+            "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
+            "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
         },
-        lifecycle_hygiene_check(report),
-        lock_check(report),
-        implementation_status(report.status.storage),
-        implementation_status(report.status.indexing),
-        optional_json_number(report.status.manifest_schema_version),
-        report
-            .status
-            .storage_inspection
-            .as_ref()
-            .and_then(|inspection| inspection.schema_version)
-            .map(|version| version.to_string())
-            .unwrap_or_else(|| "null".to_string()),
-        optional_json_string(
-            report
-                .status
-                .storage_inspection
-                .as_ref()
-                .and_then(|inspection| inspection.journal_mode.as_deref())
-        ),
-        optional_json_string(
-            report
-                .status
-                .storage_inspection
-                .as_ref()
-                .and_then(|inspection| inspection.integrity_check.as_deref())
-        ),
-        findings
-    )
+        "findings": findings,
+    }))
 }
 
 fn lock_check(report: &RepositoryDoctorReport) -> &'static str {
@@ -1462,13 +1443,13 @@ fn unlock_human(outcome: &RepositoryUnlockReport) -> String {
 }
 
 fn unlock_json(outcome: &RepositoryUnlockReport) -> String {
-    format!(
-        "{{\"command\":\"unlock\",\"state_dir\":\"{}\",\"removed_locks\":{},\"inspected_locks\":{},\"message\":\"{}\"}}\n",
-        json_string(&outcome.state_dir),
-        outcome.removed_locks,
-        json_array(&outcome.inspected_locks),
-        json_string(&outcome.message)
-    )
+    json_line(json!({
+        "command": "unlock",
+        "state_dir": outcome.state_dir,
+        "removed_locks": outcome.removed_locks,
+        "inspected_locks": outcome.inspected_locks,
+        "message": outcome.message,
+    }))
 }
 
 fn logs_human(outcome: &RepositoryLogsReport) -> String {
@@ -1481,20 +1462,18 @@ fn logs_human(outcome: &RepositoryLogsReport) -> String {
 }
 
 fn logs_json(outcome: &RepositoryLogsReport, options: &LogsOptions) -> String {
-    format!(
-        "{{\"command\":\"logs\",\"state_dir\":\"{}\",\"available\":{},\"redacted\":{},\"paths\":\"repo_relative_only\",\"component_filter\":{},\"tail\":{},\"since\":{},\"entries\":{},\"message\":\"{}\"}}\n",
-        json_string(&outcome.state_dir),
-        outcome.available,
-        outcome.redacted,
-        optional_json_string(options.component.as_deref()),
-        options
-            .tail
-            .map(|tail| tail.to_string())
-            .unwrap_or_else(|| "null".to_string()),
-        optional_json_string(options.since.as_deref()),
-        json_array(&outcome.entries),
-        json_string(&outcome.message)
-    )
+    json_line(json!({
+        "command": "logs",
+        "state_dir": outcome.state_dir,
+        "available": outcome.available,
+        "redacted": outcome.redacted,
+        "paths": "repo_relative_only",
+        "component_filter": options.component,
+        "tail": options.tail,
+        "since": options.since,
+        "entries": outcome.entries,
+        "message": outcome.message,
+    }))
 }
 
 fn repository_status_value(status: &RepositoryStatus) -> &'static str {
@@ -1557,75 +1536,39 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
     }
 }
 
-fn finding_json(finding: &RepositoryDoctorFinding) -> String {
-    format!(
-        "{{\"severity\":\"{}\",\"code\":\"{}\",\"detail\":\"{}\"}}",
-        doctor_severity(finding.severity),
-        doctor_code(finding.code),
-        json_string(&finding.detail)
-    )
+fn finding_json(finding: &RepositoryDoctorFinding) -> serde_json::Value {
+    json!({
+        "severity": doctor_severity(finding.severity),
+        "code": doctor_code(finding.code),
+        "detail": finding.detail,
+    })
 }
 
 fn lifecycle_error(command: &str, json: bool, error: RepoGrammarError) -> CliOutput {
     if json {
         CliOutput::failure(
             2,
-            format!(
-                "{{\"command\":\"{}\",\"status\":\"error\",\"reason\":\"{}\"}}\n",
-                json_string(command),
-                json_string(&error.to_string())
-            ),
+            json_line(json!({
+                "command": command,
+                "status": "error",
+                "reason": error.to_string(),
+            })),
         )
     } else {
         CliOutput::failure(2, format!("{error}\n"))
     }
 }
 
-fn json_array(values: &[String]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| format!("\"{}\"", json_string(value)))
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-}
-
-fn optional_json_string(value: Option<&str>) -> String {
-    value
-        .map(|value| format!("\"{}\"", json_string(value)))
-        .unwrap_or_else(|| "null".to_string())
-}
-
-fn optional_json_number(value: Option<u32>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "null".to_string())
+fn json_line(value: serde_json::Value) -> String {
+    let mut output = value.to_string();
+    output.push('\n');
+    output
 }
 
 fn optional_human_number(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".to_string())
-}
-
-fn json_string(value: &str) -> String {
-    let mut escaped = String::new();
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            control if (control as u32) <= 0x1f => {
-                escaped.push_str(&format!("\\u{:04x}", control as u32));
-            }
-            other => escaped.push(other),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
@@ -1649,6 +1592,7 @@ mod tests {
     use rusqlite::Connection;
     use serde_json::Value;
     use std::fs;
+    use std::process::Command;
 
     fn current_lock_host_json() -> String {
         let host = ["HOSTNAME", "COMPUTERNAME"]
@@ -1660,18 +1604,31 @@ mod tests {
                     && !value.contains('\\')
                     && !value.chars().any(char::is_control)
             });
-        host.map(|value| format!("\"{}\"", json_string(&value)))
+        host.map(|value| json!(value).to_string())
             .unwrap_or_else(|| "null".to_string())
     }
 
     fn stale_index_lock_json(token: &str) -> String {
-        format!(
-            "{{\"kind\":\"index\",\"pid\":0,\"host\":{},\"os\":\"{}\",\"started_unix_seconds\":1,\"repogrammar_version\":\"{}\",\"token\":\"{}\"}}\n",
-            current_lock_host_json(),
-            std::env::consts::OS,
-            env!("CARGO_PKG_VERSION"),
-            json_string(token)
-        )
+        let mut value = json!({
+            "kind": "index",
+            "pid": 0,
+            "host": null,
+            "os": std::env::consts::OS,
+            "started_unix_seconds": 1,
+            "repogrammar_version": env!("CARGO_PKG_VERSION"),
+            "token": token,
+        });
+        value["host"] = serde_json::from_str(&current_lock_host_json()).expect("host JSON");
+        json_line(value)
+    }
+
+    fn git_init(workspace: &TempWorkspace) -> bool {
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     struct TestRuntime;
@@ -2424,7 +2381,6 @@ mod tests {
     #[test]
     fn init_creates_state_and_json_is_parseable() {
         let workspace = TempWorkspace::new("cli-init");
-        create_git_dir(workspace.path());
         let env = |_: &str| None;
 
         let output = run_with_context(
@@ -2874,7 +2830,9 @@ mod tests {
     fn doctor_json_reports_lifecycle_hygiene_codes() {
         let workspace = TempWorkspace::new("cli-doctor-lifecycle-hygiene");
         let env = |_: &str| None;
-        fs::create_dir_all(workspace.path().join(".git")).expect("create git dir");
+        if !git_init(&workspace) {
+            return;
+        }
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
         let state = workspace.path().join(DEFAULT_STATE_DIR);
         fs::write(state.join(".gitignore"), "bad\n").expect("write bad state gitignore");
@@ -3321,10 +3279,5 @@ mod tests {
 
         assert_eq!(output.status, 2);
         assert!(output.stderr.contains("unknown stats option: --mystery"));
-    }
-
-    fn create_git_dir(root: &Path) {
-        fs::create_dir(root.join(".git")).expect("create .git");
-        fs::create_dir(root.join(".git/info")).expect("create .git/info");
     }
 }

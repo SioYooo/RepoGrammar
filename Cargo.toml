@@ -24,3 +24,6 @@ rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"
 # Production: semantic-worker adapters validate NDJSON v1 from isolated worker
 # processes before translating messages into RepoGrammar-owned facts.
 serde_json = "1"
+# Production: filesystem adapters compute strict SHA-256 content hashes for
+# repository evidence using the standard RustCrypto implementation.
+sha2 = "0.10"

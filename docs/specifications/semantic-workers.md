@@ -97,6 +97,10 @@ strict SHA-256 content hash, repository revision, byte range, and note. Worker
 errors must use typed error codes; unsupported TypeScript compiler API versions
 use `SEMANTIC_VERSION_UNSUPPORTED` with a syntax-only fallback instead of
 semantic certainty.
+Semantic-worker request and evidence paths use the same lexical repo-relative
+policy as storage: non-empty slash-separated paths only, with absolute paths,
+Windows drive prefixes, backslashes, URI-like text, control characters,
+`.`/`..` traversal segments, and empty segments rejected.
 
 Fact `target` values are optional. When present, a target must be either `null`
 or a non-blank string; empty and whitespace-only strings are not valid

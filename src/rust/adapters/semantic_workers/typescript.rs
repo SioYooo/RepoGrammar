@@ -9,6 +9,7 @@ use crate::core::model::{
     CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, Provenance, RepositoryRevision,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
+use crate::core::policy::paths::looks_like_windows_absolute_path;
 use crate::ports::semantic_worker::{
     SemanticWorker, SemanticWorkerError, SemanticWorkerRequest, SEMANTIC_VERSION_UNSUPPORTED_CODE,
     SEMANTIC_WORKER_PROTOCOL_VERSION,
@@ -16,7 +17,7 @@ use crate::ports::semantic_worker::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -798,31 +799,7 @@ fn looks_like_source_snippet(value: &str) -> bool {
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), ()> {
-    if path.trim().is_empty() || Path::new(path).is_absolute() {
-        return Err(());
-    }
-    if path.contains('\\')
-        || path.contains("://")
-        || path.contains('\0')
-        || looks_like_windows_absolute_path(path)
-    {
-        return Err(());
-    }
-    for component in Path::new(path).components() {
-        match component {
-            Component::Normal(_) => {}
-            Component::CurDir
-            | Component::ParentDir
-            | Component::Prefix(_)
-            | Component::RootDir => return Err(()),
-        }
-    }
-    Ok(())
-}
-
-fn looks_like_windows_absolute_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+    crate::core::policy::paths::validate_repo_relative_path(path).map_err(|_| ())
 }
 
 #[cfg(test)]

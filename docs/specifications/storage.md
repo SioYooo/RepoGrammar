@@ -289,6 +289,10 @@ raw path. Every family and evidence row must carry generation id; every evidence
 row must carry file content hash and source range. Full repository revision
 metadata for family evidence remains deferred until repository/worktree
 freshness metadata is implemented.
+Repository-relative storage paths are lexical, slash-separated, non-empty
+paths. They must reject absolute paths, Windows drive prefixes, backslashes,
+URI-like text, control characters, `.`/`..` traversal segments, and empty path
+segments before activation or readback.
 Unknown facts must retain reason code, affected claim, freshness status, and
 recovery guidance where applicable.
 

@@ -121,6 +121,17 @@
 
 - Tightened provenance and semantic-worker evidence docs around strict
   `sha256:<64 hex>` content hashes.
+- Replaced the bootstrap SHA-256 implementation with the standard `sha2` crate
+  while preserving strict `sha256:<64 hex>` content-hash output and vector
+  tests.
+- Replaced CLI and progress JSON string assembly with `serde_json` builders for
+  parseable machine output without changing human output.
+- Centralized lexical repo-relative path validation across source reads,
+  storage, SQLite validation, semantic-worker boundaries, schemas, and protocol
+  tests.
+- Centralized native Git context resolution for discovery ignore checks and
+  repo-local `.git/info/exclude` hygiene instead of manually parsing `.git`
+  files.
 - Bound discovery hashing and source-store reads to `max_file_bytes + 1` bytes
   so oversized files are classified without allocating the full file.
 - Changed TS/JS discovery to resolve parent Git worktrees before running

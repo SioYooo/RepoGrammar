@@ -53,12 +53,9 @@ pub trait SemanticWorker {
 mod tests {
     use super::*;
     use crate::core::model::{ContentHash, FactCertainty, SemanticFactKind};
+    use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
     use serde_json::{json, Map, Value};
-    use std::{
-        collections::BTreeSet,
-        fs,
-        path::{Component, Path},
-    };
+    use std::{collections::BTreeSet, fs, path::Path};
 
     #[test]
     fn protocol_version_is_pinned_to_v1() {
@@ -124,7 +121,15 @@ mod tests {
         let changed_file_pattern = schema["properties"]["changed_files"]["items"]["pattern"]
             .as_str()
             .expect("changed file item must define a path-safety pattern");
-        for fragment in ["(?!/)", "(?![A-Za-z]:)", "\\.\\.", ".*\\\\", "://"] {
+        for fragment in [
+            "(?!/)",
+            "(?![A-Za-z]:)",
+            "(?!.*//)",
+            "\\u0000-\\u001F",
+            "\\.\\.",
+            ".*\\\\",
+            "://",
+        ] {
             assert!(
                 changed_file_pattern.contains(fragment),
                 "changed file pattern should constrain {fragment}"
@@ -360,6 +365,8 @@ mod tests {
             "src\\source.ts",
             "../source.ts",
             "src/../source.ts",
+            "src//source.ts",
+            "src/\u{0008}/source.ts",
             "C:tmp/source.ts",
         ] {
             let mut fact = valid_fact_message();
@@ -561,32 +568,18 @@ mod tests {
     }
 
     fn validate_request_changed_file(path: &str) -> Result<(), String> {
-        if path.trim().is_empty()
-            || Path::new(path).is_absolute()
-            || path.contains('\\')
-            || path.contains("://")
-            || path.contains('\0')
-            || looks_like_windows_absolute_path(path)
-        {
-            return Err("changed file must be repository-relative".to_string());
-        }
-        for component in Path::new(path).components() {
-            match component {
-                Component::Normal(_) => {}
-                Component::CurDir
-                | Component::ParentDir
-                | Component::Prefix(_)
-                | Component::RootDir => {
-                    return Err("changed file must not traverse outside repository".to_string());
-                }
+        crate::core::policy::paths::validate_repo_relative_path(path).map_err(|error| match error {
+            RepoRelativePathError::Traversal => {
+                "changed file must not traverse outside repository".to_string()
             }
-        }
-        Ok(())
-    }
-
-    fn looks_like_windows_absolute_path(path: &str) -> bool {
-        let bytes = path.as_bytes();
-        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+            RepoRelativePathError::Empty
+            | RepoRelativePathError::Absolute
+            | RepoRelativePathError::Backslash
+            | RepoRelativePathError::ControlCharacter
+            | RepoRelativePathError::UriLike => {
+                "changed file must be repository-relative".to_string()
+            }
+        })
     }
 
     fn validate_protocol_text(value: &str, field: &str) -> Result<(), String> {
@@ -792,7 +785,15 @@ mod tests {
         let pattern = path_schema["pattern"]
             .as_str()
             .expect("path schema must define a path-safety pattern");
-        for fragment in ["(?!/)", "(?![A-Za-z]:)", "\\.\\.", ".*\\\\", "://"] {
+        for fragment in [
+            "(?!/)",
+            "(?![A-Za-z]:)",
+            "(?!.*//)",
+            "\\u0000-\\u001F",
+            "\\.\\.",
+            ".*\\\\",
+            "://",
+        ] {
             assert!(
                 pattern.contains(fragment),
                 "evidence path pattern should constrain {fragment}"
