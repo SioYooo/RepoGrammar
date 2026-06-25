@@ -139,7 +139,12 @@ The current implementation covers the first structural slice only:
   exact FastAPI, FastAPI router-alias, pytest, Pydantic model,
   Pydantic settings, SQLAlchemy model, and SQLAlchemy session/repository
   anchors can produce default families only through separate derived support
-  facts, and keep the test-injected
+  facts, prove exact-anchor family reads across `families`, `family`,
+  `member`, `find`, `explain`, and advisory `check`, prove token-budget
+  automatic evidence selection plus explicit compact/evidence/deep modes stay
+  metadata-only, prove supported MCP operations return the same family context,
+  prove stale source mutation or deletion returns blocking `StaleEvidence`
+  `UNKNOWN`, and keep the test-injected
   `SEMANTIC` worker fixture as coverage for the explicit worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored

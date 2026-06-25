@@ -163,8 +163,11 @@ allowed.
   return typed `UNKNOWN`/`InsufficientSupport`, and positive family cases require
   either exact-anchor derived `DATAFLOW_DERIVED` support or an explicitly
   injected compatible semantic/dataflow support fixture. Positive family smoke
-  tests must cover compact default output without evidence records and explicit
-  evidence mode output with repo-relative metadata only.
+  tests must cover compact default output without evidence records, `member`,
+  `find`, `explain`, and advisory `check` read paths, token-budget auto
+  evidence mode, explicit compact override, explicit evidence and deep modes
+  with repo-relative metadata only, MCP parity for supported operations, and
+  stale-evidence `UNKNOWN` after source mutation or deletion.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
@@ -181,9 +184,10 @@ allowed.
   exact-anchor derived support facts producing no-worker direct FastAPI,
   FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
   SQLAlchemy session/repository families only when Python support reaches three
-  members, low-support Python release fixtures preserving `UNKNOWN`, test-only
-  strong support facts proving explicit worker family read paths only when
-  compatible `SEMANTIC` evidence is injected, stale
+  members, their CLI/MCP metadata-only compact/evidence/deep query paths,
+  low-support Python release fixtures preserving `UNKNOWN`, test-only strong
+  support facts proving explicit worker family read paths only when compatible
+  `SEMANTIC` evidence is injected, stale
   evidence fallback, and typed canonical framework identities rather than
   framework-name substring matching. Future Python slices must add coverage for
   default-index import context, Tree-sitter

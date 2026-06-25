@@ -47,7 +47,11 @@
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming
-  provider-backed Python semantics. Default indexing validates and persists
+  provider-backed Python semantics. It also covers exact-anchor `member`,
+  `find`, `explain`, advisory `check`, token-budget auto evidence, explicit
+  compact/evidence/deep metadata modes, MCP parity for supported operations,
+  and stale source mutation/deletion returning `StaleEvidence` `UNKNOWN`.
+  Default indexing validates and persists
   parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
   and CLI/MCP family evidence.

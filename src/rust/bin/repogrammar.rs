@@ -720,6 +720,231 @@ mod tests {
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct PythonExactAnchorSmokeCase {
+        fixture: &'static str,
+        family_id: &'static str,
+        support_target: &'static str,
+        evidence_path: &'static str,
+        member_role: &'static str,
+    }
+
+    const PYTHON_EXACT_ANCHOR_SMOKE_CASES: &[PythonExactAnchorSmokeCase] = &[
+        PythonExactAnchorSmokeCase {
+            fixture: "positive-strong-evidence",
+            family_id: "family:python:fastapi_route:framework_fastapi_route",
+            support_target: "fastapi.APIRouter.get",
+            evidence_path: "routes.py",
+            member_role: "framework:fastapi.route",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "fastapi-alias-strong-evidence",
+            family_id: "family:python:fastapi_route:framework_fastapi_route",
+            support_target: "fastapi.APIRouter.get",
+            evidence_path: "routes.py",
+            member_role: "framework:fastapi.route",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "pytest-strong-evidence",
+            family_id: "family:python:pytest_test:framework_pytest_test",
+            support_target: "pytest.test",
+            evidence_path: "test_api.py",
+            member_role: "framework:pytest.test",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "pydantic-basic",
+            family_id: "family:python:pydantic_model:framework_pydantic_model",
+            support_target: "pydantic.BaseModel",
+            evidence_path: "schemas.py",
+            member_role: "framework:pydantic.model",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "pydantic-settings-strong-evidence",
+            family_id: "family:python:pydantic_model:framework_pydantic_model",
+            support_target: "pydantic.BaseSettings",
+            evidence_path: "settings.py",
+            member_role: "framework:pydantic.model",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "pydantic-settings-package-strong-evidence",
+            family_id: "family:python:pydantic_model:framework_pydantic_model",
+            support_target: "pydantic_settings.BaseSettings",
+            evidence_path: "settings.py",
+            member_role: "framework:pydantic.model",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-strong-evidence",
+            family_id:
+                "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+            support_target: "sqlalchemy.select",
+            evidence_path: "repository.py",
+            member_role: "framework:sqlalchemy.repository_method",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-session-strong-evidence",
+            family_id:
+                "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+            support_target: "sqlalchemy.orm.Session.execute",
+            evidence_path: "repository.py",
+            member_role: "framework:sqlalchemy.repository_method",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-model-strong-evidence",
+            family_id: "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+            support_target: "sqlalchemy.orm.Mapped",
+            evidence_path: "models.py",
+            member_role: "framework:sqlalchemy.model",
+        },
+    ];
+
+    fn assert_content_hash_json(value: &Value) {
+        let hash = value.as_str().expect("content hash string");
+        let Some(hex) = hash.strip_prefix("sha256:") else {
+            panic!("hash missing sha256 prefix: {hash}");
+        };
+        assert_eq!(hex.len(), 64, "sha256 hash length");
+        assert!(
+            hex.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit()),
+            "sha256 hash must be hex: {hash}"
+        );
+    }
+
+    fn assert_repo_relative_json_path(value: &Value) {
+        let path = value.as_str().expect("path string");
+        assert!(!path.is_empty(), "path must not be empty");
+        assert!(!path.starts_with('/'), "path must be relative: {path}");
+        assert!(
+            !path.split('/').any(|component| component == ".."),
+            "path must not traverse: {path}"
+        );
+        assert!(
+            !path.contains('\\'),
+            "path must use forward slashes: {path}"
+        );
+        assert!(!path.contains("://"), "path must not be a URI: {path}");
+        assert!(
+            !path
+                .as_bytes()
+                .windows(2)
+                .any(|window| window[0].is_ascii_alphabetic() && window[1] == b':'),
+            "path must not be Windows-absolute: {path}"
+        );
+    }
+
+    fn assert_python_exact_anchor_family_detail(
+        command: &str,
+        value: &Value,
+        case: PythonExactAnchorSmokeCase,
+    ) -> String {
+        assert_eq!(value["command"], command);
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["family"]["family_id"], case.family_id);
+        assert_eq!(value["family"]["classification"], "DOMINANT_PATTERN");
+        assert_eq!(value["family"]["support"], 3);
+        assert_eq!(value["output"]["mode"], "compact");
+        assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
+        assert_eq!(value["output"]["source_snippets_included"], false);
+        assert!(value["evidence"].as_array().expect("evidence").is_empty());
+        assert_eq!(value["unknowns"][0]["reason"], "FrameworkMagic");
+        assert_eq!(value["unknowns"][0]["class"], "non_blocking_unknown");
+        let members = value["members"].as_array().expect("members");
+        assert_eq!(members.len(), 3);
+        assert!(members.iter().all(|member| {
+            member["family_id"] == case.family_id && member["role"] == case.member_role
+        }));
+        members[0]["code_unit_id"]
+            .as_str()
+            .expect("member code unit id")
+            .to_string()
+    }
+
+    fn assert_python_exact_anchor_evidence(
+        command: &str,
+        value: &Value,
+        case: PythonExactAnchorSmokeCase,
+        mode: &str,
+        token_budget: Option<u64>,
+    ) {
+        assert_eq!(value["command"], command);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["family"]["family_id"], case.family_id);
+        assert_eq!(value["family"]["support"], 3);
+        assert_eq!(value["output"]["mode"], mode);
+        match token_budget {
+            Some(token_budget) => assert_eq!(value["output"]["token_budget"], token_budget),
+            None => assert!(value["output"]["token_budget"].is_null()),
+        }
+        assert_eq!(value["output"]["source_snippets_included"], false);
+        assert_eq!(
+            value["output"]["selection_strategy"],
+            "greedy_marginal_coverage_v1"
+        );
+        assert_eq!(
+            value["output"]["covered_claims"],
+            serde_json::json!(["canonical", "support"])
+        );
+        assert_eq!(value["output"]["missing_claims"], serde_json::json!([]));
+        let evidence = value["evidence"].as_array().expect("evidence");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["family_id"], case.family_id);
+        assert_eq!(evidence[0]["path"], case.evidence_path);
+        assert_eq!(
+            evidence[0]["covered_claims"],
+            serde_json::json!(["canonical", "support"])
+        );
+        assert_repo_relative_json_path(&evidence[0]["path"]);
+        assert_content_hash_json(&evidence[0]["content_hash"]);
+        assert!(
+            evidence[0]["start_byte"].as_u64().expect("start")
+                < evidence[0]["end_byte"].as_u64().expect("end")
+        );
+    }
+
+    fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
+        assert_eq!(value["command"], command);
+        assert_eq!(value["status"], "UNKNOWN");
+        assert_eq!(value["implemented"], true);
+        assert!(
+            value.get("family").is_none(),
+            "stale output must not include family"
+        );
+        assert!(
+            value.get("members").is_none(),
+            "stale output must not include members"
+        );
+        assert!(
+            value.get("evidence").is_none(),
+            "stale output must not include evidence"
+        );
+        assert!(
+            value.get("check").is_none(),
+            "stale output must not include check"
+        );
+        assert_eq!(value["unknowns"][0]["class"], "blocking_unknown");
+        assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
+        assert_eq!(
+            value["unknowns"][0]["affected_claim"],
+            format!("{family_id}:evidence_freshness")
+        );
+        assert_eq!(value["unknowns"][0]["recovery"], "run repogrammar sync");
+    }
+
+    fn mcp_context_payload(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+        arguments: Value,
+    ) -> Value {
+        let context = McpServeContext {
+            repository_root: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let payload = handle_context_call(runtime, &context, &arguments).expect("MCP payload");
+        let payload_text = payload.to_string();
+        assert_no_output_leakage("mcp", &payload_text, workspace);
+        payload
+    }
+
     fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         match language {
             DiscoveredLanguage::TypeScript | DiscoveredLanguage::TypeScriptReact => {
@@ -1154,81 +1379,7 @@ mod tests {
 
     #[test]
     fn python_release_fixture_exact_anchors_produce_family_without_worker() {
-        struct ExactAnchorCase {
-            fixture: &'static str,
-            family_id: &'static str,
-            support_target: &'static str,
-            evidence_path: &'static str,
-            member_role: &'static str,
-        }
-
-        const CASES: &[ExactAnchorCase] = &[
-            ExactAnchorCase {
-                fixture: "positive-strong-evidence",
-                family_id: "family:python:fastapi_route:framework_fastapi_route",
-                support_target: "fastapi.APIRouter.get",
-                evidence_path: "routes.py",
-                member_role: "framework:fastapi.route",
-            },
-            ExactAnchorCase {
-                fixture: "fastapi-alias-strong-evidence",
-                family_id: "family:python:fastapi_route:framework_fastapi_route",
-                support_target: "fastapi.APIRouter.get",
-                evidence_path: "routes.py",
-                member_role: "framework:fastapi.route",
-            },
-            ExactAnchorCase {
-                fixture: "pytest-strong-evidence",
-                family_id: "family:python:pytest_test:framework_pytest_test",
-                support_target: "pytest.test",
-                evidence_path: "test_api.py",
-                member_role: "framework:pytest.test",
-            },
-            ExactAnchorCase {
-                fixture: "pydantic-basic",
-                family_id: "family:python:pydantic_model:framework_pydantic_model",
-                support_target: "pydantic.BaseModel",
-                evidence_path: "schemas.py",
-                member_role: "framework:pydantic.model",
-            },
-            ExactAnchorCase {
-                fixture: "pydantic-settings-strong-evidence",
-                family_id: "family:python:pydantic_model:framework_pydantic_model",
-                support_target: "pydantic.BaseSettings",
-                evidence_path: "settings.py",
-                member_role: "framework:pydantic.model",
-            },
-            ExactAnchorCase {
-                fixture: "pydantic-settings-package-strong-evidence",
-                family_id: "family:python:pydantic_model:framework_pydantic_model",
-                support_target: "pydantic_settings.BaseSettings",
-                evidence_path: "settings.py",
-                member_role: "framework:pydantic.model",
-            },
-            ExactAnchorCase {
-                fixture: "sqlalchemy-strong-evidence",
-                family_id: "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
-                support_target: "sqlalchemy.select",
-                evidence_path: "repository.py",
-                member_role: "framework:sqlalchemy.repository_method",
-            },
-            ExactAnchorCase {
-                fixture: "sqlalchemy-session-strong-evidence",
-                family_id: "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
-                support_target: "sqlalchemy.orm.Session.execute",
-                evidence_path: "repository.py",
-                member_role: "framework:sqlalchemy.repository_method",
-            },
-            ExactAnchorCase {
-                fixture: "sqlalchemy-model-strong-evidence",
-                family_id: "family:python:sqlalchemy_model:framework_sqlalchemy_model",
-                support_target: "sqlalchemy.orm.Mapped",
-                evidence_path: "models.py",
-                member_role: "framework:sqlalchemy.model",
-            },
-        ];
-
-        for case in CASES {
+        for case in PYTHON_EXACT_ANCHOR_SMOKE_CASES {
             let workspace =
                 TempWorkspace::new(&format!("python-release-derived-family-{}", case.fixture));
             copy_python_release_fixture(case.fixture, workspace.path());
@@ -1292,6 +1443,9 @@ mod tests {
             );
             let families_json = parse_machine_output("families", &families, &workspace);
             assert_eq!(families_json["status"], "ok");
+            assert_eq!(families_json["command"], "families");
+            assert_eq!(families_json["implemented"], true);
+            assert_eq!(families_json["active_generation"], "gen-000001");
             assert_eq!(
                 families_json["families"]
                     .as_array()
@@ -1304,6 +1458,10 @@ mod tests {
                 .expect("family id")
                 .to_string();
             assert_eq!(family_id, case.family_id);
+            assert_eq!(
+                families_json["families"][0]["classification"],
+                "DOMINANT_PATTERN"
+            );
             assert_eq!(families_json["families"][0]["support"], 3);
 
             let family = run_with_runtime(
@@ -1312,20 +1470,87 @@ mod tests {
             );
             let family_json = parse_machine_output("family", &family, &workspace);
             assert_eq!(family_json["status"], "ok");
-            assert_eq!(family_json["family"]["family_id"], family_id);
-            assert_eq!(family_json["output"]["mode"], "compact");
-            assert_eq!(family_json["output"]["source_snippets_included"], false);
-            assert_eq!(family_json["members"].as_array().expect("members").len(), 3);
-            assert!(family_json["members"]
-                .as_array()
-                .expect("members")
-                .iter()
-                .all(|member| member["role"] == case.member_role));
-            assert!(family_json["evidence"]
+            let member_id = assert_python_exact_anchor_family_detail("family", &family_json, *case);
+
+            let member = run_with_runtime(
+                cli_args("member", workspace.path(), &[&member_id, "--json"]),
+                &runtime,
+            );
+            let member_json = parse_machine_output("member", &member, &workspace);
+            assert_eq!(member_json["status"], "ok");
+            assert_python_exact_anchor_family_detail("member", &member_json, *case);
+
+            for command in ["find", "explain"] {
+                let output = run_with_runtime(
+                    cli_args(command, workspace.path(), &[case.evidence_path, "--json"]),
+                    &runtime,
+                );
+                let value = parse_machine_output(command, &output, &workspace);
+                assert_eq!(value["status"], "ok", "{command} should find family");
+                assert_python_exact_anchor_family_detail(command, &value, *case);
+            }
+
+            let check = run_with_runtime(
+                cli_args("check", workspace.path(), &[case.evidence_path, "--json"]),
+                &runtime,
+            );
+            let check_json = parse_machine_output("check", &check, &workspace);
+            assert_eq!(check_json["status"], "CONTEXT_ONLY");
+            assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+            assert_eq!(
+                check_json["check"]["reason"],
+                "runtime equivalence remains unproven"
+            );
+            assert_eq!(check_json["check"]["fail_on"], "none");
+            assert_python_exact_anchor_family_detail("check", &check_json, *case);
+
+            let family_auto_evidence = run_with_runtime(
+                cli_args(
+                    "family",
+                    workspace.path(),
+                    &[&family_id, "--token-budget", "1", "--json"],
+                ),
+                &runtime,
+            );
+            let auto_evidence_json =
+                parse_machine_output("family", &family_auto_evidence, &workspace);
+            assert_python_exact_anchor_evidence(
+                "family",
+                &auto_evidence_json,
+                *case,
+                "evidence",
+                Some(1),
+            );
+            assert_eq!(auto_evidence_json["output"]["budget_satisfied"], false);
+
+            let family_compact_override = run_with_runtime(
+                cli_args(
+                    "family",
+                    workspace.path(),
+                    &[
+                        &family_id,
+                        "--mode",
+                        "compact",
+                        "--token-budget",
+                        "1",
+                        "--json",
+                    ],
+                ),
+                &runtime,
+            );
+            let compact_override_json =
+                parse_machine_output("family", &family_compact_override, &workspace);
+            assert_eq!(compact_override_json["status"], "ok");
+            assert_eq!(compact_override_json["output"]["mode"], "compact");
+            assert_eq!(compact_override_json["output"]["token_budget"], 1);
+            assert_eq!(
+                compact_override_json["output"]["estimated_evidence_tokens"],
+                0
+            );
+            assert!(compact_override_json["evidence"]
                 .as_array()
                 .expect("evidence")
                 .is_empty());
-            assert_eq!(family_json["unknowns"][0]["reason"], "FrameworkMagic");
 
             let family_evidence = run_with_runtime(
                 cli_args(
@@ -1343,18 +1568,105 @@ mod tests {
                 &runtime,
             );
             let evidence_json = parse_machine_output("family", &family_evidence, &workspace);
-            assert_eq!(evidence_json["status"], "ok");
-            assert_eq!(evidence_json["output"]["mode"], "evidence");
-            assert_eq!(evidence_json["output"]["token_budget"], 1);
-            assert_eq!(evidence_json["output"]["source_snippets_included"], false);
-            assert_eq!(
-                evidence_json["evidence"]
-                    .as_array()
-                    .expect("evidence")
-                    .len(),
-                1
+            assert_python_exact_anchor_evidence(
+                "family",
+                &evidence_json,
+                *case,
+                "evidence",
+                Some(1),
             );
-            assert_eq!(evidence_json["evidence"][0]["path"], case.evidence_path);
+
+            let family_deep = run_with_runtime(
+                cli_args(
+                    "family",
+                    workspace.path(),
+                    &[&family_id, "--mode", "deep", "--json"],
+                ),
+                &runtime,
+            );
+            let deep_json = parse_machine_output("family", &family_deep, &workspace);
+            assert_python_exact_anchor_evidence("family", &deep_json, *case, "deep", None);
+        }
+    }
+
+    #[test]
+    fn python_exact_anchor_queries_return_stale_unknown_without_worker() {
+        fn assert_stale_queries(
+            runtime: &ProductCliRuntime,
+            workspace: &TempWorkspace,
+            case: PythonExactAnchorSmokeCase,
+            member_id: &str,
+        ) {
+            let families =
+                run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+            let families_json = parse_machine_output("families", &families, workspace);
+            assert_python_stale_unknown("families", &families_json, case.family_id);
+            assert!(families_json["families"]
+                .as_array()
+                .expect("families")
+                .is_empty());
+
+            for (command, target) in [
+                ("family", case.family_id),
+                ("member", member_id),
+                ("find", case.evidence_path),
+                ("explain", case.evidence_path),
+                ("check", case.evidence_path),
+            ] {
+                let output = run_with_runtime(
+                    cli_args(command, workspace.path(), &[target, "--json"]),
+                    runtime,
+                );
+                let value = parse_machine_output(command, &output, workspace);
+                assert_python_stale_unknown(command, &value, case.family_id);
+            }
+        }
+
+        let case = *PYTHON_EXACT_ANCHOR_SMOKE_CASES
+            .iter()
+            .find(|case| case.fixture == "sqlalchemy-model-strong-evidence")
+            .expect("SQLAlchemy model exact-anchor case");
+
+        for mode in ["mutated", "deleted"] {
+            let workspace =
+                TempWorkspace::new(&format!("python-release-derived-family-stale-{mode}"));
+            copy_python_release_fixture(case.fixture, workspace.path());
+            let runtime = ProductCliRuntime;
+
+            let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+            let init_json = parse_machine_output("init", &init, &workspace);
+            assert_eq!(init_json["status"], "initialized");
+
+            let index = run_with_runtime(
+                cli_args(
+                    "index",
+                    workspace.path(),
+                    &["--json", "--progress", "never"],
+                ),
+                &runtime,
+            );
+            let index_json = parse_machine_output("index", &index, &workspace);
+            assert_eq!(index_json["status"], "complete");
+
+            let family = run_with_runtime(
+                cli_args("family", workspace.path(), &[case.family_id, "--json"]),
+                &runtime,
+            );
+            let family_json = parse_machine_output("family", &family, &workspace);
+            assert_eq!(family_json["status"], "ok");
+            let member_id = assert_python_exact_anchor_family_detail("family", &family_json, case);
+
+            let evidence_path = workspace.path().join(case.evidence_path);
+            match mode {
+                "mutated" => fs::write(&evidence_path, "# stale replacement\n")
+                    .expect("mutate exact-anchor evidence file"),
+                "deleted" => {
+                    fs::remove_file(&evidence_path).expect("delete exact-anchor evidence file")
+                }
+                _ => unreachable!("covered stale mode"),
+            }
+
+            assert_stale_queries(&runtime, &workspace, case, &member_id);
         }
     }
 
@@ -2249,6 +2561,162 @@ project_includes = ["src"]
         assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
         assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!payload_text.contains("export function"));
+    }
+
+    #[test]
+    fn product_mcp_matches_python_exact_anchor_family_queries_without_source_leakage() {
+        let case = *PYTHON_EXACT_ANCHOR_SMOKE_CASES
+            .iter()
+            .find(|case| case.fixture == "sqlalchemy-model-strong-evidence")
+            .expect("SQLAlchemy model exact-anchor case");
+        let workspace = TempWorkspace::new("product-mcp-python-exact-anchor");
+        copy_python_release_fixture(case.fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+
+        let find = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "find_analogues",
+                "target": case.evidence_path,
+                "mode": "evidence",
+                "token_budget": 1,
+            }),
+        );
+        assert_python_exact_anchor_evidence("find", &find, case, "evidence", Some(1));
+
+        let show = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "show_family",
+                "target": case.family_id,
+                "mode": "deep",
+            }),
+        );
+        assert_python_exact_anchor_evidence("family", &show, case, "deep", None);
+
+        let explain = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "explain_deviation",
+                "target": case.evidence_path,
+            }),
+        );
+        assert_eq!(explain["status"], "ok");
+        assert_python_exact_anchor_family_detail("explain", &explain, case);
+
+        let check = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "check_conformance",
+                "target": case.evidence_path,
+            }),
+        );
+        assert_eq!(check["status"], "CONTEXT_ONLY");
+        assert_eq!(check["check"]["advisory_status"], "UNKNOWN");
+        assert_python_exact_anchor_family_detail("check", &check, case);
+
+        let input = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": McpToolName::Context.as_str(),
+                    "arguments": {
+                        "operation": "find_analogues",
+                        "target": case.evidence_path,
+                        "mode": "evidence",
+                        "token_budget": 1,
+                    },
+                },
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "shutdown",
+            })
+        );
+        let context = McpServeContext {
+            repository_root: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let mut output = Vec::new();
+        serve_json_lines(&runtime, &context, input.as_bytes(), &mut output)
+            .expect("serve MCP lines");
+        let output = String::from_utf8(output).expect("utf8 MCP output");
+        assert_no_output_leakage("mcp-jsonrpc", &output, &workspace);
+        let lines = output.lines().collect::<Vec<_>>();
+        assert!(
+            lines.len() >= 2,
+            "MCP should return list and tool responses"
+        );
+        let tools_response: Value = serde_json::from_str(lines[0]).expect("tools/list response");
+        assert_eq!(
+            tools_response["result"]["tools"][0]["name"],
+            McpToolName::Context.as_str()
+        );
+        assert_eq!(
+            tools_response["result"]["tools"]
+                .as_array()
+                .expect("tools")
+                .len(),
+            1
+        );
+        let tool_response: Value = serde_json::from_str(lines[1]).expect("tools/call response");
+        assert_eq!(tool_response["result"]["isError"], false);
+        assert_eq!(tool_response["result"]["content"][0]["type"], "text");
+        let payload_text = tool_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool payload text");
+        assert_no_output_leakage("mcp-jsonrpc-payload", payload_text, &workspace);
+        let payload: Value = serde_json::from_str(payload_text).expect("tool payload JSON");
+        assert_python_exact_anchor_evidence("find", &payload, case, "evidence", Some(1));
+
+        fs::write(
+            workspace.path().join(case.evidence_path),
+            "# stale replacement\n",
+        )
+        .expect("mutate exact-anchor evidence file");
+        for (operation, target, command) in [
+            ("find_analogues", case.evidence_path, "find"),
+            ("show_family", case.family_id, "family"),
+            ("explain_deviation", case.evidence_path, "explain"),
+            ("check_conformance", case.evidence_path, "check"),
+        ] {
+            let stale = mcp_context_payload(
+                &runtime,
+                &workspace,
+                serde_json::json!({
+                    "operation": operation,
+                    "target": target,
+                }),
+            );
+            assert_python_stale_unknown(command, &stale, case.family_id);
+        }
     }
 
     #[test]

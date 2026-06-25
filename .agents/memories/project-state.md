@@ -21,10 +21,14 @@
   readiness. A separate
   `repogrammar-python-derived` step can synthesize support from exact canonical
   anchors for units with one framework role, so narrow Python family rows can be
-  produced without claiming provider-backed semantics. Family detail output now
-  supports compact/evidence/deep metadata modes shared by CLI and MCP; compact
-  is the default, evidence/deep use greedy metadata coverage selection, and
-  deep does not yet include source snippets. Pyrefly/Pyright and
+  produced without claiming provider-backed semantics. Product smoke now covers
+  those exact-anchor families across CLI `member`/`find`/`explain`/advisory
+  `check`, token-budget auto evidence, explicit compact/evidence/deep metadata
+  modes, supported MCP operations, and stale source mutation/deletion returning
+  blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
+  compact/evidence/deep metadata modes shared by CLI and MCP; compact is the
+  default, evidence/deep use greedy metadata coverage selection, and deep does
+  not yet include source snippets. Pyrefly/Pyright and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
@@ -123,7 +127,8 @@ direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
 FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
 SQLAlchemy session/repository fixtures now validate the no-worker exact-anchor
-derived-support family path. A separate
+derived-support family path, metadata-only evidence modes, MCP parity, and
+stale-evidence query refusal. A separate
 test-only strong FastAPI semantic-support fixture injects compatible `SEMANTIC`
 facts through the
 existing worker boundary to validate family reads and stale-evidence fallback
