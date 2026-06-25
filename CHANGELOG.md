@@ -160,6 +160,10 @@
 - Aligned the Rust-side TypeScript semantic-worker request guard with the
   checked-in worker stub's 1 MiB stdin envelope, including the terminating
   newline written after the JSON request object.
+- Hardened the Rust-side TypeScript semantic-worker process boundary so timeout
+  handling does not wait on descendant-held pipes after killing the worker, and
+  empty changed-file requests cannot accept worker facts as repository-wide
+  scope.
 - Hardened semantic-worker protocol validation so worker errors must still close
   with `end_of_stream`, evidence paths are schema-constrained to repo-relative
   forms, fixture validation rejects unsafe evidence paths and source-like text,

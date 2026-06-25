@@ -90,10 +90,10 @@ allowed.
   output, invalid request paths, unrequested fact paths, and relative executable
   rejection. They must also cover inherited-pipe timeout handling, unsupported
   field-name redaction, invalid/symlink project roots, the shared 1 MiB stdin
-  request envelope with limit-plus-one rejection,
-  worker-error output that omits `end_of_stream`, unsupported TypeScript
-  versions with semantic certainty, sorted/deduplicated request files, and
-  rejected absolute-path or source-like free text.
+  request envelope with limit-plus-one rejection, empty changed-file requests
+  that return facts, worker-error output that omits `end_of_stream`,
+  unsupported TypeScript versions with semantic certainty, sorted/deduplicated
+  request files, and rejected absolute-path or source-like free text.
 - TypeScript worker executable tests must run the dependency-free worker stub
   through Node, validate parseable NDJSON `worker_error` plus `end_of_stream`
   output for valid requests, accept large changed-file requests below the

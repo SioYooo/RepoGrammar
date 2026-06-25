@@ -217,8 +217,8 @@ impl TypeScriptSemanticWorkerBoundary {
             if start.elapsed() >= self.timeout {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = join_reader(stdout_reader);
-                let _ = join_reader(stderr_reader);
+                let _ = join_reader_before_deadline(stdout_reader, start, self.timeout);
+                let _ = join_reader_before_deadline(stderr_reader, start, self.timeout);
                 return Err(SemanticWorkerError::Timeout(
                     "semantic worker timed out".to_string(),
                 ));
@@ -385,7 +385,7 @@ fn validate_fact_scope(
     allowed_paths: &BTreeSet<String>,
     line_number: usize,
 ) -> Result<(), SemanticWorkerError> {
-    if allowed_paths.is_empty() || allowed_paths.contains(&fact.evidence.provenance.path) {
+    if allowed_paths.contains(&fact.evidence.provenance.path) {
         Ok(())
     } else {
         Err(protocol_error(
@@ -865,7 +865,7 @@ mod tests {
                 valid_end_of_stream_message(),
             ]),
             REQUEST_ID,
-            &BTreeSet::new(),
+            &requested_fact_paths(),
         )
         .expect("worker output should parse");
 
@@ -887,7 +887,7 @@ mod tests {
         let facts = parse_worker_output(
             &ndjson(vec![fact, valid_end_of_stream_message()]),
             REQUEST_ID,
-            &BTreeSet::new(),
+            &requested_fact_paths(),
         )
         .expect("null target should parse");
 
@@ -1029,7 +1029,7 @@ mod tests {
         let facts = parse_worker_output(
             &ndjson(vec![fact, valid_end_of_stream_message()]),
             REQUEST_ID,
-            &BTreeSet::new(),
+            &requested_fact_paths(),
         )
         .expect("normalized symbol text should parse");
 
@@ -1041,6 +1041,17 @@ mod tests {
 
     #[test]
     fn worker_output_parser_rejects_unrequested_fact_paths_and_oversized_output() {
+        let empty_scope_error = parse_worker_output(
+            &ndjson(vec![valid_fact_message(), valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &BTreeSet::new(),
+        )
+        .expect_err("facts must not be accepted for an empty request scope");
+        assert!(matches!(
+            empty_scope_error,
+            SemanticWorkerError::ProtocolViolation(_)
+        ));
+
         let allowed_paths = BTreeSet::from(["src/other.ts".to_string()]);
         let error = parse_worker_output(
             &ndjson(vec![valid_fact_message(), valid_end_of_stream_message()]),
@@ -1241,6 +1252,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn process_boundary_timeout_does_not_wait_for_inherited_pipes_after_kill() {
+        let workspace = TempWorkspace::new("typescript-worker-timeout-inherited-pipe");
+        let inherited_pipe = executable_script(
+            &workspace,
+            "timeout-inherited-pipe.sh",
+            "#!/bin/sh\n( /bin/sleep 1 ) &\n/bin/sleep 1\n",
+        );
+        let worker = TypeScriptSemanticWorkerBoundary::new(inherited_pipe.display().to_string())
+            .with_timeout(Duration::from_millis(20));
+
+        let started = Instant::now();
+        let error = worker
+            .analyze_project(valid_request(&workspace))
+            .expect_err("timed-out worker with inherited pipe must return");
+
+        assert!(matches!(error, SemanticWorkerError::Timeout(_)));
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "timeout path waited for inherited pipe holder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn process_boundary_sends_sorted_deduplicated_changed_files() {
         let workspace = TempWorkspace::new("typescript-worker-request-order");
         let request_path = workspace.path().join("request.json");
@@ -1273,6 +1308,31 @@ mod tests {
             request_json["changed_files"],
             json!(["src/a.ts", "src/z.ts"])
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_boundary_rejects_facts_for_empty_request_scope() {
+        let workspace = TempWorkspace::new("typescript-worker-empty-scope-facts");
+        let script = executable_script(
+            &workspace,
+            "fact-for-empty-scope.sh",
+            &format!(
+                "#!/bin/sh\n/bin/cat >/dev/null\n/bin/cat <<'EOF'\n{}\nEOF\n",
+                ndjson(vec![valid_fact_message(), valid_end_of_stream_message()])
+            ),
+        );
+        let worker = TypeScriptSemanticWorkerBoundary::new(script.display().to_string())
+            .with_timeout(Duration::from_secs(2));
+
+        let error = worker
+            .analyze_project(SemanticWorkerRequest {
+                project_root: workspace.path().display().to_string(),
+                changed_files: Vec::new(),
+            })
+            .expect_err("facts for an empty request scope must fail");
+
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
     }
 
     #[cfg(unix)]
@@ -1500,6 +1560,10 @@ mod tests {
             .map(|message| message.to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn requested_fact_paths() -> BTreeSet<String> {
+        BTreeSet::from(["src/handlers/user.ts".to_string()])
     }
 
     fn valid_progress_message() -> Value {

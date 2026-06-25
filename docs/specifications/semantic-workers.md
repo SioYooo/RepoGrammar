@@ -129,13 +129,17 @@ Requests must be size-bounded before writing to worker stdin so a worker that
 does not read cannot bypass timeout supervision. The Rust-side TypeScript
 adapter and the checked-in Node stub share a 1 MiB stdin envelope for a request,
 counting the newline terminator that Rust writes after the JSON request object.
+Timeout handling must not block on stdout or stderr pipes inherited by worker
+descendants after the direct worker process is killed.
 Unsupported TypeScript compiler API versions must not be accepted with
 `SEMANTIC` certainty; those facts must be rejected as unsupported-version output
 unless the worker reports a syntax-only or unknown fallback.
 When a request provides changed file paths, the adapter must reject facts whose
-evidence path was not requested. Runtime fact text fields must reject obvious
-absolute paths, URI schemes, NUL/newline payloads, and source-like snippets
-until source-retention policy is defined.
+evidence path was not requested. If a request has no changed files, an
+end-of-stream-only response is allowed but any returned fact must be rejected
+rather than treated as repository-wide scope. Runtime fact text fields must
+reject obvious absolute paths, URI schemes, NUL/newline payloads, and
+source-like snippets until source-retention policy is defined.
 
 `index` and `sync` do not launch a semantic worker by default. If
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, the current
