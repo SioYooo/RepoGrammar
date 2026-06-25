@@ -256,7 +256,8 @@ allowed.
 - Python provider-planner tests must cover grouping only plausible candidate
   sets by supported code-unit kind and exact framework role, Python support
   threshold enforcement, ambiguous-role and low-support skips, deterministic
-  request ordering, claim-specific blocking `UNKNOWN` skips, non-blocking
+  request ordering, claim-specific blocking `UNKNOWN` skips for import
+  resolution, framework identity, and pytest fixture binding, non-blocking
   `UNKNOWN` preservation, unsafe path rejection, invalid metadata rejection,
   active-generation snapshot planning without mutation, and no family claim or
   CLI/MCP behavior change from planning alone.

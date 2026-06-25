@@ -2447,10 +2447,38 @@ mod tests {
         let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
         let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
         let fourth = indexed_python_unit("app/d.py", "fastapi_route", 3);
-        let units = vec![first.clone(), second.clone(), third.clone(), fourth.clone()];
+        let fifth = indexed_python_unit("app/e.py", "fastapi_route", 4);
+        let sixth = indexed_python_unit("app/f.py", "fastapi_route", 5);
+        let seventh = indexed_python_unit("app/g.py", "fastapi_route", 6);
+        let eighth = indexed_python_unit("app/h.py", "fastapi_route", 7);
+        let pytest_first = indexed_python_unit("tests/test_a.py", "pytest_test", 8);
+        let pytest_second = indexed_python_unit("tests/test_b.py", "pytest_test", 9);
+        let pytest_third = indexed_python_unit("tests/test_c.py", "pytest_test", 10);
+        let pytest_fourth = indexed_python_unit("tests/test_d.py", "pytest_test", 11);
+        let units = vec![
+            first.clone(),
+            second.clone(),
+            third.clone(),
+            fourth.clone(),
+            fifth.clone(),
+            sixth.clone(),
+            seventh.clone(),
+            eighth.clone(),
+            pytest_first.clone(),
+            pytest_second.clone(),
+            pytest_third.clone(),
+            pytest_fourth.clone(),
+        ];
         let mut facts = units
             .iter()
-            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .map(|unit| {
+                let role = if unit.kind == "pytest_test" {
+                    "framework:pytest.test"
+                } else {
+                    "framework:fastapi.route"
+                };
+                framework_role_fact_for_unit(unit, role)
+            })
             .collect::<Vec<_>>();
         facts.push(parser_unknown_fact_for_unit(
             &second,
@@ -2459,8 +2487,33 @@ mod tests {
         ));
         facts.push(parser_unknown_fact_for_unit(
             &third,
+            "RuntimeDependencyInjection",
+            "python_import_resolution",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &fourth,
+            "UnresolvedImport",
+            "python_import_resolution",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &fifth,
+            "FrameworkMagic",
+            "python_framework_identity",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &sixth,
             "MonkeyPatch",
             "python_call_target",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &seventh,
+            "FrameworkMagic",
+            "python_call_target",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
+            &pytest_second,
+            "PytestFixtureInjection",
+            "pytest_fixture_binding",
         ));
 
         let planned = plan_pyrefly_framework_identity_requests(
@@ -2472,15 +2525,32 @@ mod tests {
         )
         .expect("plan provider requests");
 
-        assert_eq!(planned.len(), 1);
+        assert_eq!(planned.len(), 2);
+        let fastapi_plan = planned
+            .iter()
+            .find(|plan| plan.code_unit_kind == "fastapi_route")
+            .expect("fastapi plan");
         assert_eq!(
-            planned[0]
+            fastapi_plan
                 .request
                 .candidates
                 .iter()
                 .map(|candidate| candidate.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["app/a.py", "app/c.py", "app/d.py"]
+            vec!["app/a.py", "app/f.py", "app/g.py", "app/h.py"]
+        );
+        let pytest_plan = planned
+            .iter()
+            .find(|plan| plan.code_unit_kind == "pytest_test")
+            .expect("pytest plan");
+        assert_eq!(
+            pytest_plan
+                .request
+                .candidates
+                .iter()
+                .map(|candidate| candidate.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tests/test_a.py", "tests/test_c.py", "tests/test_d.py"]
         );
     }
 
