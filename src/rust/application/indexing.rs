@@ -983,6 +983,52 @@ mod tests {
         }
     }
 
+    struct ParserSemanticFactParser;
+
+    impl SourceParser for ParserSemanticFactParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let unit = parser_unit(
+                &document,
+                "unit:a.ts#module:0-all",
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            Ok(ParseReport {
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
+                semantic_facts: vec![SemanticFact {
+                    kind: SemanticFactKind::ResolvedImport,
+                    subject: format!("{}#import:express", document.path),
+                    target: Some(SymbolId::new("fastapi.APIRouter").expect("valid target")),
+                    origin: FactOrigin {
+                        engine: "python".to_string(),
+                        engine_version: "3.13.0".to_string(),
+                        method: "cpython_ast".to_string(),
+                    },
+                    certainty: FactCertainty::Semantic,
+                    evidence: Evidence::new(
+                        CodeUnitId::new("unit:a.ts#module:0-all").expect("valid unit id"),
+                        SourceRange::new(0, document.text.len()).expect("valid range"),
+                        Provenance::new(
+                            document.path,
+                            document.content_hash.clone(),
+                            document.repository_revision.clone(),
+                        )
+                        .expect("valid provenance"),
+                        "parser-origin semantic import must be rejected",
+                    )
+                    .expect("valid evidence"),
+                    assumptions: Vec::new(),
+                }],
+                diagnostics: Vec::new(),
+            })
+        }
+    }
+
     struct ExpressRouteParser;
 
     impl SourceParser for ExpressRouteParser {
@@ -1446,6 +1492,36 @@ mod tests {
                 && to.starts_with("ir:unit:")
                 && label == "contains"
         }));
+    }
+
+    #[test]
+    fn parser_semantic_facts_cannot_claim_semantic_certainty() {
+        let workspace = TempWorkspace::new("indexing-parser-semantic-fact");
+        fs::write(
+            workspace.path().join("a.ts"),
+            "import express from 'express';\n",
+        )
+        .expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let error = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &ParserSemanticFactParser,
+            &store,
+        )
+        .expect_err("parser-origin SEMANTIC fact must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("parser semantic facts must stay structural or unknown"),
+            "unexpected error: {error}"
+        );
+        assert!(!state.join("current-generation").exists());
     }
 
     #[test]

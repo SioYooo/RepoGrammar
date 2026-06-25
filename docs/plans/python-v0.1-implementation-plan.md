@@ -157,7 +157,10 @@ facts are labeled separately and never bypass static conflict/UNKNOWN gates.
 
 ## Required Python Fixtures
 
-Fixtures should live under `src/fixtures/python/` once implementation begins.
+Initial release-smoke fixtures now live under `src/fixtures/python/release/v0_1/`.
+They cover default syntax-only/no-claim behavior plus a test-only strong FastAPI
+semantic-support fixture for family read and stale-evidence smoke coverage.
+They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 

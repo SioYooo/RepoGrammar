@@ -62,6 +62,14 @@
   across committed Express, React, Jest/Vitest, mixed JS/TS, low-support, and
   mixed-language fixture shapes while preserving syntax-only `UNKNOWN` query
   behavior by default.
+- Python v0.1 release fixture smoke gate that exercises committed FastAPI,
+  pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support fixture
+  shapes through product CLI JSON paths while preserving syntax-only
+  `UNKNOWN` query behavior by default.
+- Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
+  facts through the existing worker boundary to prove family reads, stale
+  evidence fallback, and leakage guards without claiming production Python
+  semantic-provider support.
 - Storage-aware `status`/`doctor` reporting for active generation health,
   schema version, journal mode, integrity checks, and invalid active-generation
   pointers.
@@ -114,7 +122,7 @@ process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash
 freshness and claim-input readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
-v0.1 TS/JS release fixture smoke gate. Continue one boundary at a time:
+v0.1 TS/JS and Python release fixture smoke gates. Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
 provenance/cache keys, bounded framework-role propagation, or richer
 family-claim gates. Keep

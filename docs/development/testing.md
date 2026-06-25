@@ -145,21 +145,26 @@ allowed.
   cases, oversized request rejection, unsafe path and symlink-escape rejection,
   bounded semantic-mode source reads, and absence of source snippets, absolute
   paths, or unsafe dynamic-import literal targets.
-- Transitional release fixture smoke tests currently copy committed TS/JS source fixtures from
-  `src/fixtures/typescript/release/v0_1/` into temporary workspaces and run the
-  product CLI through `init`, `index`, `files`, `units`, `families`, `family`,
-  `member`, `find`, `explain`, `check`, and `doctor` JSON paths. Default smoke
-  expectations must remain conservative: syntax-only indexing succeeds, machine
-  output is parseable and does not leak source snippets or absolute paths, and
-  family query commands return typed `UNKNOWN`/`InsufficientSupport` unless a
-  test explicitly injects strong semantic or dataflow support.
+- Transitional release fixture smoke tests currently copy committed TS/JS source
+  fixtures from `src/fixtures/typescript/release/v0_1/` and Python source
+  fixtures from `src/fixtures/python/release/v0_1/` into temporary workspaces and
+  run the product CLI through `init`, `index`, `files`, `units`, `families`,
+  `family`, `member`, `find`, `explain`, `check`, and `doctor` JSON paths.
+  Default smoke expectations must remain conservative: syntax-only indexing
+  succeeds, machine output is parseable and does not leak source snippets,
+  parser/provider internals, or absolute paths, and family query commands return
+  typed `UNKNOWN`/`InsufficientSupport` unless a test explicitly injects strong
+  semantic or dataflow support.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
   persisted parser-origin structural facts and typed `UNKNOWN`, heuristic
   framework-role facts staying out of family claims, parser-origin facts
-  staying out of family construction, and typed canonical framework identities
-  rather than framework-name substring matching. Future Python slices must add
+  staying out of family construction, Python release fixtures preserving
+  `UNKNOWN` by default, test-only strong support facts proving family read paths
+  only when compatible `SEMANTIC` evidence is injected, stale evidence fallback,
+  and typed canonical framework identities rather than framework-name substring
+  matching. Future Python slices must add
   coverage for `symtable`/`tomllib`, Tree-sitter
   fallback not creating family claims, Pyrefly/Pyright disagreement becoming
   `ConflictingFacts`, provider provenance/freshness cache keys, and typed

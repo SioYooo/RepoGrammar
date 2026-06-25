@@ -85,9 +85,15 @@ and `sync`, and the dependency-free
 `files`/`units` reads from active file-manifest-only or syntax-only generations.
 Those reads revalidate active-generation health plus stored paths, hashes,
 languages, unit ids, and byte ranges before returning repo-relative metadata.
-Release fixture smoke coverage copies committed TS/JS fixtures into temporary
-workspaces and checks product CLI JSON paths, no absolute-path leakage, no
-source-snippet leakage, and conservative `UNKNOWN` query results by default.
+Release fixture smoke coverage copies committed TS/JS and Python fixtures into
+temporary workspaces and checks product CLI JSON paths, no absolute-path
+leakage, no source-snippet or parser/provider-internal leakage, and
+conservative `UNKNOWN` query results by default. Python release fixtures cover
+FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown, and low-support
+examples. A separate test-only strong FastAPI semantic-support fixture injects
+compatible `SEMANTIC` facts through the existing worker boundary to validate
+family reads and stale-evidence fallback without claiming production Python
+semantic-provider support.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed

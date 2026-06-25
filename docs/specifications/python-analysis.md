@@ -90,6 +90,12 @@ The current implementation covers the first structural slice only:
 - syntax-origin `FRAMEWORK_ROLE` facts for FastAPI route-shaped functions,
   pytest tests/fixtures, Pydantic model-shaped classes, SQLAlchemy
   model-shaped classes, and SQLAlchemy repository method-shaped functions;
+- committed Python release fixtures under `src/fixtures/python/release/v0_1/`
+  for FastAPI, pytest, Pydantic, SQLAlchemy, mixed, dynamic-unknown,
+  low-support, strong-evidence, and stale-evidence smoke coverage;
+- product CLI smoke tests that copy those fixtures into temporary repositories,
+  prove default Python indexing remains syntax-only/no-claim, and prove strong
+  FastAPI family reads only through test-injected compatible `SEMANTIC` facts;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for future strong facts.
 
@@ -100,6 +106,13 @@ snippet-free, but they are still worker-local structural anchors. Default
 product indexing persists them only as internal structural/`UNKNOWN` semantic
 fact records. It does not expose them through CLI/MCP query commands, feed them
 to the family builder, or treat them as semantic-provider claims.
+
+The strong Python release smoke path is test-only. It uses the existing
+transitional worker executable boundary to inject fixture-controlled
+`python-fixture-provider` facts and verify product read paths, stale-evidence
+fallback, and source/path leakage guards. It is not a Pyrefly/Pyright provider
+implementation and must not be documented as production Python semantic
+support.
 
 This slice does not implement repo-local import resolution, `symtable` scope
 facts, `tomllib` configuration facts, Pyrefly, Pyright, provider cache keys,

@@ -31,6 +31,11 @@
   persists those facts as internal parser-origin `STRUCTURAL`/`UNKNOWN`
   semantic facts while keeping them out of family construction and CLI/MCP
   family evidence.
+- Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
+  SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
+  strong FastAPI semantic-support fixture that validates family reads, stale
+  evidence fallback, and leakage guards without claiming production Python
+  semantic-provider support.
 - Metadata-only algorithm paper archive for syntax, semantics, retrieval,
   graph fingerprints, alignment, anti-unification, clustering, evidence
   selection, evaluation, and installer supply-chain references.

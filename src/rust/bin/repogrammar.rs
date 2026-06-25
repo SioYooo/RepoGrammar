@@ -533,7 +533,6 @@ fn run_native_agent_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repogrammar::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use repogrammar::application::query::{
         assess_semantic_fact_readiness, list_semantic_facts, SemanticFactReadinessRequest,
     };
@@ -603,8 +602,21 @@ mod tests {
             .join("v0_1")
     }
 
+    fn python_release_fixture_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("python")
+            .join("release")
+            .join("v0_1")
+    }
+
     fn copy_release_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_root().join(name), destination);
+    }
+
+    fn copy_python_release_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&python_release_fixture_root().join(name), destination);
     }
 
     fn copy_dir_contents(source: &Path, destination: &Path) {
@@ -650,6 +662,10 @@ mod tests {
             !output.contains(release_fixture_root().to_string_lossy().as_ref()),
             "{command} leaked absolute fixture path: {output}"
         );
+        assert!(
+            !output.contains(python_release_fixture_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute Python fixture path: {output}"
+        );
         for snippet in [
             "app.get(",
             "export function",
@@ -669,6 +685,25 @@ mod tests {
             "props.status",
             "toHaveLength",
             "toBe(true)",
+            "from fastapi",
+            "@router.",
+            "BaseModel",
+            "mapped_column",
+            "pytest.fixture",
+            "importlib.import_module",
+            "client.get(",
+            "return {",
+            "Depends(",
+            "HTTPException",
+            "DeclarativeBase",
+            "select(",
+            "getattr(",
+            "cpython_ast",
+            "STRUCTURAL",
+            "FRAMEWORK_HEURISTIC",
+            "python-fixture-provider",
+            "release_fixture_semantic_support",
+            "origin_engine",
         ] {
             assert!(
                 !output.contains(snippet),
@@ -703,7 +738,7 @@ mod tests {
                 workspace.path().display().to_string(),
             ))
             .expect("discover files for worker fixture");
-        let parser = SyntaxCodeUnitParser;
+        let parser = RepoGrammarSourceParser::default();
         let mut messages = Vec::new();
         for file in report.files {
             let source = FilesystemSourceStore
@@ -724,22 +759,23 @@ mod tests {
                     text: &source.text,
                 })
                 .expect("parse source for worker fixture");
-            for unit in parsed
-                .units
-                .into_iter()
-                .filter(|unit| unit.kind == CodeUnitKind::ExpressRoute)
-            {
+            for unit in parsed.units.into_iter() {
+                let Some((target, engine, engine_version, method, note)) =
+                    semantic_support_for_unit(&unit.kind)
+                else {
+                    continue;
+                };
                 messages.push(serde_json::json!({
                     "protocol_version": 1,
                     "message_type": "fact",
                     "request_id": "repogrammar-typescript-semantic-worker",
                     "fact_kind": "RESOLVED_IMPORT",
-                    "subject": format!("{}#import:express", unit.id.as_str()),
-                    "target": "package:express",
+                    "subject": format!("{}#semantic-support", unit.id.as_str()),
+                    "target": target,
                     "origin": {
-                        "engine": "typescript",
-                        "engine_version": "6.0.0",
-                        "method": "compiler_api"
+                        "engine": engine,
+                        "engine_version": engine_version,
+                        "method": method
                     },
                     "certainty": "SEMANTIC",
                     "evidence": {
@@ -749,7 +785,7 @@ mod tests {
                         "repository_revision": "UNKNOWN",
                         "start_byte": unit.range.start_byte,
                         "end_byte": unit.range.end_byte,
-                        "note": "compiler resolved Express import target"
+                        "note": note
                     },
                     "assumptions": []
                 }));
@@ -772,6 +808,35 @@ mod tests {
         )
         .expect("write semantic support worker");
         worker_script
+    }
+
+    #[cfg(unix)]
+    fn semantic_support_for_unit(
+        kind: &CodeUnitKind,
+    ) -> Option<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    )> {
+        match kind {
+            CodeUnitKind::ExpressRoute => Some((
+                "package:express",
+                "typescript",
+                "6.0.0",
+                "compiler_api",
+                "compiler resolved Express import target",
+            )),
+            CodeUnitKind::FastApiRoute => Some((
+                "fastapi.APIRouter.get",
+                "python-fixture-provider",
+                "0.1.0",
+                "release_fixture_semantic_support",
+                "provider resolved FastAPI route decorator",
+            )),
+            _ => None,
+        }
     }
 
     #[cfg(unix)]
@@ -886,6 +951,128 @@ mod tests {
         }
     }
 
+    #[test]
+    fn python_release_fixtures_default_product_smoke_returns_json_without_claim_inflation() {
+        const RELEASE_FIXTURES: &[(&str, &str, &[&str])] = &[
+            (
+                "fastapi-basic",
+                "app.py",
+                &["fastapi_route", "pydantic_model"],
+            ),
+            (
+                "pytest-basic",
+                "test_users.py",
+                &["pytest_fixture", "pytest_test"],
+            ),
+            ("pydantic-basic", "schemas.py", &["pydantic_model"]),
+            (
+                "sqlalchemy-basic",
+                "models.py",
+                &["sqlalchemy_model", "sqlalchemy_repository_method"],
+            ),
+            (
+                "mixed-python",
+                "api.py",
+                &["fastapi_route", "pydantic_model", "pytest_test"],
+            ),
+            ("dynamic-unknown", "dynamic.py", &["function"]),
+            ("low-support", "lonely.py", &["fastapi_route"]),
+        ];
+        const QUERY_COMMANDS: &[&str] =
+            &["families", "family", "member", "find", "explain", "check"];
+
+        for (fixture, target, expected_kinds) in RELEASE_FIXTURES {
+            let workspace = TempWorkspace::new(&format!("python-release-{fixture}"));
+            copy_python_release_fixture(fixture, workspace.path());
+            let runtime = ProductCliRuntime;
+
+            let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+            let init_json = parse_machine_output("init", &init, &workspace);
+            assert_eq!(init_json["status"], "initialized");
+
+            let index = run_with_runtime(
+                cli_args(
+                    "index",
+                    workspace.path(),
+                    &["--json", "--progress", "never"],
+                ),
+                &runtime,
+            );
+            let index_json = parse_machine_output("index", &index, &workspace);
+            assert_eq!(index_json["command"], "index");
+            assert_eq!(index_json["status"], "complete");
+            assert_eq!(index_json["generation_id"], "gen-000001");
+            assert_eq!(index_json["indexing"], "syntax_only_code_units");
+            assert_eq!(index_json["parser"], "syntax_only");
+            assert_eq!(index_json["semantic_worker"], "deferred");
+            assert_eq!(index_json["mining"], "deferred");
+            assert!(
+                index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+                "fixture {fixture} should index at least one unit"
+            );
+
+            let files =
+                run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+            let files_json = parse_machine_output("files", &files, &workspace);
+            assert_eq!(files_json["command"], "files");
+            assert_eq!(files_json["status"], "ok");
+            assert_eq!(files_json["implemented"], true);
+            assert_eq!(files_json["active_generation"], "gen-000001");
+            assert_eq!(files_json["indexing"], "syntax_only_code_units");
+            assert!(
+                !files_json["files"]
+                    .as_array()
+                    .expect("files array")
+                    .is_empty(),
+                "fixture {fixture} should report indexed files"
+            );
+
+            let units =
+                run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+            let units_json = parse_machine_output("units", &units, &workspace);
+            assert_eq!(units_json["command"], "units");
+            assert_eq!(units_json["status"], "ok");
+            assert_eq!(units_json["implemented"], true);
+            assert_eq!(units_json["active_generation"], "gen-000001");
+            assert_eq!(units_json["indexing"], "syntax_only_code_units");
+            assert_eq!(units_json["semantic_worker"], "deferred");
+            assert_eq!(units_json["mining"], "deferred");
+            let unit_kinds = units_json["units"]
+                .as_array()
+                .expect("units array")
+                .iter()
+                .filter(|unit| unit["language"] == "python")
+                .filter_map(|unit| unit["kind"].as_str())
+                .collect::<Vec<_>>();
+            for expected_kind in *expected_kinds {
+                assert!(
+                    unit_kinds.contains(expected_kind),
+                    "fixture {fixture} should include Python unit kind {expected_kind}; got {unit_kinds:?}"
+                );
+            }
+
+            for command in QUERY_COMMANDS {
+                let output = if *command == "families" {
+                    run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime)
+                } else {
+                    run_with_runtime(
+                        cli_args(command, workspace.path(), &[target, "--json"]),
+                        &runtime,
+                    )
+                };
+                let value = parse_machine_output(command, &output, &workspace);
+                assert_unknown_query_json(command, &value);
+            }
+
+            let doctor =
+                run_with_runtime(cli_args("doctor", workspace.path(), &["--json"]), &runtime);
+            let doctor_json = parse_machine_output("doctor", &doctor, &workspace);
+            assert_eq!(doctor_json["command"], "doctor");
+            assert_eq!(doctor_json["checks"]["storage"], "available");
+            assert!(doctor_json["checks"].get("schema_version").is_none());
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn product_runtime_strong_worker_support_produces_family_then_stale_unknown() {
@@ -955,6 +1142,162 @@ mod tests {
             "app.get('/users', function listChanged(req, res) { res.json(['changed']); });\n",
         )
         .expect("mutate users route");
+
+        let stale = run_with_runtime(
+            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_eq!(stale_json["status"], "UNKNOWN");
+        assert_eq!(stale_json["unknowns"][0]["reason"], "StaleEvidence");
+        assert_eq!(
+            stale_json["unknowns"][0]["recovery"],
+            "run repogrammar sync"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn python_release_fixture_strong_fastapi_support_produces_family_then_stale_unknown() {
+        let workspace = TempWorkspace::new("python-release-positive-family");
+        copy_python_release_fixture("positive-strong-evidence", workspace.path());
+        let worker_script = semantic_support_worker_script(&workspace);
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+
+        let outcome = runtime
+            .index_repository(
+                "index",
+                CliIndexRequest {
+                    repository_root: workspace.path().display().to_string(),
+                    state_dir_override: None,
+                    max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                    semantic_worker_executable: Some("/bin/sh".to_string()),
+                    semantic_worker_args: vec![worker_script.display().to_string()],
+                },
+            )
+            .expect("index Python release fixture with semantic support worker");
+        assert_eq!(
+            outcome.semantic_worker,
+            repogrammar::application::indexing::SemanticWorkerRunStatus::Complete
+        );
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert!(
+            outcome.semantic_facts >= 6,
+            "Python fixture should store parser/framework facts plus three semantic support facts"
+        );
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        let support_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "python-fixture-provider"
+                    && fact.origin_method == "release_fixture_semantic_support"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            support_facts.len(),
+            3,
+            "fixture provider should emit exactly one strong support fact per route"
+        );
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let route_units = units_json["units"]
+            .as_array()
+            .expect("units array")
+            .iter()
+            .filter(|unit| unit["language"] == "python" && unit["kind"] == "fastapi_route")
+            .collect::<Vec<_>>();
+        assert_eq!(route_units.len(), 3);
+        for fact in &support_facts {
+            assert_eq!(fact.certainty, "SEMANTIC");
+            assert_eq!(fact.origin_engine_version, "0.1.0");
+            assert_eq!(fact.target.as_deref(), Some("fastapi.APIRouter.get"));
+            assert!(route_units.iter().any(|unit| {
+                unit["id"].as_str() == Some(fact.code_unit_id.as_str())
+                    && unit["path"].as_str() == Some(fact.path.as_str())
+                    && unit["content_hash"].as_str() == Some(fact.content_hash.as_str())
+                    && unit["start_byte"].as_u64() == Some(fact.start_byte as u64)
+                    && unit["end_byte"].as_u64() == Some(fact.end_byte as u64)
+            }));
+        }
+        assert!(
+            facts.facts.iter().all(|fact| {
+                !(fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.certainty == "SEMANTIC")
+            }),
+            "CPython parser facts must never be promoted to SEMANTIC"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert_eq!(
+            families_json["families"]
+                .as_array()
+                .expect("families")
+                .len(),
+            1
+        );
+        let family_id = families_json["families"][0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .to_string();
+        assert_eq!(
+            family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert_eq!(families_json["families"][0]["support"], 3);
+
+        for command in ["family", "find", "explain"] {
+            let args = if command == "family" {
+                vec![family_id.as_str(), "--json"]
+            } else {
+                vec!["routes.py", "--json"]
+            };
+            let output = run_with_runtime(cli_args(command, workspace.path(), &args), &runtime);
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_eq!(value["status"], "ok", "{command} should find family");
+            assert_eq!(value["family"]["family_id"], family_id);
+            assert_eq!(value["family"]["support"], 3);
+            assert_eq!(value["members"].as_array().expect("members").len(), 3);
+            assert!(value["members"]
+                .as_array()
+                .expect("members")
+                .iter()
+                .all(|member| member["role"] == "framework:fastapi.route"));
+            assert_eq!(value["evidence"].as_array().expect("evidence").len(), 3);
+            assert_eq!(
+                value["unknowns"][0]["reason"], "FrameworkMagic",
+                "runtime equivalence must remain non-blocking UNKNOWN"
+            );
+        }
+
+        let check = run_with_runtime(
+            cli_args("check", workspace.path(), &["routes.py", "--json"]),
+            &runtime,
+        );
+        let check_json = parse_machine_output("check", &check, &workspace);
+        assert_eq!(check_json["status"], "CONTEXT_ONLY");
+        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+
+        fs::write(
+            workspace.path().join("routes.py"),
+            "from fastapi import APIRouter\n\nrouter = APIRouter()\n\n@router.get(\"/changed\")\ndef changed_route():\n    return []\n",
+        )
+        .expect("mutate Python route fixture");
 
         let stale = run_with_runtime(
             cli_args("family", workspace.path(), &[&family_id, "--json"]),
