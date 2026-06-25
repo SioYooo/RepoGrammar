@@ -712,7 +712,7 @@ fn handle_installer(command: &str, rest: &[String]) -> CliOutput {
         }
         return CliOutput::failure(
             2,
-            "repogrammar serve is not implemented yet; the v0.1 MCP server must default to read-only behavior\n",
+            "repogrammar serve runs through the product stdio runtime; use the repogrammar binary for read-only MCP serving\n",
         );
     }
 
@@ -1116,21 +1116,49 @@ impl Default for LogsOptions {
     }
 }
 
-fn parse_serve_options(rest: &[String]) -> Result<(), String> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServeOptions {
+    pub project_path: Option<String>,
+    pub json: bool,
+    pub quiet: bool,
+    pub verbose: bool,
+}
+
+pub fn parse_serve_options(rest: &[String]) -> Result<ServeOptions, String> {
+    let mut options = ServeOptions::default();
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
+            "--project" | "--path" => {
+                let value = option_value(rest, index, rest[index].as_str(), "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
             "--progress" => {
                 let value = option_value(rest, index, "--progress", "auto, always, or never")?;
                 ProgressMode::parse(value)?;
                 index += 2;
             }
-            "--json" | "--quiet" | "--verbose" => index += 1,
-            value if !value.starts_with('-') => index += 1,
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" => {
+                options.quiet = true;
+                index += 1;
+            }
+            "--verbose" => {
+                options.verbose = true;
+                index += 1;
+            }
+            value if !value.starts_with('-') => {
+                set_project_path(&mut options.project_path, value)?;
+                index += 1;
+            }
             other => return Err(format!("unknown serve option: {other}")),
         }
     }
-    Ok(())
+    Ok(options)
 }
 
 fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOptions, String> {
@@ -1353,7 +1381,7 @@ fn validate_log_component(value: &str) -> Result<(), String> {
     }
 }
 
-fn repository_root(current_dir: &Path, project_path: Option<&str>) -> String {
+pub fn repository_root(current_dir: &Path, project_path: Option<&str>) -> String {
     let raw = Path::new(project_path.unwrap_or("."));
     let path = if raw.is_absolute() {
         raw.to_path_buf()
@@ -1363,7 +1391,7 @@ fn repository_root(current_dir: &Path, project_path: Option<&str>) -> String {
     path.display().to_string()
 }
 
-fn state_dir_override<F>(env_lookup: &F) -> Option<String>
+pub fn state_dir_override<F>(env_lookup: &F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {

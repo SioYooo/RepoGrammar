@@ -20,10 +20,10 @@ pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
 discovery, syntax-only code-unit extraction, syntax-origin framework-role fact
 storage, CodeUnit-derived structural IR storage, SQLite generation-storage
 wiring, a dependency-free TypeScript worker unavailable stub, and repository
-guard checks.
+guard checks, and a read-only MCP `repogrammar_context` stdio boundary.
 
-It does not yet implement TypeScript compiler analysis, MCP serving, installer
-writes, or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
+It does not yet implement TypeScript compiler analysis, installer writes, or
+full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
 can execute a configured process, send the v1 request payload, and validate
 NDJSON v1 facts. A checked-in worker stub can validate stdin and report semantic
 analysis as unavailable. `index` and `sync` do not launch a worker by default;
@@ -48,9 +48,10 @@ family query commands are wired to the active FamilyStore read path: with no
 active index they still return fallback guidance, and with an active index but
 insufficient family evidence they return typed `UNKNOWN` instead of pretending a
 family was proven. `status` and `doctor` can distinguish file-manifest-only
-generations from syntax-only code-unit/IR generations.
-Commands that install agent configuration or serve MCP return explicit
-not-implemented errors until those contracts are implemented and tested.
+generations from syntax-only code-unit/IR generations. `serve` exposes the same
+conservative query path through the single default MCP tool
+`repogrammar_context`. Commands that install agent configuration still return
+explicit deferred-write errors until those contracts are implemented and tested.
 
 ## Why RepoGrammar?
 

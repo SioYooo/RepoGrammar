@@ -1,7 +1,8 @@
 # MCP API Specification
 
-The MCP interface is not implemented yet. This file records the first planned
-tool boundary without claiming a stable API.
+The MCP interface is implemented as a minimal pre-alpha read-only stdio server.
+This file records the concrete v0.1 bootstrap tool boundary without claiming a
+final stable API or installer integration.
 
 ## Default tool surface
 
@@ -20,6 +21,15 @@ The tool carries an `operation` field. Supported v0.1 operations are:
 
 This keeps agent tool selection stable while preserving explicit internal
 operation semantics. The CLI remains multi-command for human discoverability.
+
+The current input schema is intentionally small:
+
+- required `operation`: one of the four operation strings above.
+- optional `target`: non-empty string.
+- optional `token_budget`: positive integer, accepted for contract compatibility
+  but not yet used for evidence selection.
+- optional `include_variations` and `include_exceptions`: booleans, accepted for
+  contract compatibility.
 
 Advanced MCP tools may exist later, but they must be hidden by default and
 enabled only by configuration or environment variable, for example:
@@ -74,24 +84,45 @@ family claims whose evidence changed. Freshness checks must compare the active
 index generation and repository state described in
 `docs/specifications/storage.md`.
 
-Typed analysis uncertainty must not be flattened into transport failure. Once
-query execution exists, MCP responses must preserve `UNKNOWN` class, reason
-code, affected claim, provenance, freshness status, and suggested recovery
-action where available.
+Typed analysis uncertainty must not be flattened into transport failure. MCP
+responses preserve `UNKNOWN` class, reason code, affected claim, and suggested
+recovery action where available.
 The current Rust storage/query boundary has an internal active-generation
 claim-input snapshot, semantic-fact freshness/readiness gate, and conservative
 EC-MVFI-lite family read model. MCP responses must not expose semantic-worker
 facts, raw snapshot contents, or treat framework heuristics as family evidence.
-When MCP transport is implemented, it must reuse the CLI query layer's typed
-`UNKNOWN` and family-evidence boundaries rather than inventing a parallel
+The MCP call handler reuses the same application query preflight and
+FamilyStore-backed lookup path as the CLI rather than inventing a parallel
 contract.
 
 ## Serving mode
 
-`repogrammar serve` runs the MCP server once implemented. v0.1 serving behavior
-must default to read-only and must not modify business code from pattern-family
-results. MCP serving should open the active repository database read-only where
-possible; indexing remains the only writer.
+`repogrammar serve` runs a newline-delimited JSON-RPC stdio loop for
+`initialize`, `notifications/initialized`, `tools/list`, `tools/call`, and
+`shutdown`. v0.1 serving behavior defaults to read-only and must not modify
+business code from pattern-family results. MCP serving uses a read-only runtime
+facade that can only request repository status and pattern-family lookup.
+Indexing remains the only writer.
+
+`tools/list` returns exactly one default tool, `repogrammar_context`.
+`tools/call` wraps the RepoGrammar JSON payload in a standard MCP text content
+item:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"status\":\"UNKNOWN\"}"
+    }
+  ],
+  "isError": false
+}
+```
+
+Missing state, missing active indexes, and typed analysis uncertainty are normal
+tool results. Unknown JSON-RPC methods, unknown tool names, invalid operations,
+blank targets, and malformed argument types are transport/schema errors.
 
 MCP calls must not wait on telemetry network activity.
 

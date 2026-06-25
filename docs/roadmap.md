@@ -66,10 +66,11 @@ checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
 The substrate hardening checkpoint now covers generation immutability,
 lifecycle doctor hygiene, repo-guard coverage, bounded reads, parent Git ignore
 behavior, manifest/status/doctor schema clarity, semantic-worker request
-limits, and index-lock cleanup/unlock gates. Before new MCP, installer, Python,
-or CodeGraph runtime feature work, the next implementation slice should tighten
+limits, index-lock cleanup/unlock gates, conservative family query reads, and
+read-only MCP serving over `repogrammar_context`. Before installer, Python, or
+CodeGraph runtime feature work, the next implementation slice should tighten
 the family claim input contract and EC-MVFI-lite readiness gates rather than
-exposing substrate records as user-visible family claims.
+exposing substrate records as overclaimed user-visible family claims.
 
 1. Phase 1: repo-local lifecycle.
 2. Phase 1.5: language and provider abstraction.
@@ -95,16 +96,16 @@ claim-input snapshot reads,
 semantic-fact/evidence storage substrate, the Rust-side semantic-worker
 process/NDJSON validation boundary, and opt-in command-level semantic-fact
 ingestion through the storage gate, plus an internal semantic-fact file-hash
-freshness and claim-input readiness gate. Continue one boundary at a time:
-read-only MCP serving over the query layer, TypeScript compiler toolchain
-preparation, or richer family-claim gates. Keep syntax-only code units,
-structural IR, syntax-origin framework-role facts, and weak stored semantic
-facts out of family claims unless the conservative builder has stronger
-compatible support.
+freshness and claim-input readiness gate, and read-only MCP serving through the
+same query layer. Continue one boundary at a time: TypeScript compiler toolchain
+preparation, richer family-claim gates, or installer self-test groundwork. Keep
+syntax-only code units, structural IR, syntax-origin framework-role facts, and
+weak stored semantic facts out of family claims unless the conservative builder
+has stronger compatible support.
 
-Do not advance full mining or MCP serving until parser output,
-family-evidence read paths, freshness checks, and evidence contracts remain
-validated together.
+Do not advance full mining or installer writes until parser output,
+family-evidence read paths, freshness checks, MCP self-tests, and evidence
+contracts remain validated together.
 
 ## Command implementation path
 
@@ -114,8 +115,8 @@ validated together.
 - Extend `find`, `family`, `explain`, and `check` beyond the current
   EC-MVFI-lite/typed-UNKNOWN slice as stronger semantic evidence becomes
   available.
-- Implement read-only `serve` for MCP with the default `repogrammar_context`
-  tool and missing/stale-index fallback semantics.
+- Harden read-only MCP self-tests for the default `repogrammar_context` tool and
+  missing/stale-index fallback semantics.
 - Implement safe installer writes only after native agent detection, backups,
   receipts, and MCP self-tests are validated.
 

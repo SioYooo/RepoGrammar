@@ -99,6 +99,10 @@
   query layer return family evidence or typed `UNKNOWN`; `files` and `units`
   remain implemented inventory commands whose missing-index fallback is an
   active-index precondition failure.
+- Read-only MCP `repogrammar_context` stdio boundary for `initialize`,
+  `tools/list`, `tools/call`, and `shutdown`, reusing the same pattern-family
+  query preflight and FamilyStore-backed lookup path without enabling installer
+  writes.
 - Storage-aware `status` and `doctor` reporting for active generation id, schema
   version, WAL journal mode, integrity check, and unhealthy active-generation
   pointer cases.

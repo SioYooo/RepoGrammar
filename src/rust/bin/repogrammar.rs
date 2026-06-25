@@ -19,11 +19,20 @@ use repogrammar::application::repository::{
     RepositoryStatus, RepositoryStatusReport, RepositoryStatusRequest,
 };
 use repogrammar::error::RepoGrammarError;
-use repogrammar::interfaces::cli::{run_with_runtime, CliIndexRequest, CliRuntime};
+use repogrammar::interfaces::cli::{
+    parse_serve_options, repository_root, run_with_runtime, state_dir_override, CliIndexRequest,
+    CliRuntime,
+};
+use repogrammar::interfaces::mcp::{serve_json_lines, McpReadOnlyRuntime, McpServeContext};
 
 fn main() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
     let runtime = ProductCliRuntime;
-    let output = run_with_runtime(std::env::args().skip(1), &runtime);
+    if args.first().is_some_and(|command| command == "serve") {
+        let status = run_serve_command(&args[1..], &runtime);
+        std::process::exit(status);
+    }
+    let output = run_with_runtime(args, &runtime);
     print!("{}", output.stdout);
     eprint!("{}", output.stderr);
     std::process::exit(output.status);
@@ -162,9 +171,58 @@ impl CliRuntime for ProductCliRuntime {
     }
 }
 
+impl McpReadOnlyRuntime for ProductCliRuntime {
+    fn repository_status(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+        <Self as CliRuntime>::repository_status(self, request)
+    }
+
+    fn family_lookup(
+        &self,
+        request: RepositoryStatusRequest,
+        target: Option<&str>,
+    ) -> Result<FamilyLookupReport, RepoGrammarError> {
+        <Self as CliRuntime>::family_lookup(self, request, target)
+    }
+}
+
+fn run_serve_command(rest: &[String], runtime: &impl McpReadOnlyRuntime) -> i32 {
+    let options = match parse_serve_options(rest) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    let current_dir = match std::env::current_dir() {
+        Ok(current_dir) => current_dir,
+        Err(error) => {
+            eprintln!("failed to read current directory: {error}");
+            return 1;
+        }
+    };
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let context = McpServeContext {
+        repository_root: repository_root(&current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(&env_lookup),
+    };
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    match serve_json_lines(runtime, &context, stdin.lock(), stdout.lock()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            2
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::interfaces::mcp::handle_context_call;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -391,6 +449,85 @@ mod tests {
             warning.contains(workspace.path().to_string_lossy().as_ref())
                 || warning.contains("missing-worker")
         }));
+    }
+
+    #[test]
+    fn product_mcp_context_missing_state_returns_fallback_without_creating_state() {
+        let workspace = TempWorkspace::new("product-mcp-missing-state");
+        let runtime = ProductCliRuntime;
+        let context = McpServeContext {
+            repository_root: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+
+        let response = handle_context_call(
+            &runtime,
+            &context,
+            &serde_json::json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+            }),
+        )
+        .expect("fallback response");
+
+        assert_eq!(response["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(response["reason"], "repository is not initialized");
+        assert!(!workspace.path().join(".repogrammar").exists());
+    }
+
+    #[test]
+    fn product_mcp_serve_reads_active_query_without_source_leakage() {
+        let workspace = TempWorkspace::new("product-mcp-serve");
+        fs::write(
+            workspace.path().join("component.tsx"),
+            "export function UserCard() { return <section />; }\n",
+        )
+        .expect("write source");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0);
+        let input = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "repogrammar_context",
+                    "arguments": {
+                        "operation": "check_conformance",
+                        "target": "component.tsx"
+                    }
+                }
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "shutdown"
+            })
+        );
+        let context = McpServeContext {
+            repository_root: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let mut output = Vec::new();
+
+        serve_json_lines(&runtime, &context, input.as_bytes(), &mut output)
+            .expect("serve MCP lines");
+        let output = String::from_utf8(output).expect("utf8 MCP output");
+        let first_line = output.lines().next().expect("tool response");
+        let response: Value = serde_json::from_str(first_line).expect("JSON-RPC response");
+        let payload_text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool payload");
+        let payload: Value = serde_json::from_str(payload_text).expect("tool payload JSON");
+
+        assert_eq!(payload["status"], "UNKNOWN");
+        assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
+        assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!payload_text.contains("export function"));
     }
 
     #[cfg(unix)]

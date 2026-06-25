@@ -2,7 +2,8 @@
 
 - Status: Bootstrap plus syntax-only indexing, structural IR storage, opt-in
   syntax-origin framework-role fact storage, semantic fact ingestion, internal
-  active claim-input snapshot reads, and semantic-fact freshness/readiness gating
+  active claim-input snapshot reads, semantic-fact freshness/readiness gating,
+  FamilyStore-backed query reads, and read-only MCP serving
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -22,19 +23,21 @@ syntax-origin TS/JS framework-role fact storage, CodeUnit-derived structural IR
 node/containment-edge storage, Rust-side TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
 TypeScript worker stub that reports compiler analysis as unavailable, a
-validated semantic-fact storage writer, and opt-in command-level
-semantic-worker fact ingestion through the same-generation storage gate. It also
-has an internal active-generation claim-input snapshot read path for future
-claim builders and an internal file-hash freshness/readiness gate that blocks
-stale facts, unsupported fact kinds, weak certainty, or conflicting certainty
-with typed `UNKNOWN`.
+validated semantic-fact storage writer, opt-in command-level semantic-worker
+fact ingestion through the same-generation storage gate, conservative
+FamilyStore-backed query reads, and a read-only MCP `repogrammar_context` stdio
+boundary. It also has an internal active-generation claim-input snapshot read
+path for future claim builders and an internal file-hash freshness/readiness
+gate that blocks stale facts, unsupported fact kinds, weak certainty, or
+conflicting certainty with typed `UNKNOWN`.
 
 ## Durable knowledge
 
 Implemented capabilities include module boundaries, minimal domain types,
 pattern-family-first CLI command parsing, safe installer dry-run planning, typed
 progress and telemetry policy types, stable not-implemented behavior,
-transport-neutral MCP single-tool operation boundary, repository guard checks,
+transport-neutral MCP single-tool operation boundary, read-only MCP serving,
+repository guard checks,
 documentation, skills, memories, CI configuration, repo-local
 `init`/`uninit`/`status`/`doctor`/`unlock`/`logs`, TS/JS file discovery,
 hash-checked source reads, dependency-free syntax-only code-unit extraction,
@@ -76,20 +79,22 @@ family evidence. Syntax-origin framework-role facts use
 insufficient support until stronger evidence and claim builders exist.
 
 Tree-sitter integration, TypeScript compiler API integration, command-level
-full repository/worktree freshness metadata, family-claim gates, typed IR
-attributes beyond the structural bootstrap graph, resolved framework semantics,
-family mining, query-ready family evidence, pattern-family query execution, MCP
-serving, installer writes, and telemetry network transport are not implemented.
+full repository/worktree freshness metadata, typed IR attributes beyond the
+structural bootstrap graph, resolved framework semantics, full family mining,
+installer writes, and telemetry network transport are not implemented.
 
-Pattern-family query commands still use stable fallback behavior. `files` and
-`units` can return active file-manifest-only or syntax-only index metadata, but
-stored syntax-only units must not be described as query-ready family evidence.
+Pattern-family query commands and MCP tool calls still use stable fallback
+behavior before an active index and typed `UNKNOWN` when active evidence is
+insufficient. `files` and `units` can return active file-manifest-only or
+syntax-only index metadata, but stored syntax-only units must not be described
+as query-ready family evidence.
 
 ## Implications
 
 Future agents must not claim TypeScript analysis, Python production support,
-pattern-family mining, freshness-validated semantic claims, query execution, or
-stable MCP API support until those capabilities are implemented and tested.
+full pattern-family mining, freshness-validated semantic claims, installer
+writes, or stable MCP API support until those capabilities are implemented and
+tested.
 Agents also must not restart repo-local lifecycle, SQLite generation, opt-in
 semantic-worker ingestion, or Rust-side worker process validation work from
 scratch. Do not restart structural IR storage or active semantic-fact/evidence
@@ -100,5 +105,5 @@ canonical specs.
 ## Revalidation conditions
 
 Update this memory after Tree-sitter integration, TypeScript compiler API
-integration, full family-claim gates, family-query claim paths, MCP serving,
-installer writes, or production family evidence lands.
+integration, full family-claim gates, installer writes, production family
+evidence, or stable MCP API support lands.

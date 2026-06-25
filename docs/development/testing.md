@@ -85,6 +85,12 @@ allowed.
   eligible family records, no-family active generations returning typed
   `InsufficientSupport`, family id/path lookup, JSON/human CLI output, advisory
   `check` behavior, and absence of source snippets or absolute paths.
+- MCP serve tests must cover the single default `repogrammar_context` tool
+  schema, accepted operation enum, unknown tool and operation rejection,
+  missing-state fallback without implicit repo-local state creation,
+  no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
+  `check_conformance`, JSON-RPC initialize/tools/list/tools/call/shutdown
+  handling, and absence of source snippets or absolute paths.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
@@ -160,6 +166,7 @@ class/reason token validation, internal semantic-fact freshness/readiness gating
 for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
+read-only MCP `repogrammar_context` schema/JSON-RPC serving,
 dependency-free TypeScript worker unavailable-stub behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store

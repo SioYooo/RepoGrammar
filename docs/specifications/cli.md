@@ -258,7 +258,8 @@ whose fallback means an active inventory index precondition is missing or
 unreadable. Semantic-fact freshness/readiness checks remain internal and must
 not introduce semantic-fact CLI output. The presence of FamilyStore tables is
 not by itself a strong claim: the query layer must return typed `UNKNOWN` when
-support, compatibility, or evidence is insufficient.
+support, compatibility, or evidence is insufficient. MCP serving uses the same
+query preflight and family lookup boundary rather than a separate claim path.
 
 With `--json`, query fallback output must use exit status `2` and write a
 stable JSON object to `stderr` rather than the human text block:
@@ -283,10 +284,10 @@ generation.
 If the index is stale, the command must warn or refuse claims whose evidence has
 changed.
 
-Once query execution exists, analysis uncertainty must be reported as typed
-`UNKNOWN` with a reason code and affected claim. Missing-index fallback,
-not-yet-implemented query execution, stale-index refusal, and typed `UNKNOWN`
-are separate states and must not be collapsed into one error string.
+Analysis uncertainty must be reported as typed `UNKNOWN` with a reason code and
+affected claim. Missing-index fallback, deferred stronger query evidence,
+stale-index refusal, and typed `UNKNOWN` are separate states and must not be
+collapsed into one error string.
 
 If repository-local state exists but no active generation exists, query commands
 must keep the same `FALLBACK_TO_CODE_SEARCH` marker with `reason: no active
@@ -352,6 +353,8 @@ default syntax-origin framework-role facts alone still produce no family rows.
 metadata and, when present, code-unit records. Pattern-family query commands
 return missing-index fallback before an active generation exists, typed
 `UNKNOWN` when active family evidence is insufficient, and stored family detail
-when EC-MVFI-lite has written supported family rows. Commands that install agent
-configuration or serve MCP return explicit not-implemented or deferred-write
-errors until those implementations are designed and tested.
+when EC-MVFI-lite has written supported family rows. `serve` runs the read-only
+MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
+FamilyStore-backed lookup path. Commands that install or uninstall agent
+configuration still return deferred-write errors until those implementations are
+designed and tested with MCP self-tests and reversible receipts.
