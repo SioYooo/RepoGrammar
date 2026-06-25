@@ -65,6 +65,7 @@ All query commands must support:
 
 - `--project <path>`
 - `--token-budget <n>`
+- `--mode compact|evidence|deep`
 - `--json`
 - `--include-variations`
 - `--include-exceptions`
@@ -338,12 +339,19 @@ operand as their target. `family <target>` is an exact family-id lookup.
 and `check` may use fuzzy matching over supported query-safe path suffixes,
 exact member roles, and exact ids, but must not treat short substrings such as a
 framework name, classification label, or directory fragment as a successful
-family match. A matched family response includes family id, classification,
-support, members, variation slots, evidence ranges, content hashes, and typed
-unknowns, without source snippets or absolute paths. `check` is advisory in
-this slice: it may return matched family context as `CONTEXT_ONLY`, but the
-check-specific conformance status remains `UNKNOWN` with reason `runtime
-equivalence remains unproven`.
+family match. Matched family output defaults to `--mode compact`: family id,
+classification, support, members, variation slots, typed unknowns, selected
+output metadata, and no evidence records or source snippets. `--mode evidence`
+adds budgeted repo-relative evidence metadata: evidence id, family id,
+code-unit id, path, content hash, byte range, and note. `--token-budget <n>`
+validates a positive integer and implies `--mode evidence` unless an explicit
+mode is provided. `--mode deep` is accepted as an explicit detail request, but
+until a safe source-span rendering contract exists it remains metadata-only and
+must report `source_snippets_included: false`. None of these modes may include
+absolute paths or source snippets. `check` is advisory in this slice: it may
+return matched family context as `CONTEXT_ONLY`, but the check-specific
+conformance status remains `UNKNOWN` with reason `runtime equivalence remains
+unproven`.
 
 Before public pattern-family output is returned, stored family evidence must be
 fresh against the current repository source hashes. If an evidence source is
@@ -391,13 +399,17 @@ produce no family rows.
 metadata and, when present, code-unit records. Pattern-family query commands
 return missing-index fallback before an active generation exists, typed
 `UNKNOWN` when active family evidence is insufficient, and stored family detail
-when EC-MVFI-lite has written supported family rows. `serve` runs the read-only
-MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
+when EC-MVFI-lite has written supported family rows. Stored family detail now
+uses compact/evidence/deep output modes. Compact is the default and omits
+evidence records; evidence and deep currently return selected metadata only and
+do not include source snippets. `serve` runs the read-only MCP
+`repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
 self-test. The CLI now includes the first Python structural indexing slice, but
-Pyrefly/Pyright provider evidence, richer repo-local import semantics, and broad
-Python family mining remain deferred. Narrow exact-anchor Python family rows may
-exist when EC-MVFI-lite has enough derived support. Unsupported live target/scope
-combinations return explicit deferred errors; dry-run planning remains available
+Pyrefly/Pyright provider evidence, richer repo-local import semantics, safe
+source-span deep output, and broad Python family mining remain deferred. Narrow
+exact-anchor Python family rows may exist when EC-MVFI-lite has enough derived
+support. Unsupported live target/scope combinations return explicit deferred
+errors; dry-run planning remains available
 for all targets and scopes.

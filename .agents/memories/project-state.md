@@ -21,8 +21,10 @@
   readiness. A separate
   `repogrammar-python-derived` step can synthesize support from exact canonical
   anchors for units with one framework role, so narrow Python family rows can be
-  produced without claiming provider-backed semantics. Pyrefly/Pyright and
-  provider-backed canonical evidence remain deferred.
+  produced without claiming provider-backed semantics. Family detail output now
+  supports compact/evidence/deep metadata modes shared by CLI and MCP; compact
+  is the default and deep does not yet include source snippets. Pyrefly/Pyright
+  and provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -113,6 +115,9 @@ exact-anchor derived-support family path. A separate test-only strong FastAPI
 semantic-support fixture injects compatible `SEMANTIC` facts through the
 existing worker boundary to validate family reads and stale-evidence fallback
 without claiming production Python semantic-provider support.
+Family detail reads now use compact/evidence/deep output modes. Compact omits
+evidence records; evidence/deep select stored repo-relative metadata under an
+optional token budget and report `source_snippets_included: false`.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed

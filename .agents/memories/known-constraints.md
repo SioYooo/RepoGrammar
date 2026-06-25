@@ -46,6 +46,10 @@ analysis rules.
   path/hash/range evidence validation. Source snippets and absolute paths must
   not be stored; family rows must still be treated as absent unless the
   EC-MVFI-lite support gate has enough compatible evidence.
+- CLI and MCP family detail output defaults to compact mode and must not render
+  evidence records unless `evidence` or `deep` mode is explicitly selected.
+  Current `deep` mode is metadata-only and must report that source snippets are
+  not included until a safe source-span rendering contract exists.
 - `index` and `sync` must acquire `.repogrammar/locks/index.lock` before
   discovery, source reads, generation preparation, validation, and activation.
   They must clean up partial lock metadata writes and only remove the lock

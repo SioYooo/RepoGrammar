@@ -191,6 +191,57 @@ pub struct FamilyQueryUnknown {
     pub recovery: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FamilyEvidenceMode {
+    #[default]
+    Compact,
+    Evidence,
+    Deep,
+}
+
+impl FamilyEvidenceMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "compact" => Some(Self::Compact),
+            "evidence" => Some(Self::Evidence),
+            "deep" => Some(Self::Deep),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Evidence => "evidence",
+            Self::Deep => "deep",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyOutputOptions {
+    pub evidence_mode: FamilyEvidenceMode,
+    pub token_budget: Option<usize>,
+}
+
+impl Default for FamilyOutputOptions {
+    fn default() -> Self {
+        Self {
+            evidence_mode: FamilyEvidenceMode::Compact,
+            token_budget: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedFamilyEvidence {
+    pub mode: FamilyEvidenceMode,
+    pub token_budget: Option<usize>,
+    pub estimated_tokens: usize,
+    pub source_snippets_included: bool,
+    pub evidence: Vec<IndexedFamilyEvidenceRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FamilyLookupMode {
     ExactFamilyId,
@@ -393,6 +444,61 @@ pub fn lookup_family_with_freshness(
         active_generation: active.generation_id,
         unknowns: vec![insufficient_support_unknown("query target")],
     }))
+}
+
+pub fn select_family_evidence(
+    family: &FamilyDetailReport,
+    options: FamilyOutputOptions,
+) -> SelectedFamilyEvidence {
+    let evidence = match options.evidence_mode {
+        FamilyEvidenceMode::Compact => Vec::new(),
+        FamilyEvidenceMode::Evidence | FamilyEvidenceMode::Deep => {
+            select_budgeted_evidence(family.evidence.clone(), options.token_budget)
+        }
+    };
+    let estimated_tokens = evidence.iter().map(estimated_evidence_tokens).sum();
+
+    SelectedFamilyEvidence {
+        mode: options.evidence_mode,
+        token_budget: options.token_budget,
+        estimated_tokens,
+        source_snippets_included: false,
+        evidence,
+    }
+}
+
+fn select_budgeted_evidence(
+    evidence: Vec<IndexedFamilyEvidenceRecord>,
+    token_budget: Option<usize>,
+) -> Vec<IndexedFamilyEvidenceRecord> {
+    let Some(token_budget) = token_budget else {
+        return evidence;
+    };
+    if evidence.is_empty() {
+        return Vec::new();
+    }
+
+    let mut selected = Vec::new();
+    let mut used = 0usize;
+    for item in evidence {
+        let cost = estimated_evidence_tokens(&item);
+        if selected.is_empty() || used.saturating_add(cost) <= token_budget {
+            used = used.saturating_add(cost);
+            selected.push(item);
+        }
+    }
+    selected
+}
+
+fn estimated_evidence_tokens(evidence: &IndexedFamilyEvidenceRecord) -> usize {
+    let bytes = evidence.evidence_id.len()
+        + evidence.family_id.len()
+        + evidence.code_unit_id.len()
+        + evidence.path.len()
+        + evidence.content_hash.as_str().len()
+        + evidence.note.len()
+        + 32;
+    bytes.div_ceil(4).max(1)
 }
 
 pub fn assess_semantic_fact_readiness(
@@ -851,6 +957,34 @@ mod tests {
         }
     }
 
+    fn family_evidence(path: &str, index: usize, note: &str) -> IndexedFamilyEvidenceRecord {
+        IndexedFamilyEvidenceRecord {
+            evidence_id: format!("family-evidence:{index:06}"),
+            family_id: "family:typescript:express_route:express".to_string(),
+            code_unit_id: format!("unit:{path}#express_route:0-20"),
+            path: path.to_string(),
+            content_hash: semantic_fact().content_hash,
+            start_byte: index,
+            end_byte: index + 20,
+            note: note.to_string(),
+        }
+    }
+
+    fn family_detail_with_evidence(
+        evidence: Vec<IndexedFamilyEvidenceRecord>,
+    ) -> FamilyDetailReport {
+        FamilyDetailReport {
+            active_generation: "gen-000001".to_string(),
+            family_id: "family:typescript:express_route:express".to_string(),
+            classification: "DOMINANT_PATTERN".to_string(),
+            support: evidence.len(),
+            members: Vec::new(),
+            variation_slots: Vec::new(),
+            evidence,
+            unknowns: Vec::new(),
+        }
+    }
+
     struct StaticSourceStore {
         result: Result<SourceText, SourceStoreError>,
     }
@@ -1162,6 +1296,72 @@ mod tests {
             assert!(!debug.contains("/repo"));
             assert!(!debug.contains("function"));
         }
+    }
+
+    #[test]
+    fn family_evidence_selection_defaults_to_compact_metadata_free_output() {
+        let detail = family_detail_with_evidence(vec![family_evidence(
+            "src/routes/a.ts",
+            0,
+            "canonical support evidence",
+        )]);
+
+        let selected = select_family_evidence(&detail, FamilyOutputOptions::default());
+
+        assert_eq!(selected.mode, FamilyEvidenceMode::Compact);
+        assert!(selected.evidence.is_empty());
+        assert_eq!(selected.estimated_tokens, 0);
+        assert!(!selected.source_snippets_included);
+    }
+
+    #[test]
+    fn family_evidence_selection_preserves_store_order_and_respects_budget() {
+        let first = family_evidence("src/routes/b.ts", 0, "first stored evidence");
+        let second = family_evidence("src/routes/a.ts", 1, "second stored evidence");
+        let detail = family_detail_with_evidence(vec![first.clone(), second.clone()]);
+
+        let all = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+            },
+        );
+        assert_eq!(all.evidence, vec![first.clone(), second]);
+        assert!(!all.source_snippets_included);
+        assert!(all.estimated_tokens > 0);
+
+        let tiny_budget = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: Some(1),
+            },
+        );
+        assert_eq!(tiny_budget.evidence, vec![first]);
+        assert!(tiny_budget.estimated_tokens > 1);
+        assert!(!tiny_budget.source_snippets_included);
+    }
+
+    #[test]
+    fn deep_family_evidence_mode_remains_metadata_only_without_safe_span_reader() {
+        let detail = family_detail_with_evidence(vec![family_evidence(
+            "src/routes/a.ts",
+            0,
+            "support evidence, not a source snippet",
+        )]);
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Deep,
+                token_budget: None,
+            },
+        );
+
+        assert_eq!(selected.mode, FamilyEvidenceMode::Deep);
+        assert_eq!(selected.evidence.len(), 1);
+        assert!(!selected.source_snippets_included);
     }
 
     #[test]

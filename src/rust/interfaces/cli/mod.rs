@@ -6,9 +6,10 @@ use crate::application::install::{
     InstallScope,
 };
 use crate::application::query::{
-    query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyListReport,
-    FamilyLookupMode, FamilyLookupReport, FamilyQueryUnknown, FamilyUnknownReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+    query_preflight, repository_status_unavailable_fallback, select_family_evidence,
+    FamilyDetailReport, FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -388,10 +389,16 @@ where
                 options.target.as_deref(),
                 lookup_mode_for_command(command),
             ) {
-                Ok(report) if options.json => {
-                    CliOutput::success(family_lookup_json(command, &report))
-                }
-                Ok(report) => CliOutput::success(family_lookup_human(command, &report)),
+                Ok(report) if options.json => CliOutput::success(family_lookup_json(
+                    command,
+                    &report,
+                    options.output_options(),
+                )),
+                Ok(report) => CliOutput::success(family_lookup_human(
+                    command,
+                    &report,
+                    options.output_options(),
+                )),
                 Err(_) => query_fallback(
                     command,
                     options.json,
@@ -587,18 +594,40 @@ fn families_json(command: &str, report: &FamilyListReport) -> String {
     }))
 }
 
-fn family_lookup_human(command: &str, report: &FamilyLookupReport) -> String {
+fn family_lookup_human(
+    command: &str,
+    report: &FamilyLookupReport,
+    options: FamilyOutputOptions,
+) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
+            let selected_evidence = select_family_evidence(family, options);
+            let snippets = if selected_evidence.source_snippets_included {
+                "included"
+            } else {
+                "not_included"
+            };
             let mut output = if command == "check" {
                 format!(
-                    "{command}: CONTEXT_ONLY\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
-                    family.active_generation, family.family_id, family.classification, family.support
+                    "{command}: CONTEXT_ONLY\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
+                    family.active_generation,
+                    family.family_id,
+                    family.classification,
+                    family.support,
+                    selected_evidence.mode.as_str(),
+                    selected_evidence.estimated_tokens,
+                    snippets
                 )
             } else {
                 format!(
-                    "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\n",
-                    family.active_generation, family.family_id, family.classification, family.support
+                    "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
+                    family.active_generation,
+                    family.family_id,
+                    family.classification,
+                    family.support,
+                    selected_evidence.mode.as_str(),
+                    selected_evidence.estimated_tokens,
+                    snippets
                 )
             };
             if command == "check" {
@@ -611,7 +640,7 @@ fn family_lookup_human(command: &str, report: &FamilyLookupReport) -> String {
                     member.code_unit_id, member.role
                 ));
             }
-            for evidence in &family.evidence {
+            for evidence in &selected_evidence.evidence {
                 output.push_str(&format!(
                     "evidence: {}\tpath: {}\trange: {}-{}\tcontent_hash: {}\n",
                     evidence.evidence_id,
@@ -662,9 +691,13 @@ fn family_unknown_human(command: &str, report: &FamilyUnknownReport) -> String {
     output
 }
 
-fn family_lookup_json(command: &str, report: &FamilyLookupReport) -> String {
+fn family_lookup_json(
+    command: &str,
+    report: &FamilyLookupReport,
+    options: FamilyOutputOptions,
+) -> String {
     match report {
-        FamilyLookupReport::Found(family) => family_detail_json(command, family),
+        FamilyLookupReport::Found(family) => family_detail_json(command, family, options),
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
             "status": "UNKNOWN",
@@ -675,7 +708,12 @@ fn family_lookup_json(command: &str, report: &FamilyLookupReport) -> String {
     }
 }
 
-fn family_detail_json(command: &str, family: &FamilyDetailReport) -> String {
+fn family_detail_json(
+    command: &str,
+    family: &FamilyDetailReport,
+    options: FamilyOutputOptions,
+) -> String {
+    let selected_evidence = select_family_evidence(family, options);
     let check = if command == "check" {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -695,6 +733,12 @@ fn family_detail_json(command: &str, family: &FamilyDetailReport) -> String {
             "classification": family.classification,
             "support": family.support,
         },
+        "output": {
+            "mode": selected_evidence.mode.as_str(),
+            "token_budget": selected_evidence.token_budget,
+            "estimated_evidence_tokens": selected_evidence.estimated_tokens,
+            "source_snippets_included": selected_evidence.source_snippets_included,
+        },
         "members": family.members.iter().map(|member| {
             json!({
                 "family_id": member.family_id,
@@ -709,7 +753,7 @@ fn family_detail_json(command: &str, family: &FamilyDetailReport) -> String {
                 "description": slot.description,
             })
         }).collect::<Vec<_>>(),
-        "evidence": family.evidence.iter().map(|evidence| {
+        "evidence": selected_evidence.evidence.iter().map(|evidence| {
             json!({
                 "evidence_id": evidence.evidence_id,
                 "family_id": evidence.family_id,
@@ -1147,6 +1191,18 @@ struct QueryOptions {
     project_path: Option<String>,
     target: Option<String>,
     json: bool,
+    evidence_mode: FamilyEvidenceMode,
+    mode_explicit: bool,
+    token_budget: Option<usize>,
+}
+
+impl QueryOptions {
+    fn output_options(&self) -> FamilyOutputOptions {
+        FamilyOutputOptions {
+            evidence_mode: self.evidence_mode,
+            token_budget: self.token_budget,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1399,7 +1455,18 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 index += 2;
             }
             "--token-budget" => {
-                option_value(rest, index, "--token-budget", "a token budget")?;
+                let value = option_value(rest, index, "--token-budget", "a token budget")?;
+                options.token_budget = Some(parse_positive_usize(value, "--token-budget")?);
+                if !options.mode_explicit && options.evidence_mode == FamilyEvidenceMode::Compact {
+                    options.evidence_mode = FamilyEvidenceMode::Evidence;
+                }
+                index += 2;
+            }
+            "--mode" => {
+                let value = option_value(rest, index, "--mode", "compact, evidence, or deep")?;
+                options.evidence_mode = FamilyEvidenceMode::parse(value)
+                    .ok_or_else(|| "--mode requires compact, evidence, or deep".to_string())?;
+                options.mode_explicit = true;
                 index += 2;
             }
             "--json" => {
@@ -1477,6 +1544,16 @@ fn option_value<'a>(
         return Err(format!("{option} requires {expectation}"));
     }
     Ok(value)
+}
+
+fn parse_positive_usize(value: &str, option: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("{option} requires a positive integer"))?;
+    if parsed == 0 {
+        return Err(format!("{option} requires a positive integer"));
+    }
+    Ok(parsed)
 }
 
 fn set_project_path(target: &mut Option<String>, value: &str) -> Result<(), String> {
@@ -2594,6 +2671,8 @@ mod tests {
                 ".",
                 "--token-budget",
                 "8000",
+                "--mode",
+                "evidence",
                 "--json",
                 "--include-variations",
                 "--include-exceptions",
@@ -2612,6 +2691,22 @@ mod tests {
         assert_eq!(fallback["guidance"], "run repogrammar init");
         assert_eq!(fallback["command"], "find");
         assert_eq!(fallback["implemented"], false);
+    }
+
+    #[test]
+    fn query_options_validate_detail_modes_and_token_budget() {
+        let workspace = TempWorkspace::new("cli-query-mode-validation");
+        let env = |_: &str| None;
+
+        for args in [
+            vec!["find", "--mode", "source"],
+            vec!["find", "--token-budget", "0"],
+            vec!["find", "--token-budget", "many"],
+        ] {
+            let output = run_with_context(args, workspace.path(), &env);
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+        }
     }
 
     #[test]
@@ -2665,7 +2760,7 @@ mod tests {
     }
 
     #[test]
-    fn family_query_json_returns_active_family_detail_without_source_leakage() {
+    fn family_query_compact_mode_omits_evidence_without_source_leakage() {
         let workspace = TempWorkspace::new("cli-family-query-json");
         let env = |_: &str| None;
         let runtime = FamilyQueryRuntime;
@@ -2691,8 +2786,102 @@ mod tests {
             value["family"]["family_id"],
             "family:typescript:express_route:express"
         );
-        assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(value["output"]["mode"], "compact");
+        assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
+        assert_eq!(value["output"]["source_snippets_included"], false);
+        assert!(value["evidence"].as_array().expect("evidence").is_empty());
         assert_eq!(value["unknowns"][0]["reason"], "FrameworkMagic");
+
+        let human = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(human.status, 0);
+        assert!(!human.stdout.contains("evidence:"));
+        assert!(human.stdout.contains("evidence_mode: compact"));
+        assert!(human.stdout.contains("source_snippets: not_included"));
+
+        let explicit_compact = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--mode",
+                "compact",
+                "--token-budget",
+                "1",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        let value: Value =
+            serde_json::from_str(explicit_compact.stdout.trim()).expect("family JSON");
+        assert_eq!(value["output"]["mode"], "compact");
+        assert_eq!(value["output"]["token_budget"], 1);
+        assert!(value["evidence"].as_array().expect("evidence").is_empty());
+    }
+
+    #[test]
+    fn family_query_evidence_mode_returns_metadata_without_source_leakage() {
+        let workspace = TempWorkspace::new("cli-family-query-evidence-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--mode",
+                "evidence",
+                "--token-budget",
+                "1",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!output.stdout.contains("res.json"));
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+        assert_eq!(value["output"]["mode"], "evidence");
+        assert_eq!(value["output"]["token_budget"], 1);
+        assert_eq!(value["output"]["source_snippets_included"], false);
+        assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
+        assert!(
+            value["output"]["estimated_evidence_tokens"]
+                .as_u64()
+                .expect("estimated tokens")
+                > 1
+        );
+    }
+
+    #[test]
+    fn family_query_deep_mode_remains_metadata_only_until_span_reader_exists() {
+        let workspace = TempWorkspace::new("cli-family-query-deep-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--mode", "deep", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+        assert_eq!(value["output"]["mode"], "deep");
+        assert_eq!(value["output"]["source_snippets_included"], false);
+        assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
     }
 
     #[test]

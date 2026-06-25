@@ -51,6 +51,10 @@
   insufficient, project-config facts stay blocked, and Python still requires
   three compatible support members before the EC-MVFI-lite family builder writes
   a family.
+- Compact/evidence/deep family output modes for CLI and MCP family detail.
+  Compact is now the default and omits evidence records; evidence/deep return
+  selected repo-relative evidence metadata under an optional token budget and
+  explicitly report that source snippets are not included.
 - Python v0.1 release fixture smoke coverage for FastAPI, pytest, Pydantic,
   SQLAlchemy, mixed, dynamic-unknown, and low-support examples, plus a test-only
   strong FastAPI semantic-support fixture that validates family reads, stale

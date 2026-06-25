@@ -113,6 +113,12 @@ semantic fact for an unrelated package, API, or framework cannot prove an
 FastAPI, pytest, SQLAlchemy, Pydantic, Express, React, Jest, or Vitest family.
 Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
+Family query output is selected rather than dumped wholesale. The default
+compact mode returns family summary, members, variation slots, and unknowns
+without evidence records or source snippets. Explicit evidence/deep modes may
+return selected repo-relative evidence metadata under a token budget, but the
+current deep mode is still metadata-only until a safe source-span rendering
+contract exists.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

@@ -1236,12 +1236,43 @@ mod tests {
         let family_json = parse_machine_output("family", &family, &workspace);
         assert_eq!(family_json["status"], "ok");
         assert_eq!(family_json["family"]["family_id"], family_id);
+        assert_eq!(family_json["output"]["mode"], "compact");
+        assert_eq!(family_json["output"]["source_snippets_included"], false);
         assert_eq!(family_json["members"].as_array().expect("members").len(), 3);
-        assert_eq!(
-            family_json["evidence"].as_array().expect("evidence").len(),
-            3
-        );
+        assert!(family_json["evidence"]
+            .as_array()
+            .expect("evidence")
+            .is_empty());
         assert_eq!(family_json["unknowns"][0]["reason"], "FrameworkMagic");
+
+        let family_evidence = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[
+                    &family_id,
+                    "--mode",
+                    "evidence",
+                    "--token-budget",
+                    "1",
+                    "--json",
+                ],
+            ),
+            &runtime,
+        );
+        let evidence_json = parse_machine_output("family", &family_evidence, &workspace);
+        assert_eq!(evidence_json["status"], "ok");
+        assert_eq!(evidence_json["output"]["mode"], "evidence");
+        assert_eq!(evidence_json["output"]["token_budget"], 1);
+        assert_eq!(evidence_json["output"]["source_snippets_included"], false);
+        assert_eq!(
+            evidence_json["evidence"]
+                .as_array()
+                .expect("evidence")
+                .len(),
+            1
+        );
+        assert_eq!(evidence_json["evidence"][0]["path"], "routes.py");
     }
 
     #[cfg(unix)]
@@ -1366,12 +1397,34 @@ mod tests {
                 .expect("members")
                 .iter()
                 .all(|member| member["role"] == "framework:fastapi.route"));
-            assert_eq!(value["evidence"].as_array().expect("evidence").len(), 3);
+            assert_eq!(value["output"]["mode"], "compact");
+            assert_eq!(value["output"]["source_snippets_included"], false);
+            assert!(value["evidence"].as_array().expect("evidence").is_empty());
             assert_eq!(
                 value["unknowns"][0]["reason"], "FrameworkMagic",
                 "runtime equivalence must remain non-blocking UNKNOWN"
             );
         }
+
+        let evidence = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["routes.py", "--mode", "evidence", "--json"],
+            ),
+            &runtime,
+        );
+        let evidence_json = parse_machine_output("find", &evidence, &workspace);
+        assert_eq!(evidence_json["status"], "ok");
+        assert_eq!(evidence_json["output"]["mode"], "evidence");
+        assert_eq!(evidence_json["output"]["source_snippets_included"], false);
+        assert_eq!(
+            evidence_json["evidence"]
+                .as_array()
+                .expect("evidence")
+                .len(),
+            3
+        );
 
         let check = run_with_runtime(
             cli_args("check", workspace.path(), &["routes.py", "--json"]),
@@ -1388,11 +1441,16 @@ mod tests {
         .expect("mutate Python route fixture");
 
         let stale = run_with_runtime(
-            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            cli_args(
+                "family",
+                workspace.path(),
+                &[&family_id, "--mode", "evidence", "--json"],
+            ),
             &runtime,
         );
         let stale_json = parse_machine_output("family", &stale, &workspace);
         assert_eq!(stale_json["status"], "UNKNOWN");
+        assert!(stale_json.get("evidence").is_none());
         assert_eq!(stale_json["unknowns"][0]["reason"], "StaleEvidence");
         assert_eq!(
             stale_json["unknowns"][0]["recovery"],

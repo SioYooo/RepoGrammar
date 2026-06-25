@@ -126,6 +126,10 @@ The current implementation covers the first structural slice only:
   exact FastAPI anchors can produce a default family only through separate
   derived support facts, and keep the test-injected `SEMANTIC` worker fixture as
   coverage for the explicit worker boundary;
+- compact/evidence/deep family output modes shared by CLI and MCP. Compact is
+  the default and omits evidence records; evidence/deep select only stored
+  repo-relative evidence metadata under an optional token budget and explicitly
+  report that source snippets are not included;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for derived and future provider-backed strong facts.
 
@@ -150,7 +154,8 @@ support.
 
 This slice does not implement Pyrefly, Pyright, provider cache keys, usage
 propagation, call hierarchy recovery, Tree-sitter fallback, runtime
-observation, broad Python family mining, or source snippet retrieval. Persisted
+observation, broad Python family mining, source snippet retrieval, or
+claim-coverage-aware medoid/variation/exception evidence ranking. Persisted
 project configuration facts are structural context only and remain blocked from
 family-claim input.
 
@@ -501,7 +506,9 @@ Default query output has three levels:
 - `evidence`: compact output plus one canonical medoid, one representative
   variation, and one exception when present, using repo-relative path, byte
   range, and hash. No source snippets by default.
-- `deep`: minimum source spans only when explicitly requested.
+- `deep`: minimum source spans only when explicitly requested. The current
+  implementation accepts the mode but remains metadata-only until a safe
+  source-span rendering contract exists.
 
 Evidence selection should be budgeted. Each evidence item records the claims it
 covers, such as route decorator invariant, dependency variation, response model
@@ -513,6 +520,14 @@ per estimated token cost, with these constraints:
 - at most one or two variation items unless explicitly requested;
 - at least one exception when exceptions exist;
 - at most one evidence item from the same file by default.
+
+Current selector status: CLI and MCP share a deterministic metadata selector
+over stored `IndexedFamilyEvidenceRecord`s. `compact` returns no evidence
+records. `evidence` and `deep` preserve storage order and include as many
+metadata records as fit the token budget, always keeping the first record when
+evidence exists. Because family evidence records do not yet carry covered-claim,
+medoid, variation, or exception roles, this is not the final coverage-aware
+selector described above.
 
 ## Rejected v0.1 Routes
 

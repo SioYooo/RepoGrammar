@@ -26,8 +26,10 @@ The current input schema is intentionally small:
 
 - required `operation`: one of the four operation strings above.
 - optional `target`: non-empty string.
-- optional `token_budget`: positive integer, accepted for contract compatibility
-  but not yet used for evidence selection.
+- optional `token_budget`: positive integer used to cap selected evidence
+  metadata. Supplying it implies `mode: evidence` unless an explicit mode is
+  provided.
+- optional `mode`: one of `compact`, `evidence`, or `deep`.
 - optional `include_variations` and `include_exceptions`: booleans, accepted for
   contract compatibility.
 
@@ -103,6 +105,14 @@ facts, raw snapshot contents, or treat framework heuristics as family evidence.
 The MCP call handler reuses the same application query preflight and
 FamilyStore-backed lookup path as the CLI rather than inventing a parallel
 contract.
+Matched family responses use the same output selection contract as the CLI:
+`compact` is the default and returns family summary, members, variation slots,
+unknowns, and output metadata without evidence records; `evidence` adds
+budgeted repo-relative evidence metadata; `deep` is accepted only as an
+explicit detail request and remains metadata-only until a safe source-span
+rendering contract exists. MCP responses must report whether source snippets
+were included; the current implementation always reports
+`source_snippets_included: false`.
 
 ## Serving mode
 

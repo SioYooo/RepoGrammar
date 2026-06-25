@@ -1,8 +1,9 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
 use crate::application::query::{
-    query_preflight, repository_status_unavailable_fallback, FamilyDetailReport, FamilyLookupMode,
-    FamilyLookupReport, FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport,
+    query_preflight, repository_status_unavailable_fallback, select_family_evidence,
+    FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::error::RepoGrammarError;
@@ -137,6 +138,7 @@ pub struct McpJsonRpcOutcome {
 struct ContextArguments {
     operation: McpOperation,
     target: Option<String>,
+    output_options: FamilyOutputOptions,
 }
 
 pub fn tool_schema() -> Value {
@@ -164,6 +166,10 @@ pub fn tool_schema() -> Value {
                 "token_budget": {
                     "type": "integer",
                     "minimum": 1,
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["compact", "evidence", "deep"],
                 },
                 "include_variations": {
                     "type": "boolean",
@@ -205,9 +211,11 @@ pub fn handle_context_call(
             arguments.target.as_deref(),
             lookup_mode_for_operation(arguments.operation),
         ) {
-            Ok(FamilyLookupReport::Found(family)) => {
-                Ok(family_detail_value(arguments.operation, &family))
-            }
+            Ok(FamilyLookupReport::Found(family)) => Ok(family_detail_value(
+                arguments.operation,
+                &family,
+                arguments.output_options,
+            )),
             Ok(FamilyLookupReport::Unknown(report)) => Ok(json!({
                 "operation": arguments.operation.as_str(),
                 "command": arguments.operation.cli_command(),
@@ -395,7 +403,12 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "operation" | "target" | "token_budget" | "include_variations" | "include_exceptions"
+            "operation"
+                | "target"
+                | "token_budget"
+                | "mode"
+                | "include_variations"
+                | "include_exceptions"
         ) {
             return Err(McpProtocolError::invalid_params(
                 "repogrammar_context arguments contain an unsupported field",
@@ -425,7 +438,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             ));
         }
     };
-    if let Some(token_budget) = object.get("token_budget") {
+    let token_budget = if let Some(token_budget) = object.get("token_budget") {
         let Some(value) = token_budget.as_u64() else {
             return Err(McpProtocolError::invalid_params(
                 "repogrammar_context token_budget must be a positive integer",
@@ -436,6 +449,30 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
                 "repogrammar_context token_budget must be a positive integer",
             ));
         }
+        Some(usize::try_from(value).map_err(|_| {
+            McpProtocolError::invalid_params(
+                "repogrammar_context token_budget must fit in the local machine word size",
+            )
+        })?)
+    } else {
+        None
+    };
+    let mode_explicit = object.get("mode").is_some_and(|value| !value.is_null());
+    let mut evidence_mode = match object.get("mode") {
+        None | Some(Value::Null) => FamilyEvidenceMode::Compact,
+        Some(Value::String(value)) => FamilyEvidenceMode::parse(value).ok_or_else(|| {
+            McpProtocolError::invalid_params(
+                "repogrammar_context mode must be compact, evidence, or deep",
+            )
+        })?,
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context mode must be a string when provided",
+            ));
+        }
+    };
+    if token_budget.is_some() && !mode_explicit && evidence_mode == FamilyEvidenceMode::Compact {
+        evidence_mode = FamilyEvidenceMode::Evidence;
     }
     for field in ["include_variations", "include_exceptions"] {
         if object.get(field).is_some_and(|value| !value.is_boolean()) {
@@ -444,7 +481,14 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             ));
         }
     }
-    Ok(ContextArguments { operation, target })
+    Ok(ContextArguments {
+        operation,
+        target,
+        output_options: FamilyOutputOptions {
+            evidence_mode,
+            token_budget,
+        },
+    })
 }
 
 fn fallback_value(
@@ -461,7 +505,12 @@ fn fallback_value(
     })
 }
 
-fn family_detail_value(operation: McpOperation, family: &FamilyDetailReport) -> Value {
+fn family_detail_value(
+    operation: McpOperation,
+    family: &FamilyDetailReport,
+    options: FamilyOutputOptions,
+) -> Value {
+    let selected_evidence = select_family_evidence(family, options);
     let check = if operation == McpOperation::CheckConformance {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -482,6 +531,12 @@ fn family_detail_value(operation: McpOperation, family: &FamilyDetailReport) -> 
             "classification": family.classification,
             "support": family.support,
         },
+        "output": {
+            "mode": selected_evidence.mode.as_str(),
+            "token_budget": selected_evidence.token_budget,
+            "estimated_evidence_tokens": selected_evidence.estimated_tokens,
+            "source_snippets_included": selected_evidence.source_snippets_included,
+        },
         "members": family.members.iter().map(|member| {
             json!({
                 "family_id": member.family_id,
@@ -496,7 +551,7 @@ fn family_detail_value(operation: McpOperation, family: &FamilyDetailReport) -> 
                 "description": slot.description,
             })
         }).collect::<Vec<_>>(),
-        "evidence": family.evidence.iter().map(|evidence| {
+        "evidence": selected_evidence.evidence.iter().map(|evidence| {
             json!({
                 "evidence_id": evidence.evidence_id,
                 "family_id": evidence.family_id,
@@ -594,6 +649,10 @@ mod tests {
             schema["inputSchema"]["properties"]["target"]["minLength"],
             1
         );
+        assert_eq!(
+            schema["inputSchema"]["properties"]["mode"]["enum"],
+            json!(["compact", "evidence", "deep"])
+        );
     }
 
     #[test]
@@ -650,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn active_family_response_has_no_absolute_path_or_source_snippet() {
+    fn active_family_compact_response_has_no_absolute_path_source_snippet_or_evidence() {
         let runtime = FakeMcpRuntime::ready_found();
 
         let response = handle_context_call(
@@ -663,9 +722,93 @@ mod tests {
 
         assert_eq!(response["status"], "CONTEXT_ONLY");
         assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
-        assert_eq!(response["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(response["output"]["mode"], "compact");
+        assert_eq!(response["output"]["estimated_evidence_tokens"], 0);
+        assert_eq!(response["output"]["source_snippets_included"], false);
+        assert!(response["evidence"]
+            .as_array()
+            .expect("evidence")
+            .is_empty());
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn active_family_explicit_compact_mode_overrides_token_budget() {
+        let runtime = FakeMcpRuntime::ready_found();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+                "mode": "compact",
+                "token_budget": 1
+            }),
+        )
+        .expect("family response");
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["output"]["mode"], "compact");
+        assert_eq!(response["output"]["token_budget"], 1);
+        assert!(response["evidence"]
+            .as_array()
+            .expect("evidence")
+            .is_empty());
+    }
+
+    #[test]
+    fn active_family_evidence_mode_returns_budgeted_metadata_without_source_snippet() {
+        let runtime = FakeMcpRuntime::ready_found();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+                "mode": "evidence",
+                "token_budget": 1
+            }),
+        )
+        .expect("family response");
+        let text = response.to_string();
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["output"]["mode"], "evidence");
+        assert_eq!(response["output"]["token_budget"], 1);
+        assert_eq!(response["output"]["source_snippets_included"], false);
+        assert_eq!(response["evidence"][0]["path"], "src/routes/a.ts");
+        assert!(
+            response["output"]["estimated_evidence_tokens"]
+                .as_u64()
+                .expect("estimated tokens")
+                > 1
+        );
+        assert!(!text.contains("/tmp/repogrammar"));
+        assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn active_family_deep_mode_is_metadata_only_until_span_reader_exists() {
+        let runtime = FakeMcpRuntime::ready_found();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+                "mode": "deep"
+            }),
+        )
+        .expect("family response");
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["output"]["mode"], "deep");
+        assert_eq!(response["output"]["source_snippets_included"], false);
+        assert_eq!(response["evidence"][0]["path"], "src/routes/a.ts");
     }
 
     #[test]
@@ -702,6 +845,14 @@ mod tests {
             &json!({"operation": "find_analogues", "target": "   "}),
         )
         .expect_err("blank target");
+        assert_eq!(error.code(), -32602);
+
+        let error = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "find_analogues", "target": "src/a.py", "mode": "source"}),
+        )
+        .expect_err("invalid mode");
         assert_eq!(error.code(), -32602);
     }
 

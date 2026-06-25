@@ -125,7 +125,8 @@ Try the current pattern-family CLI boundary:
 
 ```text
 cargo run --quiet --bin repogrammar -- find --project . --token-budget 8000 <target>
-cargo run --quiet --bin repogrammar -- family --project . --token-budget 8000 <family-id>
+cargo run --quiet --bin repogrammar -- family --project . --mode compact <family-id>
+cargo run --quiet --bin repogrammar -- family --project . --mode evidence --token-budget 8000 <family-id>
 cargo run --quiet --bin repogrammar -- explain --project . --token-budget 8000 <target>
 cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <target>
 ```
@@ -135,8 +136,10 @@ repo-local state boundaries, command contracts, tests, and documentation can
 stabilize before full mining begins. Pattern-family query commands currently
 return explicit missing-index fallback guidance before `index`; after an active
 index exists, they return typed `UNKNOWN` when family evidence is insufficient.
-With `--json`, both states are parseable. `files` and `units` are limited to
-active file-manifest-only or syntax-only index metadata.
+With `--json`, both states are parseable. Matched family detail defaults to
+compact output without evidence records; explicit `--mode evidence` or
+`--mode deep` returns selected repo-relative evidence metadata only. `files` and
+`units` are limited to active file-manifest-only or syntax-only index metadata.
 
 ## Product Shape
 

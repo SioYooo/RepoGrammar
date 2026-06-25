@@ -90,14 +90,17 @@ allowed.
   insufficient, no-family active generations returning typed
   `InsufficientSupport`, exact family/member lookup versus fuzzy
   find/explain/check lookup, short-substring false-match rejection, stale
-  family-evidence refusal with `StaleEvidence`, JSON/human CLI output,
+  family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
+  mode behavior, token-budget validation and selection, JSON/human CLI output,
   advisory `check` behavior, and absence of source snippets or absolute paths.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
   no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
   `check_conformance` with `CONTEXT_ONLY` context success when conformance is
-  unproven, exact `show_family` target handling, JSON-RPC
+  unproven, exact `show_family` target handling, compact/evidence/deep output
+  mode serialization, token-budget validation and metadata-only evidence
+  selection, JSON-RPC
   initialize/tools/list/tools/call/shutdown handling, and absence of source
   snippets or absolute paths.
 - Installer live-write tests must cover `--yes` gating, MCP self-test before
@@ -155,7 +158,9 @@ allowed.
   parser/provider internals, or absolute paths, low-support and dynamic cases
   return typed `UNKNOWN`/`InsufficientSupport`, and positive family cases require
   either exact-anchor derived `DATAFLOW_DERIVED` support or an explicitly
-  injected compatible semantic/dataflow support fixture.
+  injected compatible semantic/dataflow support fixture. Positive family smoke
+  tests must cover compact default output without evidence records and explicit
+  evidence mode output with repo-relative metadata only.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,

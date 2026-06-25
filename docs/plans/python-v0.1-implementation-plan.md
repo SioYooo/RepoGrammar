@@ -162,6 +162,11 @@ trace by default, or source snippets in compact/evidence output.
 Validation gate: human and JSON outputs distinguish fallback, stale evidence,
 typed `UNKNOWN`, `CONTEXT_ONLY`, and confident family classifications.
 
+Current slice: CLI and MCP now share compact/evidence/deep output selection for
+stored family evidence metadata. `deep` is still metadata-only and reports no
+source snippets until a safe source-span reader and coverage-aware selector are
+implemented.
+
 ### Phase P8: Optional Observed Runtime Evidence
 
 Goal: add an explicit, bounded RightTyper-style observed evidence path only
