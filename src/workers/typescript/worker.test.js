@@ -55,6 +55,21 @@ function assertEndOfStream(messages, requestId) {
 }
 
 {
+  const request = validRequest();
+  request.changed_files = Array.from(
+    { length: 10_000 },
+    (_, index) => `src/file-${String(index).padStart(5, "0")}.ts`
+  );
+  const requestBytes = Buffer.byteLength(`${JSON.stringify(request)}\n`, "utf8");
+  assert(requestBytes > 4 * 1024);
+  assert(requestBytes <= 1_048_576);
+  const messages = runWorker(request);
+  assert.strictEqual(messages[0].message_type, "worker_error");
+  assert.strictEqual(messages[0].error_code, "SEMANTIC_WORKER_UNAVAILABLE");
+  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
+}
+
+{
   const messages = runWorker("{not-json}\n");
   assert.strictEqual(messages[0].message_type, "worker_error");
   assert.strictEqual(messages[0].error_code, "SEMANTIC_PROTOCOL_VIOLATION");

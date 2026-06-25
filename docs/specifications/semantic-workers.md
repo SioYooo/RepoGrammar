@@ -126,10 +126,12 @@ Worker execution must use an explicit absolute executable path plus argument
 vector, not shell interpolation. The Rust-side adapter must reject relative,
 missing, symlink, or non-directory project roots before spawning the worker.
 Requests must be size-bounded before writing to worker stdin so a worker that
-does not read cannot bypass timeout supervision. Unsupported TypeScript compiler
-API versions must not be accepted with `SEMANTIC` certainty; those facts must be
-rejected as unsupported-version output unless the worker reports a syntax-only
-or unknown fallback.
+does not read cannot bypass timeout supervision. The Rust-side TypeScript
+adapter and the checked-in Node stub share a 1 MiB stdin envelope for a request,
+counting the newline terminator that Rust writes after the JSON request object.
+Unsupported TypeScript compiler API versions must not be accepted with
+`SEMANTIC` certainty; those facts must be rejected as unsupported-version output
+unless the worker reports a syntax-only or unknown fallback.
 When a request provides changed file paths, the adapter must reject facts whose
 evidence path was not requested. Runtime fact text fields must reject obvious
 absolute paths, URI schemes, NUL/newline payloads, and source-like snippets

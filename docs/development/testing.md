@@ -89,14 +89,16 @@ allowed.
   fields, sanitized worker-error mapping, worker crashes, timeouts, oversized
   output, invalid request paths, unrequested fact paths, and relative executable
   rejection. They must also cover inherited-pipe timeout handling, unsupported
-  field-name redaction, invalid/symlink project roots, oversized request guards,
+  field-name redaction, invalid/symlink project roots, the shared 1 MiB stdin
+  request envelope with limit-plus-one rejection,
   worker-error output that omits `end_of_stream`, unsupported TypeScript
   versions with semantic certainty, sorted/deduplicated request files, and
   rejected absolute-path or source-like free text.
 - TypeScript worker executable tests must run the dependency-free worker stub
   through Node, validate parseable NDJSON `worker_error` plus `end_of_stream`
-  output for valid requests, reject malformed requests, and prove request paths
-  are not echoed in errors.
+  output for valid requests, accept large changed-file requests below the
+  shared 1 MiB stdin envelope, reject malformed requests, and prove request
+  paths are not echoed in errors.
 - Experimental Python dogfooding tests, once added, must be opt-in and must
   assert experimental support level plus typed `UNKNOWN` for dynamic imports,
   monkey patching, pytest fixture injection, runtime dependency injection,

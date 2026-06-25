@@ -25,7 +25,8 @@ pub const PINNED_TYPESCRIPT_MAJOR_VERSION: u16 = 6;
 pub const DEFAULT_SEMANTIC_WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKER_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKER_LINE_BYTES: usize = 64 * 1024;
-const MAX_WORKER_REQUEST_BYTES: usize = 4 * 1024;
+const MAX_WORKER_STDIN_BYTES: usize = 1024 * 1024;
+const WORKER_REQUEST_TERMINATOR_BYTES: usize = 1;
 const REQUEST_ID: &str = "repogrammar-typescript-semantic-worker";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,9 +244,13 @@ fn worker_request_bytes(
             "semantic worker request could not be serialized".to_string(),
         )
     })?;
-    if request_bytes.len() > MAX_WORKER_REQUEST_BYTES {
+    if request_bytes
+        .len()
+        .saturating_add(WORKER_REQUEST_TERMINATOR_BYTES)
+        > MAX_WORKER_STDIN_BYTES
+    {
         return Err(SemanticWorkerError::ProtocolViolation(
-            "semantic worker request exceeded size limit".to_string(),
+            "semantic worker request exceeded stdin size limit".to_string(),
         ));
     }
     Ok(request_bytes)
@@ -1161,6 +1166,35 @@ mod tests {
         assert_eq!(payload, fixture);
     }
 
+    #[test]
+    fn request_serialization_accepts_many_changed_files_below_worker_stdin_limit() {
+        let changed_files = (0..10_000)
+            .map(|index| format!("src/file-{index:05}.ts"))
+            .collect::<Vec<_>>();
+
+        let payload = worker_request_bytes(SemanticWorkerRequest {
+            project_root: "/repo".to_string(),
+            changed_files,
+        })
+        .expect("many changed files below the worker stdin limit should serialize");
+
+        assert!(payload.len() + WORKER_REQUEST_TERMINATOR_BYTES > 4 * 1024);
+        assert!(payload.len() + WORKER_REQUEST_TERMINATOR_BYTES <= MAX_WORKER_STDIN_BYTES);
+        let value: Value = serde_json::from_slice(&payload).expect("payload must parse");
+        let changed_files = value["changed_files"]
+            .as_array()
+            .expect("changed files must be an array");
+        assert_eq!(changed_files.len(), 10_000);
+        assert_eq!(
+            changed_files.first().and_then(serde_json::Value::as_str),
+            Some("src/file-00000.ts")
+        );
+        assert_eq!(
+            changed_files.last().and_then(serde_json::Value::as_str),
+            Some("src/file-09999.ts")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn process_boundary_runs_worker_and_parses_stdout() {
@@ -1270,14 +1304,29 @@ mod tests {
     fn boundary_rejects_invalid_request_paths() {
         let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
         let workspace = TempWorkspace::new("typescript-worker-invalid-request");
-        let error = worker
-            .analyze_project(SemanticWorkerRequest {
-                project_root: workspace.path().display().to_string(),
-                changed_files: vec!["../secret.ts".to_string()],
-            })
-            .expect_err("traversal changed file must be rejected before spawn");
+        for changed_file in [
+            "/tmp/source.ts",
+            "../secret.ts",
+            "src/../secret.ts",
+            "./src/a.ts",
+            "src\\a.ts",
+            "file:///tmp/source.ts",
+            "C:tmp/source.ts",
+            "C:/tmp/source.ts",
+            "C:\\tmp\\source.ts",
+        ] {
+            let error = worker
+                .analyze_project(SemanticWorkerRequest {
+                    project_root: workspace.path().display().to_string(),
+                    changed_files: vec![changed_file.to_string()],
+                })
+                .expect_err("unsafe changed file must be rejected before spawn");
 
-        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+            assert!(
+                matches!(error, SemanticWorkerError::ProtocolViolation(_)),
+                "unexpected error for {changed_file}: {error:?}"
+            );
+        }
 
         let error = TypeScriptSemanticWorkerBoundary::new("relative-worker")
             .analyze_project(SemanticWorkerRequest {
@@ -1289,18 +1338,30 @@ mod tests {
     }
 
     #[test]
+    fn boundary_request_limit_matches_worker_stdin_limit() {
+        let exact = request_with_serialized_len("/repo", MAX_WORKER_STDIN_BYTES - 1);
+        let exact_bytes = worker_request_bytes(exact).expect("exact stdin limit should serialize");
+        assert_eq!(
+            exact_bytes.len() + WORKER_REQUEST_TERMINATOR_BYTES,
+            MAX_WORKER_STDIN_BYTES
+        );
+
+        let oversized = request_with_serialized_len("/repo", MAX_WORKER_STDIN_BYTES);
+        let error = worker_request_bytes(oversized).expect_err("limit plus newline must fail");
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+    }
+
+    #[test]
     fn boundary_rejects_oversized_requests_before_spawn() {
         let workspace = TempWorkspace::new("typescript-worker-request-too-large");
         let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
-        let changed_files = (0..MAX_WORKER_REQUEST_BYTES)
-            .map(|index| format!("src/file{index}.ts"))
-            .collect::<Vec<_>>();
+        let request = request_with_serialized_len(
+            &workspace.path().display().to_string(),
+            MAX_WORKER_STDIN_BYTES,
+        );
 
         let error = worker
-            .analyze_project(SemanticWorkerRequest {
-                project_root: workspace.path().display().to_string(),
-                changed_files,
-            })
+            .analyze_project(request)
             .expect_err("oversized request should be rejected");
 
         assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
@@ -1347,6 +1408,78 @@ mod tests {
             project_root: workspace.path().display().to_string(),
             changed_files: vec!["src/handlers/user.ts".to_string()],
         }
+    }
+
+    fn request_with_serialized_len(project_root: &str, target_len: usize) -> SemanticWorkerRequest {
+        let mut changed_files = Vec::new();
+        let mut next_index = 0usize;
+        loop {
+            let current_len = serialized_request_len(project_root, &changed_files);
+            if current_len == target_len {
+                return SemanticWorkerRequest {
+                    project_root: project_root.to_string(),
+                    changed_files,
+                };
+            }
+            assert!(
+                current_len < target_len,
+                "request serialization overshot target length"
+            );
+
+            let empty_delta =
+                serialized_request_len_with_extra_path(project_root, &changed_files, "")
+                    - current_len;
+            let min_path_len = fixed_width_path(next_index, 0).len();
+            let min_delta = empty_delta + min_path_len;
+            let max_delta = empty_delta + 4096;
+            let remaining = target_len - current_len;
+
+            if remaining >= min_delta && remaining <= max_delta {
+                let path_len = remaining - empty_delta;
+                changed_files.push(fixed_width_path(next_index, path_len - min_path_len));
+                continue;
+            }
+
+            let delta = if remaining > max_delta && remaining - max_delta < min_delta {
+                remaining - min_delta
+            } else {
+                max_delta
+            };
+            assert!(delta >= min_delta && delta <= max_delta);
+            changed_files.push(fixed_width_path(
+                next_index,
+                delta - empty_delta - min_path_len,
+            ));
+            next_index += 1;
+        }
+    }
+
+    fn serialized_request_len(project_root: &str, changed_files: &[String]) -> usize {
+        let mut changed_files = changed_files.to_vec();
+        changed_files.sort();
+        changed_files.dedup();
+        serde_json::to_vec(&json!({
+            "protocol_version": SEMANTIC_WORKER_PROTOCOL_VERSION,
+            "request_id": REQUEST_ID,
+            "project_root": project_root,
+            "changed_files": changed_files,
+        }))
+        .expect("request serialization should not fail")
+        .len()
+    }
+
+    fn serialized_request_len_with_extra_path(
+        project_root: &str,
+        changed_files: &[String],
+        path: &str,
+    ) -> usize {
+        let mut changed_files = changed_files.to_vec();
+        changed_files.push(path.to_string());
+        serialized_request_len(project_root, &changed_files)
+    }
+
+    fn fixed_width_path(index: usize, filler_len: usize) -> String {
+        format!("src/{index:06}/{}.ts", "a".repeat(filler_len))
     }
 
     #[cfg(unix)]
