@@ -202,10 +202,11 @@ hash-checked discovered `conftest.py` file contents into that private mode,
 letting the worker build a bounded module and fixture context for the current
 parse request. That worker pass produces repo-relative structural fact payloads
 for imports, unique repo-local import bindings, decorator anchors, class bases,
-simple calls, `pytest.test` test-function anchors, same-file and
-parent-directory `conftest.py` pytest fixture edges, path-derived module names,
-CPython `symtable` scope anchors, and typed dynamic/unresolved/ambiguous
-`UNKNOWN` cases. The semantic-worker-compatible
+SQLAlchemy mapped field anchors, typed SQLAlchemy session calls, simple calls,
+`pytest.test` test-function anchors, same-file and parent-directory
+`conftest.py` pytest fixture edges, path-derived module names, CPython
+`symtable` scope anchors, and typed dynamic/unresolved/ambiguous `UNKNOWN`
+cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
 parser adapter validates and persists parse-document payloads as internal

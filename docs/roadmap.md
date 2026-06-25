@@ -73,8 +73,8 @@
   dynamic-unknown, and low-support fixture shapes through product CLI JSON
   paths while preserving low-support/dynamic `UNKNOWN` query behavior.
 - No-worker exact-anchor direct FastAPI, FastAPI alias, pytest, Pydantic
-  model/settings, and SQLAlchemy family smoke that proves derived support can
-  reach the
+  model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
+  family smoke that proves derived support can reach the
   EC-MVFI-lite family read path without claiming provider-backed Python
   semantics.
 - Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`

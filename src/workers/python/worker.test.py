@@ -54,7 +54,8 @@ parse_messages = run_worker(
         "text": """
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 router = APIRouter()
 
@@ -66,6 +67,13 @@ class Base(DeclarativeBase):
 
 class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
+
+class UserRepository:
+    def list_users(self, session: Session):
+        return session.execute("select users")
+
+    async def list_accounts(self, db: AsyncSession):
+        return await db.execute("select accounts")
 
 @router.get("/users")
 async def list_users():
@@ -92,6 +100,20 @@ assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.namespace.
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.assigned.router" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel" for fact in parse_facts)
 assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.DeclarativeBase" for fact in parse_facts)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.mapped_column"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.Session.execute"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
+    for fact in parse_facts
+)
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get" for fact in parse_facts)
 assert any(fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "client.get" for fact in parse_facts)
 assert any(

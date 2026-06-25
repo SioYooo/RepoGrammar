@@ -121,8 +121,9 @@ leakage, no source-snippet or parser/provider-internal leakage, and
 conservative `UNKNOWN` query results by default. Python release fixtures cover
 direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
-FastAPI alias, pytest, Pydantic model/settings, and SQLAlchemy fixtures now
-validate the no-worker exact-anchor derived-support family path. A separate
+FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
+SQLAlchemy session/repository fixtures now validate the no-worker exact-anchor
+derived-support family path. A separate
 test-only strong FastAPI semantic-support fixture injects compatible `SEMANTIC`
 facts through the
 existing worker boundary to validate family reads and stale-evidence fallback

@@ -1212,6 +1212,20 @@ mod tests {
                 evidence_path: "repository.py",
                 member_role: "framework:sqlalchemy.repository_method",
             },
+            ExactAnchorCase {
+                fixture: "sqlalchemy-session-strong-evidence",
+                family_id: "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+                support_target: "sqlalchemy.orm.Session.execute",
+                evidence_path: "repository.py",
+                member_role: "framework:sqlalchemy.repository_method",
+            },
+            ExactAnchorCase {
+                fixture: "sqlalchemy-model-strong-evidence",
+                family_id: "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+                support_target: "sqlalchemy.orm.Mapped",
+                evidence_path: "models.py",
+                member_role: "framework:sqlalchemy.model",
+            },
         ];
 
         for case in CASES {
@@ -1254,11 +1268,15 @@ mod tests {
                         && fact.origin_method == "bounded_ast_anchor_v1"
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(derived_support_facts.len(), 3);
-            assert!(derived_support_facts.iter().all(|fact| {
+            let target_support_facts = derived_support_facts
+                .iter()
+                .copied()
+                .filter(|fact| fact.target.as_deref() == Some(case.support_target))
+                .collect::<Vec<_>>();
+            assert_eq!(target_support_facts.len(), 3);
+            assert!(target_support_facts.iter().all(|fact| {
                 matches!(fact.kind.as_str(), "RESOLVED_CALL" | "SYMBOL" | "TYPE")
                     && fact.certainty == "DATAFLOW_DERIVED"
-                    && fact.target.as_deref() == Some(case.support_target)
                     && fact.path == case.evidence_path
                     && fact.start_byte < fact.end_byte
             }));

@@ -88,6 +88,10 @@ propagation with same-name top-level reassignment invalidation, and the
 application layer derives separate `DATAFLOW_DERIVED` support facts from exact
 canonical CPython anchors when a unit has one Python framework role; raw parser
 facts and framework heuristics still remain blocked from direct claim input.
+The implemented SQLAlchemy slice now includes exact structural anchors for
+`Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
+`Session` or `AsyncSession`, keeping those facts provider-unresolved but
+eligible for the bounded exact-anchor derivation gate.
 
 ### Phase P3: Tree-sitter Fallback and Code-unit Emission
 

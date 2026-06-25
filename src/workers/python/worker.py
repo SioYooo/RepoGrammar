@@ -33,6 +33,11 @@ MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
 MAX_CONFIG_TEXT_BYTES = 1_048_576
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
+SQLALCHEMY_SESSION_METHODS = {"commit", "execute", "rollback"}
+SQLALCHEMY_SESSION_TYPES = {
+    "sqlalchemy.orm.Session",
+    "sqlalchemy.ext.asyncio.AsyncSession",
+}
 
 
 def read_stdin() -> str:
@@ -758,6 +763,26 @@ def collect_assignment_roles(tree: ast.Module, aliases: dict[str, str]) -> dict[
     return assignments
 
 
+def collect_parameter_roles(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, str],
+) -> dict[str, str]:
+    roles: dict[str, str] = {}
+    args = [
+        *getattr(node.args, "posonlyargs", []),
+        *node.args.args,
+        *node.args.kwonlyargs,
+    ]
+    for arg in args:
+        annotation = dotted_name(arg.annotation) if arg.annotation else None
+        if not annotation:
+            continue
+        canonical = canonical_name(annotation, aliases, {})
+        if canonical in SQLALCHEMY_SESSION_TYPES:
+            roles[arg.arg] = canonical
+    return roles
+
+
 def add_fact(facts: list[dict[str, Any]], new_fact: dict[str, Any]) -> None:
     target = new_fact.get("target")
     if target is not None and not is_safe_fact_target(target):
@@ -890,6 +915,60 @@ def collect_class_base_facts(
         )
 
 
+def collect_sqlalchemy_model_field_facts(
+    node: ast.ClassDef,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for item in node.body:
+        if not isinstance(item, (ast.AnnAssign, ast.Assign)):
+            continue
+        annotation = dotted_name(item.annotation) if isinstance(item, ast.AnnAssign) else None
+        value = getattr(item, "value", None)
+        value_name = dotted_name(value) if isinstance(value, ast.AST) else None
+        if annotation:
+            canonical_annotation = canonical_name(annotation, aliases, {})
+            if canonical_annotation == "sqlalchemy.orm.Mapped":
+                start, end = node_range(starts, item.annotation)
+                add_fact(
+                    facts,
+                    structural_fact(
+                        kind="TYPE",
+                        subject_unit_id=subject_unit_id,
+                        target=canonical_annotation,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="sqlalchemy_mapped_field",
+                    ),
+                )
+        if value_name:
+            canonical_value = canonical_name(value_name, aliases, {})
+            if canonical_value == "sqlalchemy.orm.mapped_column":
+                start, end = node_range(starts, value if isinstance(value, ast.AST) else item)
+                add_fact(
+                    facts,
+                    structural_fact(
+                        kind="RESOLVED_CALL",
+                        subject_unit_id=subject_unit_id,
+                        target=canonical_value,
+                        path=path,
+                        content_hash_value=content_hash_value,
+                        repository_revision=repository_revision,
+                        start=start,
+                        end=end,
+                        anchor_kind="sqlalchemy_mapped_column",
+                    ),
+                )
+
+
 def is_dynamic_call(node: ast.Call) -> bool:
     if isinstance(node.func, ast.Call) and dotted_name(node.func) == "getattr":
         return True
@@ -907,14 +986,24 @@ def collect_call_facts(
     subject_unit_id: str,
     aliases: dict[str, str],
     assignments: dict[str, str],
+    parameter_roles: dict[str, str] | None,
     facts: list[dict[str, Any]],
 ) -> None:
+    parameter_roles = parameter_roles or {}
     calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
     calls.sort(key=lambda child: node_range(starts, child))
     for call in calls:
         start, end = node_range(starts, call)
         name = dotted_name(call.func)
         canonical = canonical_name(name, aliases, assignments) if name else None
+        if canonical:
+            parts = canonical.split(".")
+            if (
+                len(parts) == 2
+                and parts[0] in parameter_roles
+                and parts[1] in SQLALCHEMY_SESSION_METHODS
+            ):
+                canonical = f"{parameter_roles[parts[0]]}.{parts[1]}"
         if canonical in {"sys.path.append", "sys.path.insert"}:
             add_fact(
                 facts,
@@ -1185,11 +1274,22 @@ def analyze_source(
                 subject_unit_id,
                 aliases,
                 assignments,
+                collect_parameter_roles(item, aliases),
                 facts,
             )
         elif isinstance(item, ast.ClassDef):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
             collect_class_base_facts(
+                item,
+                starts,
+                path,
+                content_hash_value,
+                repository_revision,
+                subject_unit_id,
+                aliases,
+                facts,
+            )
+            collect_sqlalchemy_model_field_facts(
                 item,
                 starts,
                 path,
@@ -1234,6 +1334,7 @@ def analyze_source(
                     child_unit_id,
                     aliases,
                     assignments,
+                    collect_parameter_roles(child, aliases),
                     facts,
                 )
 

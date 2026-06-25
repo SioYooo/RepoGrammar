@@ -1234,6 +1234,8 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "pytest_test_function"
             | "pytest_fixture_edge"
             | "pytest_conftest_fixture_edge"
+            | "sqlalchemy_mapped_field"
+            | "sqlalchemy_mapped_column"
             | "module_name"
             | "scope_imported"
             | "scope_namespace"
@@ -1553,6 +1555,99 @@ class AppSettings(BaseSettings):
         }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("from pydantic import"));
+    }
+
+    #[test]
+    fn cpython_frontend_extracts_sqlalchemy_model_field_anchors() {
+        let source = r#"
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, Session, mapped_column
+
+class User:
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+class Account:
+    __tablename__ = "accounts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+class UserRepository:
+    def list_users(self, session: Session):
+        return session.execute("select users")
+
+    async def list_accounts(self, db: AsyncSession):
+        return await db.execute("select accounts")
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .filter(|unit| unit.kind.as_str() == "sqlalchemy_model")
+                .count(),
+            2
+        );
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.Mapped")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_mapped_field")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.mapped_column")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_mapped_column")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.Session.execute")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.execute")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("mapped_column(primary_key=True)"));
+    }
+
+    #[test]
+    fn cpython_frontend_does_not_treat_local_sqlalchemy_names_as_exact_anchors() {
+        let source = r#"
+class Mapped:
+    pass
+
+def mapped_column():
+    return object()
+
+class User:
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column()
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind.as_str() == "sqlalchemy_model"));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.Mapped")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.mapped_column")
+        }));
     }
 
     #[test]

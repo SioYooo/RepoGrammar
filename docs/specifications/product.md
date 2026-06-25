@@ -56,9 +56,10 @@ bounded exact-anchor derivation step that synthesizes separate
 canonical Python framework compatibility table for a unit with one framework
 role. Product smoke tests now prove low-support and dynamic cases remain
 `UNKNOWN`, while three-member direct FastAPI, FastAPI alias, pytest, Pydantic
-model/settings, and SQLAlchemy fixtures can produce families without a semantic
-worker through those derived facts. It also persists root `pyproject.toml` only
-as structural project-config context or typed config `UNKNOWN`. Subsequent
+model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
+fixtures can produce families without a semantic worker through those derived
+facts. It also persists root `pyproject.toml` only as structural
+project-config context or typed config `UNKNOWN`. Subsequent
 slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
 bounded role propagation, target-centered call recovery, richer EC-MVFI-lite

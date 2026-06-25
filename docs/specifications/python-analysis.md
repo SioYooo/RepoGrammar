@@ -113,6 +113,11 @@ The current implementation covers the first structural slice only:
   `router = APIRouter(); api = router`, with same-name top-level reassignment
   removing that name's role so stale aliases do not produce exact canonical
   anchors;
+- SQLAlchemy 2.0 structural anchors for model class fields using imported
+  `Mapped[...]` annotations or `mapped_column(...)` calls, plus bounded
+  parameter-role propagation that canonicalizes typed `Session` and
+  `AsyncSession` calls such as `session.execute(...)` to exact SQLAlchemy
+  session targets;
 - Rust parser adapter translation into RepoGrammar-owned `CodeUnit` and IR
   metadata, plus same-generation storage of CPython `ast` structural and
   `UNKNOWN` facts after Rust-side envelope, field, path, hash, origin, range,
@@ -132,8 +137,9 @@ The current implementation covers the first structural slice only:
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest, Pydantic model,
-  Pydantic settings, and SQLAlchemy anchors can produce default families only
-  through separate derived support facts, and keep the test-injected
+  Pydantic settings, SQLAlchemy model, and SQLAlchemy session/repository
+  anchors can produce default families only through separate derived support
+  facts, and keep the test-injected
   `SEMANTIC` worker fixture as coverage for the explicit worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored
@@ -262,6 +268,11 @@ Compatibility examples:
 - SQLAlchemy model: base or mapped members resolve to
   `sqlalchemy.orm.DeclarativeBase`, `sqlalchemy.orm.Mapped`, or
   `sqlalchemy.orm.mapped_column`.
+- SQLAlchemy repository method: calls on parameters annotated as
+  `sqlalchemy.orm.Session` or `sqlalchemy.ext.asyncio.AsyncSession` resolve to
+  exact supported session method targets such as
+  `sqlalchemy.orm.Session.execute` or
+  `sqlalchemy.ext.asyncio.AsyncSession.commit`.
 
 Unresolved canonical identity blocks only the claim that depends on that
 identity. A FastAPI route family may still exist when a specific dependency

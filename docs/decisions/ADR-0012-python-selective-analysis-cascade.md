@@ -63,7 +63,9 @@ propagation resolves canonical framework facts such as:
 - Pydantic models/settings resolving to `pydantic.BaseModel`,
   `pydantic.BaseSettings`, or `pydantic_settings.BaseSettings`;
 - SQLAlchemy 2.0 typed mappings resolving to `sqlalchemy.orm.DeclarativeBase`,
-  `Mapped`, or `mapped_column`.
+  `sqlalchemy.orm.Mapped`, or `sqlalchemy.orm.mapped_column`, and repository
+  method calls on typed `Session` or `AsyncSession` parameters resolving to
+  exact SQLAlchemy session method targets.
 
 The first bounded propagation slice may run before Pyrefly by deriving separate
 `DATAFLOW_DERIVED` support facts from validated CPython structural anchors, but

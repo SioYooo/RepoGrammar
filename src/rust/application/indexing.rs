@@ -2029,47 +2029,94 @@ mod tests {
 
     #[test]
     fn exact_sqlalchemy_repository_parser_anchors_derive_family_support() {
-        let first = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 0);
-        let second = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 1);
-        let third = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 2);
-        let units = vec![first.clone(), second.clone(), third.clone()];
-        let parser_facts = units
-            .iter()
-            .map(|unit| {
-                parser_structural_anchor_fact(
-                    unit,
-                    SemanticFactKind::ResolvedCall,
-                    "sqlalchemy.select",
-                )
-            })
-            .collect::<Vec<_>>();
-        let role_facts = units
-            .iter()
-            .map(|unit| {
-                framework_role_fact_for_unit(unit, "framework:sqlalchemy.repository_method")
-            })
-            .collect::<Vec<_>>();
+        for target in [
+            "sqlalchemy.select",
+            "sqlalchemy.orm.Session.execute",
+            "sqlalchemy.ext.asyncio.AsyncSession.commit",
+        ] {
+            let first = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 0);
+            let second = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 1);
+            let third = indexed_python_unit("repository.py", "sqlalchemy_repository_method", 2);
+            let units = vec![first.clone(), second.clone(), third.clone()];
+            let parser_facts = units
+                .iter()
+                .map(|unit| {
+                    parser_structural_anchor_fact(unit, SemanticFactKind::ResolvedCall, target)
+                })
+                .collect::<Vec<_>>();
+            let role_facts = units
+                .iter()
+                .map(|unit| {
+                    framework_role_fact_for_unit(unit, "framework:sqlalchemy.repository_method")
+                })
+                .collect::<Vec<_>>();
 
-        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
-            .expect("derive exact SQLAlchemy repository support");
+            let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+                .expect("derive exact SQLAlchemy repository support");
 
-        assert_eq!(derived.len(), 3);
-        assert!(derived.iter().all(|fact| {
-            fact.certainty == FactCertainty::DataflowDerived
-                && fact.origin.engine == "repogrammar-python-derived"
-                && fact.origin.method == "bounded_ast_anchor_v1"
-                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.select")
-        }));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
-        let report = build_family_claims(&units, &family_facts);
-        assert_eq!(report.claims.len(), 1);
-        assert_eq!(report.claims[0].language, "python");
-        assert_eq!(
-            report.claims[0].framework_role,
-            "framework:sqlalchemy.repository_method"
-        );
-        assert_eq!(report.claims[0].support, 3);
+            assert_eq!(derived.len(), 3);
+            assert!(derived.iter().all(|fact| {
+                fact.certainty == FactCertainty::DataflowDerived
+                    && fact.origin.engine == "repogrammar-python-derived"
+                    && fact.origin.method == "bounded_ast_anchor_v1"
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some(target)
+            }));
+            let mut family_facts = role_facts;
+            family_facts.extend(derived);
+            let report = build_family_claims(&units, &family_facts);
+            assert_eq!(report.claims.len(), 1);
+            assert_eq!(report.claims[0].language, "python");
+            assert_eq!(
+                report.claims[0].framework_role,
+                "framework:sqlalchemy.repository_method"
+            );
+            assert_eq!(report.claims[0].support, 3);
+        }
+    }
+
+    #[test]
+    fn exact_sqlalchemy_model_parser_anchors_derive_family_support() {
+        for (kind, target) in [
+            (SemanticFactKind::Type, "sqlalchemy.orm.Mapped"),
+            (
+                SemanticFactKind::ResolvedCall,
+                "sqlalchemy.orm.mapped_column",
+            ),
+        ] {
+            let first = indexed_python_unit("models.py", "sqlalchemy_model", 0);
+            let second = indexed_python_unit("models.py", "sqlalchemy_model", 1);
+            let third = indexed_python_unit("models.py", "sqlalchemy_model", 2);
+            let units = vec![first.clone(), second.clone(), third.clone()];
+            let parser_facts = units
+                .iter()
+                .map(|unit| parser_structural_anchor_fact(unit, kind.clone(), target))
+                .collect::<Vec<_>>();
+            let role_facts = units
+                .iter()
+                .map(|unit| framework_role_fact_for_unit(unit, "framework:sqlalchemy.model"))
+                .collect::<Vec<_>>();
+
+            let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+                .expect("derive exact SQLAlchemy model support");
+
+            assert_eq!(derived.len(), 3);
+            assert!(derived.iter().all(|fact| {
+                fact.certainty == FactCertainty::DataflowDerived
+                    && fact.origin.engine == "repogrammar-python-derived"
+                    && fact.origin.method == "bounded_ast_anchor_v1"
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some(target)
+            }));
+            let mut family_facts = role_facts;
+            family_facts.extend(derived);
+            let report = build_family_claims(&units, &family_facts);
+            assert_eq!(report.claims.len(), 1);
+            assert_eq!(report.claims[0].language, "python");
+            assert_eq!(
+                report.claims[0].framework_role,
+                "framework:sqlalchemy.model"
+            );
+            assert_eq!(report.claims[0].support, 3);
+        }
     }
 
     #[test]

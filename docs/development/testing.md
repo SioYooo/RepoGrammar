@@ -179,10 +179,11 @@ allowed.
   claim-input readiness, heuristic framework-role facts staying out of family
   claims, raw parser-origin facts staying out of family construction,
   exact-anchor derived support facts producing no-worker direct FastAPI,
-  FastAPI alias, pytest, Pydantic model/settings, and SQLAlchemy families only
-  when Python support reaches three members, low-support Python release fixtures
-  preserving `UNKNOWN`, test-only strong support facts proving explicit worker
-  family read paths only when compatible `SEMANTIC` evidence is injected, stale
+  FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
+  SQLAlchemy session/repository families only when Python support reaches three
+  members, low-support Python release fixtures preserving `UNKNOWN`, test-only
+  strong support facts proving explicit worker family read paths only when
+  compatible `SEMANTIC` evidence is injected, stale
   evidence fallback, and typed canonical framework identities rather than
   framework-name substring matching. Future Python slices must add coverage for
   default-index import context, Tree-sitter
