@@ -1,7 +1,13 @@
 # ADR-0009: Experimental Python dogfooding
 
-- Status: Accepted
+- Status: Superseded by ADR-0011
 - Date: 2026-06-25
+
+## Supersession
+
+ADR-0011 promotes Python from experimental dogfooding to the official v0.1
+implementation target. This ADR remains historical context for the previous
+pre-v0.2 Python boundary.
 
 ## Context
 

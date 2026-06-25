@@ -30,11 +30,15 @@ context lives under `.agents/memories/`.
 - Product boundaries: `specifications/product.md`.
 - v0.1 implementation coordination:
   `plans/v0.1-parallel-development-plan.md`.
-- v0.1 substrate hardening before family mining, MCP, installer, Python, or
-  CodeGraph runtime work:
+- v0.1 substrate hardening checkpoint retained for historical context before
+  later broad product slices:
   `plans/v0.1-substrate-hardening-checkpoint.md`.
-- Experimental Python dogfooding: `decisions/ADR-0009-experimental-python-dogfooding.md`,
-  `plans/python-dogfooding-plan.md`, and `specifications/semantic-workers.md`.
+- Python v0.1 analysis: `decisions/ADR-0011-python-first-v0-1.md`,
+  `specifications/python-analysis.md`, and
+  `plans/python-v0.1-implementation-plan.md`.
+- Historical Python dogfooding boundary:
+  `decisions/ADR-0009-experimental-python-dogfooding.md` and
+  `plans/python-dogfooding-plan.md`.
 - Optional CodeGraph provider boundary:
   `decisions/ADR-0010-optional-codegraph-provider.md` and
   `plans/codegraph-provider-plan.md`.
@@ -53,7 +57,8 @@ context lives under `.agents/memories/`.
 - Telemetry policy: `specifications/telemetry.md`.
 - Language-native semantic workers: `specifications/semantic-workers.md`.
 - Algorithm source archive: `../algorithms/paper/README.md`.
-- MVP language scope: `decisions/ADR-0005-ts-js-first-mvp.md`.
+- MVP language scope: `decisions/ADR-0011-python-first-v0-1.md`
+  (supersedes `decisions/ADR-0005-ts-js-first-mvp.md`).
 - Quality gates: `development/repository-guard.md` and `development/testing.md`.
 
 ## Task reading guide
@@ -74,10 +79,9 @@ context lives under `.agents/memories/`.
   `specifications/mcp-api.md`.
 - Semantic worker change: read `specifications/semantic-workers.md` and
   `decisions/ADR-0004-rust-core-language-native-workers.md`.
-- Language support change: read `decisions/ADR-0005-ts-js-first-mvp.md`,
-  `decisions/ADR-0009-experimental-python-dogfooding.md`,
-  `specifications/product.md`, `docs/roadmap.md`, and the relevant plan under
-  `plans/`.
+- Language support change: read `decisions/ADR-0011-python-first-v0-1.md`,
+  `specifications/python-analysis.md`, `specifications/product.md`,
+  `docs/roadmap.md`, and the relevant plan under `plans/`.
 - Optional graph/provider change: read
   `decisions/ADR-0010-optional-codegraph-provider.md`,
   `plans/codegraph-provider-plan.md`, `specifications/product.md`, and

@@ -25,8 +25,8 @@ must remain visible and must block only the claims they actually affect.
 
 ## Reason Codes
 
-Reason codes are stable protocol-facing values. They may apply to TypeScript,
-JavaScript, experimental Python dogfooding, future C/C++, provider facts, or
+Reason codes are stable protocol-facing values. They may apply to Python v0.1,
+transitional TypeScript/JavaScript substrate, future C/C++, provider facts, or
 storage freshness:
 
 - `DynamicImport`
@@ -75,7 +75,7 @@ Some unknowns block only specific claims:
   while still allowing a syntax-only route-shape classification;
 - a stale dependency graph may block call-context evidence while preserving
   source-range evidence from the current file hash;
-- experimental Python fixture injection may block test-behavior equivalence
+- Python fixture injection may block test-behavior equivalence
   while still allowing structural pytest test discovery.
 
 ## Recovery Actions

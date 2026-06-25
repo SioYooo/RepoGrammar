@@ -67,6 +67,12 @@ When a semantic worker is unavailable, version-incompatible, conflicting with
 another analyzer, or unable to decide a dynamic behavior, the result must be
 `UNKNOWN` or abstention.
 
+Python v0.1 worker/adapters may use public parser, type-checker, or LSP
+facilities such as CPython `ast`, Pyright, Mypy, or a language server only
+behind the adapter/worker boundary. Do not reimplement a Python parser or
+whole-program call graph when existing tooling and a bounded adapter can provide
+the needed evidence.
+
 ## SQLite boundary
 
 SQLite and migration execution logic belong in `src/rust/adapters/persistence/`.

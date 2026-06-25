@@ -25,11 +25,37 @@ Semantic workers provide facts that Tree-sitter cannot reliably infer alone:
 - resolved calls where available;
 - framework-specific semantic facts when appropriate.
 
+## Python worker strategy
+
+The official v0.1 semantic-frontend target is Python. Python worker and adapter
+work should serve repository-local family evidence for FastAPI, pytest,
+SQLAlchemy, and Pydantic rather than trying to build a full Python analyzer.
+
+The canonical Python algorithm contract is
+`docs/specifications/python-analysis.md`. The worker strategy should combine:
+
+- Python `ast` or another public parser for syntax facts where useful;
+- conservative repo-local import and alias resolution;
+- framework-role facts for decorators, base classes, calls, and fixture
+  bindings;
+- usage-driven fixpoint-lite context propagation;
+- target-centered call recovery;
+- typed `UNKNOWN` for dynamic behavior.
+
+Potential language-native helpers include Pyright, Mypy, or an LSP adapter, but
+they must be optional adapter details until an implementation decision accepts
+them. Their concrete types must not enter Rust core.
+
+Dynamic imports, monkey patching, decorator rewrites, pytest fixture injection,
+settings/framework magic, runtime dependency injection, missing dependencies,
+and analyzer disagreement must become typed `UNKNOWN` for affected claims.
+
 ## TypeScript worker strategy
 
-The first planned worker is a TypeScript semantic worker. It should use the
-official TypeScript compiler or language-service APIs behind a versioned
-protocol.
+The existing TypeScript worker boundary remains transitional substrate from the
+earlier bootstrap. It should use the official TypeScript compiler or
+language-service APIs behind a versioned protocol if TS/JS support is promoted
+again after Python v0.1.
 
 Version policy:
 
@@ -46,23 +72,6 @@ request shape and returns typed `SEMANTIC_WORKER_UNAVAILABLE` or
 TypeScript compiler, inspect source files, or emit semantic facts. Compiler API
 integration remains deferred until local TypeScript tooling and package-manager
 lockfiles are validated.
-
-## Python worker strategy
-
-Python is planned as the second official language, not part of v0.1 production
-support. Before v0.2, Python work may only be experimental dogfooding and should
-be scoped to syntax-only or limited semantic evaluation. The first formal subset
-should prioritize FastAPI, pytest, SQLAlchemy, and Pydantic. Django and C/C++
-are deferred.
-
-Python semantic facts should use a language-native analyzer such as Pyright,
-Mypy, a language server, or a framework adapter where appropriate. Dynamic
-imports, monkey patching, decorator rewrites, pytest fixture injection, Django
-settings, and runtime dependency injection often require `UNKNOWN`.
-
-Experimental Python results must carry support-level and unknown-reason metadata
-so CLI, MCP, storage, and docs cannot accidentally present them as official
-v0.1 TS/JS support.
 
 ## Protocol
 
@@ -145,7 +154,8 @@ rather than treated as repository-wide scope. Runtime fact text fields must
 reject obvious absolute paths, URI schemes, NUL/newline payloads, and
 source-like snippets until source-retention policy is defined.
 
-`index` and `sync` do not launch a semantic worker by default. If
+`index` and `sync` do not launch a semantic worker by default. The current
+implemented worker runtime is TypeScript-specific transitional substrate. If
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, the current
 indexing path sends the discovered repo-relative TS/JS file set to that worker
 after syntax-only code units are recorded for the building generation.

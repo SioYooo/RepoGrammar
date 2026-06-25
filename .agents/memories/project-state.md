@@ -1,25 +1,29 @@
 # Project State
 
-- Status: Bootstrap plus syntax-only indexing, structural IR storage, opt-in
-  syntax-origin framework-role fact storage, semantic fact ingestion, internal
-  active claim-input snapshot reads, semantic-fact freshness/readiness gating,
-  FamilyStore-backed query reads, read-only MCP serving, and narrow global
-  explicit-target installer writes, with v0.1 TS/JS release fixture smoke
-  coverage
+- Status: Bootstrap plus syntax-only TS/JS indexing substrate, structural IR
+  storage, opt-in syntax-origin framework-role fact storage, semantic fact
+  ingestion, internal active claim-input snapshot reads, semantic-fact
+  freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
+  serving, and narrow global explicit-target installer writes. ADR-0011 now
+  makes Python-first analysis the official v0.1 implementation target, but the
+  Python analyzer is not implemented yet.
 - Last updated: 2026-06-25
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
 - Related canonical docs: `README.md`, `docs/roadmap.md`,
   `docs/specifications/cli.md`, `docs/specifications/storage.md`,
-  `docs/specifications/indexing-pipeline.md`
+  `docs/specifications/indexing-pipeline.md`,
+  `docs/specifications/python-analysis.md`,
+  `docs/decisions/ADR-0011-python-first-v0-1.md`
 - Supersedes: None
 - Superseded by: None
 
 ## Context
 
 RepoGrammar is still pre-alpha, but it is past pure skeleton bootstrap. The
-current branch has repository-local lifecycle, TypeScript/JavaScript discovery,
+current branch has repository-local lifecycle, transitional
+TypeScript/JavaScript discovery,
 generation-scoped SQLite storage, syntax-only code-unit indexing,
 syntax-origin TS/JS framework-role fact storage, CodeUnit-derived structural IR
 node/containment-edge storage, Rust-side TypeScript semantic-worker
@@ -37,6 +41,10 @@ unsupported fact kinds, weak certainty, or conflicting certainty with typed
 `UNKNOWN`. It also has committed TS/JS release fixtures and a product CLI JSON
 smoke gate that exercises `init`, `index`, `files`, `units`, pattern-family
 queries, and `doctor` without treating syntax-only evidence as a family claim.
+ADR-0011 pivots the official v0.1 implementation target to Python-first
+analysis for FastAPI, pytest, SQLAlchemy, and Pydantic; the current TS/JS
+substrate remains useful scaffolding but must not be described as the official
+v0.1 target.
 
 ## Durable knowledge
 
@@ -112,10 +120,10 @@ must not be described as query-ready family evidence.
 
 ## Implications
 
-Future agents must not claim TypeScript analysis, Python production support,
-full pattern-family mining, freshness-validated semantic claims, installer
-writes beyond explicit Codex/Claude MCP registration, or stable MCP API support
-until those capabilities are implemented and tested.
+Future agents must not claim compiler-backed TypeScript analysis, implemented
+Python analysis, full pattern-family mining, freshness-validated semantic
+claims, installer writes beyond explicit Codex/Claude MCP registration, or
+stable MCP API support until those capabilities are implemented and tested.
 Agents also must not restart repo-local lifecycle, SQLite generation, opt-in
 semantic-worker ingestion, or Rust-side worker process validation work from
 scratch. Do not restart structural IR storage or active semantic-fact/evidence
@@ -125,6 +133,7 @@ canonical specs.
 
 ## Revalidation conditions
 
-Update this memory after Tree-sitter integration, TypeScript compiler API
-integration, full family-claim gates, broader installer writes, production
-family evidence, or stable MCP API support lands.
+Update this memory after Python parser/import/framework analysis lands,
+Tree-sitter integration changes, TypeScript compiler API integration, full
+family-claim gates, broader installer writes, production family evidence, or
+stable MCP API support lands.

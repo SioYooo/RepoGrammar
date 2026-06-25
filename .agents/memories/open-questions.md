@@ -31,13 +31,15 @@ Open questions include:
 - MCP response schema stability.
 - Optional CodeGraph provider integration mechanism, freshness model, and
   conflict behavior.
-- Python analyzer choice for experimental dogfooding: Pyright, Mypy, LSP,
-  framework adapters, user hints, optional provider facts, bounded runtime trace,
-  or a combination.
+- Python v0.1 analyzer implementation details after ADR-0011: exact public
+  parser API boundary, whether the first worker uses Python `ast`,
+  tree-sitter-python, or both, and whether Pyright, Mypy, or an LSP-backed
+  worker should appear after framework-role evidence lands.
 - Runtime trace policy and consent boundary if traces are ever used to recover
   unknowns.
-- Internal dogfooding fixture selection for FastAPI, pytest, SQLAlchemy, and
-  Pydantic.
+- Python v0.1 fixture selection for FastAPI, pytest, SQLAlchemy, and Pydantic,
+  including negative fixtures for dynamic imports, monkey patching, fixture
+  injection ambiguity, unresolved decorators, and runtime dependency injection.
 - Native agent detection and installation receipt format.
 - Local telemetry aggregation format and export path.
 - Concrete lock-file validation edge cases and cross-platform stale-process

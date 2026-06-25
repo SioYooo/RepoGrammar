@@ -1,29 +1,31 @@
 # Python Dogfooding Plan
 
-- Status: Active
+- Status: Superseded by `.agents/memories/python-v0.1-algorithm-plan.md`
 - Last updated: 2026-06-25
-- Scope: Non-normative guidance for future experimental Python validation.
-- Evidence: `docs/decisions/ADR-0009-experimental-python-dogfooding.md`
-- Related canonical docs: `docs/decisions/ADR-0005-ts-js-first-mvp.md`, `docs/specifications/product.md`
+- Scope: Historical record of the former experimental Python boundary.
+- Evidence: `docs/decisions/ADR-0009-experimental-python-dogfooding.md`,
+  `docs/decisions/ADR-0011-python-first-v0-1.md`
+- Related canonical docs: `docs/specifications/python-analysis.md`,
+  `docs/plans/python-v0.1-implementation-plan.md`
 - Supersedes: None
-- Superseded by: None
+- Superseded by: `.agents/memories/python-v0.1-algorithm-plan.md`
 
 ## Durable knowledge
 
-- v0.1 production scope remains TypeScript/JavaScript only.
-- Python before v0.2 is experimental dogfooding, not production support.
-- The first Python subset should stay focused on FastAPI, pytest, SQLAlchemy,
-  and Pydantic; Django and C/C++ remain deferred.
-- Python dogfooding should test whether the adapter, worker, provenance, and
-  `UNKNOWN` model generalizes. It must not bypass the TS/JS-first MVP.
+- ADR-0011 changed the official v0.1 implementation target to Python-first.
+  Use `.agents/memories/python-v0.1-algorithm-plan.md` for active guidance.
+- This file is retained only to explain the previous experimental-dogfooding
+  boundary and why ADR-0011 superseded it.
+- The first Python subset remains FastAPI, pytest, SQLAlchemy, and Pydantic;
+  Django and C/C++ remain deferred.
 - Dynamic imports, monkey patching, decorator rewrites, pytest fixture
   injection, runtime dependency injection, unresolved imports, and framework
   magic should default to typed `UNKNOWN` unless source-backed evidence is
   strong.
-- Any Python-facing docs must label support as experimental until an accepted
-  v0.2 adapter exists.
+- Python-facing docs must not call the current code implemented Python
+  analysis until parser/import/framework evidence extraction actually lands.
 
 ## Revalidation conditions
 
-Update when a Python adapter design, fixture set, semantic-worker strategy, or
-v0.2 ADR is accepted.
+Update only if historical context needs correction. Active Python v0.1 guidance
+belongs in `.agents/memories/python-v0.1-algorithm-plan.md`.

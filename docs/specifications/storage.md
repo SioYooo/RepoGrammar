@@ -219,11 +219,12 @@ absolute paths through unit ids. Active semantic-fact reads are internal and
 must likewise revalidate fact/evidence rows before any future family builder
 consumes them.
 
-Experimental Python discovery, once accepted, must record its support level and
-must not be stored or reported as official v0.1 production support. Optional
-provider facts, including future CodeGraph-derived facts, must carry provider
-provenance and freshness metadata before they can participate in family
-evidence.
+Python discovery is the official v0.1 target once implemented. It must record
+language provenance, source hashes, support level where relevant, and freshness
+metadata with the same repo-relative storage discipline as existing TS/JS
+substrate. Optional provider facts, including future CodeGraph-derived facts,
+must carry provider provenance and freshness metadata before they can
+participate in family evidence.
 
 ## Project Configuration
 

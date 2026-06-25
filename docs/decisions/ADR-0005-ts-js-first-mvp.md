@@ -1,7 +1,12 @@
 # ADR-0005: TypeScript/JavaScript-first MVP with Python as second language
 
-- Status: Accepted
+- Status: Superseded by ADR-0011
 - Date: 2026-06-24
+
+## Supersession
+
+ADR-0011 changes the official v0.1 implementation target to Python-first.
+This ADR is retained as historical context for the earlier TS/JS-first plan.
 
 ## Context
 

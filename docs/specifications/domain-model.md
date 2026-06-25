@@ -9,7 +9,7 @@ A `CodeUnit` is a repository-owned analyzable source unit such as a function,
 class, module, or test case. It carries a language, kind, source range, and
 provenance. It must not contain Tree-sitter nodes or transport-specific types.
 
-Current syntax-only indexing can persist `CodeUnit` records for modules,
+Current syntax-only indexing can persist transitional TS/JS `CodeUnit` records for modules,
 functions, assigned arrow functions, classes, methods, React function
 components, custom hooks, Express route calls, and Jest/Vitest suite or test
 blocks. These records are structural candidates only. They are not semantic
@@ -52,6 +52,9 @@ for recognized Express, React, and Jest/Vitest code-unit shapes. These facts
 carry repo-relative code-unit evidence, `FRAMEWORK_HEURISTIC` certainty, and
 explicit unresolved-binding assumptions; they do not resolve TypeScript symbols,
 framework runtime behavior, or family membership.
+Python v0.1 facts should follow the same owned model for FastAPI, pytest,
+SQLAlchemy, and Pydantic evidence; parser, type-checker, LSP, or Python runtime
+objects must not enter the core domain.
 
 ## PatternFamily
 

@@ -27,8 +27,8 @@
   selection, evaluation, and installer supply-chain references.
 - Parallel-agent implementation and post-implementation logic-review
   requirements in the mirrored agent contract.
-- TypeScript/JavaScript-first MVP language policy with Python deferred to a
-  focused second-language phase.
+- Historical TypeScript/JavaScript-first MVP language policy, now superseded by
+  ADR-0011's Python-first v0.1 target.
 - Pattern-family-first CLI command surface, with CodeGraph-style graph commands
   rejected as top-level v0.1 commands.
 - Stable deferred `stats --json` output that exposes metric-kind vocabulary
@@ -119,12 +119,13 @@
   evidence, building-only writes, malformed evidence rejection before
   activation, and atomic rollback of failed fact writes.
 - v0.1 parallel development planning artifacts for repo-local lifecycle,
-  adapter/provider abstraction, experimental Python dogfooding, optional
+  adapter/provider abstraction, Python-first analysis, optional
   CodeGraph provider boundaries, typed UNKNOWN governance, family compression,
   query/MCP, installer, and release-smoke phases.
-- Experimental Python dogfooding plan and ADR that keep Python outside official
-  v0.1 production support while targeting FastAPI, pytest, SQLAlchemy, and
-  Pydantic validation.
+- Historical experimental Python dogfooding plan and ADR, now superseded by
+  ADR-0011.
+- Python-first v0.1 analysis specification, implementation plan, ADR, and
+  durable memory for FastAPI, pytest, SQLAlchemy, and Pydantic family evidence.
 - Optional CodeGraph provider plan and ADR that allow future auxiliary provider
   evidence without making CodeGraph a dependency or product wrapper.
 - UNKNOWN governance specification with typed unknown classes, reason codes,
@@ -213,8 +214,8 @@
   members, variation slots, and family-bound evidence without enabling
   pattern-family query commands yet.
 - Updated roadmap, product, CLI, MCP, indexing, semantic-worker, storage, and
-  domain-model docs to align Python dogfooding, optional provider, and UNKNOWN
-  boundaries with the current syntax-only indexing baseline.
+  domain-model docs to align Python-first v0.1 analysis, optional provider, and
+  UNKNOWN boundaries with the current transitional TS/JS indexing baseline.
 - Hardened generation-scoped storage writes so indexed files, code units, IR
   nodes/edges, and semantic facts can only be recorded while a generation is
   still building, and active generations cannot be downgraded by stale
@@ -227,8 +228,9 @@
 - Implemented `unlock --force --yes` for confirmed stale `index.lock` removal
   while preserving active, unknown, invalid, daemon, and SQLite locks.
 - Expanded `repo-guard` required-document coverage to include v0.1 planning
-  artifacts, the substrate hardening checkpoint, ADR-0009/ADR-0010, typed
-  UNKNOWN governance, and the matching durable memory mirrors.
+  artifacts, the Python analysis specification and ADR-0011, the substrate
+  hardening checkpoint, ADR-0009/ADR-0010, typed UNKNOWN governance, and the
+  matching durable memory mirrors.
 - Hardened `doctor` lifecycle diagnostics so missing or invalid generated state
   `.gitignore`, Git exclude patterns, init receipts, and root `.gitignore`
   markers are reported without mutating repository state.

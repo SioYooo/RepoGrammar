@@ -35,21 +35,30 @@ navigation.
 
 ## MVP scope
 
-The first implementation phase targets local TypeScript and JavaScript analysis
-through a Tree-sitter syntax layer plus a future TypeScript semantic worker.
-Initial framework adapters are planned for Express, NestJS, React, Jest, and
-Vitest.
+RepoGrammar v0.1 is Python-first. The official v0.1 implementation target is
+local Python analysis for recurring repository pattern families in:
 
-RepoGrammar v0.1 officially supports TypeScript and JavaScript only. Python is
-planned as the second official language and may appear earlier only as an
-experimental adapter. Experimental Python functionality must not be documented
-as production support. Experimental Python dogfooding exists to validate
-language-adapter, semantic-worker, provenance, and `UNKNOWN` boundaries before a
-future v0.2 support decision.
+- FastAPI;
+- pytest;
+- SQLAlchemy;
+- Pydantic.
 
-Python v0.2 should prioritize FastAPI, pytest, SQLAlchemy, and Pydantic. Django
-is deferred until after the focused FastAPI/pytest subset validates the
-language-adapter abstraction.
+The first Python implementation phase should use parser-backed syntax
+extraction, repo-local import resolution, framework role extraction,
+usage-driven fixpoint-lite context propagation, target-centered call recovery,
+pytest fixture graph construction, EC-MVFI-lite family induction, and typed
+`UNKNOWN` governance. The canonical algorithm contract is
+`docs/specifications/python-analysis.md`.
+
+Existing TypeScript/JavaScript discovery, syntax extraction, framework-role
+facts, TypeScript worker protocol scaffolding, and release fixtures are
+transitional substrate from the earlier bootstrap. They may remain useful, but
+they are no longer the official v0.1 language target. Production-quality TS/JS
+family evidence is deferred until after the Python v0.1 checkpoint unless a
+later ADR changes the sequence again.
+
+Django, C/C++, whole-program Python call graphs, sound full Python semantic
+analysis, and default runtime tracing are deferred.
 
 ## Non-goals
 
@@ -72,12 +81,11 @@ RepoGrammar must distinguish `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, and
 runtime behavior must lead to abstention rather than certainty.
 
 Structural similarity may generate candidates, but it must not by itself prove
-semantic family membership. Compiler-native semantic facts take precedence over
+semantic family membership. Language-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints. Syntax-origin framework-role
-facts can record that a code unit has a recognizable Express, React, or
-Jest/Vitest role shape, but `FRAMEWORK_HEURISTIC` certainty is not enough to
-prove family membership, resolved handler identity, runtime lifecycle
-equivalence, or conformance.
+facts can record that a code unit has a recognizable framework role shape, but
+`FRAMEWORK_HEURISTIC` certainty is not enough to prove family membership,
+resolved handler identity, runtime lifecycle equivalence, or conformance.
 Freshness is a required gate before semantic facts can become inputs to future
 family claim builders. A fresh supported fact kind is still only eligible input;
 it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result
@@ -88,8 +96,9 @@ store a `DOMINANT_PATTERN` family when repeated compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
 non-framework evidence. That support must be role-compatible: an arbitrary
 semantic fact for an unrelated package, API, or framework cannot prove an
-Express, React, Jest, or Vitest family. Otherwise family queries must return
-typed `UNKNOWN` rather than upgrading syntax/framework heuristics into claims.
+FastAPI, pytest, SQLAlchemy, Pydantic, Express, React, Jest, or Vitest family.
+Otherwise family queries must return typed `UNKNOWN` rather than upgrading
+syntax/framework heuristics into claims.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

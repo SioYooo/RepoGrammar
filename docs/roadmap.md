@@ -62,26 +62,27 @@
 
 ## Next implementation plan
 
-RepoGrammar v0.1 now follows a product-first and dogfooding-aware phase plan.
+RepoGrammar v0.1 now follows a product-first Python analysis phase plan.
 The detailed coordination artifacts are
-`docs/plans/v0.1-parallel-development-plan.md` and the immediate hardening
-checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
+`docs/plans/v0.1-parallel-development-plan.md`, the Python implementation plan
+in `docs/plans/python-v0.1-implementation-plan.md`, and the immediate
+hardening checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
 
 The substrate hardening checkpoint now covers generation immutability,
 lifecycle doctor hygiene, repo-guard coverage, bounded reads, parent Git ignore
 behavior, manifest/status/doctor schema clarity, semantic-worker request
 limits, index-lock cleanup/unlock gates, conservative family query reads, and
-read-only MCP serving over `repogrammar_context`. Before installer, Python, or
-CodeGraph runtime feature work, the next implementation slice should tighten
+read-only MCP serving over `repogrammar_context`. With ADR-0011 accepted, the
+next analysis implementation slice should pivot to Python v0.1 while preserving
 the family claim input contract and EC-MVFI-lite readiness gates rather than
 exposing substrate records as overclaimed user-visible family claims.
 
 1. Phase 1: repo-local lifecycle.
 2. Phase 1.5: language and provider abstraction.
-3. Phase 1.6: experimental Python dogfooding boundary.
+3. Phase 1.6: Python v0.1 analysis boundary.
 4. Phase 1.7: optional CodeGraph provider boundary.
 5. Phase 1.8: UNKNOWN governance.
-6. Phase 2: file discovery for official TS/JS and experimental Python.
+6. Phase 2: file discovery for Python v0.1 plus transitional TS/JS substrate.
 7. Phase 3: storage and generation.
 8. Phase 4: parsers.
 9. Phase 5: semantic and framework facts.
@@ -103,7 +104,8 @@ ingestion through the storage gate, plus an internal semantic-fact file-hash
 freshness and claim-input readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
 v0.1 TS/JS release fixture smoke gate. Continue one boundary at a time:
-TypeScript compiler toolchain preparation or richer family-claim gates. Keep
+Python discovery/module graph, parser boundary, framework-role facts, or richer
+family-claim gates. Keep
 syntax-only code units, structural IR, syntax-origin framework-role facts, and
 weak stored semantic facts out of family claims unless the conservative builder
 has stronger compatible support.
@@ -128,18 +130,27 @@ evidence contracts remain validated together.
 
 ## v0.1 language scope
 
-- Official: TypeScript and JavaScript.
-- Framework focus: Express, NestJS, React, Jest, and Vitest.
-- Goal: validate pattern-family representation with high evidence density.
+- Official target: Python.
+- Framework focus: FastAPI, pytest, SQLAlchemy, and Pydantic.
+- Goal: validate pattern-family representation with high evidence density in
+  Python backend and test repositories.
 
 ## Python path
 
-- Pre-v0.2 Python work is experimental only.
-- v0.2 target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
+- Python is the v0.1 implementation target.
+- Use the method stack in `docs/specifications/python-analysis.md`.
+- First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the
   language-adapter abstraction.
-- Python dogfooding before v0.2 is for internal adapter and `UNKNOWN`
-  validation only. It must not change the official v0.1 TS/JS support claim.
+- Whole-program call graphs, sound full Python semantics, default runtime
+  tracing, and LLM-derived family evidence are rejected for v0.1.
+
+## TypeScript/JavaScript path
+
+- Existing TS/JS discovery, syntax extraction, framework-role facts, worker
+  protocol scaffolding, and fixtures remain transitional substrate.
+- Production-quality TS/JS family evidence is deferred until after Python v0.1
+  unless a later ADR changes scope again.
 
 ## CodeGraph provider path
 
@@ -166,6 +177,9 @@ evidence contracts remain validated together.
 
 - Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
   dependency policy are reviewed.
+- Implement Python discovery, repo-local import resolution, parser-backed
+  syntax extraction, framework role extraction, pytest fixture graph recovery,
+  usage propagation, and target-centered call recovery in scoped phases.
 - Validate TypeScript worker tooling and package manager before adding
   TypeScript compiler API dependencies or semantic fact emission.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
@@ -182,7 +196,8 @@ evidence contracts remain validated together.
 - Optional watcher/daemon support that marks affected families stale and lazily
   recomputes instead of eagerly rebuilding the whole repository.
 - MCP transport implementation for planned tools.
-- Framework adapters for Express, NestJS, React, Jest, and Vitest.
+- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first;
+  Express, NestJS, React, Jest, and Vitest move to the TS/JS follow-up path.
 
 ## Open design areas
 

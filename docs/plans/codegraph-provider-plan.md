@@ -57,7 +57,8 @@ The exact configuration key is deferred until the provider port is specified.
 - no top-level `callers`, `callees`, `impact`, `affected`, `node`, or `explore`
   v0.1 commands;
 - no automatic `codegraph init`;
-- no bypass of TypeScript/JavaScript semantic-worker or family-evidence gates.
+- no bypass of Python v0.1 or other language-specific semantic-worker and
+  family-evidence gates.
 
 ## Future Work
 

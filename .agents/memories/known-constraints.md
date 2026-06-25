@@ -5,7 +5,9 @@
 - Scope: Confirmed repository constraints that are easy to violate.
 - Evidence: Mirrored root guide, architecture docs, product spec, and
   `repo-guard` checks.
-- Related canonical docs: `AGENTS.md`, `docs/architecture/dependency-rules.md`, `docs/specifications/product.md`
+- Related canonical docs: `AGENTS.md`, `docs/architecture/dependency-rules.md`,
+  `docs/specifications/product.md`,
+  `docs/decisions/ADR-0011-python-first-v0-1.md`
 - Supersedes: None
 - Superseded by: None
 
@@ -51,10 +53,15 @@ analysis rules.
   status output or `doctor.checks`.
 - Tree-sitter is the intended syntax technology, but AST types must stay in
   adapters and Tree-sitter facts are not final semantic truth.
-- v0.1 official language scope is TypeScript/JavaScript only. Python is planned
-  second and remains experimental until accepted for v0.2.
-- Pre-v0.2 Python work is experimental dogfooding only. It must not be
-  documented or exposed as production Python support.
+- v0.1 official language scope is Python-first, focused on FastAPI, pytest,
+  SQLAlchemy, and Pydantic. Existing TypeScript/JavaScript discovery, storage,
+  worker, fixture, and query substrate is transitional and must not be
+  described as the official v0.1 implementation target unless a later ADR
+  changes scope.
+- Python v0.1 work must use public parser/analyzer APIs, repo-local helpers,
+  native platform features, and installed dependencies where they already solve
+  the problem. Do not hand-roll a Python parser, whole-program call graph, or
+  type inference engine.
 - v0.1 CLI is pattern-family-first; CodeGraph-style graph navigation command
   names are not top-level commands.
 - CodeGraph is a possible optional lower-layer provider. It is not a

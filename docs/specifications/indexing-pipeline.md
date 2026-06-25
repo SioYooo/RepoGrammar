@@ -101,9 +101,10 @@ extensions, include/exclude patterns, framework adapters, and family thresholds.
 Malformed configuration must warn and fall back to safe defaults rather than
 failing indexing.
 
-Experimental Python discovery, when added, must be opt-in and marked
-experimental. It must not change the official v0.1 TS/JS support claim or allow
-Python syntax-only facts to become production semantic claims.
+Python discovery is the next official v0.1 implementation target. It must
+discover `.py` files, package roots, safe project configuration, and
+repo-local module names without executing repository code. Python syntax-only
+facts still cannot become semantic claims or family evidence by themselves.
 
 ## Tree-sitter parsing
 
@@ -133,10 +134,15 @@ or test fixture binding.
 
 Language-native frontends provide project models, module resolution, symbol
 resolution, type information, inheritance, and resolved calls where available.
-The TypeScript worker is the first planned semantic frontend. The Rust-side
-TypeScript process adapter can validate NDJSON worker output and translate facts
-into RepoGrammar-owned semantic facts. The syntax-only `index` and `sync` path
-does not launch that worker by default. With
+The next official semantic-frontend design target is Python. Python analysis
+should combine parser-backed syntax facts, repo-local import resolution,
+framework-role extraction, usage-driven fixpoint-lite context propagation,
+target-centered call recovery, and pytest fixture graph construction as
+specified in `docs/specifications/python-analysis.md`.
+
+The existing Rust-side TypeScript process adapter can validate NDJSON worker
+output and translate facts into RepoGrammar-owned semantic facts. The
+syntax-only `index` and `sync` path does not launch that worker by default. With
 `REPOGRAMMAR_TYPESCRIPT_WORKER`, it may launch an explicit worker executable
 with optional argv from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store
 accepted facts only after evidence matches an indexed manifest entry, code-unit
@@ -161,9 +167,9 @@ role facts may be recorded by the current TS/JS framework adapter with
 input as insufficient support unless the current claim builder can combine them
 with stronger compatible evidence.
 
-The first official language scope is TypeScript/JavaScript. Python should remain
-experimental until a focused FastAPI, pytest, SQLAlchemy, and Pydantic subset is
-designed and accepted.
+The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
+SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains
+transitional substrate until a later ADR re-promotes it.
 
 ## Optional providers
 
@@ -179,9 +185,12 @@ typed `UNKNOWN`, or abstention for the affected claim.
 ## Code-unit extraction
 
 Extraction identifies functions, classes, modules, tests, and framework-specific
-units. TypeScript and JavaScript are the first language targets. Current stored
-unit kinds are syntax-only and include module, function, arrow function, class,
-method, React component, React hook, Express route, test suite, and test case.
+units. Python v0.1 extraction should cover modules, functions, async functions,
+classes, methods, decorators, imports, assignments, calls, annotations, class
+bases, FastAPI route/dependency roles, pytest tests/fixtures, Pydantic models,
+and SQLAlchemy model/session roles. Current stored TS/JS unit kinds are
+syntax-only and include module, function, arrow function, class, method, React
+component, React hook, Express route, test suite, and test case.
 
 ## Normalization and fingerprinting
 
@@ -196,7 +205,7 @@ membership. Semantic compatibility filtering must run before family membership
 is claimed.
 
 The v0.1 mining design is Evidence-Constrained Multi-View Family Induction
-(EC-MVFI). Tree-sitter syntax, TypeScript compiler facts, framework roles,
+(EC-MVFI). Tree-sitter syntax, language-native semantic facts, framework roles,
 CFG/dataflow/effect views, API usage, and repository context are separate views.
 Weak agreement may rank candidates, but family claims require compatible
 source-backed evidence; unresolved or conflicting facts remain `UNKNOWN`.
@@ -209,8 +218,9 @@ families. These algorithms are deliberately deferred.
 
 ## Framework adapters
 
-Initial framework adapters are scoped to Express, NestJS, React, Jest, and
-Vitest. Framework rules belong in `src/rust/adapters/frameworks/`.
+Initial Python v0.1 framework adapters are scoped to FastAPI, pytest,
+SQLAlchemy, and Pydantic. Framework rules belong in
+`src/rust/adapters/frameworks/`.
 
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
 Express routes, React components, React hooks, Jest/Vitest suites, and

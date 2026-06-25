@@ -1,22 +1,18 @@
 # Python Dogfooding Plan
 
-- Status: Active planning artifact
+- Status: Superseded by `docs/plans/python-v0.1-implementation-plan.md`
 - Last updated: 2026-06-25
-- Scope: Experimental internal validation only
+- Scope: Historical record of the previous experimental Python boundary
 
-Python work before v0.2 is experimental dogfooding. It does not change the
-official v0.1 TypeScript and JavaScript support claim.
+ADR-0011 promotes Python to the official v0.1 implementation target. This file
+is retained for historical context only. Use
+`docs/specifications/python-analysis.md` and
+`docs/plans/python-v0.1-implementation-plan.md` for current Python v0.1 work.
 
 ## Boundary
 
-Python may be used to test whether RepoGrammar's language-adapter,
-semantic-worker, provenance, provider, and `UNKNOWN` model generalizes beyond
-TS/JS. It must remain opt-in, clearly labeled experimental, and excluded from
-default production-support claims.
-
-Documentation must use "experimental Python dogfooding" or equivalent wording.
-Do not describe this as unqualified "Python support" until a later ADR accepts a
-focused production adapter.
+This historical boundary treated Python as opt-in dogfooding only. That is no
+longer the active v0.1 scope.
 
 ## First Subset
 
@@ -56,7 +52,10 @@ Syntax-only Python observations are structural candidates. They cannot prove
 semantic equivalence, route conformance, fixture binding, ORM transaction
 behavior, or production family membership by themselves.
 
-## Dogfooding Steps
+## Historical Dogfooding Steps
+
+These steps are superseded by `docs/plans/python-v0.1-implementation-plan.md`;
+they remain here only to explain the older boundary.
 
 1. Define an experimental language flag and adapter boundary after repo-local
    lifecycle and language/provider abstraction are stable.
@@ -68,14 +67,14 @@ behavior, or production family membership by themselves.
    disagreement.
 5. Evaluate whether Pyright, Mypy, an LSP, optional CodeGraph facts, user hints,
    or bounded runtime traces should refine specific unknowns.
-6. Write a future v0.2 ADR before promoting Python beyond experimental
-   dogfooding.
+6. Write a future ADR before changing Python's support level. ADR-0011 is that
+   superseding decision for v0.1.
 
-## Promotion Criteria
+## Historical Promotion Criteria
 
-Python can be considered for official support only after:
+The former plan required these conditions before official Python support:
 
-- an accepted ADR changes the language scope;
+- an accepted ADR changes the language scope, now ADR-0011;
 - a stable fixture suite covers the target frameworks;
 - dynamic limits and `UNKNOWN` reasons are documented;
 - semantic facts have clear provenance and freshness;

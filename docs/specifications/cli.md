@@ -132,7 +132,8 @@ for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
 `repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. They run TS/JS discovery, read source through a
+repository-local state directory. The implemented bootstrap path still runs
+TS/JS discovery, reads source through a
 repo-relative hash-checked boundary, store repo-relative file metadata and
 syntax-only code-unit records plus any syntax-origin framework-role fact records
 in a new generation-scoped SQLite database, validate the generation, and
@@ -256,7 +257,8 @@ when repository state or an active index generation is missing or unreadable.
 storage. Stored syntax-only code units are not family evidence; stored
 syntax-origin framework-role facts remain insufficient support unless stronger
 compatible semantic/dataflow evidence exists. Query commands must not imply that
-TypeScript compiler analysis, full mining, or MCP serving has run. The
+Python v0.1 analysis, TypeScript compiler analysis, full mining, or production
+family evidence has run. The
 `files` and `units` commands are a limited exception: when an active
 file-manifest-only or syntax-only generation exists, they may read and return
 repo-relative indexed-file metadata and code-unit records for inventory/debugging
@@ -352,8 +354,8 @@ lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
 repo-local lifecycle information without claiming parser/mining support.
-`index` and `sync` create syntax-only SQLite generations from the TS/JS file
-discovery substrate and dependency-free structural extractor. Their JSON output
+`index` and `sync` currently create syntax-only SQLite generations from the
+TS/JS file discovery substrate and dependency-free structural extractor. Their JSON output
 includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, the actual `semantic_facts` count, `indexing:
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
@@ -380,5 +382,6 @@ when EC-MVFI-lite has written supported family rows. `serve` runs the read-only
 MCP `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
-self-test. Unsupported live target/scope combinations return explicit deferred
+self-test. Python v0.1 analysis is the next official implementation target but
+is not yet implemented in the CLI. Unsupported live target/scope combinations return explicit deferred
 errors; dry-run planning remains available for all targets and scopes.

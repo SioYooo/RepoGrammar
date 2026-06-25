@@ -34,10 +34,11 @@ logic, run the relevant checks, and resolve conflicts by understanding the code
 instead of mechanically choosing one side.
 
 Current v0.1 implementation planning is tracked in
-`docs/plans/v0.1-parallel-development-plan.md`. Use that plan to choose phase
-scope, ownership lanes, validation gates, and commit boundaries. Update the
-plan and matching `.agents/memories/` files whenever phase scope, experimental
-Python dogfooding, optional CodeGraph provider integration, or `UNKNOWN` policy
+`docs/plans/v0.1-parallel-development-plan.md` and
+`docs/plans/python-v0.1-implementation-plan.md`. Use those plans to choose
+phase scope, ownership lanes, validation gates, and commit boundaries. Update
+the plans and matching `.agents/memories/` files whenever phase scope, Python
+v0.1 analysis, optional CodeGraph provider integration, or `UNKNOWN` policy
 changes.
 
 ## Verification

@@ -19,8 +19,14 @@ documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
 pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
 discovery, syntax-only code-unit extraction, syntax-origin framework-role fact
 storage, CodeUnit-derived structural IR storage, SQLite generation-storage
-wiring, a dependency-free TypeScript worker unavailable stub, and repository
-guard checks, and a read-only MCP `repogrammar_context` stdio boundary.
+wiring, a dependency-free TypeScript worker unavailable stub, repository guard
+checks, and a read-only MCP `repogrammar_context` stdio boundary.
+
+The official v0.1 implementation target has pivoted to Python-first analysis
+for FastAPI, pytest, SQLAlchemy, and Pydantic. The current TS/JS code remains
+transitional substrate from the earlier bootstrap while Python discovery,
+parser, framework-role, import-resolution, and family-evidence work is
+implemented.
 
 It does not yet implement TypeScript compiler analysis, broad installer writes,
 or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
@@ -113,11 +119,11 @@ active file-manifest-only or syntax-only index metadata.
 
 | Area | Current state | Target shape |
 |---|---|---|
-| Language scope | v0.1 contracts are TypeScript/JavaScript first | Production-quality TS/JS pattern-family evidence |
-| Python | Planned second official language; pre-v0.2 work is experimental dogfooding only | Experimental FastAPI, pytest, SQLAlchemy, and Pydantic validation until a focused v0.2 adapter is accepted |
-| Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Tree-sitter boundary remains planned | Tree-sitter generates syntax candidates, not final semantic truth |
+| Language scope | v0.1 target is Python-first; current code still contains TS/JS bootstrap substrate | Production-quality Python pattern-family evidence for FastAPI, pytest, SQLAlchemy, and Pydantic |
+| TS/JS | Transitional substrate from the earlier bootstrap | Deferred production-quality TS/JS pattern-family evidence after Python v0.1 unless a later ADR changes scope |
+| Parsing | Dependency-free syntax-only TS/JS extractor stores structural code-unit candidates; Python parser boundary is planned | Public parser-backed syntax candidates, not final semantic truth |
 | Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty; compiler worker implementation and claims remain deferred | Language-native semantic workers provide compiler/API facts |
-| Discovery | TS/JS discovery feeds syntax-only `index`/`sync` generations | Git-aware source inventory feeding parser and storage |
+| Discovery | TS/JS discovery currently feeds syntax-only `index`/`sync` generations | Git-aware Python source inventory feeding parser and storage |
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Read-only `repogrammar_context` serve boundary is implemented | Stable agent-tool API after more compatibility testing |
@@ -211,11 +217,14 @@ v0.1 parallel development plan:
 - keep syntax-only code units structural and non-semantic;
 - keep syntax-origin framework-role facts framework-heuristic and out of family
   claims until stronger evidence and claim builders exist;
+- pivot the next analysis work to Python discovery, parser boundaries,
+  repo-local import resolution, framework-role extraction, and Python
+  EC-MVFI-lite fixtures;
 - keep TypeScript compiler API integration, full mining, broad installer writes,
   and instruction-file integration deferred until parser output, storage,
-  semantic-worker, MCP self-test, and receipt boundaries are validated together.
-- keep experimental Python dogfooding, optional CodeGraph provider work, and
-  typed `UNKNOWN` governance explicitly scoped before implementation.
+  semantic-worker, MCP self-test, and receipt boundaries are validated together;
+- keep optional CodeGraph provider work and typed `UNKNOWN` governance
+  explicitly scoped before implementation.
 
 See [docs/roadmap.md](docs/roadmap.md) and
 [docs/plans/v0.1-parallel-development-plan.md](docs/plans/v0.1-parallel-development-plan.md)
