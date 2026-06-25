@@ -47,8 +47,9 @@ TypeScript/JavaScript discovery, Python `.py` discovery with Python
 virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
-bases, simple calls, same-file pytest fixture edges, and typed dynamic or
-unresolved `UNKNOWN` cases persisted as internal parser-origin semantic facts.
+bases, simple calls, `pytest.test` test-function anchors, same-file pytest
+fixture edges, and typed dynamic or unresolved `UNKNOWN` cases persisted as
+internal parser-origin semantic facts.
 Default parser-mode indexing now also carries bounded discovered `conftest.py`
 context into the CPython parse-document request so parent-directory pytest
 fixture-edge facts can be persisted structurally; those facts are still not
@@ -96,9 +97,10 @@ documentation, skills, memories, CI configuration, repo-local
 discovery, hash-checked source reads, dependency-free TS/JS syntax-only
 code-unit extraction, CPython AST-backed Python structural code-unit
 extraction, worker-local Python structural fact payloads for import bindings,
-decorator anchors, class bases, simple call targets, same-file pytest fixture
-edges, parent-directory `conftest.py` fixture hierarchy edges, and typed
-dynamic/unresolved `UNKNOWN` cases, syntax-origin
+decorator anchors, class bases, simple call targets, `pytest.test`
+test-function anchors, same-file pytest fixture edges, parent-directory
+`conftest.py` fixture hierarchy edges, and typed dynamic/unresolved `UNKNOWN`
+cases, syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config

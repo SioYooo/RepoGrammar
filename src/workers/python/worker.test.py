@@ -95,6 +95,12 @@ assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Dec
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get" for fact in parse_facts)
 assert any(fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "client.get" for fact in parse_facts)
 assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.test"
+    and "python_anchor_kind=pytest_test_function" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
     fact["fact_kind"] == "UNKNOWN"
     and fact["target"] == "PytestFixtureInjection"
     and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
@@ -339,6 +345,12 @@ def test_users(client, missing_fixture):
     }
 )
 conftest_parse_facts = conftest_parse_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.test"
+    and "python_anchor_kind=pytest_test_function" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
 assert any(
     fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pytest.fixture.client"

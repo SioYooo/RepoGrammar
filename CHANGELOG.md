@@ -26,9 +26,10 @@
   Rust parser adapter and semantic-worker-compatible NDJSON framework-role
   heuristic smoke output, without running repository code or provider tools.
 - Python worker structural fact output for import bindings, decorator anchors,
-  class bases, simple call targets, same-file pytest fixture edges, and typed
-  dynamic/unresolved `UNKNOWN` cases, now including path-derived module-name
-  anchors, CPython `symtable` structural scope anchors, and a private
+  class bases, simple call targets, `pytest.test` test-function anchors,
+  same-file pytest fixture edges, and typed dynamic/unresolved `UNKNOWN` cases,
+  now including path-derived module-name anchors, CPython `symtable`
+  structural scope anchors, and a private
   `tomllib` project-config summary mode. Its semantic-worker-compatible
   project mode now resolves only unique repo-local module imports as
   `STRUCTURAL` facts, resolves requested-project `conftest.py` fixture names

@@ -81,8 +81,8 @@ The current implementation covers the first structural slice only:
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
 - CPython `ast` structural fact output for import bindings, decorator anchors,
-  class bases, simple call targets, same-file pytest fixture edges, and typed
-  dynamic/unresolved `UNKNOWN` facts;
+  class bases, simple call targets, pytest test-function anchors, same-file
+  pytest fixture edges, and typed dynamic/unresolved `UNKNOWN` facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -99,9 +99,10 @@ The current implementation covers the first structural slice only:
 - default parser-mode indexing now passes the discovered repo-relative `.py`
   inventory plus bounded, hash-checked discovered `conftest.py` file contents
   into the private CPython parse-document request so the same source-tied parse
-  pass can emit unique repo-local import facts, pytest parent-directory
-  `conftest.py` fixture-edge facts, and typed unresolved/ambiguous import or
-  fixture `UNKNOWN`s without launching a separate Python semantic worker;
+  pass can emit unique repo-local import facts, `pytest.test` anchors,
+  pytest parent-directory `conftest.py` fixture-edge facts, and typed
+  unresolved/ambiguous import or fixture `UNKNOWN`s without launching a
+  separate Python semantic worker;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a

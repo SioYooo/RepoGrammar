@@ -175,9 +175,10 @@ evidence contracts remain validated together.
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
 - The first CPython structural slice is implemented, including
   worker-local structural anchors for imports, decorators, class bases, simple
-  calls, same-file pytest fixture edges, and typed dynamic/unresolved
-  `UNKNOWN`, plus path-derived module names, CPython `symtable` scope anchors,
-  and private `tomllib` project-config summaries. The semantic-worker-compatible
+  calls, `pytest.test` test-function anchors, same-file pytest fixture edges,
+  and typed dynamic/unresolved `UNKNOWN`, plus path-derived module names,
+  CPython `symtable` scope anchors, and private `tomllib` project-config
+  summaries. The semantic-worker-compatible
   project mode now builds a bounded module graph for requested `.py` files and
   emits structural repo-local import facts only for unique module-level matches,
   resolves requested-project `conftest.py` fixture names through pytest's

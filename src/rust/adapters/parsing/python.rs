@@ -1231,6 +1231,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "decorator_binding"
             | "class_base"
             | "call_target"
+            | "pytest_test_function"
             | "pytest_fixture_edge"
             | "pytest_conftest_fixture_edge"
             | "module_name"
@@ -1419,6 +1420,14 @@ def test_users(client):
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("client.get")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.test")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_test_function")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown

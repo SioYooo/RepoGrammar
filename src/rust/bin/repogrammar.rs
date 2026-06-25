@@ -1822,6 +1822,18 @@ project_includes = ["src"]
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.test")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_test_function")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/api.py"
+                && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("pytest.fixture.client")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
@@ -1924,7 +1936,10 @@ project_includes = ["src"]
                 assert!(
                     matches!(
                         target,
-                        "fastapi.APIRouter.get" | "pydantic.BaseModel" | "pytest.fixture"
+                        "fastapi.APIRouter.get"
+                            | "pydantic.BaseModel"
+                            | "pytest.fixture"
+                            | "pytest.test"
                     ),
                     "unexpected derived target {target}"
                 );
@@ -1939,6 +1954,7 @@ project_includes = ["src"]
         assert!(derived_targets.contains("fastapi.APIRouter.get"));
         assert!(derived_targets.contains("pydantic.BaseModel"));
         assert!(derived_targets.contains("pytest.fixture"));
+        assert!(derived_targets.contains("pytest.test"));
         for fact in readiness.facts {
             if derived_fact_ids.contains(&fact.fact_id) {
                 assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));

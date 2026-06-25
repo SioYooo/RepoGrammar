@@ -998,6 +998,21 @@ def collect_fixture_facts(
 ) -> None:
     if not node.name.startswith("test_"):
         return
+    start, end = node_range(starts, node)
+    add_fact(
+        facts,
+        structural_fact(
+            kind="SYMBOL",
+            subject_unit_id=subject_unit_id,
+            target="pytest.test",
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind="pytest_test_function",
+        ),
+    )
     conftest_fixture_names = conftest_fixture_names or set()
     for arg in node.args.args:
         if arg.arg == "self":
