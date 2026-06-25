@@ -169,8 +169,10 @@ typed `UNKNOWN`, `CONTEXT_ONLY`, and confident family classifications.
 
 Current slice: CLI and MCP now share compact/evidence/deep output selection for
 stored family evidence metadata. `deep` is still metadata-only and reports no
-source snippets until a safe source-span reader and coverage-aware selector are
-implemented.
+source snippets until a safe source-span reader is implemented. The current
+builder can link one narrow Python variation evidence record when an
+already-ready family has multiple exact-compatible framework-anchor support
+targets; broader variation, medoid, and exception evidence remain deferred.
 
 ### Phase P8: Optional Observed Runtime Evidence
 
@@ -191,7 +193,8 @@ Initial release-smoke fixtures now live under `src/fixtures/python/release/v0_1/
 They cover low-support and dynamic `UNKNOWN` behavior, a no-worker exact-anchor
 FastAPI family path through derived support, and a test-only strong FastAPI
 semantic-support fixture for explicit worker family read and stale-evidence
-smoke coverage. They are not yet the full Python provider corpus.
+smoke coverage. They also include a no-worker FastAPI exact-anchor target
+variation fixture. They are not yet the full Python provider corpus.
 
 Minimum positive fixture groups:
 

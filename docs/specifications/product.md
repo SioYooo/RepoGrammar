@@ -58,7 +58,10 @@ role. Product smoke tests now prove low-support and dynamic cases remain
 `UNKNOWN`, while three-member direct FastAPI, FastAPI alias, pytest, Pydantic
 model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
 fixtures can produce families without a semantic worker through those derived
-facts. It also persists root `pyproject.toml` only as structural
+facts. Ready Python families can also record narrow variation metadata when
+their already-compatible exact framework-anchor support targets differ within
+the same family; this does not imply provider-backed semantics or runtime
+equivalence. It also persists root `pyproject.toml` only as structural
 project-config context or typed config `UNKNOWN`. Subsequent
 slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
@@ -122,8 +125,10 @@ without evidence records or source snippets. Explicit evidence/deep modes may
 return selected repo-relative evidence metadata under a token budget. The
 current selector uses greedy marginal coverage over conservative metadata
 labels and reports missing requested coverage instead of inventing unsupported
-variation or exception evidence. Deep mode is still metadata-only until a safe
-source-span rendering contract exists.
+variation or exception evidence. The only current variation evidence link is
+Python exact-compatible framework-anchor target diversity inside an already
+ready family; exception evidence remains deferred. Deep mode is still
+metadata-only until a safe source-span rendering contract exists.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

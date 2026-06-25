@@ -45,6 +45,7 @@ pub struct FamilyEvidence {
     pub content_hash: crate::core::model::ContentHash,
     pub start_byte: usize,
     pub end_byte: usize,
+    pub support_targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +101,7 @@ pub fn build_family_claims(
     semantic_facts: &[SemanticFact],
 ) -> FamilyBuildReport {
     let role_by_unit = framework_roles_by_unit(semantic_facts);
-    let supported_units = eligible_support_by_unit(units, semantic_facts, &role_by_unit);
+    let support_targets_by_unit = eligible_support_by_unit(units, semantic_facts, &role_by_unit);
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
     let mut unknowns = Vec::new();
 
@@ -131,6 +132,10 @@ pub fn build_family_claims(
             content_hash: unit.content_hash.clone(),
             start_byte: unit.start_byte,
             end_byte: unit.end_byte,
+            support_targets: support_targets_by_unit
+                .get(&unit.id)
+                .map(|targets| targets.iter().cloned().collect())
+                .unwrap_or_default(),
         });
     }
 
@@ -152,7 +157,7 @@ pub fn build_family_claims(
         });
         let supported_evidence = evidence
             .into_iter()
-            .filter(|evidence| supported_units.contains(&evidence.code_unit_id))
+            .filter(|evidence| !evidence.support_targets.is_empty())
             .collect::<Vec<_>>();
         if supported_evidence.len() < min_family_support(&key.language) {
             unknowns.push(insufficient_support_unknown(format!(
@@ -168,6 +173,23 @@ pub fn build_family_claims(
             affected_claim: format!("{family_id}:runtime_equivalence"),
             recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
         };
+        let mut variation_slots = vec![VariationSlot {
+            slot_id: "slot:runtime_unknown".to_string(),
+            description: format!(
+                "{}:{}:{}",
+                runtime_unknown.class.as_protocol_str(),
+                runtime_unknown.reason.as_protocol_str(),
+                "runtime equivalence remains unproven"
+            ),
+        }];
+        if python_framework_anchor_target_varies(&key, &supported_evidence) {
+            variation_slots.push(VariationSlot {
+                slot_id: "slot:python_framework_anchor_target".to_string(),
+                description:
+                    "variation:python_framework_anchor_target:exact compatible framework anchors differ"
+                        .to_string(),
+            });
+        }
         claims.push(FamilyClaim {
             family_id,
             classification: "DOMINANT_PATTERN".to_string(),
@@ -177,15 +199,7 @@ pub fn build_family_claims(
             framework_role: key.framework_role,
             normalized_shape: key.normalized_shape,
             evidence: supported_evidence,
-            variation_slots: vec![VariationSlot {
-                slot_id: "slot:runtime_unknown".to_string(),
-                description: format!(
-                    "{}:{}:{}",
-                    runtime_unknown.class.as_protocol_str(),
-                    runtime_unknown.reason.as_protocol_str(),
-                    "runtime equivalence remains unproven"
-                ),
-            }],
+            variation_slots,
             exceptions: Vec::new(),
             unknowns: vec![runtime_unknown],
             readiness: ClaimReadiness::Ready,
@@ -210,6 +224,7 @@ pub fn build_family_claims(
 }
 
 pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
+    let variation_evidence_indexes = framework_anchor_variation_evidence_indexes(claim);
     let members = claim
         .evidence
         .iter()
@@ -239,11 +254,7 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
             ),
             family_id: claim.family_id.clone(),
             code_unit_id: evidence.code_unit_id.clone(),
-            covered_claims: if index == 0 {
-                vec!["canonical".to_string(), "support".to_string()]
-            } else {
-                vec!["support".to_string()]
-            },
+            covered_claims: family_evidence_covered_claims(index, &variation_evidence_indexes),
             path: evidence.path.clone(),
             content_hash: evidence.content_hash.clone(),
             start_byte: evidence.start_byte,
@@ -286,12 +297,12 @@ fn eligible_support_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
     role_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> BTreeSet<String> {
+) -> BTreeMap<String, BTreeSet<String>> {
     let unit_by_id = units
         .iter()
         .map(|unit| (unit.id.as_str(), unit))
         .collect::<BTreeMap<_, _>>();
-    let mut supported = BTreeSet::new();
+    let mut supported = BTreeMap::new();
     for fact in facts {
         if !fact.certainty.supports_family_membership()
             || matches!(
@@ -319,10 +330,79 @@ fn eligible_support_by_unit(
             && fact.evidence.range.end_byte == unit.end_byte
             && support_fact_is_role_compatible(fact, framework_role)
         {
-            supported.insert(code_unit_id.to_string());
+            supported
+                .entry(code_unit_id.to_string())
+                .or_insert_with(BTreeSet::new)
+                .insert(
+                    fact.target
+                        .as_ref()
+                        .map(|target| target.as_str().to_string())
+                        .unwrap_or_else(|| fact.kind.as_protocol_str().to_string()),
+                );
         }
     }
     supported
+}
+
+fn python_framework_anchor_target_varies(key: &FamilyKey, evidence: &[FamilyEvidence]) -> bool {
+    if key.language != "python" {
+        return false;
+    }
+    distinct_support_targets(evidence).len() > 1
+}
+
+fn distinct_support_targets(evidence: &[FamilyEvidence]) -> BTreeSet<String> {
+    evidence
+        .iter()
+        .flat_map(|evidence| evidence.support_targets.iter().cloned())
+        .collect()
+}
+
+fn framework_anchor_variation_evidence_indexes(claim: &FamilyClaim) -> BTreeSet<usize> {
+    if claim.language != "python" || distinct_support_targets(&claim.evidence).len() <= 1 {
+        return BTreeSet::new();
+    }
+    let canonical_targets = claim
+        .evidence
+        .first()
+        .map(|evidence| {
+            evidence
+                .support_targets
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let index = claim
+        .evidence
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, evidence)| {
+            evidence
+                .support_targets
+                .iter()
+                .any(|target| !canonical_targets.contains(target))
+        })
+        .map(|(index, _)| index)
+        .or_else(|| (claim.evidence.len() > 1).then_some(1))
+        .unwrap_or(0);
+    [index].into_iter().collect()
+}
+
+fn family_evidence_covered_claims(
+    index: usize,
+    variation_evidence_indexes: &BTreeSet<usize>,
+) -> Vec<String> {
+    let mut claims = if index == 0 {
+        vec!["canonical".to_string(), "support".to_string()]
+    } else {
+        vec!["support".to_string()]
+    };
+    if variation_evidence_indexes.contains(&index) {
+        claims.push("variation".to_string());
+    }
+    claims
 }
 
 fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> bool {
@@ -706,6 +786,91 @@ mod tests {
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].language, "python");
         assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn python_family_records_exact_anchor_target_variation_metadata() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+
+        let same_target = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+            ],
+        );
+        assert_eq!(same_target.claims.len(), 1);
+        let same_target_records = family_storage_records(&same_target.claims[0]);
+        assert!(!same_target_records
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:python_framework_anchor_target"));
+        assert!(same_target_records.evidence.iter().all(|evidence| {
+            !evidence
+                .covered_claims
+                .iter()
+                .any(|claim| claim == "variation" || claim == "exception")
+        }));
+
+        let varied_target = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.FastAPI.post"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.delete"),
+            ],
+        );
+        assert_eq!(varied_target.claims.len(), 1);
+        let claim = &varied_target.claims[0];
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:runtime_unknown"));
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:python_framework_anchor_target"
+                && slot.description
+                    == "variation:python_framework_anchor_target:exact compatible framework anchors differ"));
+
+        let records = family_storage_records(claim);
+        assert_eq!(
+            records.evidence[0].covered_claims,
+            vec!["canonical".to_string(), "support".to_string()]
+        );
+        let variation_records = records
+            .evidence
+            .iter()
+            .filter(|evidence| {
+                evidence
+                    .covered_claims
+                    .iter()
+                    .any(|claim| claim == "variation")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(variation_records.len(), 1);
+        assert!(variation_records[0]
+            .covered_claims
+            .contains(&"support".to_string()));
+        assert!(records.evidence.iter().all(|evidence| {
+            !evidence
+                .covered_claims
+                .iter()
+                .any(|claim| claim == "exception")
+        }));
+        let serialized = format!("{records:?}");
+        assert!(!serialized.contains("fastapi.APIRouter.get"));
+        assert!(!serialized.contains("fastapi.FastAPI.post"));
+        assert!(!serialized.contains("@"));
     }
 
     #[test]

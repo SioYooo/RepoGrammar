@@ -118,10 +118,12 @@ whether the rough budget was satisfied. Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
 `support`, `variation`, and `exception`; selectors must consume those labels
 rather than infer coverage from notes or record order. The current family
-builder emits only `canonical` and `support`, so requested variation or
-exception coverage must be reported as missing until later builders explicitly
-link evidence to those claims. MCP responses must report whether source snippets
-were included; the current implementation always reports
+builder emits `canonical` and `support`, plus a narrow Python `variation` label
+when an already-ready family has multiple exact-compatible framework-anchor
+support targets. Requested exception coverage and broader variation coverage
+must be reported as missing until later builders explicitly link evidence to
+those claims. MCP responses must report whether source snippets were included;
+the current implementation always reports
 `source_snippets_included: false`.
 
 ## Serving mode

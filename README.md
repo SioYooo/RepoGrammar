@@ -40,7 +40,9 @@ turning raw facts into family claims. A bounded application-layer derivation
 step can now synthesize separate `DATAFLOW_DERIVED` support facts only when
 validated CPython anchors exact-match the Python framework compatibility table
 for a unit with one framework role; low-support and dynamic cases still return
-typed `UNKNOWN`. The Python plan still uses a
+typed `UNKNOWN`. Ready Python exact-anchor families may record metadata-only
+variation evidence when exact-compatible framework-anchor support targets
+differ. The Python plan still uses a
 claim-driven selective
 cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
 plausible family candidates, Pyright only for claim-upgrading cross-checks, and

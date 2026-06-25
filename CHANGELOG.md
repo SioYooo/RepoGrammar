@@ -70,6 +70,11 @@
   insufficient, project-config facts stay blocked, and Python still requires
   three compatible support members before the EC-MVFI-lite family builder writes
   a family.
+- Narrow Python exact-anchor variation metadata: when an already-ready Python
+  family has multiple exact-compatible framework-anchor support targets, the
+  family builder records a dedicated variation slot and one metadata-only
+  `variation` evidence label. This does not add provider-backed semantics,
+  source snippets, exception mining, or runtime-equivalence claims.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and

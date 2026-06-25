@@ -158,9 +158,10 @@ The current implementation covers the first structural slice only:
   repo-relative evidence metadata under an optional token budget and explicitly
   report that source snippets are not included. The selector now uses
   deterministic greedy marginal coverage over conservative claim labels:
-  current stored evidence can cover `canonical` and `support`, while requested
-  variation or exception coverage is reported as missing until storage/model
-  records explicitly link evidence to those roles;
+  current stored evidence can cover `canonical`, `support`, and the narrow
+  Python exact-anchor target `variation` case. Requested exception coverage or
+  broader variation coverage is reported as missing until storage/model records
+  explicitly link evidence to those roles;
 - exact canonical Python framework target checks in the EC-MVFI-lite support
   gate for derived and future provider-backed strong facts.
 
@@ -186,9 +187,10 @@ support.
 This slice does not implement Pyrefly, Pyright, provider cache keys, usage
 propagation, call hierarchy recovery, Tree-sitter fallback, runtime
 observation, broad Python family mining, source snippet retrieval, or
-schema-backed medoid/variation/exception evidence links. Persisted project
-configuration facts are structural context only and remain blocked from
-family-claim input.
+schema-backed medoid/general-variation/exception evidence links. The only
+current variation evidence is exact-compatible Python framework-anchor target
+diversity inside an already-ready family. Persisted project configuration
+facts are structural context only and remain blocked from family-claim input.
 
 ### Layer 0: Authoritative Frontend
 
@@ -564,9 +566,11 @@ conservative metadata candidates and keep source snippets disabled. Evidence
 records carry schema-backed `covered_claims` labels from the allowlist
 `canonical`, `support`, `variation`, and `exception`; the selector consumes
 those labels and never infers coverage from free-text notes. The current builder
-emits only `canonical` and `support`, so requested variation or exception
-coverage remains in `missing_claims` until explicit medoid, variation-slot, and
-exception evidence links exist.
+emits `canonical` and `support`, plus one narrow Python `variation` evidence
+label when a ready family has multiple exact-compatible framework-anchor
+support targets. Requested exception coverage and broader variation coverage
+remain in `missing_claims` until explicit medoid, variation-slot, and exception
+evidence links exist.
 
 ## Rejected v0.1 Routes
 

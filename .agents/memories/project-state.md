@@ -30,7 +30,9 @@
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
   compact/evidence/deep metadata modes shared by CLI and MCP; compact is the
   default, evidence/deep use greedy metadata coverage selection, and deep does
-  not yet include source snippets. Pyrefly/Pyright and
+  not yet include source snippets. Ready Python exact-anchor families can also
+  record metadata-only variation evidence when exact-compatible framework-anchor
+  support targets differ. Pyrefly/Pyright and
   provider-backed canonical evidence remain deferred.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
@@ -134,8 +136,9 @@ direct FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. Positive direct FastAPI,
 FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy model-field, and
 SQLAlchemy session/repository fixtures now validate the no-worker exact-anchor
-derived-support family path, metadata-only evidence modes, MCP parity, and
-stale-evidence query refusal. A separate
+derived-support family path, exact-anchor target variation metadata,
+metadata-only evidence modes, MCP parity, and stale-evidence query refusal. A
+separate
 test-only strong FastAPI semantic-support fixture injects compatible `SEMANTIC`
 facts through the
 existing worker boundary to validate family reads and stale-evidence fallback
@@ -144,8 +147,10 @@ Family detail reads now use compact/evidence/deep output modes. Compact omits
 evidence records; evidence/deep run deterministic greedy metadata selection
 under an optional token budget and report `source_snippets_included: false`.
 Family evidence records carry schema-backed `covered_claims` labels. The
-current builder emits `canonical` and `support`; requested variation or
-exception coverage is returned in `missing_claims` until later builders link
+current builder emits `canonical` and `support`, plus one narrow Python
+`variation` label when an already-ready family has multiple exact-compatible
+framework-anchor support targets. Requested exception coverage and broader
+variation coverage are returned in `missing_claims` until later builders link
 evidence to those roles.
 `index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures

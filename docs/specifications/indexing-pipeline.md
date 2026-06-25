@@ -284,10 +284,12 @@ stored family evidence metadata. The selector uses deterministic greedy
 marginal coverage per estimated token cost and never reads source snippets.
 Family evidence records carry schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the current
-builder emits only `canonical` and `support`. Requested variation or exception
-coverage is reported as missing until family evidence is explicitly linked to
-variation slots or counterexamples. This selector does not replace future
-medoid selection, template induction, or exception mining.
+builder emits `canonical` and `support`, plus a narrow Python `variation`
+label when a ready family's exact-compatible framework-anchor support targets
+differ. Requested exception coverage and broader variation coverage are
+reported as missing until family evidence is explicitly linked to variation
+slots or counterexamples. This selector does not replace future medoid
+selection, template induction, or exception mining.
 
 ## Framework adapters
 

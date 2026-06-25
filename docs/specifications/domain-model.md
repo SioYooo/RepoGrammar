@@ -124,10 +124,12 @@ Evidence links a conclusion to a code unit, source range, provenance record, and
 note. Every future family conclusion must carry auditable source evidence.
 Family evidence storage must remain linked to a family and same-generation code
 unit and must carry explicit covered-claim labels. The current allowlist is
-`canonical`, `support`, `variation`, and `exception`; current builders emit only
-`canonical` and `support` until explicit variation-slot and exception evidence
-links exist. Semantic-fact evidence must not be treated as family evidence by
-itself.
+`canonical`, `support`, `variation`, and `exception`. Current builders emit
+`canonical` and `support`, and they may emit one narrow Python `variation`
+evidence label when an already-ready family has multiple exact-compatible
+framework-anchor support targets. Exception evidence and broader medoid,
+template, or counterexample evidence links remain deferred. Semantic-fact
+evidence must not be treated as family evidence by itself.
 
 ## Provenance
 

@@ -1590,6 +1590,109 @@ mod tests {
     }
 
     #[test]
+    fn python_release_fixture_records_exact_anchor_variation_evidence() {
+        let workspace = TempWorkspace::new("python-release-derived-anchor-variation");
+        copy_python_release_fixture("fastapi-route-variation", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        let mut derived_targets = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-python-derived"
+                    && fact.origin_method == "bounded_ast_anchor_v1"
+                    && fact.path == "routes.py"
+            })
+            .map(|fact| fact.target.as_deref().expect("support target").to_string())
+            .collect::<Vec<_>>();
+        derived_targets.sort();
+        assert_eq!(
+            derived_targets,
+            vec![
+                "fastapi.APIRouter.delete".to_string(),
+                "fastapi.APIRouter.get".to_string(),
+                "fastapi.FastAPI.post".to_string(),
+            ]
+        );
+
+        let family_id = "family:python:fastapi_route:framework_fastapi_route";
+        let family = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[
+                    family_id,
+                    "--mode",
+                    "evidence",
+                    "--include-variations",
+                    "--json",
+                ],
+            ),
+            &runtime,
+        );
+        let family_json = parse_machine_output("family", &family, &workspace);
+        assert_eq!(family_json["status"], "ok");
+        assert_eq!(family_json["family"]["family_id"], family_id);
+        assert_eq!(family_json["family"]["support"], 3);
+        assert_eq!(
+            family_json["output"]["covered_claims"],
+            serde_json::json!(["canonical", "support", "variation"])
+        );
+        assert_eq!(
+            family_json["output"]["missing_claims"],
+            serde_json::json!([])
+        );
+        assert_eq!(family_json["output"]["source_snippets_included"], false);
+        assert!(family_json["variation_slots"]
+            .as_array()
+            .expect("variation slots")
+            .iter()
+            .any(|slot| slot["slot_id"] == "slot:python_framework_anchor_target"));
+        let evidence = family_json["evidence"].as_array().expect("evidence");
+        assert_eq!(evidence.len(), 2);
+        assert!(evidence.iter().any(|record| {
+            record["covered_claims"] == serde_json::json!(["canonical", "support"])
+        }));
+        assert!(evidence.iter().any(|record| {
+            record["covered_claims"] == serde_json::json!(["support", "variation"])
+        }));
+        for record in evidence {
+            assert_eq!(record["family_id"], family_id);
+            assert_eq!(record["path"], "routes.py");
+            assert_repo_relative_json_path(&record["path"]);
+            assert_content_hash_json(&record["content_hash"]);
+            assert!(
+                record["start_byte"].as_u64().expect("start")
+                    < record["end_byte"].as_u64().expect("end")
+            );
+        }
+    }
+
+    #[test]
     fn python_exact_anchor_queries_return_stale_unknown_without_worker() {
         fn assert_stale_queries(
             runtime: &ProductCliRuntime,

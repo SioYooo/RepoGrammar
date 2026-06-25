@@ -43,6 +43,8 @@
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.
+- Narrow Python exact-anchor variation metadata when an already-ready family has
+  multiple exact-compatible framework-anchor support targets.
 - Optional command-level semantic-worker ingestion for `index`/`sync` when
   `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
   argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
@@ -76,7 +78,7 @@
   model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
   family smoke that proves derived support can reach the
   EC-MVFI-lite family read path without claiming provider-backed Python
-  semantics.
+  semantics, plus a FastAPI exact-anchor target variation smoke path.
 - Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
   facts through the existing worker boundary to prove family reads, stale
   evidence fallback, and leakage guards without claiming production Python
