@@ -84,6 +84,9 @@ Some unknowns block only specific claims:
   source-range evidence from the current file hash;
 - Python fixture injection may block test-behavior equivalence
   while still allowing structural pytest test discovery;
+- dynamic or unsafe Python pytest fixture `name=` aliases may block fixture
+  binding without changing the structural fact that the function is decorated
+  as a pytest fixture;
 - duplicate applicable Python `conftest.py` fixture names may block fixture
   binding with `ConflictingFacts`, while known pytest built-in fixtures may
   remain non-supporting external context;

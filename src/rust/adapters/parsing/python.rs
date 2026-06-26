@@ -2900,6 +2900,148 @@ def client():
     }
 
     #[test]
+    fn parse_document_honors_literal_pytest_fixture_name_aliases() {
+        let source = r#"
+import pytest
+
+fixture_name = "dynamic_client"
+fixture_alias = pytest.fixture
+
+@pytest.fixture(name="api_client")
+def _api_client():
+    return object()
+
+@pytest.fixture(name=fixture_name)
+def dynamic_client():
+    return object()
+
+@fixture_alias(name="settings")
+def _settings():
+    return object()
+
+@pytest.fixture(name="bad/client")
+def unsafe_client():
+    return object()
+
+def test_fixture_aliases(api_client, settings, _api_client, dynamic_client, unsafe_client):
+    assert api_client
+"#;
+        let report = PythonAstParser::default()
+            .parse(document_at("tests/test_fixture_alias_name.py", source))
+            .expect("parse literal fixture name aliases");
+
+        assert!(
+            report.semantic_facts.iter().any(|fact| {
+                fact.kind == SemanticFactKind::Symbol
+                    && fact.target.as_ref().map(SymbolId::as_str)
+                        == Some("pytest.fixture.api_client")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+            }),
+            "facts={:?}",
+            report.semantic_facts
+        );
+        assert!(
+            report.semantic_facts.iter().any(|fact| {
+                fact.kind == SemanticFactKind::Symbol
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.settings")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+            }),
+            "facts={:?}",
+            report.semantic_facts
+        );
+        for target in [
+            "pytest.fixture._api_client",
+            "pytest.fixture._settings",
+            "pytest.fixture.dynamic_client",
+            "pytest.fixture.unsafe_client",
+        ] {
+            assert!(
+                report.semantic_facts.iter().all(|fact| {
+                    !(fact.kind == SemanticFactKind::Symbol
+                        && fact.target.as_ref().map(SymbolId::as_str) == Some(target)
+                        && fact.assumptions.iter().any(|assumption| {
+                            assumption == "python_anchor_kind=pytest_fixture_edge"
+                        }))
+                }),
+                "fixture implementation name should not become a fixture binding target: {target}"
+            );
+        }
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }));
+        let debug = format!("{:?}", report);
+        assert!(!debug.contains("name=fixture_name"));
+        assert!(!debug.contains("bad/client"));
+        assert!(!debug.contains("return object"));
+    }
+
+    #[test]
+    fn parse_with_context_honors_conftest_literal_pytest_fixture_name_aliases() {
+        let source = r#"
+def test_fixture_aliases(api_client, _api_client):
+    assert api_client
+"#;
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "tests/conftest.py".to_string(),
+                "tests/sub/test_fixture_alias_name.py".to_string(),
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: vec![ParserProjectFileContext {
+                path: "tests/conftest.py".to_string(),
+                text: r#"
+import pytest
+
+@pytest.fixture(name="api_client")
+def _api_client():
+    return object()
+"#
+                .to_string(),
+            }],
+        };
+        let report = PythonAstParser::default()
+            .parse_with_context(
+                document_at("tests/sub/test_fixture_alias_name.py", source),
+                &context,
+            )
+            .expect("parse conftest literal fixture name alias");
+
+        assert!(
+            report.semantic_facts.iter().any(|fact| {
+                fact.kind == SemanticFactKind::Symbol
+                    && fact.target.as_ref().map(SymbolId::as_str)
+                        == Some("pytest.fixture.api_client")
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                    })
+            }),
+            "facts={:?}",
+            report.semantic_facts
+        );
+        assert!(report.semantic_facts.iter().all(|fact| {
+            !(fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture._api_client")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                }))
+        }));
+        let debug = format!("{:?}", report);
+        assert!(!debug.contains("tests/conftest.py"));
+        assert!(!debug.contains("return object"));
+    }
+
+    #[test]
     fn parse_document_rejects_protocol_drift_and_unsafe_fact_text() {
         let source = "def ok():\n    pass\n";
         let mut valid = valid_response(source, vec![valid_structural_fact(source)]);

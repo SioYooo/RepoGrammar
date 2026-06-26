@@ -214,14 +214,15 @@ anchors, typed SQLAlchemy session calls including `add`, `execute`, `scalar`,
 same-method reassignment invalidation, simple calls, bounded same-function
 FastAPI service-call context anchors,
 `pytest.test` test-function anchors, same-file
-and unique parent-directory `conftest.py` pytest fixture edges, known pytest
-built-in fixture context, FastAPI static
+and unique parent-directory `conftest.py` pytest fixture edges, literal
+pytest fixture `name=` aliases, known pytest built-in fixture context, FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
 `Cookie` request-shape anchors, path-derived module names, CPython `symtable`
 scope anchors, and typed dynamic decorator, dynamic call, monkey-patch,
-dynamic/unresolved/ambiguous import, duplicate conftest fixture, plugin fixture,
+dynamic/unresolved/ambiguous import, dynamic pytest fixture name, duplicate
+conftest fixture, plugin fixture,
 and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
@@ -368,9 +369,10 @@ not erase route-shape evidence and do not become family support. Canonical
 `pytest.mark.parametrize` decorator anchors can support pytest test families,
 but `pytest.parametrize.<name>` argument anchors remain context metadata and do
 not prove support. Known pytest built-in fixture context targets such as
-`pytest.builtin_fixture.tmp_path`, duplicate conftest fixture UNKNOWNs, and
-plugin-style fixture UNKNOWNs remain context/abstention metadata and do not
-prove support. Pydantic field, field-type, `model_config`, nested `Config`,
+`pytest.builtin_fixture.tmp_path`, dynamic fixture-name UNKNOWNs, duplicate
+conftest fixture UNKNOWNs, and plugin-style fixture UNKNOWNs remain
+context/abstention metadata and do not prove support. Pydantic field,
+field-type, `model_config`, nested `Config`,
 computed-field, field-validator, legacy validator, and model-validator anchors
 likewise stay model schema/config/member metadata and do not prove membership
 support. FastAPI service-call anchors stay handler/service context metadata and

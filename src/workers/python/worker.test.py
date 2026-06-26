@@ -1287,6 +1287,79 @@ assert "tests/conftest.py" not in serialized_fixture_boundaries
 assert "return object" not in serialized_fixture_boundaries
 assert "django_db" not in serialized_fixture_boundaries
 
+fixture_name_alias_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/test_fixture_alias_name.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["tests/test_fixture_alias_name.py"],
+        "source_roots": [],
+        "conftest_files": [],
+        "text": """
+import pytest
+
+fixture_name = "dynamic_client"
+fixture_alias = pytest.fixture
+
+@pytest.fixture(name="api_client")
+def _api_client():
+    return object()
+
+@pytest.fixture(name=fixture_name)
+def dynamic_client():
+    return object()
+
+@fixture_alias(name="settings")
+def _settings():
+    return object()
+
+@pytest.fixture(name="bad/client")
+def unsafe_client():
+    return object()
+
+def test_fixture_aliases(api_client, settings, _api_client, dynamic_client, unsafe_client):
+    assert api_client
+""",
+    }
+)
+fixture_name_alias_facts = fixture_name_alias_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.api_client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.settings"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"]
+    in {
+        "pytest.fixture._api_client",
+        "pytest.fixture._settings",
+        "pytest.fixture.dynamic_client",
+        "pytest.fixture.unsafe_client",
+    }
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+serialized_fixture_name_aliases = json.dumps(fixture_name_alias_messages)
+assert "name=fixture_name" not in serialized_fixture_name_aliases
+assert "bad/client" not in serialized_fixture_name_aliases
+assert "return object" not in serialized_fixture_name_aliases
+
 ambiguous_context_messages = run_worker(
     {
         "protocol_version": 1,

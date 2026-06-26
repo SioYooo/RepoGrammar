@@ -152,13 +152,14 @@ allowed.
   `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
   dependency-target/dependency-call/error/status-code anchors, static FastAPI
   request body/path/query/header/cookie marker anchors, pytest fixture
-  decorator aliases, pytest parametrize decorator and literal argument anchors,
-  direct-parametrize-over-fixture precedence, indirect parametrize remaining
-  typed `PytestFixtureInjection` `UNKNOWN`, duplicate applicable conftest
-  fixtures becoming fixture-binding `ConflictingFacts`, known pytest built-in
-  fixtures becoming external context rather than missing-fixture UNKNOWNs,
-  plugin-style fixture names remaining typed `PytestFixtureInjection`
-  `UNKNOWN`, Pydantic field, field-type,
+  decorator aliases, literal pytest fixture `name=` aliases, dynamic fixture
+  names remaining typed `PytestFixtureInjection` `UNKNOWN`, pytest parametrize
+  decorator and literal argument anchors, direct-parametrize-over-fixture
+  precedence, indirect parametrize remaining typed `PytestFixtureInjection`
+  `UNKNOWN`, duplicate applicable conftest fixtures becoming fixture-binding
+  `ConflictingFacts`, known pytest built-in fixtures becoming external context
+  rather than missing-fixture UNKNOWNs, plugin-style fixture names remaining
+  typed `PytestFixtureInjection` `UNKNOWN`, Pydantic field, field-type,
   model-config, nested Config, computed-field, validator, and model-validator
   anchors,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,

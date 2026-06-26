@@ -297,12 +297,13 @@ same-function FastAPI service-call context anchors, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, `pytest.test`
-test-function anchors, same-file pytest fixture edges, known pytest built-in
-fixture context, literal pytest parametrize argument anchors, path-derived
-module names, and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts
-for dynamic import, unresolved import, framework magic, duplicate conftest
-fixture bindings, plugin-style fixture names without an allowlist or provider,
-and unresolved pytest fixture injection cases. Literal pytest parametrize
+test-function anchors, same-file pytest fixture edges with literal `name=`
+aliases, known pytest built-in fixture context, literal pytest parametrize
+argument anchors, path-derived module names, and CPython `symtable` scope
+anchors, plus typed `UNKNOWN` facts for dynamic import, unresolved import,
+framework magic, dynamic pytest fixture names, duplicate conftest fixture
+bindings, plugin-style fixture names without an allowlist or provider, and
+unresolved pytest fixture injection cases. Literal pytest parametrize
 arguments are structural parametrize facts, not unresolved fixture injections.
 Pydantic field,
 field-type, config, computed-field, and model-validator anchors are
@@ -313,7 +314,8 @@ discovered repo-relative `.py` inventory plus bounded, hash-checked discovered
 `conftest.py` file contents into that private parse-document request, so unique
 repo-local module imports and parent-directory pytest fixture bindings can be
 recorded as `STRUCTURAL` source-tied parser facts, known pytest built-ins can be
-recorded as external fixture context, and ambiguous/missing imports, duplicate
+recorded as external fixture context, and ambiguous/missing imports, dynamic
+fixture names, duplicate
 conftest fixtures, or unresolved plugin fixtures remain typed `UNKNOWN`s. The
 semantic-worker-compatible Python project mode can also resolve requested
 unique `conftest.py` fixture names through pytest's parent-directory hierarchy

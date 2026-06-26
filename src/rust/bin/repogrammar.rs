@@ -1637,6 +1637,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn python_release_dynamic_pytest_fixture_name_stays_unknown_without_claims() {
+        let workspace = TempWorkspace::new("python-release-dynamic-fixture-name");
+        copy_python_release_fixture("pytest-dynamic-fixture-name", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_stored_python_unknown_fact(
+            &facts.facts,
+            "conftest.py",
+            "PytestFixtureInjection",
+            "pytest_fixture_binding",
+        );
+        assert_stored_python_unknown_fact(
+            &facts.facts,
+            "test_fixture_names.py",
+            "PytestFixtureInjection",
+            "pytest_fixture_binding",
+        );
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.fixture.dynamic_client")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_fixture_edge"
+                        || assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                }))
+        }));
+        assert_targets_blocked_from_claim_input(
+            &workspace,
+            &store,
+            &facts.facts,
+            &["PytestFixtureInjection"],
+        );
+        assert_no_derived_python_support_for_targets(
+            &facts.facts,
+            &["pytest.fixture.dynamic_client", "PytestFixtureInjection"],
+        );
+        assert_no_dynamic_boundary_fact_leakage(&workspace, &facts.facts);
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_unknown_query_json("families", &families_json);
+        assert_no_claim_payload("families", &families_json);
+    }
+
     #[cfg(unix)]
     #[test]
     fn product_runtime_strong_worker_support_produces_family_then_stale_unknown() {
@@ -1779,6 +1850,28 @@ mod tests {
                     && fact.origin_method == "cpython_ast"
                     && fact.certainty == "DATAFLOW_DERIVED")
             }));
+            if case.fixture == "pytest-fixture-alias-strong-evidence" {
+                assert!(
+                    facts.facts.iter().any(|fact| {
+                        fact.path == "test_fixture_names.py"
+                            && fact.kind == "SYMBOL"
+                            && fact.target.as_deref() == Some("pytest.fixture.api_client")
+                            && fact.assumptions.iter().any(|assumption| {
+                                assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                            })
+                    }),
+                    "facts={:?}",
+                    facts.facts
+                );
+                assert!(facts.facts.iter().all(|fact| {
+                    !(fact.path == "test_fixture_names.py"
+                        && fact.kind == "SYMBOL"
+                        && fact.target.as_deref() == Some("pytest.fixture._api_client")
+                        && fact.assumptions.iter().any(|assumption| {
+                            assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                        }))
+                }));
+            }
 
             let families = run_with_runtime(
                 cli_args("families", workspace.path(), &["--json"]),

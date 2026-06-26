@@ -66,6 +66,9 @@
   evidence. Dynamic FastAPI dependency target expressions such as
   `Depends(make_dependency())` now produce typed `RuntimeDependencyInjection`
   UNKNOWNs for the dependency-target sub-claim instead of silently disappearing.
+  Literal pytest fixture `name=` aliases now define the fixture binding name,
+  while dynamic or unsafe `name=` values remain typed `PytestFixtureInjection`
+  UNKNOWNs instead of falling back to the implementation function name.
   Duplicate applicable pytest `conftest.py` fixture names now produce typed
   `ConflictingFacts` UNKNOWNs for fixture binding, known pytest built-in
   fixtures such as `tmp_path` and `capsys` become metadata-only
@@ -75,6 +78,9 @@
   mutation, dynamic FastAPI dependency targets, pytest fixture-binding
   ambiguity/plugin UNKNOWNs, dynamic call target, dynamic decorator, and
   monkey-patch boundaries through the product indexing/query path.
+  A dedicated `pytest-dynamic-fixture-name` release fixture verifies dynamic
+  pytest fixture `name=` values stay UNKNOWN through the product path without
+  producing fixture-binding support.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming

@@ -12,6 +12,6 @@ def db():
     return object()
 
 
-@pt.fixture
-def settings():
+@pt.fixture(name="api_client")
+def _api_client():
     return object()

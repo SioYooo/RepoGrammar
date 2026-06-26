@@ -344,23 +344,62 @@ def has_pytest_fixture_decorator(
     )
 
 
+def pytest_fixture_binding_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> tuple[list[str], bool]:
+    aliases = aliases or {}
+    assignments = assignments or {}
+    names: set[str] = set()
+    has_unknown_name = False
+    for decorator in getattr(node, "decorator_list", []):
+        raw_name = dotted_name(decorator)
+        if raw_name is None or canonical_name(raw_name, aliases, assignments) not in {
+            "fixture",
+            "pytest.fixture",
+        }:
+            continue
+        explicit_name = False
+        if isinstance(decorator, ast.Call):
+            for keyword in decorator.keywords:
+                if keyword.arg != "name":
+                    continue
+                explicit_name = True
+                if isinstance(keyword.value, ast.Constant) and keyword.value.value is None:
+                    names.add(node.name)
+                elif isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
+                    candidate = keyword.value.value
+                    if is_safe_fact_target(f"pytest.fixture.{candidate}"):
+                        names.add(candidate)
+                    else:
+                        has_unknown_name = True
+                else:
+                    has_unknown_name = True
+        if not explicit_name:
+            names.add(node.name)
+    return sorted(names), has_unknown_name
+
+
 def pytest_fixture_names_from_tree(
     tree: ast.Module,
     aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
 ) -> set[str]:
-    return set(pytest_fixture_name_counts_from_tree(tree, aliases))
+    return set(pytest_fixture_name_counts_from_tree(tree, aliases, assignments))
 
 
 def pytest_fixture_name_counts_from_tree(
     tree: ast.Module,
     aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in tree.body:
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(
-            item, aliases
-        ):
-            counts[item.name] = counts.get(item.name, 0) + 1
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names, _has_unknown_name = pytest_fixture_binding_names(item, aliases, assignments)
+            for name in names:
+                counts[name] = counts.get(name, 0) + 1
     return counts
 
 
@@ -860,6 +899,11 @@ def assignment_role(
         return None
     if isinstance(value, ast.Name):
         return assignments.get(value.id) or aliases.get(value.id)
+    name = dotted_name(value)
+    if name:
+        canonical = canonical_name(name, aliases, assignments)
+        if canonical == "pytest.fixture":
+            return canonical
     return None
 
 
@@ -2135,7 +2179,7 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
-    fixture_name_counts = pytest_fixture_name_counts_from_tree(tree, aliases)
+    fixture_name_counts = pytest_fixture_name_counts_from_tree(tree, aliases, assignments)
 
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -2186,6 +2230,21 @@ def analyze_source(
                 defined_names,
                 facts,
             )
+            _fixture_names, has_unknown_fixture_name = pytest_fixture_binding_names(
+                item, aliases, assignments
+            )
+            if has_unknown_fixture_name:
+                start, end = node_range(starts, item)
+                add_pytest_fixture_unknown(
+                    facts,
+                    subject_unit_id,
+                    "PytestFixtureInjection",
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    start,
+                    end,
+                )
             if unit_by_node[id(item)]["kind"] == "fastapi_route":
                 collect_fastapi_parameter_facts(
                     item,
@@ -2549,7 +2608,8 @@ def pytest_fixture_name_counts(source: str) -> dict[str, int]:
         "UNKNOWN",
         "unit:conftest.py#module:module:0-0:0",
     )
-    return pytest_fixture_name_counts_from_tree(tree, aliases)
+    assignments = collect_assignment_roles(tree, aliases)
+    return pytest_fixture_name_counts_from_tree(tree, aliases, assignments)
 
 
 def pytest_fixture_names(source: str) -> set[str]:

@@ -83,9 +83,10 @@ The current implementation covers the first structural slice only:
 - CPython `ast` structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, bounded same-function application call
   targets, pytest test-function anchors, alias-aware pytest fixture decorators,
-  same-file pytest fixture edges, literal pytest parametrize argument anchors,
-  typed dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
-  monkey-patch, and unresolved import `UNKNOWN` facts;
+  literal pytest fixture `name=` aliases, same-file pytest fixture edges,
+  literal pytest parametrize argument anchors, typed dynamic import, `sys.path`
+  mutation, dynamic call, dynamic decorator, monkey-patch, dynamic pytest
+  fixture-name, and unresolved import `UNKNOWN` facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -138,11 +139,14 @@ The current implementation covers the first structural slice only:
   structural facts; they do not become provider-backed semantic facts. Direct
   pytest parametrize arguments take precedence over same-name fixture bindings,
   indirect parametrize arguments remain typed `PytestFixtureInjection`
-  `UNKNOWN`, duplicate applicable conftest fixture names become
-  `ConflictingFacts` for `pytest_fixture_binding`, known pytest built-in
-  fixtures become `pytest.builtin_fixture.*` context anchors, plugin-style
-  fixtures remain `PytestFixtureInjection` `UNKNOWN` until an allowlist or
-  provider resolves them, fixture-edge, builtin-fixture, and
+  `UNKNOWN`, literal `@pytest.fixture(name="...")` values replace the
+  implementation function name for fixture binding, dynamic or unsafe fixture
+  `name=` values become `PytestFixtureInjection` for `pytest_fixture_binding`,
+  duplicate applicable conftest fixture names become `ConflictingFacts` for
+  `pytest_fixture_binding`, known pytest built-in fixtures become
+  `pytest.builtin_fixture.*` context anchors, plugin-style fixtures remain
+  `PytestFixtureInjection` `UNKNOWN` until an allowlist or provider resolves
+  them, fixture-edge, builtin-fixture, and
   parametrize-argument anchors stay out of family membership support, and
   Pydantic member/config metadata likewise does not become support;
 - bounded same-function application call recovery for import-resolved static forms such as
@@ -180,9 +184,10 @@ The current implementation covers the first structural slice only:
   the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
-  dynamic-unknown, low-support, strong-evidence, and stale-evidence smoke
-  coverage. The dynamic-unknown fixture covers dynamic import, `sys.path`
-  mutation, dynamic call target, dynamic decorator, and monkey-patch boundaries;
+  dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
+  and stale-evidence smoke coverage. The dynamic-unknown fixture covers dynamic
+  import, `sys.path` mutation, dynamic call target, dynamic decorator, and
+  monkey-patch boundaries;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,
@@ -525,7 +530,9 @@ source of Python test-family evidence.
 
 Algorithm:
 
-1. Collect `@pytest.fixture` definitions.
+1. Collect `@pytest.fixture` definitions. Literal `name="..."` aliases become
+   the fixture binding name; dynamic or unsafe `name=` values do not fall back
+   to the implementation function name.
 2. Collect `conftest.py` files by directory hierarchy.
 3. Collect test function parameters.
 4. Classify direct `pytest.mark.parametrize` arguments before fixture lookup.
@@ -699,6 +706,7 @@ The following conditions must produce typed `UNKNOWN` for affected claims:
 - unresolved decorators;
 - runtime dependency injection;
 - ambiguous pytest fixture injection;
+- dynamic or unsafe pytest fixture `name=` aliases;
 - duplicate applicable `conftest.py` fixture names without provider resolution;
 - plugin-style pytest fixture names without an allowlist or provider;
 - missing project configuration;
