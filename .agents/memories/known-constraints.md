@@ -102,6 +102,15 @@ analysis rules.
 - The default v0.1 MCP surface is one `repogrammar_context` tool with explicit
   operations, while CLI remains multi-command.
 - Anonymous telemetry and research trace collection are separate consent paths.
+  Anonymous telemetry is disabled by default, allowlist-validated, explicit
+  upload only, and blocked by `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, or
+  CI. Anonymous payloads must not contain repository instance ids, repository
+  root hashes, paths, symbols, content hashes, byte ranges, raw targets, source,
+  prompts, query text, patches, diffs, env vars, credentials, or raw errors.
+  Telemetry export is inspect-only, and experiment export is redacted by
+  default.
+  Local stats must not report measured token savings without comparable paired
+  baseline/treatment token measurements and a measurement source.
 - Static uncertainty must be represented as typed `UNKNOWN`; dynamic behavior,
   conflicting facts, stale evidence, and insufficient support must not be
   guessed away.

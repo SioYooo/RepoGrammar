@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repogrammar.local/schemas/telemetry-v1.schema.json",
+  "title": "RepoGrammar Anonymous Telemetry Payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repogrammar_version",
+    "os_family",
+    "agent_target",
+    "event_window_day_utc",
+    "anonymous_machine_id",
+    "eligible_code_units_bucket",
+    "family_count_bucket",
+    "family_support_coverage_bucket",
+    "local_pattern_density_bucket",
+    "abstention_rate_bucket",
+    "external_dependency_signal",
+    "thin_wrapper_risk",
+    "token_saving_risk",
+    "command_category_counts_bucket",
+    "mcp_call_count_bucket",
+    "read_plan_returned_count_bucket",
+    "read_plan_item_count_bucket",
+    "unknown_reason_code_counts_bucket",
+    "typed_error_code_counts_bucket",
+    "source_snippets_returned",
+    "measured_token_savings_bucket"
+  ],
+  "properties": {
+    "schema_version": { "const": "telemetry.v1" },
+    "repogrammar_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "os_family": { "enum": ["macos", "linux", "windows", "other"] },
+    "agent_target": { "enum": ["codex", "claude-code", "unknown"] },
+    "event_window_day_utc": { "type": "integer", "minimum": 0 },
+    "anonymous_machine_id": {
+      "type": "string",
+      "pattern": "^anon-[0-9a-f]{64}$"
+    },
+    "eligible_code_units_bucket": { "$ref": "#/$defs/countBucket" },
+    "family_count_bucket": { "$ref": "#/$defs/countBucket" },
+    "family_support_coverage_bucket": { "$ref": "#/$defs/ratioBucket" },
+    "local_pattern_density_bucket": { "$ref": "#/$defs/ratioBucket" },
+    "abstention_rate_bucket": { "$ref": "#/$defs/ratioBucket" },
+    "external_dependency_signal": { "$ref": "#/$defs/riskBucket" },
+    "thin_wrapper_risk": { "$ref": "#/$defs/riskBucket" },
+    "token_saving_risk": { "$ref": "#/$defs/riskBucket" },
+    "command_category_counts_bucket": { "$ref": "#/$defs/countBucketMap" },
+    "mcp_call_count_bucket": { "$ref": "#/$defs/countBucket" },
+    "read_plan_returned_count_bucket": { "$ref": "#/$defs/countBucket" },
+    "read_plan_item_count_bucket": { "$ref": "#/$defs/countBucket" },
+    "unknown_reason_code_counts_bucket": { "$ref": "#/$defs/countBucketMap" },
+    "typed_error_code_counts_bucket": { "$ref": "#/$defs/countBucketMap" },
+    "source_snippets_returned": { "const": false },
+    "measured_token_savings_bucket": {
+      "anyOf": [
+        { "type": "null" },
+        { "enum": ["negative", "0", "1-999", "1000-9999", "10000+"] }
+      ]
+    }
+  },
+  "$defs": {
+    "countBucketMap": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/countBucket" }
+    },
+    "countBucket": {
+      "enum": ["0", "1-2", "3-9", "10-49", "50-199", "200+"]
+    },
+    "ratioBucket": {
+      "enum": ["unknown", "0", "0-25", "25-50", "50-75", "75-100"]
+    },
+    "riskBucket": {
+      "enum": ["unknown", "low", "medium", "high"]
+    }
+  }
+}

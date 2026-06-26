@@ -202,6 +202,7 @@ snippets or absolute paths.
 - `--dry-run`
 - `--yes`
 - `--print-config`
+- `--telemetry`
 - `--no-telemetry`
 - `--no-permissions`
 
@@ -220,8 +221,9 @@ configuration succeeds; `uninstall` removes only receipt-owned managed entries.
 `repogrammar stats` reports repo-shape diagnostics for initialized repositories
 with an active readable generation. With `--json`, it must return a parseable
 object with `implemented: true`, the active generation, metric-kind vocabulary,
-`null` values for measured `token_savings` and
-`context_compression_ratio`, and diagnostic metrics:
+`null` values for measured `token_savings`, `token_savings_ratio`,
+`measurement_source`, and `context_compression_ratio` unless a comparable local
+paired token experiment exists, and diagnostic metrics:
 
 - `local_pattern_density`
 - `family_support_coverage`
@@ -236,6 +238,51 @@ guessed. The output must not include source snippets, query text, repository
 names, or absolute paths. If repository state or the active index is missing,
 `stats --json` uses the same missing-index fallback shape as implemented
 inventory commands and keeps `implemented: true`.
+
+`repogrammar telemetry` owns anonymous product telemetry consent, explicit
+upload, research trace consent, and local paired token experiment recording.
+Telemetry is disabled by default. `REPOGRAMMAR_TELEMETRY=0`,
+`DO_NOT_TRACK=1`, and CI force effective telemetry off and prevent upload
+network activity. Supported subcommands are:
+
+- `telemetry status [--json]`
+- `telemetry on [--json]`
+- `telemetry off [--json]`
+- `telemetry export [--json]`
+- `telemetry upload [--json] [--dry-run] [--yes] [--endpoint <url>]`
+- `telemetry purge [--json] --yes`
+- `telemetry research-status|research-on|research-off|research-export|research-purge`
+- `telemetry experiment-start|experiment-record|experiment-stop|experiment-report|experiment-export|experiment-purge`
+
+Upload uses `REPOGRAMMAR_TELEMETRY_ENDPOINT` when `--endpoint` is not supplied.
+Endpoints must be HTTPS except localhost test endpoints. No endpoint configured
+returns a parseable not-uploaded result. `upload --dry-run` validates and
+prints the exact allowlisted payload without opening a network connection.
+Non-dry-run upload requires `--yes`.
+`telemetry export --json` is inspect-only and does not create a queue or
+rollup.
+
+Paired token measurements are local only unless the user also opts into
+anonymous telemetry upload of aggregate buckets. Actual token savings are:
+
+```text
+baseline_total_tokens - treatment_total_tokens
+```
+
+They are reported only when comparable baseline and treatment sessions share a
+measurement source. Accepted sources are `host_reported`, `user_entered`, and
+`documented_tokenizer`.
+Experiment start requires explicit `--yes` in non-interactive use.
+`--experiment-mode record-existing` records counts from already performed
+sessions and usually does not increase token usage. `--experiment-mode
+controlled-pair` records comparable baseline/treatment measurements and warns
+that users may spend additional time, tokens, and provider cost if they choose
+to run separate sessions. `--session baseline|treatment` identifies the
+measurement side. If treatment correctness fails, reports keep the raw token
+delta but mark the result invalid for product token-saving claims.
+`experiment-export --json` is redacted by default and must not include the
+user-provided experiment name, session ids, raw token counts, prompts, paths,
+repository names, symbols, or source.
 
 ## Disallowed top-level graph commands
 

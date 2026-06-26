@@ -22,9 +22,20 @@ use crate::application::repository::{
     RepositoryStatusRequest, RepositoryUninitOutcome, RepositoryUninitRequest,
     RepositoryUnlockReport, RepositoryUnlockRequest,
 };
+use crate::application::telemetry::{
+    experiment_export, experiment_purge, experiment_record, experiment_report,
+    experiment_report_json, experiment_start, experiment_stop, export_anonymous_telemetry,
+    latest_comparable_experiment_report, purge_telemetry, research_export, research_purge,
+    set_anonymous_telemetry, set_research_trace, telemetry_disabled_by_environment,
+    telemetry_status, upload_anonymous_telemetry, validate_telemetry_endpoint, ExperimentMode,
+    ExperimentRecordRequest, ExperimentStartRequest, ExperimentWorkflowMode, MeasurementSource,
+    TelemetryDiagnostics, TelemetryExportReport, TelemetryPaths, TelemetryPurgeReport,
+    TelemetryStatusReport, TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
+    TelemetryUploadTransport, TestOutcome,
+};
 use crate::error::RepoGrammarError;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliIndexRequest {
@@ -97,6 +108,15 @@ pub trait CliRuntime {
         _context: InstallExecutionContext,
     ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("install"))
+    }
+
+    fn upload_telemetry_payload(
+        &self,
+        _endpoint: &str,
+        _payload: &str,
+        _timeout: std::time::Duration,
+    ) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("telemetry upload"))
     }
 }
 
@@ -222,7 +242,9 @@ where
         [command, rest @ ..] if command == "stats" => {
             handle_stats(rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if command == "telemetry" => handle_telemetry(rest),
+        [command, rest @ ..] if command == "telemetry" => {
+            handle_telemetry(rest, current_dir, env_lookup, runtime)
+        }
         [command] if is_forbidden_graph_command(command) => CliOutput::failure(
             2,
             format!(
@@ -950,10 +972,13 @@ where
         );
     }
 
-    let request = match parse_install_options(rest) {
+    let mut request = match parse_install_options(rest) {
         Ok(request) => request,
         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
     };
+    if telemetry_disabled_by_environment(env_lookup) {
+        request.telemetry_enabled = false;
+    }
     let plan = plan_install(&request);
 
     if request.dry_run {
@@ -966,6 +991,9 @@ where
         if request.print_config {
             output.push_str("config preview: absolute executable path, MCP self-test, reversible receipt, and marker-fenced instruction edits are required\n");
         }
+        output.push_str(
+            "anonymous telemetry does not run paired token-saving experiments or add model calls\n",
+        );
         CliOutput::success(output)
     } else {
         if !request.assume_yes {
@@ -978,8 +1006,17 @@ where
             Ok(context) => context,
             Err(error) => return CliOutput::failure(2, format!("{error}\n")),
         };
-        match runtime.install_agent_integration(command, request, context) {
-            Ok(outcome) => CliOutput::success(install_outcome_human(&outcome)),
+        match runtime.install_agent_integration(command, request.clone(), context.clone()) {
+            Ok(outcome) => {
+                let mut output = install_outcome_human(&outcome);
+                if command == "install" {
+                    match apply_install_telemetry_preference(&request, &context, env_lookup) {
+                        Ok(status) => output.push_str(&install_telemetry_human(&status)),
+                        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+                    }
+                }
+                CliOutput::success(output)
+            }
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         }
     }
@@ -1008,6 +1045,23 @@ where
         data_dir,
         current_dir: current_dir.display().to_string(),
     })
+}
+
+fn apply_install_telemetry_preference<F>(
+    request: &InstallRequest,
+    context: &InstallExecutionContext,
+    env_lookup: &F,
+) -> Result<TelemetryStatusReport, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let paths = TelemetryPaths {
+        global_data_dir: PathBuf::from(&context.data_dir),
+        repository_root: PathBuf::from(&context.current_dir),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    set_anonymous_telemetry(&paths, request.telemetry_enabled)?;
+    telemetry_status(&paths, None, env_lookup)
 }
 
 fn default_install_data_dir<F>(env_lookup: &F) -> Result<String, String>
@@ -1043,6 +1097,15 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
         outcome.scope.as_str(),
         if targets.is_empty() { "none" } else { &targets },
         outcome.receipt_paths.len()
+    )
+}
+
+fn install_telemetry_human(report: &TelemetryStatusReport) -> String {
+    format!(
+        "telemetry={}\neffective_telemetry={}\ndisabled_by_environment={}\nexperiments=separate opt-in; controlled-pair may increase token usage, time, and provider cost\n",
+        if report.enabled { "on" } else { "off" },
+        if report.effective_enabled { "on" } else { "off" },
+        report.disabled_by_environment
     )
 }
 
@@ -1097,7 +1160,12 @@ where
 
     if options.json {
         return match runtime.repo_shape_diagnostics(request) {
-            Ok(report) => CliOutput::success(stats_json(&report)),
+            Ok(report) => {
+                let measurement = telemetry_global_data_dir(env_lookup)
+                    .ok()
+                    .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
+                CliOutput::success(stats_json(&report, measurement.as_ref()))
+            }
             Err(_) => query_fallback(
                 "stats",
                 true,
@@ -1167,7 +1235,18 @@ fn stats_human(report: &RepoShapeDiagnosticsReport) -> String {
     )
 }
 
-fn stats_json(report: &RepoShapeDiagnosticsReport) -> String {
+fn stats_json(
+    report: &RepoShapeDiagnosticsReport,
+    measurement: Option<&crate::application::telemetry::ExperimentReport>,
+) -> String {
+    let measurement_status = if measurement
+        .and_then(|measurement| measurement.token_savings)
+        .is_some()
+    {
+        "paired_measurement_available"
+    } else {
+        "no_paired_measurement"
+    };
     json_line(json!({
         "command": "stats",
         "status": "ok",
@@ -1188,7 +1267,12 @@ fn stats_json(report: &RepoShapeDiagnosticsReport) -> String {
             "covered_code_units": report.covered_code_units,
         },
         "metric_kinds": ["MEASURED", "DERIVED", "ESTIMATED", "CAUSAL_EXPERIMENT"],
-        "token_savings": null,
+        "token_savings": measurement.and_then(|measurement| measurement.token_savings),
+        "token_savings_ratio": measurement.and_then(|measurement| measurement.token_savings_ratio),
+        "measurement_source": measurement.and_then(|measurement| measurement.measurement_source.as_deref()),
+        "measurement_status": measurement_status,
+        "measurement_reason": measurement.and_then(|measurement| measurement.reason.as_deref()),
+        "claim_validity": measurement.map(|measurement| measurement.claim_validity.as_str()).unwrap_or("unknown"),
         "context_compression_ratio": null,
         "interpretation": report.interpretation,
         "claim": "diagnostic only; token saving depends on repeated repo-local patterns and is not measured token savings",
@@ -1208,21 +1292,975 @@ fn optional_ratio_human(value: Option<f64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn handle_telemetry(rest: &[String]) -> CliOutput {
-    match rest {
-        [] => CliOutput::success("telemetry: anonymous=off, research-trace=off\n"),
-        [command] if command == "status" => {
-            CliOutput::success("telemetry: anonymous=off, research-trace=off\n")
+fn handle_telemetry<F>(
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let (command, command_rest) = match rest.split_first() {
+        Some((command, rest)) => (command.as_str(), rest),
+        None => ("status", &[][..]),
+    };
+    match command {
+        "status" => {
+            let options = match parse_telemetry_options(command_rest) {
+                Ok(options) => options,
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            };
+            let paths =
+                match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+                    Ok(paths) => paths,
+                    Err(error) => return telemetry_error("status", options.json, error),
+                };
+            let endpoint = options
+                .endpoint
+                .clone()
+                .or_else(|| env_lookup("REPOGRAMMAR_TELEMETRY_ENDPOINT"));
+            match telemetry_status(&paths, endpoint.as_deref(), env_lookup) {
+                Ok(report) if options.json => CliOutput::success(telemetry_status_json(&report)),
+                Ok(report) => CliOutput::success(telemetry_status_human(&report)),
+                Err(error) => telemetry_error("status", options.json, error),
+            }
         }
-        [command] if matches!(command.as_str(), "on" | "off" | "purge" | "export") => {
-            CliOutput::failure(
-                2,
-                format!(
-                    "repogrammar telemetry {command} is not implemented yet; telemetry consent and local storage writes are deferred\n"
-                ),
-            )
+        "on" | "off" => {
+            let options = match parse_telemetry_options(command_rest) {
+                Ok(options) => options,
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            };
+            let paths =
+                match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+                    Ok(paths) => paths,
+                    Err(error) => return telemetry_error(command, options.json, error),
+                };
+            match set_anonymous_telemetry(&paths, command == "on")
+                .and_then(|_| telemetry_status(&paths, None, env_lookup))
+            {
+                Ok(report) if options.json => CliOutput::success(telemetry_status_json(&report)),
+                Ok(report) => CliOutput::success(telemetry_status_human(&report)),
+                Err(error) => telemetry_error(command, options.json, error),
+            }
         }
-        [unknown, ..] => CliOutput::failure(2, format!("unknown telemetry command: {unknown}\n")),
+        "export" => {
+            let options = match parse_telemetry_options(command_rest) {
+                Ok(options) => options,
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            };
+            let paths =
+                match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+                    Ok(paths) => paths,
+                    Err(error) => return telemetry_error("export", options.json, error),
+                };
+            let diagnostics = telemetry_diagnostics(
+                current_dir,
+                env_lookup,
+                runtime,
+                options.project_path.as_deref(),
+            );
+            let measurement = telemetry_global_data_dir(env_lookup)
+                .ok()
+                .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
+            match export_anonymous_telemetry(
+                &paths,
+                env!("CARGO_PKG_VERSION"),
+                diagnostics,
+                measurement.as_ref(),
+            ) {
+                Ok(report) if options.json => CliOutput::success(telemetry_export_json(&report)),
+                Ok(report) => CliOutput::success(format!(
+                    "telemetry export: payload_bytes={}\nsource_snippets_returned=false\n",
+                    report.payload_bytes
+                )),
+                Err(error) => telemetry_error("export", options.json, error),
+            }
+        }
+        "upload" => {
+            let options = match parse_telemetry_options(command_rest) {
+                Ok(options) => options,
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            };
+            if !options.dry_run && !options.yes {
+                return telemetry_error(
+                    "upload",
+                    options.json,
+                    RepoGrammarError::InvalidInput(
+                        "telemetry upload requires --yes unless --dry-run is set".to_string(),
+                    ),
+                );
+            }
+            let paths =
+                match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+                    Ok(paths) => paths,
+                    Err(error) => return telemetry_error("upload", options.json, error),
+                };
+            let endpoint = options
+                .endpoint
+                .clone()
+                .or_else(|| env_lookup("REPOGRAMMAR_TELEMETRY_ENDPOINT"));
+            let diagnostics = telemetry_diagnostics(
+                current_dir,
+                env_lookup,
+                runtime,
+                options.project_path.as_deref(),
+            );
+            let measurement = telemetry_global_data_dir(env_lookup)
+                .ok()
+                .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
+            let transport = RuntimeTelemetryTransport { runtime };
+            match upload_anonymous_telemetry(
+                &paths,
+                TelemetryUploadRequest {
+                    endpoint,
+                    dry_run: options.dry_run,
+                },
+                env!("CARGO_PKG_VERSION"),
+                diagnostics,
+                measurement.as_ref(),
+                env_lookup,
+                &transport,
+            ) {
+                Ok(report) if options.json => {
+                    let status = if telemetry_upload_should_fail(&report) {
+                        2
+                    } else {
+                        0
+                    };
+                    cli_output_with_status(status, telemetry_upload_json(&report), String::new())
+                }
+                Ok(report) => {
+                    if telemetry_upload_should_fail(&report) {
+                        CliOutput::failure(
+                            2,
+                            format!(
+                                "telemetry upload: not_uploaded\nreason: {}\n",
+                                report.reason.unwrap_or_else(|| "not uploaded".to_string())
+                            ),
+                        )
+                    } else {
+                        CliOutput::success(telemetry_upload_human(&report))
+                    }
+                }
+                Err(error) => telemetry_error("upload", options.json, error),
+            }
+        }
+        "purge" => {
+            let options = match parse_telemetry_options(command_rest) {
+                Ok(options) => options,
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            };
+            let paths =
+                match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+                    Ok(paths) => paths,
+                    Err(error) => return telemetry_error("purge", options.json, error),
+                };
+            match purge_telemetry(&paths, options.yes) {
+                Ok(report) if options.json => {
+                    CliOutput::success(telemetry_purge_json("purge", &report))
+                }
+                Ok(report) => CliOutput::success(telemetry_purge_human("telemetry purge", &report)),
+                Err(error) => telemetry_error("purge", options.json, error),
+            }
+        }
+        "research-status" => {
+            handle_research("research-status", command_rest, current_dir, env_lookup)
+        }
+        "research-on" => handle_research("research-on", command_rest, current_dir, env_lookup),
+        "research-off" => handle_research("research-off", command_rest, current_dir, env_lookup),
+        "research-export" => {
+            handle_research("research-export", command_rest, current_dir, env_lookup)
+        }
+        "research-purge" => {
+            handle_research("research-purge", command_rest, current_dir, env_lookup)
+        }
+        "experiment-start" => handle_experiment_start(command_rest, env_lookup),
+        "experiment-record" => handle_experiment_record(command_rest, env_lookup),
+        "experiment-stop" => handle_experiment_stop(command_rest, env_lookup),
+        "experiment-report" => handle_experiment_report(command_rest, env_lookup),
+        "experiment-export" => handle_experiment_export(command_rest, env_lookup),
+        "experiment-purge" => handle_experiment_purge(command_rest, env_lookup),
+        unknown => CliOutput::failure(2, format!("unknown telemetry command: {unknown}\n")),
+    }
+}
+
+struct RuntimeTelemetryTransport<'a, R> {
+    runtime: &'a R,
+}
+
+impl<R: CliRuntime> TelemetryUploadTransport for RuntimeTelemetryTransport<'_, R> {
+    fn upload(
+        &self,
+        endpoint: &str,
+        payload: &str,
+        timeout: std::time::Duration,
+    ) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+        self.runtime
+            .upload_telemetry_payload(endpoint, payload, timeout)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct TelemetryCliOptions {
+    json: bool,
+    project_path: Option<String>,
+    yes: bool,
+    dry_run: bool,
+    endpoint: Option<String>,
+}
+
+fn parse_telemetry_options(rest: &[String]) -> Result<TelemetryCliOptions, String> {
+    let mut options = TelemetryCliOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--project" => {
+                let value = option_value(rest, index, "--project", "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--yes" => {
+                options.yes = true;
+                index += 1;
+            }
+            "--dry-run" => {
+                options.dry_run = true;
+                index += 1;
+            }
+            "--endpoint" => {
+                let value = option_value(rest, index, "--endpoint", "an upload endpoint")?;
+                validate_telemetry_endpoint(value).map_err(|error| error.to_string())?;
+                options.endpoint = Some(value.to_string());
+                index += 2;
+            }
+            "--quiet" | "--verbose" => {
+                index += 1;
+            }
+            other => return Err(format!("unknown telemetry option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn telemetry_paths<F>(
+    current_dir: &Path,
+    env_lookup: &F,
+    project_path: Option<&str>,
+) -> Result<TelemetryPaths, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    Ok(TelemetryPaths {
+        global_data_dir: telemetry_global_data_dir(env_lookup)?,
+        repository_root: PathBuf::from(repository_root(current_dir, project_path)),
+        state_dir_override: state_dir_override(env_lookup),
+    })
+}
+
+fn telemetry_global_data_dir<F>(env_lookup: &F) -> Result<PathBuf, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    default_install_data_dir(env_lookup)
+        .map(PathBuf::from)
+        .map_err(RepoGrammarError::InvalidInput)
+}
+
+fn telemetry_diagnostics<F>(
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+    project_path: Option<&str>,
+) -> Option<TelemetryDiagnostics>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, project_path),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    runtime
+        .repo_shape_diagnostics(request)
+        .ok()
+        .map(|report| TelemetryDiagnostics {
+            eligible_code_units: report.eligible_code_units,
+            family_count: report.family_count,
+            family_support_coverage: report.family_support_coverage,
+            local_pattern_density: report.local_pattern_density,
+            abstention_rate: report.abstention_rate,
+            external_dependency_signal: report.external_dependency_signal,
+            thin_wrapper_risk: report.thin_wrapper_risk.as_str(),
+            token_saving_risk: report.token_saving_risk.as_str(),
+            read_plan_item_count: 0,
+        })
+}
+
+fn telemetry_status_human(report: &TelemetryStatusReport) -> String {
+    format!(
+        "telemetry: anonymous={}\nresearch-trace={}\neffective_anonymous={}\ndisabled_by_environment={}\nnetwork_upload_configured={}\nqueue_count={}\nsent_receipts={}\n",
+        if report.enabled { "on" } else { "off" },
+        if report.research_enabled { "on" } else { "off" },
+        if report.effective_enabled { "on" } else { "off" },
+        report.disabled_by_environment,
+        report.network_upload_configured,
+        report.queue_count,
+        report.sent_receipt_count,
+    )
+}
+
+fn telemetry_status_json(report: &TelemetryStatusReport) -> String {
+    json_line(json!({
+        "command": "telemetry status",
+        "status": "ok",
+        "schema_version": report.schema_version,
+        "enabled": report.enabled,
+        "research_enabled": report.research_enabled,
+        "disabled_by_environment": report.disabled_by_environment,
+        "effective_enabled": report.effective_enabled,
+        "anonymous_machine_id": report.anonymous_machine_id,
+        "queue_count": report.queue_count,
+        "sent_receipt_count": report.sent_receipt_count,
+        "network_upload_configured": report.network_upload_configured,
+        "updated_at": report.updated_at,
+    }))
+}
+
+fn telemetry_export_json(report: &TelemetryExportReport) -> String {
+    json_line(json!({
+        "command": "telemetry export",
+        "status": "ok",
+        "payload_bytes": report.payload_bytes,
+        "queued": report.queued,
+        "payload": report.payload,
+    }))
+}
+
+fn telemetry_upload_should_fail(report: &TelemetryUploadReport) -> bool {
+    !report.uploaded
+        && report
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("disabled"))
+}
+
+fn telemetry_upload_json(report: &TelemetryUploadReport) -> String {
+    json_line(json!({
+        "command": "telemetry upload",
+        "status": if report.uploaded { "uploaded" } else { "not_uploaded" },
+        "uploaded": report.uploaded,
+        "dry_run": report.dry_run,
+        "network_upload_configured": report.network_upload_configured,
+        "reason": report.reason,
+        "payload": report.payload,
+        "receipt": report.receipt.as_ref().map(|receipt| json!({
+            "status_code": receipt.status_code,
+            "receipt_id": receipt.receipt_id,
+        })),
+    }))
+}
+
+fn telemetry_upload_human(report: &TelemetryUploadReport) -> String {
+    if report.uploaded {
+        let receipt = report
+            .receipt
+            .as_ref()
+            .map(|receipt| receipt.receipt_id.as_str())
+            .unwrap_or("none");
+        format!("telemetry upload: uploaded\nreceipt: {receipt}\n")
+    } else {
+        format!(
+            "telemetry upload: not_uploaded\nreason: {}\n",
+            report.reason.as_deref().unwrap_or("not uploaded")
+        )
+    }
+}
+
+fn telemetry_purge_json(command: &str, report: &TelemetryPurgeReport) -> String {
+    json_line(json!({
+        "command": format!("telemetry {command}"),
+        "status": "ok",
+        "removed_files": report.removed_files,
+        "removed_directories": report.removed_directories,
+    }))
+}
+
+fn telemetry_purge_human(command: &str, report: &TelemetryPurgeReport) -> String {
+    format!(
+        "{command}: removed_files={} removed_directories={}\n",
+        report.removed_files, report.removed_directories
+    )
+}
+
+fn telemetry_error(command: &str, json: bool, error: RepoGrammarError) -> CliOutput {
+    if json {
+        CliOutput::failure(
+            2,
+            json_line(json!({
+                "command": format!("telemetry {command}"),
+                "status": "error",
+                "reason": error.to_string(),
+            })),
+        )
+    } else {
+        CliOutput::failure(2, format!("{error}\n"))
+    }
+}
+
+fn cli_output_with_status(status: i32, stdout: String, stderr: String) -> CliOutput {
+    CliOutput {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+fn handle_research<F>(
+    command: &str,
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_telemetry_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let paths = match telemetry_paths(current_dir, env_lookup, options.project_path.as_deref()) {
+        Ok(paths) => paths,
+        Err(error) => return telemetry_error(command, options.json, error),
+    };
+    match command {
+        "research-status" => match telemetry_status(&paths, None, env_lookup) {
+            Ok(report) if options.json => CliOutput::success(telemetry_status_json(&report)),
+            Ok(report) => CliOutput::success(telemetry_status_human(&report)),
+            Err(error) => telemetry_error(command, options.json, error),
+        },
+        "research-on" | "research-off" => {
+            match set_research_trace(&paths, command == "research-on")
+                .and_then(|_| telemetry_status(&paths, None, env_lookup))
+            {
+                Ok(report) if options.json => CliOutput::success(telemetry_status_json(&report)),
+                Ok(report) => CliOutput::success(telemetry_status_human(&report)),
+                Err(error) => telemetry_error(command, options.json, error),
+            }
+        }
+        "research-export" => match research_export(&paths) {
+            Ok(value) if options.json => CliOutput::success(json_line(json!({
+                "command": "telemetry research-export",
+                "status": "ok",
+                "payload": value,
+            }))),
+            Ok(value) => CliOutput::success(format!(
+                "research export: redacted_metadata_only\nsource_snippets_returned={}\n",
+                value["source_snippets_included"].as_bool().unwrap_or(false)
+            )),
+            Err(error) => telemetry_error(command, options.json, error),
+        },
+        "research-purge" => match research_purge(&paths, options.yes) {
+            Ok(report) if options.json => {
+                CliOutput::success(telemetry_purge_json(command, &report))
+            }
+            Ok(report) => CliOutput::success(telemetry_purge_human(command, &report)),
+            Err(error) => telemetry_error(command, options.json, error),
+        },
+        _ => CliOutput::failure(2, format!("unknown telemetry command: {command}\n")),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ExperimentStartOptions {
+    json: bool,
+    yes: bool,
+    name: Option<String>,
+    experiment_mode: Option<ExperimentWorkflowMode>,
+    mode: Option<ExperimentMode>,
+    measurement_source: Option<MeasurementSource>,
+    coarse_task_kind: Option<String>,
+    elapsed_time_bucket: Option<String>,
+    read_plan_used: Option<bool>,
+    read_plan_item_count_bucket: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ExperimentRecordOptions {
+    json: bool,
+    name: Option<String>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    tool_tokens: Option<u64>,
+    success: Option<bool>,
+    test_outcome: TestOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ExperimentNameOptions {
+    json: bool,
+    name: Option<String>,
+    yes: bool,
+}
+
+fn handle_experiment_start<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_start_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    if !options.yes {
+        return experiment_error(
+            "experiment-start",
+            options.json,
+            RepoGrammarError::InvalidInput(
+                "experiment recording requires explicit --yes confirmation".to_string(),
+            ),
+        );
+    }
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-start", options.json, error),
+    };
+    let request = match experiment_start_request(options.clone()) {
+        Ok(request) => request,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    match experiment_start(&data_dir, request) {
+        Ok(report) if options.json => {
+            CliOutput::success(experiment_cli_json("experiment-start", &report))
+        }
+        Ok(report) => CliOutput::success(experiment_human("experiment-start", &report)),
+        Err(error) => experiment_error("experiment-start", options.json, error),
+    }
+}
+
+fn handle_experiment_record<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_record_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-record", options.json, error),
+    };
+    let request = match experiment_record_request(options.clone()) {
+        Ok(request) => request,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    match experiment_record(&data_dir, request) {
+        Ok(report) if options.json => {
+            CliOutput::success(experiment_cli_json("experiment-record", &report))
+        }
+        Ok(report) => CliOutput::success(experiment_human("experiment-record", &report)),
+        Err(error) => experiment_error("experiment-record", options.json, error),
+    }
+}
+
+fn handle_experiment_stop<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_name_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-stop", options.json, error),
+    };
+    let Some(name) = options.name.as_deref() else {
+        return CliOutput::failure(2, "--name is required\n");
+    };
+    match experiment_stop(&data_dir, name) {
+        Ok(report) if options.json => {
+            CliOutput::success(experiment_cli_json("experiment-stop", &report))
+        }
+        Ok(report) => CliOutput::success(experiment_human("experiment-stop", &report)),
+        Err(error) => experiment_error("experiment-stop", options.json, error),
+    }
+}
+
+fn handle_experiment_report<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_name_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-report", options.json, error),
+    };
+    let Some(name) = options.name.as_deref() else {
+        return CliOutput::failure(2, "--name is required\n");
+    };
+    match experiment_report(&data_dir, name) {
+        Ok(report) if options.json => {
+            CliOutput::success(experiment_cli_json("experiment-report", &report))
+        }
+        Ok(report) => CliOutput::success(experiment_human("experiment-report", &report)),
+        Err(error) => experiment_error("experiment-report", options.json, error),
+    }
+}
+
+fn handle_experiment_export<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_name_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-export", options.json, error),
+    };
+    let Some(name) = options.name.as_deref() else {
+        return CliOutput::failure(2, "--name is required\n");
+    };
+    match experiment_export(&data_dir, name) {
+        Ok(value) if options.json => CliOutput::success(json_line(json!({
+            "command": "telemetry experiment-export",
+            "status": "ok",
+            "payload": value,
+        }))),
+        Ok(value) => CliOutput::success(format!(
+            "experiment export: name={}\nsessions={}\n",
+            value["name"].as_str().unwrap_or("unknown"),
+            value["sessions"].as_array().map(Vec::len).unwrap_or(0)
+        )),
+        Err(error) => experiment_error("experiment-export", options.json, error),
+    }
+}
+
+fn handle_experiment_purge<F>(rest: &[String], env_lookup: &F) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_experiment_name_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let data_dir = match telemetry_global_data_dir(env_lookup) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return experiment_error("experiment-purge", options.json, error),
+    };
+    let Some(name) = options.name.as_deref() else {
+        return CliOutput::failure(2, "--name is required\n");
+    };
+    match experiment_purge(&data_dir, name, options.yes) {
+        Ok(report) if options.json => {
+            CliOutput::success(telemetry_purge_json("experiment-purge", &report))
+        }
+        Ok(report) => CliOutput::success(telemetry_purge_human("experiment purge", &report)),
+        Err(error) => experiment_error("experiment-purge", options.json, error),
+    }
+}
+
+fn parse_experiment_start_options(rest: &[String]) -> Result<ExperimentStartOptions, String> {
+    let mut options = ExperimentStartOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--yes" => {
+                options.yes = true;
+                index += 1;
+            }
+            "--name" => {
+                options.name =
+                    Some(option_value(rest, index, "--name", "an experiment name")?.to_string());
+                index += 2;
+            }
+            "--experiment-mode" | "--workflow-mode" => {
+                options.experiment_mode = Some(ExperimentWorkflowMode::parse(option_value(
+                    rest,
+                    index,
+                    "--experiment-mode",
+                    "record_existing or controlled_pair",
+                )?)?);
+                index += 2;
+            }
+            "--session" => {
+                options.mode = Some(ExperimentMode::parse(option_value(
+                    rest,
+                    index,
+                    "--session",
+                    "baseline or treatment",
+                )?)?);
+                index += 2;
+            }
+            "--mode" => {
+                options.mode = Some(ExperimentMode::parse(option_value(
+                    rest,
+                    index,
+                    "--mode",
+                    "baseline or treatment",
+                )?)?);
+                index += 2;
+            }
+            "--measurement-source" => {
+                options.measurement_source = Some(MeasurementSource::parse(option_value(
+                    rest,
+                    index,
+                    "--measurement-source",
+                    "a measurement source",
+                )?)?);
+                index += 2;
+            }
+            "--task-kind" => {
+                options.coarse_task_kind = Some(
+                    option_value(rest, index, "--task-kind", "a coarse task kind")?.to_string(),
+                );
+                index += 2;
+            }
+            "--elapsed-time-bucket" => {
+                options.elapsed_time_bucket = Some(
+                    option_value(rest, index, "--elapsed-time-bucket", "a bucket")?.to_string(),
+                );
+                index += 2;
+            }
+            "--read-plan-used" => {
+                options.read_plan_used = Some(parse_bool(option_value(
+                    rest,
+                    index,
+                    "--read-plan-used",
+                    "true or false",
+                )?)?);
+                index += 2;
+            }
+            "--read-plan-item-count" => {
+                let value = parse_positive_usize(
+                    option_value(rest, index, "--read-plan-item-count", "a count")?,
+                    "--read-plan-item-count",
+                )?;
+                options.read_plan_item_count_bucket =
+                    Some(read_plan_count_bucket(value).to_string());
+                index += 2;
+            }
+            other => return Err(format!("unknown experiment-start option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_experiment_record_options(rest: &[String]) -> Result<ExperimentRecordOptions, String> {
+    let mut options = ExperimentRecordOptions {
+        test_outcome: TestOutcome::Unknown,
+        ..ExperimentRecordOptions::default()
+    };
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--name" => {
+                options.name =
+                    Some(option_value(rest, index, "--name", "an experiment name")?.to_string());
+                index += 2;
+            }
+            "--input-tokens" => {
+                options.input_tokens = Some(parse_u64(
+                    option_value(rest, index, "--input-tokens", "a token count")?,
+                    "--input-tokens",
+                )?);
+                index += 2;
+            }
+            "--output-tokens" => {
+                options.output_tokens = Some(parse_u64(
+                    option_value(rest, index, "--output-tokens", "a token count")?,
+                    "--output-tokens",
+                )?);
+                index += 2;
+            }
+            "--tool-tokens" => {
+                options.tool_tokens = Some(parse_u64(
+                    option_value(rest, index, "--tool-tokens", "a token count")?,
+                    "--tool-tokens",
+                )?);
+                index += 2;
+            }
+            "--success" => {
+                options.success = Some(parse_bool(option_value(
+                    rest,
+                    index,
+                    "--success",
+                    "true or false",
+                )?)?);
+                index += 2;
+            }
+            "--test-outcome" => {
+                options.test_outcome = TestOutcome::parse(option_value(
+                    rest,
+                    index,
+                    "--test-outcome",
+                    "passed, failed, not_run, or unknown",
+                )?)?;
+                index += 2;
+            }
+            other => return Err(format!("unknown experiment-record option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_experiment_name_options(rest: &[String]) -> Result<ExperimentNameOptions, String> {
+    let mut options = ExperimentNameOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--yes" => {
+                options.yes = true;
+                index += 1;
+            }
+            "--name" => {
+                options.name =
+                    Some(option_value(rest, index, "--name", "an experiment name")?.to_string());
+                index += 2;
+            }
+            other => return Err(format!("unknown experiment option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn experiment_start_request(
+    options: ExperimentStartOptions,
+) -> Result<ExperimentStartRequest, String> {
+    Ok(ExperimentStartRequest {
+        name: options
+            .name
+            .ok_or_else(|| "--name is required".to_string())?,
+        experiment_mode: options
+            .experiment_mode
+            .ok_or_else(|| "--experiment-mode is required".to_string())?,
+        mode: options
+            .mode
+            .ok_or_else(|| "--session is required".to_string())?,
+        measurement_source: options
+            .measurement_source
+            .ok_or_else(|| "--measurement-source is required".to_string())?,
+        coarse_task_kind: options.coarse_task_kind,
+        elapsed_time_bucket: options.elapsed_time_bucket,
+        read_plan_used: options.read_plan_used,
+        read_plan_item_count_bucket: options.read_plan_item_count_bucket,
+    })
+}
+
+fn experiment_record_request(
+    options: ExperimentRecordOptions,
+) -> Result<ExperimentRecordRequest, String> {
+    Ok(ExperimentRecordRequest {
+        name: options
+            .name
+            .ok_or_else(|| "--name is required".to_string())?,
+        input_tokens: options
+            .input_tokens
+            .ok_or_else(|| "--input-tokens is required".to_string())?,
+        output_tokens: options
+            .output_tokens
+            .ok_or_else(|| "--output-tokens is required".to_string())?,
+        tool_tokens: options
+            .tool_tokens
+            .ok_or_else(|| "--tool-tokens is required".to_string())?,
+        success: options
+            .success
+            .ok_or_else(|| "--success is required".to_string())?,
+        test_outcome: options.test_outcome,
+    })
+}
+
+fn experiment_cli_json(
+    command: &str,
+    report: &crate::application::telemetry::ExperimentReport,
+) -> String {
+    let mut value = experiment_report_json(report);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("command".to_string(), json!(format!("telemetry {command}")));
+        object.insert("status".to_string(), json!("ok"));
+    }
+    json_line(value)
+}
+
+fn experiment_human(
+    command: &str,
+    report: &crate::application::telemetry::ExperimentReport,
+) -> String {
+    format!(
+        "{command}: {}\nbaseline_total_tokens: {}\ntreatment_total_tokens: {}\ntoken_savings: {}\nmeasurement_source: {}\nreason: {}\n",
+        report.name,
+        optional_u64_human(report.baseline_total_tokens),
+        optional_u64_human(report.treatment_total_tokens),
+        report
+            .token_savings
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        report.measurement_source.as_deref().unwrap_or("null"),
+        report.reason.as_deref().unwrap_or("none")
+    )
+}
+
+fn experiment_error(command: &str, json: bool, error: RepoGrammarError) -> CliOutput {
+    if json {
+        CliOutput::failure(
+            2,
+            json_line(json!({
+                "command": format!("telemetry {command}"),
+                "status": "error",
+                "reason": error.to_string(),
+            })),
+        )
+    } else {
+        CliOutput::failure(2, format!("{error}\n"))
+    }
+}
+
+fn optional_u64_human(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{option} requires a non-negative integer"))
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("value must be true or false".to_string()),
+    }
+}
+
+fn read_plan_count_bucket(value: usize) -> &'static str {
+    match value {
+        0 => "0",
+        1..=2 => "1-2",
+        3..=9 => "3-9",
+        10..=49 => "10-49",
+        _ => "50+",
     }
 }
 
@@ -1800,6 +2838,10 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
             }
             "--no-telemetry" => {
                 request.telemetry_enabled = false;
+                index += 1;
+            }
+            "--telemetry" => {
+                request.telemetry_enabled = true;
                 index += 1;
             }
             "--no-permissions" => {
@@ -4826,6 +5868,164 @@ mod tests {
     }
 
     #[test]
+    fn install_yes_alone_persists_telemetry_disabled() {
+        struct InstallRuntime;
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                assert!(!request.telemetry_enabled);
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: vec![request.target],
+                    receipt_paths: vec![context.data_dir],
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-telemetry-default-off");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let output = run_with_context_and_runtime(
+            ["install", "--target", "codex", "--yes"],
+            workspace.path(),
+            &env,
+            &InstallRuntime,
+        );
+        let status = run_with_context(["telemetry", "status", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("telemetry=off"));
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["enabled"], false);
+    }
+
+    #[test]
+    fn install_telemetry_flag_persists_consent_unless_env_disabled() {
+        struct InstallRuntime;
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: vec![request.target],
+                    receipt_paths: vec![context.data_dir],
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-telemetry-on");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let output = run_with_context_and_runtime(
+            ["install", "--target", "codex", "--yes", "--telemetry"],
+            workspace.path(),
+            &env,
+            &InstallRuntime,
+        );
+        let status = run_with_context(["telemetry", "status", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("telemetry=on"));
+        assert!(output.stdout.contains("effective_telemetry=on"));
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["enabled"], true);
+
+        let disabled_home = workspace.path().join("disabled-data-home");
+        let disabled_env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(disabled_home.display().to_string()),
+            "DO_NOT_TRACK" => Some("1".to_string()),
+            _ => None,
+        };
+        let disabled = run_with_context_and_runtime(
+            ["install", "--target", "codex", "--yes", "--telemetry"],
+            workspace.path(),
+            &disabled_env,
+            &InstallRuntime,
+        );
+
+        assert_eq!(disabled.status, 0);
+        assert!(disabled.stdout.contains("telemetry=off"));
+        assert!(disabled.stdout.contains("disabled_by_environment=true"));
+    }
+
+    #[test]
     fn status_doctor_stats_and_telemetry_status_are_safe() {
         assert_eq!(run(["status"]).status, 0);
         assert_eq!(run(["doctor"]).status, 0);
@@ -4835,6 +6035,463 @@ mod tests {
         assert!(stats.stderr.contains("FALLBACK_TO_CODE_SEARCH"));
         assert!(stats.stderr.contains("repository is not initialized"));
         assert_eq!(run(["telemetry", "status"]).status, 0);
+    }
+
+    #[test]
+    fn telemetry_status_reports_anonymous_and_research_consent_separately() {
+        let workspace = TempWorkspace::new("cli-telemetry-consent");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let anonymous = run_with_context(["telemetry", "on", "--json"], workspace.path(), &env);
+        assert_eq!(anonymous.status, 0);
+        let value: Value = serde_json::from_str(anonymous.stdout.trim()).expect("telemetry JSON");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["research_enabled"], false);
+
+        let research = run_with_context(
+            ["telemetry", "research-on", "--json"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(research.status, 0);
+        let value: Value = serde_json::from_str(research.stdout.trim()).expect("telemetry JSON");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["research_enabled"], true);
+        assert!(!research
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn telemetry_env_opt_out_reports_upload_disabled() {
+        let workspace = TempWorkspace::new("cli-telemetry-env");
+        let data_home = workspace.path().join("data-home");
+        let env_on = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            run_with_context(["telemetry", "on"], workspace.path(), &env_on).status,
+            0
+        );
+        let env_disabled = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "DO_NOT_TRACK" => Some("1".to_string()),
+            _ => None,
+        };
+
+        let status = run_with_context(
+            ["telemetry", "status", "--json"],
+            workspace.path(),
+            &env_disabled,
+        );
+
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["disabled_by_environment"], true);
+        assert_eq!(value["effective_enabled"], false);
+    }
+
+    #[test]
+    fn telemetry_disabled_upload_does_not_call_transport() {
+        struct UploadRuntime {
+            calls: std::cell::Cell<usize>,
+        }
+
+        impl CliRuntime for UploadRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("telemetry upload test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                Ok(FamilyQueryRuntime::status_report())
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("telemetry upload test")
+            }
+
+            fn upload_telemetry_payload(
+                &self,
+                _endpoint: &str,
+                _payload: &str,
+                _timeout: std::time::Duration,
+            ) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+                self.calls.set(self.calls.get() + 1);
+                Ok(TelemetryUploadReceipt {
+                    status_code: 204,
+                    receipt_id: "test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-telemetry-disabled-upload");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        let runtime = UploadRuntime {
+            calls: std::cell::Cell::new(0),
+        };
+
+        let output = run_with_context_and_runtime(
+            [
+                "telemetry",
+                "upload",
+                "--json",
+                "--endpoint",
+                "https://telemetry.example.invalid/v1",
+                "--yes",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert_eq!(runtime.calls.get(), 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("upload JSON");
+        assert_eq!(value["status"], "not_uploaded");
+        assert_eq!(value["reason"], "anonymous telemetry is disabled");
+    }
+
+    #[test]
+    fn telemetry_upload_dry_run_exports_allowlisted_payload_without_network() {
+        struct UploadRuntime;
+
+        impl CliRuntime for UploadRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("telemetry upload test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                Ok(FamilyQueryRuntime::status_report())
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("telemetry upload test")
+            }
+
+            fn repo_shape_diagnostics(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
+                FamilyQueryRuntime.repo_shape_diagnostics(_request)
+            }
+
+            fn upload_telemetry_payload(
+                &self,
+                _endpoint: &str,
+                _payload: &str,
+                _timeout: std::time::Duration,
+            ) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+                panic!("dry-run upload must not call transport")
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-telemetry-upload-dry-run");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            run_with_context(["telemetry", "on"], workspace.path(), &env).status,
+            0
+        );
+
+        let output = run_with_context_and_runtime(
+            [
+                "telemetry",
+                "upload",
+                "--json",
+                "--dry-run",
+                "--endpoint",
+                "https://telemetry.example.invalid/v1",
+            ],
+            workspace.path(),
+            &env,
+            &UploadRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("upload JSON");
+        assert_eq!(value["status"], "not_uploaded");
+        assert_eq!(value["payload"]["schema_version"], "telemetry.v1");
+        assert_eq!(value["payload"]["source_snippets_returned"], false);
+        let serialized = output.stdout;
+        assert!(!serialized.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!serialized.contains("query_text"));
+        assert!(!serialized.contains("raw_error"));
+    }
+
+    #[test]
+    fn telemetry_experiment_pair_makes_stats_report_measured_savings() {
+        let workspace = TempWorkspace::new("cli-token-experiment");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        for args in [
+            vec![
+                "telemetry",
+                "experiment-start",
+                "--name",
+                "task-a",
+                "--experiment-mode",
+                "record-existing",
+                "--session",
+                "baseline",
+                "--measurement-source",
+                "user_entered",
+                "--yes",
+            ],
+            vec![
+                "telemetry",
+                "experiment-record",
+                "--name",
+                "task-a",
+                "--input-tokens",
+                "100",
+                "--output-tokens",
+                "40",
+                "--tool-tokens",
+                "10",
+                "--success",
+                "true",
+            ],
+            vec!["telemetry", "experiment-stop", "--name", "task-a"],
+            vec![
+                "telemetry",
+                "experiment-start",
+                "--name",
+                "task-a",
+                "--experiment-mode",
+                "record-existing",
+                "--session",
+                "treatment",
+                "--measurement-source",
+                "user_entered",
+                "--read-plan-used",
+                "true",
+                "--read-plan-item-count",
+                "2",
+                "--yes",
+            ],
+            vec![
+                "telemetry",
+                "experiment-record",
+                "--name",
+                "task-a",
+                "--input-tokens",
+                "70",
+                "--output-tokens",
+                "30",
+                "--tool-tokens",
+                "5",
+                "--success",
+                "true",
+            ],
+            vec!["telemetry", "experiment-stop", "--name", "task-a"],
+        ] {
+            let output = run_with_context(args, workspace.path(), &env);
+            assert_eq!(output.status, 0, "{:?}", output);
+        }
+
+        let stats = run_with_context_and_runtime(
+            ["stats", "--json"],
+            workspace.path(),
+            &env,
+            &FamilyQueryRuntime,
+        );
+
+        assert_eq!(stats.status, 0);
+        let value: Value = serde_json::from_str(stats.stdout.trim()).expect("stats JSON");
+        assert_eq!(value["token_savings"], 45);
+        assert_eq!(value["measurement_source"], "user_entered");
+        assert_eq!(value["measurement_status"], "paired_measurement_available");
+        assert_eq!(value["claim_validity"], "valid_for_product_claim");
+        assert!(!stats
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn telemetry_experiment_start_requires_explicit_confirmation() {
+        let workspace = TempWorkspace::new("cli-token-experiment-confirmation");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let output = run_with_context(
+            [
+                "telemetry",
+                "experiment-start",
+                "--json",
+                "--name",
+                "task-a",
+                "--experiment-mode",
+                "record-existing",
+                "--session",
+                "baseline",
+                "--measurement-source",
+                "user_entered",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 2);
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(
+            value["reason"],
+            "experiment recording requires explicit --yes confirmation"
+        );
+    }
+
+    #[test]
+    fn telemetry_controlled_pair_report_warns_about_extra_usage_cost() {
+        let workspace = TempWorkspace::new("cli-controlled-pair-cost");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        for args in [
+            vec![
+                "telemetry",
+                "experiment-start",
+                "--name",
+                "task-a",
+                "--experiment-mode",
+                "controlled-pair",
+                "--session",
+                "baseline",
+                "--measurement-source",
+                "user_entered",
+                "--yes",
+            ],
+            vec![
+                "telemetry",
+                "experiment-record",
+                "--name",
+                "task-a",
+                "--input-tokens",
+                "100",
+                "--output-tokens",
+                "20",
+                "--tool-tokens",
+                "0",
+                "--success",
+                "true",
+            ],
+            vec!["telemetry", "experiment-stop", "--name", "task-a"],
+            vec![
+                "telemetry",
+                "experiment-start",
+                "--name",
+                "task-a",
+                "--experiment-mode",
+                "controlled-pair",
+                "--session",
+                "treatment",
+                "--measurement-source",
+                "user_entered",
+                "--yes",
+            ],
+            vec![
+                "telemetry",
+                "experiment-record",
+                "--name",
+                "task-a",
+                "--input-tokens",
+                "60",
+                "--output-tokens",
+                "20",
+                "--tool-tokens",
+                "0",
+                "--success",
+                "false",
+                "--test-outcome",
+                "failed",
+            ],
+            vec!["telemetry", "experiment-stop", "--name", "task-a"],
+        ] {
+            let output = run_with_context(args, workspace.path(), &env);
+            assert_eq!(output.status, 0, "{:?}", output);
+        }
+
+        let report = run_with_context(
+            [
+                "telemetry",
+                "experiment-report",
+                "--name",
+                "task-a",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(report.status, 0);
+        let value: Value = serde_json::from_str(report.stdout.trim()).expect("report JSON");
+        assert_eq!(value["experiment_mode"], "controlled_pair");
+        assert_eq!(value["token_savings"], 40);
+        assert_eq!(value["claim_validity"], "invalid_for_product_claim");
+        assert_eq!(value["correctness"]["treatment_success"], false);
+        assert_eq!(value["cost_notice"]["may_have_increased_usage"], true);
     }
 
     #[test]

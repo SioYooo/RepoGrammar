@@ -81,7 +81,7 @@ impl Default for InstallRequest {
             print_config: false,
             assume_yes: false,
             no_permissions: false,
-            telemetry_enabled: true,
+            telemetry_enabled: false,
         }
     }
 }

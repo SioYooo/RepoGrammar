@@ -137,6 +137,7 @@ cargo run --quiet --bin repogrammar -- units --json
 cargo run --quiet --bin repogrammar -- status
 cargo run --quiet --bin repogrammar -- doctor --json
 cargo run --quiet --bin repogrammar -- stats --json
+cargo run --quiet --bin repogrammar -- telemetry status --json
 ```
 
 Try the current pattern-family CLI boundary:
@@ -164,9 +165,16 @@ required before editing, and line ranges remain unavailable until a safe
 source-span renderer exists. `stats --json` reports repo-shape diagnostics such
 as local pattern density, family support coverage, abstention rate, and
 thin-wrapper/token-saving risk. These diagnostics are not measured token
-savings; token-saving potential depends on repeated repo-local patterns and is
-lower in third-party-heavy or thin-wrapper repositories. `files` and `units`
-are limited to active file-manifest-only or syntax-only index metadata.
+savings; actual token savings are reported only after a local paired
+baseline/treatment token experiment records comparable measurements. Experiment
+recording requires explicit confirmation: `record-existing` uses sessions the
+user already performed, while `controlled-pair` warns that separate baseline
+and treatment sessions may increase token usage, time, and provider cost.
+Anonymous telemetry is off by default and can be inspected, enabled, disabled,
+exported, uploaded, or purged through `repogrammar telemetry ...`; environment
+opt-outs and CI force upload disabled, and research trace consent is separate.
+`files` and `units` are limited to active file-manifest-only or syntax-only
+index metadata.
 
 ## Product Shape
 
@@ -180,7 +188,7 @@ are limited to active file-manifest-only or syntax-only index metadata.
 | Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, Python fixture smoke for stale evidence, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
 | State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
 | MCP | Read-only `repogrammar_context` serve boundary is implemented | Stable agent-tool API after more compatibility testing |
-| Telemetry | Consent boundaries are specified | Anonymous telemetry separate from research traces, disabled by default |
+| Telemetry | Opt-in anonymous telemetry status/on/off/export/upload/purge and separate research consent are implemented with an allowlisted schema, inspect-only export, redacted experiment export, and no repository instance id in payloads | Future production endpoint configuration |
 | Optional providers | No provider dependency | CodeGraph may be considered only as an optional lower-layer evidence provider, not a required runtime |
 
 RepoGrammar does not depend on cloud services, local LLMs, embedding models,

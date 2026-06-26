@@ -39,10 +39,13 @@
   source remains required before edits and line ranges are `null` until safe
   source-span rendering exists. `repogrammar stats --json` now reports
   repo-shape diagnostics for local pattern density, family support coverage,
-  abstention rate, and thin-wrapper/token-saving risk without measured token
-  savings. Ready Python exact-anchor families can also record metadata-only
-  variation evidence when exact-compatible framework-anchor support targets
-  differ. FastAPI static `response_model=...`, static
+  abstention rate, external dependency signal, and thin-wrapper/token-saving
+  risk, and reports measured token savings only when local paired
+  baseline/treatment experiment records are comparable. Anonymous telemetry
+  upload is explicit opt-in, does not include a repository instance id, and
+  experiment export is redacted by default. Ready Python exact-anchor families
+  can also record metadata-only variation evidence when exact-compatible
+  framework-anchor support targets differ. FastAPI static `response_model=...`, static
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
   HTTPException status-code structural anchors, plus static FastAPI
   body/path/query/header/cookie request-shape anchors, remain auxiliary

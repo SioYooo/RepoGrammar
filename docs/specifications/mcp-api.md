@@ -170,7 +170,9 @@ tool results. Unknown JSON-RPC methods, unknown tool names, invalid operations,
 blank, oversized, or control-character-containing targets, oversized token
 budgets, and malformed argument types are transport/schema errors.
 
-MCP calls must not wait on telemetry network activity.
+MCP calls must not wait on telemetry network activity and must not trigger
+telemetry upload. Anonymous telemetry upload is only attempted by explicit
+`repogrammar telemetry upload` after consent and endpoint validation.
 
 ## Agent guidance
 

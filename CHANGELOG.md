@@ -106,6 +106,18 @@
   pattern density, family support coverage, abstention rate, and
   thin-wrapper/token-saving risk without reporting measured token savings or
   context compression ratios.
+- Anonymous telemetry now has state-backed `status`, `on`, `off`, `export`,
+  `upload`, and `purge` commands, remains disabled by default, honors
+  environment opt-outs, validates a versioned allowlist payload schema, and
+  keeps research trace consent separate. The anonymous payload no longer carries
+  a repository instance id, includes only coarse external-dependency risk, and
+  treats export as inspect-only rather than queue creation. Local paired token
+  experiments can now record baseline/treatment token counts through explicit
+  `record-existing` or `controlled-pair` confirmation so `stats --json` reports
+  measured token savings only when comparable measurements exist. Experiment
+  export is redacted by default, controlled-pair reports warn about possible
+  extra token/time/provider cost, and failed treatment correctness invalidates
+  product token-saving claims even when a raw token delta is available.
   FastAPI exact-anchor regression coverage now spans all supported
   FastAPI/APIRouter HTTP route methods (`delete`, `get`, `head`, `options`,
   `patch`, `post`, and `put`) and keeps `api_route`/WebSocket decorators

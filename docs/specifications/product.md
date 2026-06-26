@@ -167,6 +167,8 @@ density, family support coverage, abstention rate, and thin-wrapper/token-saving
 risk. These diagnostics explain when RepoGrammar can reduce context acquisition
 cost and when third-party-heavy or thin-wrapper repositories are unlikely to
 produce large savings. They are not measured token savings or causal claims.
+Measured token savings are reported only when a local paired baseline/treatment
+token experiment has comparable token counts and a measurement source.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
@@ -187,5 +189,11 @@ anonymous telemetry preference, anonymous machine id, and non-repository-derived
 runtime artifacts only.
 
 Anonymous telemetry and research trace collection are separate consent
-decisions. Context compression metrics are not actual token savings unless a
-comparable baseline and treatment token measurement exist.
+decisions. Anonymous telemetry is disabled by default, upload is explicit, and
+environment opt-outs prevent network upload. Context compression metrics are not
+actual token savings unless a comparable baseline and treatment token
+measurement exist.
+Anonymous telemetry payloads must not include a repository instance id,
+repository root hash, source path, symbol, content hash, byte range, raw target,
+prompt, source snippet, or raw error. Experiment export is redacted by default
+and reports token/count data only through coarse buckets.

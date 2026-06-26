@@ -14,8 +14,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const DEFAULT_STATE_DIR: &str = ".repogrammar";
 
 const STATE_DIR_OVERRIDE_PREFIX: &str = ".repogrammar-";
-const REQUIRED_STATE_SUBDIRS: [&str; 6] =
-    ["generations", "cache", "logs", "locks", "tmp", "receipts"];
+const REQUIRED_STATE_SUBDIRS: [&str; 7] = [
+    "generations",
+    "cache",
+    "logs",
+    "locks",
+    "telemetry",
+    "tmp",
+    "receipts",
+];
 const STATE_GITIGNORE: &str = "# RepoGrammar local generated state.\n\
 # This directory contains repository-local indexes, logs, caches, locks,\n\
 # telemetry rollups, and temporary files. Do not commit it.\n\

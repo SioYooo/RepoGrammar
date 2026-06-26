@@ -117,7 +117,24 @@ allowed.
   gating, MCP self-test before native configuration, hanging MCP self-test
   timeout/kill behavior, unsupported broad `--target all`, unsupported native
   scopes, receipt writing, receipt-write rollback, receipt-owned uninstall,
-  foreign receipt refusal, and no `.repogrammar/` mutation.
+  foreign receipt refusal, install `--yes` not enabling telemetry, install
+  `--telemetry` persisting consent only after successful live install,
+  environment/CI telemetry disablement overriding install consent, and no
+  `.repogrammar/` mutation.
+- Telemetry and metrics tests must cover default anonymous telemetry disabled,
+  anonymous telemetry and research trace consent as separate state,
+  `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry
+  off, disabled telemetry making zero upload transport calls, upload dry-runs
+  making zero network calls, HTTPS-or-localhost endpoint validation, allowlisted
+  telemetry payload validation, absence of source snippets/prompts/query
+  text/paths/repository names/symbols/raw errors/env values from exported
+  payloads, explicit upload receipt behavior with fake transports, inspect-only
+  telemetry export without queue/rollup creation, redacted research export,
+  redacted experiment export without raw names/session ids/token counts, paired
+  baseline/treatment token experiment recording,
+  missing pairs yielding `token_savings: null`, comparable pairs computing
+  token savings and ratio, required measurement source, and `stats --json`
+  reporting measured savings only when a valid paired measurement exists.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,

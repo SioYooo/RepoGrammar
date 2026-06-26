@@ -35,7 +35,7 @@ The installer must:
 - store an absolute executable path in MCP configuration where supported;
 - avoid sudo or administrator privileges;
 - support `--dry-run`, `--print-config`, `--target`, `--scope`, `--yes`,
-  `--no-permissions`, and `--no-telemetry`;
+  `--no-permissions`, `--telemetry`, and `--no-telemetry`;
 - validate every configured MCP integration by launching a self-test;
 - store an installation receipt sufficient for precise, reversible uninstall;
 - never remove configuration that was not created by RepoGrammar;
@@ -50,6 +50,15 @@ Global user state may contain only installation and user-preference data:
 - anonymous telemetry preference and anonymous machine id;
 - downloaded grammar or runtime artifacts that are not repository-derived;
 - global user preferences.
+
+Anonymous telemetry is off by default. Live `install --yes` must not imply
+telemetry consent. `--telemetry` is the explicit opt-in flag for install-time
+planning, receipts, and live preference persistence after agent installation
+succeeds. `--no-telemetry` remains accepted as an explicit disable and
+backward-compatible flag. `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, and CI force the
+effective install-time telemetry decision to disabled. Users can also change
+actual telemetry preference with `repogrammar telemetry on` and
+`repogrammar telemetry off`.
 
 It must not contain source-derived family facts, evidence text, source paths,
 symbol names, query text, raw prompts, or repository-specific SQLite indexes.
@@ -96,6 +105,9 @@ Live `install` and `uninstall` writes are intentionally narrow:
   directory after native configuration succeeds and rolls back the native entry
   if receipt writing fails;
 - uninstall removes only targets with a matching RepoGrammar receipt.
+- live install persists the final anonymous telemetry preference after
+  successful agent configuration; `--yes` alone persists disabled telemetry, and
+  environment/CI disablement overrides `--telemetry`.
 
 The installer still does not copy executables, edit instruction files, repair
 malformed native agent config, or touch `.repogrammar/`.

@@ -25,6 +25,7 @@ use repogrammar::application::repository::{
     RepositoryDoctorReport, RepositoryDoctorRequest, RepositoryImplementationStatus,
     RepositoryStatus, RepositoryStatusReport, RepositoryStatusRequest,
 };
+use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
 use repogrammar::interfaces::cli::{
     parse_serve_options, repository_root, run_with_runtime, state_dir_override, CliIndexRequest,
@@ -36,6 +37,7 @@ use repogrammar::interfaces::mcp::{
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -224,6 +226,73 @@ impl CliRuntime for ProductCliRuntime {
                 "unknown installer command".to_string(),
             )),
         }
+    }
+
+    fn upload_telemetry_payload(
+        &self,
+        endpoint: &str,
+        payload: &str,
+        timeout: Duration,
+    ) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+        upload_telemetry_with_curl(endpoint, payload, timeout)
+    }
+}
+
+fn upload_telemetry_with_curl(
+    endpoint: &str,
+    payload: &str,
+    timeout: Duration,
+) -> Result<TelemetryUploadReceipt, RepoGrammarError> {
+    let mut child = Command::new("curl")
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--max-time")
+        .arg(timeout.as_secs().max(1).to_string())
+        .arg("--request")
+        .arg("POST")
+        .arg("--header")
+        .arg("content-type: application/json")
+        .arg("--data-binary")
+        .arg("@-")
+        .arg(endpoint)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput("telemetry upload transport unavailable".to_string())
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload.as_bytes())
+            .map_err(|_| RepoGrammarError::InvalidInput("telemetry upload failed".to_string()))?;
+    }
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| RepoGrammarError::InvalidInput("telemetry upload failed".to_string()))?
+        {
+            if status.success() {
+                return Ok(TelemetryUploadReceipt {
+                    status_code: 200,
+                    receipt_id: format!("receipt-{}", std::process::id()),
+                });
+            }
+            return Err(RepoGrammarError::InvalidInput(
+                "telemetry upload failed".to_string(),
+            ));
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RepoGrammarError::InvalidInput(
+                "telemetry upload timed out".to_string(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
