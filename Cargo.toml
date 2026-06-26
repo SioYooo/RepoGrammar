@@ -3,7 +3,7 @@ name = "repogrammar"
 version = "0.1.0"
 edition = "2021"
 description = "Repository pattern-family analysis engine bootstrap"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [[bin]]

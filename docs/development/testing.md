@@ -116,17 +116,42 @@ allowed.
   creation, no native configuration delegation, and native Codex/Claude Code
   MCP command-shape reporting for dry-run global installs, plus live-write
   `--yes` gating, MCP self-test before native configuration, hanging MCP
-  self-test timeout/kill behavior, unsupported broad `--target all`,
-  unsupported native scopes, receipt writing, receipt-write rollback,
-  receipt-owned uninstall, missing/foreign receipt refusal, install `--yes` not
-  enabling telemetry, `install --yes` not prompting for telemetry, install
-  `--telemetry` persisting consent only after successful live install,
-  environment/CI telemetry disablement overriding install consent, and no
-  `.repogrammar/` mutation. Default tests must not invoke real `codex` or
-  `claude` binaries; validate native integration through dry-run output,
-  command-vector construction, fake configurators, and receipt behavior. Any
-  real native-agent CLI integration test must be explicitly ignored or
-  feature-gated outside default CI.
+  self-test timeout/kill behavior, interactive TUI wizard routing, multi-select
+  Codex/Claude Code parsing and deterministic normalization, existing
+  RepoGrammar-owned receipt detection, already-managed target skipping,
+  safe `--target all --scope global --yes`, all-or-rollback multi-target
+  install, unsupported native scopes, receipt writing, receipt-write rollback,
+  receipt-owned uninstall, all-target uninstall of owned receipts,
+  missing/foreign receipt refusal, install `--yes` not enabling telemetry,
+  `install --yes` not prompting for telemetry, install `--telemetry` persisting
+  consent only after successful live install, environment/CI telemetry
+  disablement overriding install consent, CodeGraph-style target parsing for
+  `auto`, `all`, `none`, comma-separated concrete targets, aliases, duplicate
+  normalization, and invalid empty CSV entries, no-write
+  `--print-config <target>` behavior for deferred registry targets, and no
+  `.repogrammar/` mutation.
+  Default tests must not invoke real `codex` or `claude` binaries; validate
+  native integration through dry-run output, command-vector construction, fake
+  configurators, fake prompts, and receipt behavior. Any real native-agent CLI
+  integration test must be explicitly ignored or feature-gated outside default
+  CI.
+- Installer wrapper tests must run without network access and without real
+  native-agent CLIs. They must cover shell syntax validation and a local fake
+  release-artifact path for `src/install/repogrammar-install.sh`, including
+  checksum verification, CLI command installation, bundled worker asset
+  installation, delegated
+  `repogrammar install` / `repogrammar uninstall` invocation through a fake
+  binary, source-checkout `--from-source` install/configure dogfood without
+  network access, actionable no-release failure text, refusal of foreign
+  command paths, target/scope pass-through for comma-separated, `none`, and
+  local-scope install requests, and command removal. Default tests must not use
+  wrapper scripts to call real `codex` or `claude` binaries.
+- Npm launcher tests must run without network access, without Rust/Cargo, and
+  without real native-agent CLIs. They must use local fake release artifacts to
+  cover target selection, checksum rejection, binary/worker cache installation,
+  `REPOGRAMMAR_BINARY` local dogfood bypass, argument forwarding including
+  target lists, local scope, and `--print-config`, and npm package shape via
+  `npm pack --dry-run`.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry

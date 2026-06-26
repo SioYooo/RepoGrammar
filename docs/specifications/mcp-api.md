@@ -175,7 +175,11 @@ telemetry upload. Anonymous telemetry upload is only attempted by explicit
 `repogrammar telemetry upload` after consent and endpoint validation.
 Claude Code and Codex integrations both point at this same read-only MCP server;
 agent installation and uninstallation are machine-level configuration workflows
-and must not change MCP tool semantics or enable telemetry by themselves.
+and must not change MCP tool semantics, initialize a repository, index code,
+touch `.repogrammar/`, upload telemetry, or enable telemetry by themselves.
+Interactive multi-agent install and `--target all --scope global --yes` are
+installer transactions around this same read-only MCP server, not additional
+MCP tools.
 
 ## Agent guidance
 

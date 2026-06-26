@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: repogrammar-x86_64-unknown-linux-gnu.tar.gz
+            shell: bash
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: repogrammar-aarch64-unknown-linux-gnu.tar.gz
+            shell: bash
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: repogrammar-x86_64-apple-darwin.tar.gz
+            shell: bash
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: repogrammar-aarch64-apple-darwin.tar.gz
+            shell: bash
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: repogrammar-x86_64-pc-windows-msvc.zip
+            shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
+        shell: ${{ matrix.shell }}
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/repogrammar" dist/repogrammar
+          mkdir -p dist/workers/python
+          cp src/workers/python/worker.py dist/workers/python/worker.py
+          chmod 755 dist/repogrammar
+          tar -czf "${{ matrix.archive }}" -C dist repogrammar workers
+          shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+        shell: bash
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/repogrammar.exe" "dist/repogrammar.exe"
+          New-Item -ItemType Directory -Force -Path "dist/workers/python" | Out-Null
+          Copy-Item "src/workers/python/worker.py" "dist/workers/python/worker.py"
+          Compress-Archive -Path "dist/repogrammar.exe","dist/workers" -DestinationPath "${{ matrix.archive }}" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish release assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Add installer scripts
+        run: |
+          cp src/install/repogrammar-install.sh release-assets/install.sh
+          cp src/install/install.ps1 release-assets/install.ps1
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          files: release-assets/*
+
+  npm:
+    name: Publish npm launcher
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: node src/npm/repogrammar.test.js
+      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
+      - name: Publish npm package when token is configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish"
+            exit 0
+          fi
+          npm publish --access public

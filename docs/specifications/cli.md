@@ -82,6 +82,13 @@ All long-running commands must support:
 Long-running commands include repository initialization, indexing, sync, and MCP
 serving.
 
+For `index` and `sync`, human progress is emitted to stderr when
+`--progress always` is set, or when `--progress auto` detects an interactive
+stderr. `--quiet` and `--progress never` suppress progress. Final human or JSON
+results remain on stdout. When `--json --progress always` is used, progress
+events are emitted as NDJSON on stderr and the final command result remains a
+single JSON object on stdout.
+
 ## Repository state commands
 
 `repogrammar init` creates repository-local state under `.repogrammar/` by
@@ -151,6 +158,13 @@ Python parser-origin structural/`UNKNOWN` facts, or root `pyproject.toml`
 also add separate `DATAFLOW_DERIVED` support facts without running a semantic
 worker. These are bounded RepoGrammar support facts, not compiler/provider-backed
 facts.
+During a non-quiet run, `index` and `sync` emit progress for project discovery,
+file scanning, syntax parsing, local support-fact recording, semantic-worker
+deferred/running state, candidate/family construction, and persistence
+validation. Known work uses exact completed/total counts. Unknown work must
+remain explicit and must not display fabricated percentages or ETAs. Progress
+events must not include source snippets, source paths, content hashes, symbols,
+raw targets, or repository-identifying absolute paths.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
@@ -199,6 +213,7 @@ snippets or absolute paths.
 
 - `--target`
 - `--scope global|project`
+- `--location global|local` as a `--scope` alias
 - `--dry-run`
 - `--yes`
 - `--print-config`
@@ -207,21 +222,50 @@ snippets or absolute paths.
 - `--no-permissions`
 
 Installer commands configure agents and machine-level integration only. They do
-not create, delete, or rewrite `.repogrammar/`. Live writes require `--yes`.
-The current implementation supports explicit `--target codex --scope global`
-through the native Codex MCP CLI and explicit
-`--target claude-code --scope global` through the native Claude Code MCP CLI.
-Live `--target all` and all project-local writes remain deferred to avoid
-partial or unsupported agent configuration. `install` runs a read-only MCP
-self-test before native configuration and writes a managed receipt after native
-configuration succeeds; `uninstall` removes only receipt-owned managed entries.
+not create, delete, or rewrite `.repogrammar/`, and they do not run `init`,
+`index`, or `sync`. The installer follows a CodeGraph-style target-registry
+state machine while preserving RepoGrammar's safety boundaries. `--target`
+accepts `auto`, `all`, `none`, single concrete ids, and comma-separated
+concrete target lists. Recognized concrete ids are `codex`, `claude-code`
+(`claude` alias), `cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and
+`kiro`. `repogrammar install` with no flags launches a simple TUI-style text
+wizard when running in an interactive terminal. The wizard supports multi-select
+Codex and Claude Code in one run, shows existing RepoGrammar-managed receipts,
+skips already managed agents by default, and lets users add missing supported
+agents on later runs.
+
+Noninteractive live writes require `--yes`. `install --yes`, `install
+--dry-run`, and explicit `--target ... --yes` must never prompt. The current
+implementation supports `--target codex --scope global` through the native
+Codex MCP CLI, `--target claude-code --scope global` through the native Claude
+Code MCP CLI, and safe `--target all --scope global --yes` through the same
+all-or-rollback transaction. `all` and `auto` resolve to the current
+first-class live targets for safe noninteractive writes. Registry targets
+without a live writer must fail before command-path, receipt, or native config
+writes and direct the user to `--dry-run` or `--print-config`. Project-local
+writes remain deferred.
+
+`install` places the `repogrammar` command in a user-writable command directory
+when possible, runs a read-only MCP self-test before native configuration,
+writes one managed receipt per configured target, and rolls back all changes
+from the same run if any selected agent install or receipt write fails.
+Re-running `install` refreshes only a RepoGrammar-managed command path and
+skips native agent add commands for already managed target receipts. Existing
+foreign command paths must still be refused rather than adopted silently.
+`uninstall` removes only receipt-owned managed entries. `uninstall --target all
+--scope global --yes` removes every owned first-class agent receipt it finds,
+but refuses unmanaged or foreign receipts.
 Dry-run install output reports the native MCP command shape for supported
-global Codex and Claude Code targets. Live `install --yes` must not prompt for
-telemetry; if neither `--telemetry` nor `--no-telemetry` is provided,
-telemetry remains disabled. `--yes` itself never implies telemetry consent.
-Interactive telemetry prompts are allowed only for a future live install mode
-that runs without `--yes` and without explicit telemetry flags; current v0.1
-live writes are `--yes` gated.
+global Codex and Claude Code targets and deferred MCP snippet guidance for
+registry targets without live writers. `--print-config <target>` prints a
+target-specific MCP configuration snippet and exits without requiring a live
+write confirmation, creating install state, running an MCP self-test, or
+delegating native writes. Live `install --yes` must not prompt for telemetry;
+if neither `--telemetry` nor `--no-telemetry` is provided, telemetry remains
+disabled. `--yes` itself never implies telemetry consent.
+Interactive telemetry prompts are allowed only in the default TUI-style
+installer, only when no telemetry flag was supplied, and the default is no.
+Install does not upload telemetry or run paired token-saving experiments.
 
 ## Metrics commands
 

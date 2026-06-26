@@ -4,6 +4,7 @@ use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
     python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
 };
+use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::core::model::{
     CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
     Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
@@ -175,6 +176,7 @@ pub fn index_repository_with_discovery_parser_and_store(
     parser: &impl SourceParser,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
         request,
         discovery,
@@ -186,6 +188,7 @@ pub fn index_repository_with_discovery_parser_and_store(
             family_store: None,
         },
         store,
+        &mut progress,
     )
 }
 
@@ -197,6 +200,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
     framework_roles: &dyn FrameworkRoleDetector,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
         request,
         discovery,
@@ -208,6 +212,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
             family_store: None,
         },
         store,
+        &mut progress,
     )
 }
 
@@ -218,6 +223,31 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     store: &(impl IndexStore + FamilyStore),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            semantic_worker: None,
+            family_store: Some(store),
+        },
+        store,
+        &mut progress,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     index_repository_with_optional_semantic_worker(
         request,
@@ -230,6 +260,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
             family_store: Some(store),
         },
         store,
+        progress,
     )
 }
 
@@ -241,6 +272,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
     semantic_worker: &dyn SemanticWorker,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
         request,
         discovery,
@@ -252,6 +284,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
             family_store: None,
         },
         store,
+        &mut progress,
     )
 }
 
@@ -264,6 +297,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
     semantic_worker: &dyn SemanticWorker,
     store: &impl IndexStore,
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
         request,
         discovery,
@@ -275,6 +309,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
             family_store: None,
         },
         store,
+        &mut progress,
     )
 }
 
@@ -287,6 +322,28 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     semantic_worker: &dyn SemanticWorker,
     store: &(impl IndexStore + FamilyStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
+    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
+        request,
+        discovery,
+        source_store,
+        parser,
+        (framework_roles, semantic_worker),
+        store,
+        &mut progress,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_and_worker: (&dyn FrameworkRoleDetector, &dyn SemanticWorker),
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let (framework_roles, semantic_worker) = framework_and_worker;
     index_repository_with_optional_semantic_worker(
         request,
         discovery,
@@ -298,6 +355,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
             family_store: Some(store),
         },
         store,
+        progress,
     )
 }
 
@@ -308,14 +366,33 @@ fn index_repository_with_optional_semantic_worker(
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
     store: &impl IndexStore,
+    progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "acquiring index lock",
+        WorkUnits::Unknown,
+    );
     let _index_lock = crate::application::repository::acquire_index_lock(
         &request.repository_root,
         request.state_dir_override.as_deref(),
     )?;
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "discovering repository files",
+        WorkUnits::Unknown,
+    );
     let report = discover_repository_files(request.clone(), discovery)?;
+    emit_progress(
+        progress,
+        ProgressStage::FileScanning,
+        "discovered files",
+        known_work_units(report.files.len(), report.files.len()),
+    );
     let generation = crate::application::storage::prepare_index_generation(store)?;
-    for file in &report.files {
+    for (index, file) in report.files.iter().enumerate() {
         crate::application::storage::record_indexed_file(
             store,
             &generation,
@@ -326,6 +403,12 @@ fn index_repository_with_optional_semantic_worker(
                 language: file.language.as_str().to_string(),
             },
         )?;
+        emit_progress(
+            progress,
+            ProgressStage::FileScanning,
+            "stored file metadata",
+            known_work_units(index + 1, report.files.len()),
+        );
     }
 
     let mut indexed_units = 0usize;
@@ -333,8 +416,14 @@ fn index_repository_with_optional_semantic_worker(
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     let mut warnings = report.warnings.clone();
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "building parser project context",
+        WorkUnits::Unknown,
+    );
     let parser_context = parser_project_context(&request, &report, source_store, parser)?;
-    for file in &report.files {
+    for (index, file) in report.files.iter().enumerate() {
         let source = source_store
             .read_source(SourceReadRequest {
                 repository_root: request.repository_root.clone(),
@@ -360,6 +449,12 @@ fn index_repository_with_optional_semantic_worker(
                     "parser skipped unsupported language: {}",
                     file.path
                 ));
+                emit_progress(
+                    progress,
+                    ProgressStage::SyntaxParsing,
+                    "parsed source files",
+                    known_work_units(index + 1, report.files.len()),
+                );
                 continue;
             }
             Err(ParseError::Internal(_)) => {
@@ -382,7 +477,19 @@ fn index_repository_with_optional_semantic_worker(
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
+        emit_progress(
+            progress,
+            ProgressStage::SyntaxParsing,
+            "parsed source files",
+            known_work_units(index + 1, report.files.len()),
+        );
     }
+    emit_progress(
+        progress,
+        ProgressStage::CodeUnitExtractionNormalization,
+        "stored code units",
+        known_work_units(indexed_units, indexed_units),
+    );
 
     sort_semantic_facts(&mut parser_semantic_facts);
     let parser_fact_count = record_semantic_facts(store, &generation, 0, &parser_semantic_facts)?;
@@ -401,7 +508,31 @@ fn index_repository_with_optional_semantic_worker(
         parser_fact_count + framework_fact_count,
         &derived_python_support_facts,
     )?;
+    emit_progress(
+        progress,
+        ProgressStage::SemanticResolution,
+        "recorded local support facts",
+        known_work_units(
+            parser_fact_count + framework_fact_count + derived_python_support_fact_count,
+            parser_fact_count + framework_fact_count + derived_python_support_fact_count,
+        ),
+    );
 
+    if options.semantic_worker.is_some() {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "running semantic worker",
+            WorkUnits::Unknown,
+        );
+    } else {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "semantic worker deferred",
+            WorkUnits::Unknown,
+        );
+    }
     let (semantic_worker, worker_facts) = record_semantic_worker_facts(
         &request,
         &report,
@@ -412,8 +543,22 @@ fn index_repository_with_optional_semantic_worker(
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
+    if worker_semantic_facts > 0 {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "recorded worker facts",
+            known_work_units(worker_semantic_facts, worker_semantic_facts),
+        );
+    }
 
     if let Some(family_store) = options.family_store {
+        emit_progress(
+            progress,
+            ProgressStage::CandidateDiscovery,
+            "checking family candidates",
+            WorkUnits::Unknown,
+        );
         let mut family_facts = Vec::with_capacity(
             parser_semantic_facts.len()
                 + framework_role_facts.len()
@@ -430,10 +575,28 @@ fn index_repository_with_optional_semantic_worker(
             &indexed_code_units,
             &family_facts,
         )?;
+        emit_progress(
+            progress,
+            ProgressStage::FamilyConstruction,
+            "stored eligible family claims",
+            WorkUnits::Unknown,
+        );
     }
 
+    emit_progress(
+        progress,
+        ProgressStage::PersistenceValidation,
+        "validating generation",
+        WorkUnits::Unknown,
+    );
     crate::application::storage::validate_index_generation(store, &generation)?;
     crate::application::storage::activate_index_generation(store, &generation)?;
+    emit_progress(
+        progress,
+        ProgressStage::PersistenceValidation,
+        "activated generation",
+        WorkUnits::Unknown,
+    );
 
     Ok(IndexingOutcome {
         indexed_units,
@@ -447,6 +610,25 @@ fn index_repository_with_optional_semantic_worker(
         semantic_worker,
         warnings,
     })
+}
+
+fn emit_progress(
+    progress: &mut dyn FnMut(ProgressEvent),
+    stage: ProgressStage,
+    message: &'static str,
+    work: WorkUnits,
+) {
+    progress(ProgressEvent::new(stage, message, work));
+}
+
+fn known_work_units(completed: usize, total: usize) -> WorkUnits {
+    let Ok(completed) = u64::try_from(completed) else {
+        return WorkUnits::Unknown;
+    };
+    let Ok(total) = u64::try_from(total) else {
+        return WorkUnits::Unknown;
+    };
+    WorkUnits::known(completed, total).unwrap_or(WorkUnits::Unknown)
 }
 
 #[derive(Clone, Copy)]
@@ -2174,6 +2356,54 @@ mod tests {
             .query_row("SELECT count(*) FROM code_units", [], |row| row.get(0))
             .expect("count code units");
         assert_eq!(code_units, 0);
+    }
+
+    #[test]
+    fn parser_indexing_emits_stage_progress_without_source_paths() {
+        let workspace = TempWorkspace::new("indexing-progress-events");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        fs::write(workspace.path().join("b.ts"), "export const b = 2;\n").expect("write b");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let mut events = Vec::new();
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_families_and_store_with_progress(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &detector,
+                &store,
+                &mut |event| events.push(event),
+            )
+            .expect("index with progress events");
+
+        assert_eq!(outcome.discovered_files, 2);
+        assert!(events.iter().any(|event| matches!(
+            (event.stage, event.work),
+            (ProgressStage::ProjectDiscovery, WorkUnits::Unknown)
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event.stage, ProgressStage::FileScanning)));
+        assert!(events.iter().any(|event| matches!(
+            (event.stage, event.work),
+            (ProgressStage::SyntaxParsing, WorkUnits::Known(work))
+                if work.completed() == 2 && work.total() == 2
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event.stage, ProgressStage::PersistenceValidation)));
+        let rendered = events
+            .iter()
+            .map(ProgressEvent::render_plain)
+            .collect::<String>();
+        assert!(!rendered.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("a.ts"));
+        assert!(!rendered.contains("b.ts"));
     }
 
     #[test]

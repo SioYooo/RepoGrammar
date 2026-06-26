@@ -1,335 +1,257 @@
 # RepoGrammar
 
-Local implementation-pattern intelligence for coding agents.
+Local implementation-pattern context for coding agents.
 
-RepoGrammar is a pre-alpha local analysis engine for discovering recurring
-repository implementation pattern families and returning auditable source
-evidence. It is designed for agents and maintainers who need to know how a
-codebase usually implements something before they change it.
+RepoGrammar helps coding agents and maintainers understand how a repository
+usually implements a feature before changing it. Instead of returning a long
+list of vaguely similar files, it tries to summarize recurring implementation
+families, accepted variations, exceptions, and the evidence behind those
+claims.
 
-RepoGrammar is not a call-graph explorer. The core product shape is
-pattern-family evidence: dominant conventions, accepted variations, exceptions,
-counterexamples, and `UNKNOWN` when static analysis cannot justify a stronger
-claim.
+RepoGrammar is **pre-alpha**. The current public preview is local-first,
+metadata-only, and conservative: when evidence is insufficient, stale,
+ambiguous, or outside the supported scope, RepoGrammar returns `UNKNOWN`
+instead of guessing.
 
-## Status
+## What It Does
 
-This repository has reached the scoped v0.1 release surface for Python-first,
-sound-by-abstention implementation/integration-family evidence and read
-planning, while remaining pre-alpha outside that narrow contract. It currently
-contains governance, documentation, CI, a Rust core skeleton, semantic-worker
-boundaries, a pattern-family-first CLI boundary, repo-local lifecycle commands,
-TS/JS file discovery, Python `.py` discovery, syntax-only code-unit extraction,
-syntax-origin framework-role fact storage, CodeUnit-derived structural IR
-storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
-unavailable stub, a CPython AST-backed Python worker for structural code units,
-stored internal structural anchors, and typed dynamic/unresolved `UNKNOWN`
-output,
-repository guard checks, and a read-only MCP `repogrammar_context` stdio
-boundary. Matched Python family reads now include metadata-only read plans that
-identify target, canonical, support, and variation spans by repo-relative path,
-strict content hash, and byte range without returning source text.
+RepoGrammar is designed to answer questions like:
 
-The official v0.1 implementation target has pivoted to Python-first analysis
-for FastAPI, pytest, SQLAlchemy, and Pydantic. The current TS/JS code remains
-transitional substrate from the earlier bootstrap while Python discovery,
-parser, framework-role, import-resolution, and family-evidence work is
-implemented. The first Python slice discovers `.py` files, extracts CPython
-`ast` structural code units for FastAPI route-shaped functions, pytest
-tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
-emits worker-local structural anchors for imports/decorators/class bases/simple
-calls/test and fixture dependency edges, stores those anchors as internal parser-origin
-`STRUCTURAL`/`UNKNOWN` facts, and stores framework-role heuristic facts without
-turning raw facts into family claims. A bounded application-layer derivation
-step can now synthesize separate `DATAFLOW_DERIVED` support facts only when
-validated CPython anchors exact-match the Python framework compatibility table
-for a unit with one framework role and no claim-relevant parser-origin blocking
-`UNKNOWN`. This is sound-by-abstention bounded Python framework-family claims,
-not sound Python semantic analysis; low-support and dynamic cases still return
-typed `UNKNOWN`. Ready Python exact-anchor families pass bounded complete-link
-clustering over support-family features before being stored, so bridge examples
-cannot single-link incompatible Python support into one confident claim. They
-may record metadata-only variation evidence when exact-compatible
-framework-anchor support targets differ, and metadata-only variation slots when
-parser-context profiles differ inside an already-supported family. Exact-anchor
-derivation now uses only
-top-level framework bindings that have not been shadowed, and module-scope
-dynamic import/path mutation becomes unit-scoped blocking `UNKNOWN` evidence
-instead of being guessed away. Product-path regression coverage verifies local
-framework lookalikes such as `@client.get(...)`, user-defined `BaseModel`, and
-user-defined SQLAlchemy-shaped `Base` remain non-family evidence. The Python
-plan still uses a claim-driven selective
-cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
-plausible family candidates, Pyright only for claim-upgrading cross-checks, and
-typed `UNKNOWN` when evidence cannot support a claim.
+- What local implementation pattern does this target resemble?
+- Which examples are canonical, and which are variations or exceptions?
+- What files should an agent read before editing?
+- Is this target likely to conform to a known local family?
 
-It does not yet implement TypeScript compiler analysis, broad installer writes,
-or full EC-MVFI mining. The Rust-side TypeScript semantic-worker adapter
-can execute a configured process, send the v1 request payload, and validate
-NDJSON v1 facts. A checked-in worker stub can validate stdin and report semantic
-analysis as unavailable. `index` and `sync` do not launch a worker by default;
-when `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, they may run
-that worker with optional argv from
-`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` and store only facts that pass the
-building generation's path/hash/range evidence gate. The current EC-MVFI-lite
-builder may write family records only when compatible framework-role candidates
-also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support;
-syntax-only framework heuristics remain insufficient support.
-`init`, `uninit`, `unlock`, and `logs` operate only on safe repo-local lifecycle
-state. `index` and `sync` now create a SQLite generation from TS/JS discovery
-metadata plus syntax-only `code_units` records and structural IR records:
-repo-relative path, language, kind, byte range, strict content hash, one IR node
-per code unit, and conservative containment edges. They may also store
-syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty for
-recognized Express, React, and Jest/Vitest code-unit shapes, without launching a
-semantic worker. The Python path may also store root `pyproject.toml` as a
-`python-config` inventory file and `project_config` unit with sanitized
-`PROJECT_CONFIG`/`STRUCTURAL` metadata or typed config `UNKNOWN`s. It may write
-Python family records for exact-anchor derived support when the current
-EC-MVFI-lite gate has enough compatible support, but it does not store source
-snippets or absolute paths and does not claim provider-backed Python semantics.
-`files` and `units` can read the active file-manifest-only or
-syntax-only generation for inventory/debugging. Pattern
-family query commands are wired to the active FamilyStore read path: with no
-active index they still return fallback guidance, and with an active index but
-insufficient family evidence they return typed `UNKNOWN` instead of pretending a
-family was proven. `status` and `doctor` can distinguish file-manifest-only
-generations from syntax-only code-unit/IR generations. `serve` exposes the same
-conservative query path through the single default MCP tool
-`repogrammar_context`. `install` and `uninstall` support narrow explicit-target
-Codex/Claude Code MCP configuration through native agent CLIs after a read-only
-MCP self-test and RepoGrammar-owned receipts. Uninstall refuses missing or
-foreign receipts instead of removing unmanaged agent configuration; broad
-`--target all`, unsupported native scopes, executable copying, and
-instruction-file edits remain deferred.
+The output is meant to be small and auditable. Current family results expose
+metadata such as repo-relative paths, content hashes, byte ranges, support
+counts, variation labels, and `UNKNOWN` reasons. Source snippets are not
+returned by default.
 
-## Why RepoGrammar?
+## Current Scope
 
-Coding agents usually learn repository conventions the slow way: searching
-files, reading examples one by one, and guessing which examples are canonical.
-That is brittle when a repository has multiple styles, legacy exceptions, test
-helpers, framework conventions, or partial migrations.
+The scoped v0.1 preview focuses on Python repositories using:
 
-RepoGrammar's goal is to answer a different question:
+- FastAPI
+- pytest
+- Pydantic
+- SQLAlchemy
 
-> What implementation family does this target belong to, what variations are
-> legitimate here, and what source evidence supports that conclusion?
+Current Python claims are bounded framework-family claims, not full Python
+semantic analysis. RepoGrammar requires compatible repeated evidence before it
+emits a confident family claim. Low-support, dynamic, stale, or unresolved cases
+remain `UNKNOWN`.
 
-The intended output is a small, auditable evidence set rather than a long list of
-similar files. A strong result should distinguish:
+TypeScript and JavaScript are not official v0.1 support targets.
 
-- `DOMINANT_PATTERN`: the high-support repository convention.
-- `VARIATION`: an accepted local variation slot.
-- `EXCEPTION`: a real counterexample or legacy/special-case implementation.
-- `UNKNOWN`: insufficient static evidence, competing families, dynamic behavior,
-  or an unsupported target.
+## Install
 
-## Get Started
-
-RepoGrammar is currently a Rust workspace, not an installable production tool.
-Use Cargo from the repository root:
+Once a public-preview prerelease has been published, install the prebuilt CLI
+binary first:
 
 ```text
-cargo run --quiet --bin repogrammar -- version
-cargo run --quiet --bin repogrammar -- help
-cargo run --quiet --bin repogrammar -- init
-cargo run --quiet --bin repogrammar -- index
-cargo run --quiet --bin repogrammar -- files --json
-cargo run --quiet --bin repogrammar -- units --json
-cargo run --quiet --bin repogrammar -- status
-cargo run --quiet --bin repogrammar -- doctor --json
-cargo run --quiet --bin repogrammar -- stats --json
-cargo run --quiet --bin repogrammar -- telemetry status --json
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh
+bash install.sh
 ```
 
-Try the current pattern-family CLI boundary:
+After the npm package is published, users with Node/npm can use the wrapper to
+download the same prebuilt binary and run it through `npx`:
 
 ```text
-cargo run --quiet --bin repogrammar -- find --project . --token-budget 8000 <target>
-cargo run --quiet --bin repogrammar -- family --project . --mode compact <family-id>
-cargo run --quiet --bin repogrammar -- family --project . --mode evidence --token-budget 8000 <family-id>
-cargo run --quiet --bin repogrammar -- explain --project . --token-budget 8000 <target>
-cargo run --quiet --bin repogrammar -- check --project . --token-budget 8000 <target>
+npx @sioyooo/repogrammar install
 ```
 
-The lifecycle surface is intentionally present before the full engine exists so
-repo-local state boundaries, command contracts, tests, and documentation can
-stabilize before full mining begins. Pattern-family query commands currently
-return explicit missing-index fallback guidance before `index`; after an active
-index exists, they return typed `UNKNOWN` when family evidence is insufficient.
-With `--json`, both states are parseable. Matched family detail defaults to
-compact output without evidence records; explicit `--mode evidence` or
-`--mode deep` returns selected repo-relative evidence metadata only, with
-coverage labels and missing requested variation/exception coverage reported
-without source snippets. Matched family output also includes a metadata-only
-`read_plan` with suggested source spans to inspect; target spans are marked as
-required before editing, and line ranges remain unavailable until a safe
-source-span renderer exists. `stats --json` reports repo-shape diagnostics such
-as local pattern density, family support coverage, abstention rate, and
-thin-wrapper/token-saving risk. These diagnostics are not measured token
-savings; actual token savings are reported only after a local paired
-baseline/treatment token experiment records comparable measurements. Experiment
-recording requires explicit confirmation: `--yes` is the non-interactive path,
-while interactive runs prompt with default-no `[y/N]`. `record-existing` uses
-sessions the user already performed, while `controlled-pair` warns that
-separate baseline and treatment sessions may increase token usage, time, and
-provider cost.
-Anonymous telemetry is off by default and can be inspected, enabled, disabled,
-exported, uploaded, or purged through `repogrammar telemetry ...`; environment
-opt-outs and CI force upload disabled, and research trace consent is separate.
-When anonymous telemetry is enabled, `stats --json` may update a bucketed local
-rollup only; it never opens a network connection or creates an upload queue.
-Telemetry status reports rollup/queue/sent counts and whether an explicit
-upload would open a network connection; allowlisted uploads include only coarse
-experiment aggregate categories when paired measurements exist.
-Live install keeps telemetry independent from agent setup: `--yes` never
-implies telemetry consent, `install --yes` without telemetry flags does not
-prompt and keeps telemetry disabled, and `--telemetry`/`--no-telemetry` remain
-explicit overrides.
-`files` and `units` are limited to active file-manifest-only or syntax-only
-index metadata.
-
-## Product Shape
-
-| Area | Current state | Target shape |
-|---|---|---|
-| Language scope | v0.1 target is Python-first; current code still contains TS/JS bootstrap substrate | Production-quality Python pattern-family evidence for FastAPI, pytest, SQLAlchemy, and Pydantic |
-| TS/JS | Transitional substrate from the earlier bootstrap | Deferred production-quality TS/JS pattern-family evidence after Python v0.1 unless a later ADR changes scope |
-| Parsing | Dependency-free syntax-only TS/JS extractor and CPython `ast`/`symtable`-backed Python extractor store structural code-unit, module, scope, and source-tied repo-local import candidates; private `tomllib` config summaries, semantic-worker-compatible project-mode repo-local module import facts, and Python release fixtures smoke this path without creating claims by default | Public parser-backed syntax candidates, not final semantic truth |
-| Semantics | Rust-side process adapter has request/output protocol fixtures and validates NDJSON v1 worker output; checked-in worker stub reports compiler analysis unavailable; `index`/`sync` can optionally run an explicit worker executable plus JSON argv vector and store only same-generation validated facts; default indexing can store syntax-origin framework-role facts with framework-heuristic certainty and separate exact-anchor Python `DATAFLOW_DERIVED` support facts; compiler/provider worker implementation remains deferred | Language-native semantic workers provide compiler/API facts |
-| Discovery | TS/JS and `.py` discovery feed syntax-only `index`/`sync` generations; Python virtualenv/cache/dependency dirs are skipped | Git-aware Python source inventory plus package/import context feeding parser and storage |
-| Storage | SQLite generation schema, PRAGMAs, validation, activation pointer, indexed files, syntax-only code units, syntax-origin framework-role fact records, active files/units and family read paths, validated semantic-fact/evidence write/read substrate, EC-MVFI-lite family claim storage when strong semantic/dataflow support exists, Python fixture smoke for stale evidence, and status/doctor health reporting are implemented behind ports | Local evidence index wired to semantic workers, richer family read paths, migrations, and provenance |
-| State directory | Safe `.repogrammar/` lifecycle plus file-manifest-only and syntax-only active generations are implemented | One repository-derived SQLite index per project, not a global code-derived database |
-| MCP | Read-only `repogrammar_context` serve boundary is implemented | Stable agent-tool API after more compatibility testing |
-| Telemetry | Opt-in anonymous telemetry status/on/off/export/upload/purge and separate research consent are implemented with an allowlisted schema, inspect-only export, redacted experiment export, and no repository instance id in payloads | Future production endpoint configuration |
-| Optional providers | No provider dependency | CodeGraph may be considered only as an optional lower-layer evidence provider, not a required runtime |
-
-RepoGrammar does not depend on cloud services, local LLMs, embedding models,
-vector databases, or remote APIs for v0.1.
-
-Repository-derived analysis state belongs in `.repogrammar/` by default. Global
-state is limited to installation receipts, binary/cache metadata, telemetry
-preference, anonymous machine id, and non-repository-derived runtime artifacts.
-
-## Evidence Discipline
-
-RepoGrammar must not turn weak static hints into confident claims. Structural
-similarity can generate candidates, but it cannot prove semantic family
-membership by itself.
-
-Primary evidence should come from repository-local source, normalized structure,
-language-native semantic facts, framework-aware adapters, explicit provenance,
-and contrastive examples. When evidence is ambiguous, stale, unsupported, or
-outside the official language scope, RepoGrammar must abstain with `UNKNOWN`.
-
-## CLI Reference
-
-The v0.1 CLI is organized around implementation-pattern families:
+After publication, you can also install the wrapper globally:
 
 ```text
-repogrammar init
-repogrammar uninit
-repogrammar index
-repogrammar sync
-repogrammar status
-repogrammar doctor
-repogrammar unlock
-repogrammar logs
-repogrammar find
-repogrammar families
-repogrammar family
-repogrammar member
-repogrammar explain
-repogrammar check
-repogrammar files
-repogrammar units
-repogrammar serve
+npm install -g @sioyooo/repogrammar
 repogrammar install
-repogrammar uninstall
-repogrammar stats
-repogrammar telemetry
+```
+
+The installer downloads the matching macOS or Linux release artifact, verifies
+its checksum, installs `repogrammar` into a user-writable command directory, and
+then can launch the agent setup wizard. It does not require Rust, Cargo,
+Node.js, Docker, a local LLM, an embedding model, or a cloud API key. The
+current Python preview still requires a `python3` interpreter at indexing time
+to run RepoGrammar's bundled CPython AST worker; it does not require a Python
+virtualenv or project dependency installation.
+
+The `npx` / npm path requires Node/npm by definition, but still does not require
+Rust or Cargo. On Windows preview builds, use PowerShell:
+
+```text
+Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Agent integration requires the native CLI for the agent you choose: `codex` for
+Codex integration and `claude` for Claude Code integration. Missing agent CLIs
+are non-fatal; you can configure the agents that are available and rerun
+`repogrammar install` later.
+
+The installer separates three steps: get the CLI, wire coding agents, then run
+`repogrammar init` / `repogrammar index` inside each repository. Agent wiring
+does not index code and does not create `.repogrammar/`.
+
+From a source checkout, the same installer lives at:
+
+```text
+bash src/install/repogrammar-install.sh
+```
+
+That script can install or repair the `repogrammar` command from a release,
+configure Codex and Claude Code, uninstall connected agent integrations, remove
+the local `repogrammar` command, or, for contributors, build from source. Until
+the first prerelease artifact exists, source-checkout dogfood is the supported
+path:
+
+```text
+cargo build --release
+bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
-repogrammar help
+bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all
 ```
 
-The following graph-navigation names are intentionally not top-level v0.1
-commands: `callers`, `callees`, `impact`, `affected`, `node`, and `explore`.
-If call-graph functionality is added later, it must remain secondary to the
-pattern-family product shape.
+The source path installs the built binary into RepoGrammar-managed user state
+and refreshes the user-writable `repogrammar` command without requiring a
+GitHub Release asset or published npm package.
 
-See [docs/specifications/cli.md](docs/specifications/cli.md) for the command
-contract.
-
-## Architecture
-
-RepoGrammar uses a Rust primary core with room for language-native semantic
-workers under `src/`:
+Before the npm package is published, local npm dogfood can bypass release
+downloads with an already built binary:
 
 ```text
-src/rust: Rust core, analysis engine, CLI, MCP, storage, repository guard
-src/workers: language-native semantic worker entries and future compiler integrations
-src/protocol: versioned worker protocol documents and schemas
+REPOGRAMMAR_BINARY=/absolute/path/to/target/release/repogrammar node src/npm/repogrammar.js version
+npm pack
+npm install -g ./sioyooo-repogrammar-0.1.0.tgz
 ```
 
-Reference metadata that is not executable source lives outside `src/`:
+The published npm path still expects release artifacts by default.
+
+You can also review the plan without writing anything:
 
 ```text
-algorithms/paper: metadata-only algorithm and supply-chain reference archive
+repogrammar install --target all --scope global --dry-run --no-telemetry
 ```
 
-The dependency direction and module ownership are documented in:
+The installer configures machine-level coding-agent MCP integration. It does not
+index the current repository and does not create or modify `.repogrammar/`.
 
-- [docs/architecture/overview.md](docs/architecture/overview.md)
-- [docs/architecture/module-map.md](docs/architecture/module-map.md)
-- [docs/architecture/dependency-rules.md](docs/architecture/dependency-rules.md)
+Supported public-preview binary targets are macOS arm64/x86_64, Linux
+arm64/x86_64, and Windows x86_64 preview. Release artifacts include the
+RepoGrammar binary and the Python worker asset used by the current Python
+frontend. The npm wrapper is a thin launcher for those same release artifacts;
+it is not the implementation of RepoGrammar.
 
-## Roadmap
+## Quick Start
 
-The next implementation phase should refine one boundary at a time from the
-v0.1 parallel development plan:
+From a repository you want to analyze:
 
-- keep syntax-only code units structural and non-semantic;
-- keep syntax-origin framework-role facts framework-heuristic and out of family
-  claims until stronger evidence and claim builders exist;
-- pivot the next analysis work to Python discovery, parser boundaries,
-  repo-local import resolution, framework-role extraction, and Python
-  EC-MVFI-lite fixtures;
-- keep TypeScript compiler API integration, full mining, broad installer writes,
-  and instruction-file integration deferred until parser output, storage,
-  semantic-worker, MCP self-test, and receipt boundaries are validated together;
-- keep optional CodeGraph provider work and typed `UNKNOWN` governance
-  explicitly scoped before implementation.
+```text
+repogrammar install
+repogrammar init
+repogrammar index
+repogrammar status
+repogrammar families
+repogrammar find --project . --token-budget 8000 <target>
+repogrammar family --project . --mode compact <family-id>
+repogrammar explain --project . --token-budget 8000 <target>
+repogrammar check --project . --token-budget 8000 <target>
+```
 
-See [docs/roadmap.md](docs/roadmap.md) and
-[docs/plans/v0.1-parallel-development-plan.md](docs/plans/v0.1-parallel-development-plan.md)
-for the staged plan.
+Before a repository is initialized or before enough evidence exists, query
+commands return explicit fallback or `UNKNOWN` results rather than pretending an
+index or family claim exists.
+
+`repogrammar index` shows progress automatically in an interactive terminal.
+Use `repogrammar index --progress always` to force progress output, or
+`repogrammar index --progress never` for quiet scripts.
+
+## Agent Integration
+
+RepoGrammar exposes a read-only MCP tool named `repogrammar_context`.
+
+Global MCP integration is supported for Codex and Claude Code. Running
+`repogrammar install` with no flags opens a simple text wizard that lets you
+select Codex, Claude Code, or both in one run. Re-running the wizard later lets
+you add a missing supported agent or repair the `repogrammar` command without
+reinstalling already managed agents.
+
+Noninteractive dry-runs remain available:
+
+```text
+repogrammar install --target all --scope global --dry-run --no-telemetry
+```
+
+After reviewing the plan, use `--yes` for explicit noninteractive installs:
+
+```text
+repogrammar install --target codex --scope global --yes --no-telemetry
+repogrammar install --target claude-code --scope global --yes --no-telemetry
+repogrammar install --target all --scope global --yes --no-telemetry
+```
+
+Multi-agent install is all-or-rollback: if one selected agent fails, changes
+from the same run are rolled back. Project-local live writes are deferred.
+
+For planning and manual configuration, the CLI also understands CodeGraph-style
+target ids such as `cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and
+`kiro` in dry-run and `--print-config` modes:
+
+```text
+repogrammar install --print-config cursor --location local
+repogrammar install --target cursor,gemini --location local --dry-run --no-telemetry
+```
+
+Those preview targets are not live-written by the public preview installer yet.
+
+## Privacy And Telemetry
+
+RepoGrammar is local-first. Repository-derived indexes live under
+`.repogrammar/` in the analyzed project.
+
+Anonymous telemetry is off by default. `install --yes` does not imply telemetry
+consent. Telemetry, when explicitly enabled, is designed to use coarse
+allowlisted product metrics and must not include source code, prompts, query
+text, repository names, paths, symbols, credentials, or raw errors.
+
+Useful commands:
+
+```text
+repogrammar telemetry status --json
+repogrammar telemetry on
+repogrammar telemetry off
+repogrammar telemetry export --json
+repogrammar telemetry purge --yes
+```
+
+## Limitations
+
+RepoGrammar is not production-ready and should not be treated as a sound static
+analyzer. In this preview:
+
+- Python support is limited to bounded framework-family evidence.
+- Dynamic Python behavior often produces typed `UNKNOWN`.
+- Source snippets are not returned by default.
+- Full Python semantic providers, runtime observation, and broader language
+  support are deferred.
+- Telemetry upload remains experimental and opt-in.
+
+## Documentation
+
+- [Documentation map](docs/README.md)
+- [CLI specification](docs/specifications/cli.md)
+- [Product specification](docs/specifications/product.md)
+- [Python analysis specification](docs/specifications/python-analysis.md)
+- [MCP API specification](docs/specifications/mcp-api.md)
+- [Telemetry specification](docs/specifications/telemetry.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Development
 
-Requirements:
-
-- Rust stable toolchain from [rust-toolchain.toml](rust-toolchain.toml)
-- Cargo with rustfmt and clippy components
-- Node.js for the dependency-free TypeScript worker stub smoke test
-- Git for diff-based repository guard checks
-
-Required verification:
-
-```text
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-python3 src/workers/python/worker.test.py
-node src/workers/typescript/worker.test.js
-cargo run --quiet --bin repo-guard -- check
-cargo run --quiet --bin repo-guard -- check-diff --base origin/main --head HEAD
-git diff --check origin/main...HEAD
-cmp -s AGENTS.md CLAUDE.md
-```
-
-Repository documentation starts at [docs/README.md](docs/README.md). The mirrored
-agent contract lives in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md), which
-must remain byte-identical.
+Contributors building from source need Rust/Cargo. Node.js is needed only for
+TypeScript worker tests; Python 3 is needed for Python indexing and Python
+worker tests. For contributor setup, architecture, and validation commands,
+start with [docs/README.md](docs/README.md) and
+[docs/development/testing.md](docs/development/testing.md).
 
 ## Star History
 
@@ -342,3 +264,5 @@ must remain byte-identical.
 </a>
 
 ## License
+
+MIT

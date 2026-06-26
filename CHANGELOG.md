@@ -4,6 +4,52 @@
 
 ### Added
 
+- `repogrammar index` and `repogrammar sync` now emit progress while they run.
+  Human progress uses stderr and exact completed/total counts when known;
+  `--json --progress always` emits progress NDJSON on stderr while preserving
+  the final JSON result on stdout.
+- Source-checkout installer dogfood now works before GitHub prerelease assets
+  or npm publication exist. The Bash wrapper can install the built contributor
+  binary through explicit `--from-source` flows, writes the command through the
+  same managed install layout used by the Rust installer, delegates agent
+  wiring to `repogrammar install`, refuses foreign command paths, and reports
+  actionable missing-release guidance. The npm launcher now has a tested
+  `REPOGRAMMAR_BINARY` local dogfood bypass while keeping release artifacts as
+  the published default.
+- Interactive `repogrammar install` now provides a dependency-light text wizard
+  for machine-level Codex and Claude Code MCP wiring. The wizard supports
+  multi-select in one run, skips already managed RepoGrammar receipts by
+  default, keeps telemetry default-off, and does not initialize or index
+  repositories. Noninteractive `--target all --scope global --yes` uses the
+  same all-or-rollback multi-agent transaction, and `uninstall --target all`
+  removes only RepoGrammar-owned first-class agent receipts.
+- Re-running `repogrammar install` now still installs or repairs the
+  user-writable `repogrammar` command when selected agents are already managed.
+- Managed installs now place bundled Python worker assets under install state
+  that the managed executable can discover, and refresh rollback restores the
+  previous managed executable and command copy if self-test or native agent
+  configuration fails.
+- The installer now has a CodeGraph-style target registry for planning and
+  configuration previews. `--target` accepts `auto`, `all`, `none`, aliases,
+  and comma-separated concrete target lists; `--location` aliases `--scope`;
+  and `--print-config <target>` prints no-write MCP snippets for known targets
+  such as Cursor, opencode, Hermes, Gemini, Antigravity, and Kiro while live
+  writes remain gated to global Codex and Claude Code.
+- Source checkouts now include `src/install/repogrammar-install.sh`, a
+  dependency-light TUI wrapper for downloading and verifying a prebuilt release
+  binary, installing or repairing the command, configuring or uninstalling
+  Codex/Claude Code integrations, removing the local command path after
+  confirmation, or explicitly choosing a contributor source build.
+- Release automation now builds prebuilt `repogrammar` artifacts with checksum
+  assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
+  preview, bundles the current Python worker asset, and publishes `install.sh`
+  / `install.ps1` installer assets for tagged preview releases. Real
+  downloadable prerelease artifacts are available only after a preview tag is
+  published.
+- Added the `@sioyooo/repogrammar` npm package manifest and thin `npx`
+  launcher. The launcher downloads and verifies the same prebuilt release
+  artifacts, caches the binary and bundled worker asset, and delegates all
+  behavior to the Rust CLI without requiring Cargo.
 - Repository bootstrap for the RepoGrammar Rust-core package layout.
 - Layered architecture skeleton for core, ports, application, interfaces, and
   adapters.

@@ -1,0 +1,29 @@
+{
+  "name": "@sioyooo/repogrammar",
+  "version": "0.1.0",
+  "description": "Local implementation-pattern context for coding agents",
+  "license": "MIT",
+  "bin": {
+    "repogrammar": "src/npm/repogrammar.js"
+  },
+  "files": [
+    "src/npm/repogrammar.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test:npm-wrapper": "node src/npm/repogrammar.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

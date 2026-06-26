@@ -5,8 +5,8 @@ use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::indexing::{
-    index_repository_with_discovery_parser_frameworks_families_and_store,
-    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store,
+    index_repository_with_discovery_parser_frameworks_families_and_store_with_progress,
+    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::install::{
@@ -29,14 +29,18 @@ use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
 #[cfg(test)]
 use repogrammar::interfaces::cli::run_with_runtime;
+#[cfg(test)]
+use repogrammar::interfaces::cli::ProgressMode;
 use repogrammar::interfaces::cli::{
-    parse_serve_options, repository_root, run_with_runtime_and_install_prompt, state_dir_override,
-    CliIndexRequest, CliRuntime, InstallTelemetryPrompt,
+    parse_serve_options, render_index_progress_event, repository_root,
+    run_with_runtime_and_install_prompt, should_emit_progress, state_dir_override, CliIndexRequest,
+    CliRuntime, InstallTelemetryPrompt,
 };
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -60,6 +64,22 @@ struct ProductCliRuntime;
 struct ProductInstallTelemetryPrompt;
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
+    fn is_interactive(&self) -> bool {
+        std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+    }
+
+    fn prompt_agent_selection(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
+    fn prompt_install_telemetry_consent(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
+    fn prompt_install_confirmation(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
     fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
         read_prompt_response(prompt)
     }
@@ -90,7 +110,7 @@ impl ProductCliRuntime {
 impl CliRuntime for ProductCliRuntime {
     fn index_repository(
         &self,
-        _command: &str,
+        command: &str,
         request: CliIndexRequest,
     ) -> Result<IndexingOutcome, RepoGrammarError> {
         let status_request = RepositoryStatusRequest {
@@ -132,26 +152,43 @@ impl CliRuntime for ProductCliRuntime {
         };
         let framework_roles = SyntaxFrameworkRoleDetector;
         let parser = RepoGrammarSourceParser::default();
+        let emit_progress = should_emit_progress(
+            request.progress,
+            request.json,
+            request.quiet,
+            request.stderr_is_terminal,
+        );
+        let json_progress = request.json;
+        let mut progress = |event| {
+            if emit_progress {
+                eprint!(
+                    "{}",
+                    render_index_progress_event(command, &event, json_progress)
+                );
+                let _ = std::io::stderr().flush();
+            }
+        };
         if let Some(executable) = request.semantic_worker_executable {
             let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                 .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &parser,
-                &framework_roles,
-                &worker,
+                (&framework_roles, &worker),
                 &store,
+                &mut progress,
             )
         } else {
-            index_repository_with_discovery_parser_frameworks_families_and_store(
+            index_repository_with_discovery_parser_frameworks_families_and_store_with_progress(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &parser,
                 &framework_roles,
                 &store,
+                &mut progress,
             )
         }
     }
@@ -554,9 +591,15 @@ fn native_add_command(
                 ],
             ))
         }
-        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+        AgentTarget::AllSupported | AgentTarget::None => Err(RepoGrammarError::InvalidInput(
             "native command requires a concrete agent target".to_string(),
         )),
+        target => Err(RepoGrammarError::InvalidInput(format!(
+            "{} {} live install is deferred; use --dry-run or --print-config {}",
+            target.as_str(),
+            scope.as_str(),
+            target.as_str()
+        ))),
     }
 }
 
@@ -598,9 +641,15 @@ fn native_remove_command(
                 ],
             ))
         }
-        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+        AgentTarget::AllSupported | AgentTarget::None => Err(RepoGrammarError::InvalidInput(
             "native command requires a concrete agent target".to_string(),
         )),
+        target => Err(RepoGrammarError::InvalidInput(format!(
+            "{} {} live uninstall is deferred; use --dry-run or --print-config {}",
+            target.as_str(),
+            scope.as_str(),
+            target.as_str()
+        ))),
     }
 }
 
@@ -1926,6 +1975,10 @@ mod tests {
                     strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
+                    progress: ProgressMode::Never,
+                    json: false,
+                    quiet: true,
+                    stderr_is_terminal: false,
                 },
             )
             .expect("index with semantic support worker");
@@ -2495,6 +2548,10 @@ mod tests {
                     strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
+                    progress: ProgressMode::Never,
+                    json: false,
+                    quiet: true,
+                    stderr_is_terminal: false,
                 },
             )
             .expect("index Python release fixture with semantic support worker");
@@ -3710,6 +3767,10 @@ class User(Base):
                     strict_gitignore: false,
                     semantic_worker_executable: Some(missing_worker.display().to_string()),
                     semantic_worker_args: Vec::new(),
+                    progress: ProgressMode::Never,
+                    json: false,
+                    quiet: true,
+                    stderr_is_terminal: false,
                 },
             )
             .expect("missing worker should fall back to syntax-only indexing");
@@ -4104,6 +4165,10 @@ EOF
                     strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
+                    progress: ProgressMode::Never,
+                    json: false,
+                    quiet: true,
+                    stderr_is_terminal: false,
                 },
             )
             .expect("worker fallback should keep syntax-only indexing");

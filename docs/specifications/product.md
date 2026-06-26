@@ -182,6 +182,17 @@ Machine-level `install` and `uninstall` are separate from repository-level
 `init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
 dry-run friendly.
 
+End-user installation must be binary-first. Public-preview users should be able
+to install and run the RepoGrammar CLI from a prebuilt release artifact without
+Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, local LLMs, embedding models,
+or cloud API keys. Rust/Cargo remains a contributor and source-build dependency
+only. The current Python preview still requires a `python3` interpreter at
+indexing time for the bundled CPython AST worker asset; it must not require a
+Python virtualenv or project dependency installation.
+The npm package is an optional thin launcher for users who already have
+Node/npm; it downloads and execs the same release binary and must not become a
+JavaScript reimplementation of RepoGrammar.
+
 Repository-derived analysis state belongs in the current repository's
 `.repogrammar/` state directory, or the directory named by `REPOGRAMMAR_DIR`.
 Global user state may contain installation receipts, binary/cache metadata,
@@ -208,5 +219,16 @@ and reports token/count data only through coarse buckets.
 RepoGrammar v0.1 first-class coding-agent integrations are Claude Code and
 Codex. Both integrations use the same read-only `repogrammar_context` MCP
 server through native agent CLI commands and RepoGrammar-owned receipts.
-Project-local live writes, `--target all` live writes, executable copying, and
-instruction-file edits remain deferred unless separately specified and tested.
+Interactive `repogrammar install` is a machine-level TUI-style wizard that can
+wire Codex, Claude Code, or both in one run, skip already managed agents, and
+add missing supported agents later. Multi-agent live install is
+all-or-rollback, and `--target all --scope global --yes` uses that same
+transaction. The installer may place the `repogrammar` command in a
+user-writable command directory, but it must not index code, mutate
+`.repogrammar/`, edit instruction files, upload telemetry, or run paired
+experiments. Project-local live writes and instruction-file edits remain
+deferred unless separately specified and tested. The install target registry may
+recognize additional CodeGraph-style agents for dry-run and `--print-config`
+planning, but recognized target ids are not live support claims until the
+adapter has a reversible writer, ownership receipt, uninstall inverse, and
+default tests.
