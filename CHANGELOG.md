@@ -123,6 +123,11 @@
   insufficient, project-config facts stay blocked, and Python still requires
   three compatible support members before the EC-MVFI-lite family builder writes
   a family.
+- Python EC-MVFI-lite family construction now applies bounded complete-link
+  clustering over support-family feature groups. Bridge members can no longer
+  single-link incompatible Python support families into one confident claim, and
+  multiple ready clusters inside one coarse bucket receive stable sanitized
+  cluster ids without exposing source snippets or absolute paths.
 - Narrow Python exact-anchor variation metadata: when an already-ready Python
   family has multiple exact-compatible framework-anchor support targets, the
   family builder records a dedicated variation slot and one metadata-only

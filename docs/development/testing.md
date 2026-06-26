@@ -221,7 +221,9 @@ allowed.
   `post`, and `put` route-method matrix, FastAPI alias, pytest test,
   pytest `mark.parametrize` decorator support, pytest fixture, Pydantic model/settings,
   SQLAlchemy model-field, and SQLAlchemy session/repository families only when
-  Python support reaches three members, their CLI/MCP metadata-only
+  Python support reaches three members, Python complete-link clustering refusing
+  single-link bridge members and splitting distinct ready support-family
+  clusters with stable sanitized ids, their CLI/MCP metadata-only
   compact/evidence/deep query paths,
   default-index parser context receiving discovered `.py` inventory, sanitized
   root `pyproject.toml` source roots from parser/tomllib project-config facts,

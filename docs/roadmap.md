@@ -225,8 +225,10 @@ evidence contracts remain validated together.
   application layer can derive `DATAFLOW_DERIVED` support from exact canonical
   anchors under the Python support >= 3 gate, including bare canonical pytest
   fixture decorators while keeping fixture-edge and parametrize-argument context
-  anchors out of support. Next Python slices should escalate only plausible
-  family candidates to Pyrefly and use Pyright only for claim-upgrading
+  anchors out of support. It also applies bounded complete-link clustering over
+  Python support-family features so bridge members cannot single-link
+  incompatible support families. Next Python slices should escalate only
+  plausible family candidates to Pyrefly and use Pyright only for claim-upgrading
   cross-checks.
 - First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
 - Django is deferred until after the focused Python backend subset validates the

@@ -119,8 +119,10 @@ pattern. The current storage substrate can persist generation-scoped family
 records, family members, variation slots, and family-bound evidence. The
 current EC-MVFI-lite builder can populate those records only for repeated
 compatible candidates backed by strong semantic/dataflow support; syntax-only
-framework-role facts produce typed `UNKNOWN` instead of a family claim. Full
-template induction, exception mining, and MCP family responses remain deferred.
+framework-role facts produce typed `UNKNOWN` instead of a family claim. Python
+families also pass a bounded complete-link clustering step over support-family
+features, so a bridge member cannot connect otherwise incompatible Python
+support families. Full template induction and exception mining remain deferred.
 
 ## CanonicalTemplate
 

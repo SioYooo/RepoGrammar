@@ -102,6 +102,12 @@ pub fn build_family_claims(
 ) -> FamilyBuildReport {
     let role_by_unit = framework_roles_by_unit(semantic_facts);
     let support_targets_by_unit = eligible_support_by_unit(units, semantic_facts, &role_by_unit);
+    let features_by_unit = family_features_by_unit(
+        units,
+        semantic_facts,
+        &role_by_unit,
+        &support_targets_by_unit,
+    );
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
     let mut unknowns = Vec::new();
 
@@ -159,51 +165,42 @@ pub fn build_family_claims(
             .into_iter()
             .filter(|evidence| !evidence.support_targets.is_empty())
             .collect::<Vec<_>>();
-        if supported_evidence.len() < min_family_support(&key.language) {
-            unknowns.push(insufficient_support_unknown(format!(
-                "family:{}:{}:{}",
-                key.language, key.code_unit_kind, key.framework_role
+        if supported_evidence.is_empty() {
+            unknowns.push(insufficient_support_unknown(family_affected_claim(
+                &key, None,
             )));
             continue;
         }
-        let family_id = family_id(&key);
-        let runtime_unknown = ClaimUnknown {
-            class: UnknownClass::NonBlocking,
-            reason: UnknownReasonCode::FrameworkMagic,
-            affected_claim: format!("{family_id}:runtime_equivalence"),
-            recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
-        };
-        let mut variation_slots = vec![VariationSlot {
-            slot_id: "slot:runtime_unknown".to_string(),
-            description: format!(
-                "{}:{}:{}",
-                runtime_unknown.class.as_protocol_str(),
-                runtime_unknown.reason.as_protocol_str(),
-                "runtime equivalence remains unproven"
-            ),
-        }];
-        if python_framework_anchor_target_varies(&key, &supported_evidence) {
-            variation_slots.push(VariationSlot {
-                slot_id: "slot:python_framework_anchor_target".to_string(),
-                description:
-                    "variation:python_framework_anchor_target:exact compatible framework anchors differ"
-                        .to_string(),
-            });
+        let clusters = complete_link_family_clusters(&key, supported_evidence, &features_by_unit);
+        let ready_cluster_count = clusters
+            .iter()
+            .filter(|cluster| cluster.len() >= min_family_support(&key.language))
+            .count();
+        let mut emitted_ready_clusters = 0usize;
+        for cluster in clusters {
+            let cluster_suffix = (key.language == "python" && ready_cluster_count > 1)
+                .then(|| python_cluster_signature(&cluster, &features_by_unit));
+            if cluster.len() < min_family_support(&key.language) {
+                unknowns.push(insufficient_support_unknown(family_affected_claim(
+                    &key,
+                    cluster_suffix.as_deref(),
+                )));
+                continue;
+            }
+            let suffix = if emitted_ready_clusters == 0 {
+                None
+            } else {
+                cluster_suffix.as_deref()
+            };
+            let normalized_shape = cluster_normalized_shape(&key, suffix);
+            claims.push(family_claim_from_supported_evidence(
+                &key,
+                suffix,
+                normalized_shape,
+                cluster,
+            ));
+            emitted_ready_clusters += 1;
         }
-        claims.push(FamilyClaim {
-            family_id,
-            classification: "DOMINANT_PATTERN".to_string(),
-            support: supported_evidence.len(),
-            language: key.language,
-            code_unit_kind: key.code_unit_kind,
-            framework_role: key.framework_role,
-            normalized_shape: key.normalized_shape,
-            evidence: supported_evidence,
-            variation_slots,
-            exceptions: Vec::new(),
-            unknowns: vec![runtime_unknown],
-            readiness: ClaimReadiness::Ready,
-        });
     }
 
     claims.sort_by(|left, right| left.family_id.cmp(&right.family_id));
@@ -221,6 +218,52 @@ pub fn build_family_claims(
     });
     unknowns.dedup();
     FamilyBuildReport { claims, unknowns }
+}
+
+fn family_claim_from_supported_evidence(
+    key: &FamilyKey,
+    cluster_suffix: Option<&str>,
+    normalized_shape: String,
+    supported_evidence: Vec<FamilyEvidence>,
+) -> FamilyClaim {
+    let family_id = family_id(key, cluster_suffix);
+    let runtime_unknown = ClaimUnknown {
+        class: UnknownClass::NonBlocking,
+        reason: UnknownReasonCode::FrameworkMagic,
+        affected_claim: format!("{family_id}:runtime_equivalence"),
+        recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+    };
+    let mut variation_slots = vec![VariationSlot {
+        slot_id: "slot:runtime_unknown".to_string(),
+        description: format!(
+            "{}:{}:{}",
+            runtime_unknown.class.as_protocol_str(),
+            runtime_unknown.reason.as_protocol_str(),
+            "runtime equivalence remains unproven"
+        ),
+    }];
+    if python_framework_anchor_target_varies(key, &supported_evidence) {
+        variation_slots.push(VariationSlot {
+            slot_id: "slot:python_framework_anchor_target".to_string(),
+            description:
+                "variation:python_framework_anchor_target:exact compatible framework anchors differ"
+                    .to_string(),
+        });
+    }
+    FamilyClaim {
+        family_id,
+        classification: "DOMINANT_PATTERN".to_string(),
+        support: supported_evidence.len(),
+        language: key.language.clone(),
+        code_unit_kind: key.code_unit_kind.clone(),
+        framework_role: key.framework_role.clone(),
+        normalized_shape,
+        evidence: supported_evidence,
+        variation_slots,
+        exceptions: Vec::new(),
+        unknowns: vec![runtime_unknown],
+        readiness: ClaimReadiness::Ready,
+    }
 }
 
 pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
@@ -342,6 +385,266 @@ fn eligible_support_by_unit(
         }
     }
     supported
+}
+
+fn family_features_by_unit(
+    units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let unit_by_id = units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut features = BTreeMap::new();
+
+    for unit in units {
+        if !family_eligible_kind(&unit.kind) {
+            continue;
+        }
+        let entry = features
+            .entry(unit.id.clone())
+            .or_insert_with(BTreeSet::new);
+        entry.insert(format!("language:{}", stable_token(&unit.language)));
+        entry.insert(format!("unit_kind:{}", stable_token(&unit.kind)));
+        entry.insert(format!(
+            "ast_skeleton:{}",
+            stable_token(&normalized_shape(
+                &unit.kind,
+                role_by_unit
+                    .get(&unit.id)
+                    .and_then(single_framework_role)
+                    .unwrap_or("unknown")
+            ))
+        ));
+        entry.insert(format!("path_context:{}", path_context(&unit.path)));
+        if let Some(framework_role) = role_by_unit.get(&unit.id).and_then(single_framework_role) {
+            entry.insert(format!("framework_role:{}", stable_token(framework_role)));
+        }
+        if let Some(targets) = support_targets_by_unit.get(&unit.id) {
+            for target in targets {
+                entry.insert(format!("support_exact:{}", stable_token(target)));
+                if let Some(framework_role) =
+                    role_by_unit.get(&unit.id).and_then(single_framework_role)
+                {
+                    entry.insert(format!(
+                        "support_family:{}",
+                        stable_token(&support_target_family(target, framework_role))
+                    ));
+                }
+            }
+        }
+    }
+
+    for fact in facts {
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let entry = features
+            .entry(code_unit_id.to_string())
+            .or_insert_with(BTreeSet::new);
+        for anchor_kind in fact
+            .assumptions
+            .iter()
+            .filter_map(|assumption| assumption.strip_prefix("python_anchor_kind="))
+        {
+            entry.insert(format!("anchor:{}", stable_token(anchor_kind)));
+            let target = fact.target.as_ref().map(|target| target.as_str());
+            match anchor_kind {
+                "fastapi_route_decorator" | "decorator_binding" => {
+                    if let Some(target) = target {
+                        entry.insert(format!("decorator_anchor:{}", stable_token(target)));
+                    }
+                }
+                "import_binding" | "repo_local_import_binding" | "dynamic_import_literal" => {
+                    if let Some(target) = target {
+                        entry.insert(format!("import_context:{}", stable_token(target)));
+                    }
+                }
+                "fastapi_service_call"
+                | "call_target"
+                | "sqlalchemy_select"
+                | "sqlalchemy_session_call" => {
+                    if let Some(target) = target {
+                        entry.insert(format!("call_shape:{}", stable_token(target)));
+                    }
+                }
+                "fastapi_dependency"
+                | "fastapi_dependency_target"
+                | "fastapi_http_exception"
+                | "fastapi_http_exception_status"
+                | "fastapi_cookie_param"
+                | "fastapi_header_param"
+                | "fastapi_path_param"
+                | "fastapi_query_param"
+                | "fastapi_request_body_model"
+                | "fastapi_response_model"
+                | "sqlalchemy_relationship" => {
+                    entry.insert(format!("effect_marker:{}", stable_token(anchor_kind)));
+                }
+                "pytest_fixture_edge"
+                | "pytest_conftest_fixture_edge"
+                | "pytest_builtin_fixture_context"
+                | "pytest_parametrize_arg" => {
+                    if let Some(target) = target {
+                        entry.insert(format!("fixture_context:{}", stable_token(target)));
+                    }
+                }
+                "class_base" => {
+                    if let Some(target) = target {
+                        entry.insert(format!(
+                            "class_base:{}",
+                            stable_token(&support_target_family(
+                                target,
+                                role_by_unit
+                                    .get(code_unit_id)
+                                    .and_then(single_framework_role)
+                                    .unwrap_or("")
+                            ))
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    features
+}
+
+fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
+    fact.evidence.provenance.path == unit.path
+        && fact.evidence.provenance.content_hash == unit.content_hash
+        && fact.evidence.range.start_byte >= unit.start_byte
+        && fact.evidence.range.end_byte <= unit.end_byte
+}
+
+fn complete_link_family_clusters(
+    key: &FamilyKey,
+    evidence: Vec<FamilyEvidence>,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<Vec<FamilyEvidence>> {
+    if key.language != "python" {
+        return vec![evidence];
+    }
+
+    let mut clusters: Vec<Vec<FamilyEvidence>> = Vec::new();
+    for item in evidence {
+        if let Some(cluster) = clusters.iter_mut().find(|cluster| {
+            cluster
+                .iter()
+                .all(|other| python_evidence_pair_is_compatible(&item, other, features_by_unit))
+        }) {
+            cluster.push(item);
+        } else {
+            clusters.push(vec![item]);
+        }
+    }
+    clusters
+}
+
+fn python_evidence_pair_is_compatible(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let left_groups = prefixed_features(left, features_by_unit, "support_family:");
+    let right_groups = prefixed_features(right, features_by_unit, "support_family:");
+    !left_groups.is_disjoint(&right_groups)
+}
+
+fn prefixed_features(
+    evidence: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    prefix: &str,
+) -> BTreeSet<String> {
+    features_by_unit
+        .get(&evidence.code_unit_id)
+        .into_iter()
+        .flat_map(|features| features.iter())
+        .filter_map(|feature| feature.strip_prefix(prefix).map(str::to_string))
+        .collect()
+}
+
+fn python_cluster_signature(
+    cluster: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let support_groups = cluster
+        .iter()
+        .flat_map(|evidence| prefixed_features(evidence, features_by_unit, "support_family:"))
+        .collect::<BTreeSet<_>>();
+    if support_groups.is_empty() {
+        return "python_family_cluster".to_string();
+    }
+    format!(
+        "cluster:{}",
+        support_groups.into_iter().collect::<Vec<_>>().join("+")
+    )
+}
+
+fn support_target_family(target: &str, framework_role: &str) -> String {
+    match framework_role {
+        "framework:fastapi.route" => "fastapi.route_decorator".to_string(),
+        "framework:pytest.test" => match target {
+            "pytest.fixture" => "pytest.fixture_decorator".to_string(),
+            _ => "pytest.test_anchor".to_string(),
+        },
+        "framework:pytest.fixture" => "pytest.fixture_decorator".to_string(),
+        "framework:pydantic.model" => match target {
+            "pydantic.BaseSettings" | "pydantic_settings.BaseSettings" => {
+                "pydantic.settings_base".to_string()
+            }
+            _ => "pydantic.model_base".to_string(),
+        },
+        "framework:sqlalchemy.model" => "sqlalchemy.model_mapping".to_string(),
+        "framework:sqlalchemy.repository_method" => match target {
+            "sqlalchemy.orm.Session.commit"
+            | "sqlalchemy.orm.Session.rollback"
+            | "sqlalchemy.ext.asyncio.AsyncSession.commit"
+            | "sqlalchemy.ext.asyncio.AsyncSession.rollback" => {
+                "sqlalchemy.transaction_boundary".to_string()
+            }
+            _ => "sqlalchemy.query_call".to_string(),
+        },
+        _ => framework_role.to_string(),
+    }
+}
+
+fn path_context(path: &str) -> String {
+    let first_segment = path.split('/').next().unwrap_or("repo");
+    match first_segment {
+        "app" | "api" | "src" | "tests" | "test" => stable_token(first_segment),
+        _ => "repo".to_string(),
+    }
+}
+
+fn cluster_normalized_shape(key: &FamilyKey, cluster_suffix: Option<&str>) -> String {
+    match cluster_suffix {
+        Some(suffix) => format!("{}:{}", key.normalized_shape, stable_token(suffix)),
+        None => key.normalized_shape.clone(),
+    }
+}
+
+fn family_affected_claim(key: &FamilyKey, cluster_suffix: Option<&str>) -> String {
+    match cluster_suffix {
+        Some(suffix) => format!(
+            "family:{}:{}:{}:{}",
+            key.language,
+            key.code_unit_kind,
+            key.framework_role,
+            stable_token(suffix)
+        ),
+        None => format!(
+            "family:{}:{}:{}",
+            key.language, key.code_unit_kind, key.framework_role
+        ),
+    }
 }
 
 fn python_framework_anchor_target_varies(key: &FamilyKey, evidence: &[FamilyEvidence]) -> bool {
@@ -545,13 +848,17 @@ fn normalized_shape(kind: &str, framework_role: &str) -> String {
     format!("shape:{kind}:{}", stable_token(framework_role))
 }
 
-fn family_id(key: &FamilyKey) -> String {
-    format!(
+fn family_id(key: &FamilyKey, cluster_suffix: Option<&str>) -> String {
+    let base = format!(
         "family:{}:{}:{}",
         stable_token(&key.language),
         stable_token(&key.code_unit_kind),
         stable_token(&key.framework_role)
-    )
+    );
+    match cluster_suffix {
+        Some(suffix) => format!("{base}:{}", stable_token(suffix)),
+        None => base,
+    }
 }
 
 fn stable_token(value: &str) -> String {
@@ -906,6 +1213,83 @@ mod tests {
         assert!(!serialized.contains("fastapi.APIRouter.get"));
         assert!(!serialized.contains("fastapi.FastAPI.post"));
         assert!(!serialized.contains("@"));
+    }
+
+    #[test]
+    fn python_complete_link_clustering_rejects_single_link_bridge() {
+        let query_only = python_unit("app/query.py", "sqlalchemy_repository_method", 0);
+        let bridge = python_unit("app/query_and_commit.py", "sqlalchemy_repository_method", 1);
+        let transaction_only = python_unit("app/commit.py", "sqlalchemy_repository_method", 2);
+
+        let report = build_family_claims(
+            &[query_only.clone(), bridge.clone(), transaction_only.clone()],
+            &[
+                role_fact(&query_only, "framework:sqlalchemy.repository_method"),
+                role_fact(&bridge, "framework:sqlalchemy.repository_method"),
+                role_fact(&transaction_only, "framework:sqlalchemy.repository_method"),
+                semantic_support_fact_with_target(&query_only, "sqlalchemy.orm.Session.execute"),
+                semantic_support_fact_with_target(&bridge, "sqlalchemy.orm.Session.execute"),
+                semantic_support_fact_with_target(&bridge, "sqlalchemy.orm.Session.commit"),
+                semantic_support_fact_with_target(
+                    &transaction_only,
+                    "sqlalchemy.orm.Session.commit",
+                ),
+            ],
+        );
+
+        assert!(
+            report.claims.is_empty(),
+            "complete-link clustering must not let a bridge member connect incompatible Python support families"
+        );
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_complete_link_clustering_splits_distinct_ready_support_families() {
+        let units = [
+            python_unit("app/query_a.py", "sqlalchemy_repository_method", 0),
+            python_unit("app/query_b.py", "sqlalchemy_repository_method", 1),
+            python_unit("app/query_c.py", "sqlalchemy_repository_method", 2),
+            python_unit("app/transaction_a.py", "sqlalchemy_repository_method", 3),
+            python_unit("app/transaction_b.py", "sqlalchemy_repository_method", 4),
+            python_unit("app/transaction_c.py", "sqlalchemy_repository_method", 5),
+        ];
+        let mut facts = units
+            .iter()
+            .map(|unit| role_fact(unit, "framework:sqlalchemy.repository_method"))
+            .collect::<Vec<_>>();
+        for unit in &units[0..3] {
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "sqlalchemy.orm.Session.execute",
+            ));
+        }
+        for unit in &units[3..6] {
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "sqlalchemy.orm.Session.commit",
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+
+        assert_eq!(report.claims.len(), 2);
+        assert!(report.claims.iter().all(|claim| claim.support == 3));
+        let ids = report
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(
+            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method"
+        ));
+        assert!(ids.contains(
+            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:cluster_sqlalchemy_transaction_boundary"
+        ));
     }
 
     #[test]

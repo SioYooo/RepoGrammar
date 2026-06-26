@@ -59,10 +59,13 @@ role. Product smoke tests now prove low-support and dynamic cases remain
 `UNKNOWN`, while three-member direct FastAPI, FastAPI alias, pytest, Pydantic
 model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
 fixtures can produce families without a semantic worker through those derived
-facts. Ready Python families can also record narrow variation metadata when
-their already-compatible exact framework-anchor support targets differ within
-the same family; this does not imply provider-backed semantics or runtime
-equivalence. The current Python worker can also emit bounded same-function
+facts. Before storage, Python families now pass bounded complete-link
+clustering over support-family features, preventing bridge members from
+single-linking incompatible support into one confident claim. Ready Python
+families can also record narrow variation metadata when their
+already-compatible exact framework-anchor support targets differ within the same
+family; this does not imply provider-backed semantics or runtime equivalence.
+The current Python worker can also emit bounded same-function
 FastAPI route service-call anchors as structural handler/service context; those
 anchors are not membership support. It can also emit static FastAPI request
 body and request-parameter anchors for `Body`, `Path`, `Query`, `Header`, and

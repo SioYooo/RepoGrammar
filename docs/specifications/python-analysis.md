@@ -189,6 +189,13 @@ The current implementation covers the first structural slice only:
   code unit has exactly one Python framework role, the structural evidence
   stays inside the same code-unit path/hash/range, and the target exact-matches
   the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table;
+- a conservative Python EC-MVFI-lite clustering step that builds internal
+  feature vectors from language, unit kind, framework role, normalized shape,
+  exact support target, support-family group, parser anchor categories, import
+  context, call/effect markers, fixture context, path context, and available
+  AST-skeleton labels, then uses a complete-link constraint so bridge members
+  cannot single-link incompatible Python support families into one confident
+  claim;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
@@ -626,9 +633,13 @@ policy:
 
 The current `repogrammar-python-derived` support facts satisfy only the
 bounded-propagation side of this policy. They can support a family when at
-least three same-role members have exact canonical anchors, but they do not
-prove provider-resolved identity, dependency binding, transaction behavior,
-fixture graph completeness, or runtime equivalence.
+least three same-role members have exact canonical anchors and pass the
+support-family complete-link constraint, but they do not prove
+provider-resolved identity, dependency binding, transaction behavior, fixture
+graph completeness, or runtime equivalence. When one coarse bucket contains
+multiple ready support-family clusters, the first cluster preserves the stable
+base family id and later clusters receive sanitized cluster suffixes; no suffix
+contains source text or absolute paths.
 
 Output remains one of `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or
 `UNKNOWN`. Syntax-only or framework-heuristic-only Python observations can rank

@@ -125,6 +125,8 @@ semantic-worker-compatible Python project mode can also output requested
 syntax-origin TS/JS and Python framework-role fact storage, bounded exact-anchor
 Python support derivation that excludes units with claim-relevant parser-origin
 blocking `UNKNOWN`s,
+bounded Python complete-link clustering over support-family features so bridge
+members cannot single-link incompatible Python support families,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
 TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
@@ -181,6 +183,8 @@ records, sanitized project-config source roots reused as default parser context,
 bounded `DATAFLOW_DERIVED` support facts derived only from exact canonical
 framework anchors when the unit has one Python framework role and no
 claim-relevant parser-origin blocking `UNKNOWN`,
+bounded complete-link Python family clustering over internal support-family
+features,
 CodeUnit-derived structural IR nodes and
 conservative containment edges, generation-scoped SQLite
 migrations/storage/validation/activation, product runtime wiring for `index`

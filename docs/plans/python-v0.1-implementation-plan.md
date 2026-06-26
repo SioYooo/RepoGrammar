@@ -106,7 +106,10 @@ exact canonical CPython anchors only when a unit has one Python framework role
 and no claim-relevant parser-origin blocking `UNKNOWN`. This implements
 sound-by-abstention bounded Python framework-family claims, not sound Python
 semantic analysis; raw parser facts and framework heuristics still remain
-blocked from direct claim input.
+blocked from direct claim input. The family builder now applies bounded
+complete-link clustering over Python support-family features, refusing
+single-link bridge clusters and assigning sanitized cluster ids only when one
+coarse bucket contains multiple ready clusters.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but

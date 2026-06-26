@@ -41,16 +41,19 @@ command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
 This slice does not use Tree-sitter, call a TypeScript compiler, perform full
-multi-view alignment, anti-unify templates, or cluster families. It does include
+multi-view alignment, or anti-unify templates. It does include
 a conservative EC-MVFI-lite family builder that groups by language,
-code-unit kind, framework role, and normalized shape, but it writes family rows
-only when each supporting member also has compatible same-generation `SEMANTIC`
-or `DATAFLOW_DERIVED` non-framework evidence. The current
+code-unit kind, framework role, and normalized shape, then applies a bounded
+Python complete-link clustering pass over internal support-family feature
+vectors so bridge members cannot single-link incompatible Python evidence into
+one claim. It writes family rows only when each supporting member also has
+compatible same-generation `SEMANTIC` or `DATAFLOW_DERIVED` non-framework
+evidence. The current
 Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
 layer from exact CPython structural anchors plus a single syntax-origin Python
 framework role; raw parser facts and framework heuristics remain insufficient by
 themselves.
-syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
+The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
 does not infer calls or dataflow, and cannot prove semantic or family claims.
