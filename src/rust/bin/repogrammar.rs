@@ -16,9 +16,10 @@ use repogrammar::application::install::{
 };
 use repogrammar::application::query::{
     list_code_units, list_families_with_freshness, list_indexed_files,
-    lookup_family_with_freshness, repo_shape_diagnostics, FamilyEvidenceFreshnessRequest,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, RepoShapeDiagnosticsReport,
+    lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
+    FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan, RepoShapeDiagnosticsReport,
+    SourceSpanRenderReport, SourceSpanRenderRequest,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -263,6 +264,25 @@ impl CliRuntime for ProductCliRuntime {
         )
     }
 
+    fn render_source_spans(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+        include_source_spans: bool,
+        token_budget: Option<usize>,
+    ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+        render_source_spans(
+            SourceSpanRenderRequest {
+                repository_root: request.path,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &FilesystemSourceStore,
+            read_plan,
+            include_source_spans,
+            token_budget,
+        )
+    }
+
     fn repo_shape_diagnostics(
         &self,
         request: RepositoryStatusRequest,
@@ -371,6 +391,22 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         <Self as CliRuntime>::family_lookup(self, request, target, mode)
+    }
+
+    fn render_source_spans(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+        include_source_spans: bool,
+        token_budget: Option<usize>,
+    ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+        <Self as CliRuntime>::render_source_spans(
+            self,
+            request,
+            read_plan,
+            include_source_spans,
+            token_budget,
+        )
     }
 }
 

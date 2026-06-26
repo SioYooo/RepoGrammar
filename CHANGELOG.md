@@ -8,6 +8,10 @@
   Human progress uses stderr and exact completed/total counts when known;
   `--json --progress always` emits progress NDJSON on stderr while preserving
   the final JSON result on stdout.
+- CLI and MCP family queries now support explicit bounded source-span rendering
+  (`--include-source-spans` / `include_source_spans: true`) over hash-checked
+  read-plan spans. Default output remains metadata-only, and stale or omitted
+  spans carry Read/Grep fallback guidance.
 - Source-checkout installer dogfood now works before GitHub prerelease assets
   or npm publication exist. The Bash wrapper can install the built contributor
   binary through explicit `--from-source` flows, writes the command through the

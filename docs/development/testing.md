@@ -97,10 +97,11 @@ allowed.
   find/explain/check lookup, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
   mode behavior, target and token-budget validation, greedy evidence coverage
-  metadata, metadata-only read plans with repo-relative paths, content hashes,
-  byte ranges, null line ranges until safe source-span rendering exists,
-  missing variation/exception coverage reporting, JSON/human CLI output,
-  advisory `check` behavior, and absence of source snippets or absolute paths.
+  metadata, default read plans with repo-relative paths, content hashes, byte
+  ranges, explicit source-span opt-in, line-numbered rendered spans, stale or
+  hash-mismatched span omission with Read/Grep fallback guidance, missing
+  variation/exception coverage reporting, JSON/human CLI output, advisory
+  `check` behavior, and absence of source snippets unless explicitly requested.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
@@ -108,10 +109,11 @@ allowed.
   `check_conformance` with `CONTEXT_ONLY` context success when conformance is
   unproven, exact `show_family` target handling, compact/evidence/deep output
   mode serialization, target and token-budget validation, metadata-only greedy
-  evidence selection, metadata-only read plans for all supported operations,
-  missing variation/exception coverage reporting, JSON-RPC
-  initialize/exact-one-tool tools/list/tools/call/shutdown handling, and absence of source
-  snippets or absolute paths.
+  evidence selection, metadata-only default read plans for all supported
+  operations, explicit `include_source_spans` validation and rendering, stale
+  or omitted span fallback guidance, missing variation/exception coverage
+  reporting, JSON-RPC initialize/exact-one-tool tools/list/tools/call/shutdown
+  handling, and absence of source snippets unless explicitly requested.
 - Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
   creation, no native configuration delegation, and native Codex/Claude Code
   MCP command-shape reporting for dry-run global installs, plus live-write

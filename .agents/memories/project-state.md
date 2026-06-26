@@ -31,17 +31,20 @@
   `check`, token-budget auto evidence, explicit compact/evidence/deep metadata
   modes, supported MCP operations, and stale source mutation/deletion returning
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
-  compact/evidence/deep metadata modes shared by CLI and MCP; compact is the
-  default, evidence/deep use greedy metadata coverage selection, all matched
-  modes include metadata-only read plans, and deep does not yet include source
-  snippets. Supported Python members can preserve non-blocking subclaim
+  compact/evidence/deep modes shared by CLI and MCP; compact is the default,
+  evidence/deep use greedy metadata coverage selection, all matched modes
+  include read plans, and source snippets remain disabled unless callers
+  explicitly request bounded source spans. Supported Python members can
+  preserve non-blocking subclaim
   `UNKNOWN`s, such as unresolved FastAPI dependency targets, as metadata-only
   family detail entries keyed by the concrete family id and subclaim without
   turning those subclaims into route-membership support. Read plans use
-  repo-relative paths, strict content hashes, byte
-  ranges, purpose labels, estimated token costs, and no source text; target
-  source remains required before edits and line ranges are `null` until safe
-  source-span rendering exists. `repogrammar stats --json` now reports
+  repo-relative paths, strict content hashes, byte ranges, purpose labels, and
+  estimated token costs. CLI `--include-source-spans` and MCP
+  `include_source_spans: true` render only selected hash-checked spans with
+  line numbers and omit stale or unsupported spans with Read/Grep fallback
+  guidance. Target source remains required before edits outside rendered
+  ranges. `repogrammar stats --json` now reports
   repo-shape diagnostics for local pattern density, family support coverage,
   abstention rate, external dependency signal, and thin-wrapper/token-saving
   risk, and reports measured token savings only when local paired

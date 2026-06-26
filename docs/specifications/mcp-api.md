@@ -34,6 +34,10 @@ The current input schema is intentionally small:
 - optional `include_variations` and `include_exceptions`: booleans requesting
   those evidence-coverage labels. Current output reports them as missing unless
   stored family evidence explicitly covers them.
+- optional `include_source_spans`: boolean, default `false`. When true,
+  RepoGrammar may render bounded line-numbered source spans selected from the
+  `read_plan` after content-hash validation. This is an explicit source-output
+  opt-in and is not implied by `mode: deep`.
 
 Advanced MCP tools may exist later, but they must be hidden by default and
 enabled only by configuration or environment variable, for example:
@@ -109,20 +113,24 @@ FamilyStore-backed lookup path as the CLI rather than inventing a parallel
 contract.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
-unknowns, output metadata, and a metadata-only `read_plan` without evidence
-records; `evidence` adds budgeted repo-relative evidence metadata selected by
+unknowns, output metadata, and a `read_plan` without evidence records;
+`evidence` adds budgeted repo-relative evidence metadata selected by
 deterministic greedy marginal coverage per estimated token cost; `deep` is
-accepted only as an explicit detail request and remains metadata-only until a
-safe source-span rendering contract exists. The `read_plan` is returned for the
-existing `find_analogues`, `show_family`, `explain_deviation`, and
+accepted only as an explicit detail request and remains metadata-first unless
+`include_source_spans: true` is also provided. The `read_plan` is returned for
+the existing `find_analogues`, `show_family`, `explain_deviation`, and
 `check_conformance` operations. It contains suggested target, canonical,
 support, and variation/exception spans by repo-relative path, strict content
-hash, byte range, estimated token cost, and purpose. Line ranges are currently
-`null` because safe source-span rendering is deferred. The read plan never
-includes source text or absolute paths and does not imply source edits are safe
-without reading the target body. Output metadata includes the selection
-strategy, estimated evidence tokens, estimated read-plan tokens, covered claim
-labels, missing claim labels, and whether the rough budget was satisfied.
+hash, byte range, estimated token cost, and purpose. When source spans are not
+requested, line ranges may remain `null` and `source_snippets_included` remains
+`false`. When `include_source_spans: true` is requested, RepoGrammar renders
+only selected read-plan spans after source-store path and content-hash
+validation, fills line ranges for rendered spans, and returns line-numbered
+text under a separate `source_spans` object. The read plan never includes
+absolute paths and does not imply source edits are safe outside listed ranges.
+Output metadata includes the selection strategy, estimated evidence tokens,
+estimated read-plan tokens, covered claim labels, missing claim labels, and
+whether the rough budget was satisfied.
 Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
 `support`, `variation`, and `exception`; selectors must consume those labels
@@ -135,10 +143,11 @@ those slots do not imply variation evidence coverage. Requested exception
 coverage and broader variation coverage must be reported as missing until later
 builders explicitly link evidence to those claims. Family detail unknowns
 identify runtime-equivalence gaps with the concrete
-`<family_id>:runtime_equivalence` affected claim. MCP responses
-must report whether source snippets were included;
-the current implementation always reports
-`source_snippets_included: false`.
+`<family_id>:runtime_equivalence` affected claim. MCP responses must report
+whether source snippets were included. Stale, missing, hash-mismatched,
+unsupported, dynamic, insufficient, or conflicting evidence must omit rendered
+spans and preserve typed `UNKNOWN` or omission guidance telling the agent to
+use normal Read/Grep for the affected case.
 
 ## Serving mode
 
@@ -186,6 +195,11 @@ MCP tools.
 The MCP initialize response is the canonical runtime guidance for agents.
 Installer-written instruction-file content is optional, short, marker-fenced,
 and owned by the installation workflow.
+In initialized repositories, agents should call `repogrammar_context` before
+grep/find/manual reads for implementation-pattern analogues, family
+conformance, deviations, or repeated framework behavior. Agents must fall back
+to normal Read/Grep when RepoGrammar returns `UNKNOWN`, stale/omitted spans, or
+insufficient support.
 
 ## Boundary rules
 

@@ -8,10 +8,9 @@ list of vaguely similar files, it tries to summarize recurring implementation
 families, accepted variations, exceptions, and the evidence behind those
 claims.
 
-RepoGrammar is **pre-alpha**. The current public preview is local-first,
-metadata-only, and conservative: when evidence is insufficient, stale,
-ambiguous, or outside the supported scope, RepoGrammar returns `UNKNOWN`
-instead of guessing.
+RepoGrammar is **pre-alpha**. The current public preview is local-first and
+conservative: when evidence is insufficient, stale, ambiguous, or outside the
+supported scope, RepoGrammar returns `UNKNOWN` instead of guessing.
 
 ## What It Does
 
@@ -25,7 +24,8 @@ RepoGrammar is designed to answer questions like:
 The output is meant to be small and auditable. Current family results expose
 metadata such as repo-relative paths, content hashes, byte ranges, support
 counts, variation labels, and `UNKNOWN` reasons. Source snippets are not
-returned by default.
+returned by default. When explicitly requested, RepoGrammar can return bounded,
+line-numbered source spans selected from its hash-checked read plan.
 
 ## Current Scope
 
