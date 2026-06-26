@@ -70,6 +70,7 @@ pub struct InstallRequest {
     pub assume_yes: bool,
     pub no_permissions: bool,
     pub telemetry_enabled: bool,
+    pub telemetry_explicitly_configured: bool,
 }
 
 impl Default for InstallRequest {
@@ -82,6 +83,7 @@ impl Default for InstallRequest {
             assume_yes: false,
             no_permissions: false,
             telemetry_enabled: false,
+            telemetry_explicitly_configured: false,
         }
     }
 }
@@ -243,6 +245,12 @@ pub fn execute_uninstall(
         remove_receipt(&receipt_path)?;
         configured_targets.push(target);
         receipt_paths.push(display_path(&receipt_path));
+    }
+    if configured_targets.is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "no RepoGrammar-managed install receipt found; refusing to remove unmanaged agent configuration"
+                .to_string(),
+        ));
     }
 
     Ok(InstallExecutionOutcome {
@@ -632,6 +640,26 @@ mod tests {
             .expect_err("foreign receipt");
 
         assert!(error.to_string().contains("not owned"));
+        assert_eq!(configurator.actions.borrow().len(), 0);
+    }
+
+    #[test]
+    fn uninstall_refuses_missing_receipt_without_native_remove() {
+        let workspace = TempInstallWorkspace::new("missing-receipt");
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+
+        let error = execute_uninstall(&request, &workspace.context, &configurator)
+            .expect_err("missing receipt");
+
+        assert!(error
+            .to_string()
+            .contains("no RepoGrammar-managed install receipt"));
         assert_eq!(configurator.actions.borrow().len(), 0);
     }
 

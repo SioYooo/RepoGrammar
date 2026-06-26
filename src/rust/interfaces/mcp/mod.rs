@@ -1063,10 +1063,12 @@ mod tests {
             &context,
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
         );
-        assert_eq!(
-            list.response.expect("list response")["result"]["tools"][0]["name"],
-            "repogrammar_context"
-        );
+        let list_response = list.response.expect("list response");
+        let tools = list_response["result"]["tools"]
+            .as_array()
+            .expect("tools array");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "repogrammar_context");
 
         let call = handle_json_rpc_value(
             &runtime,
@@ -1136,7 +1138,9 @@ mod tests {
         let initialize: Value = serde_json::from_str(responses[0]).expect("initialize JSON");
         assert_eq!(initialize["result"]["serverInfo"]["name"], "repogrammar");
         let list: Value = serde_json::from_str(responses[1]).expect("list JSON");
-        assert_eq!(list["result"]["tools"][0]["name"], "repogrammar_context");
+        let tools = list["result"]["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "repogrammar_context");
         let call: Value = serde_json::from_str(responses[2]).expect("call JSON");
         assert_eq!(call["result"]["isError"], false);
         let shutdown: Value = serde_json::from_str(responses[3]).expect("shutdown JSON");

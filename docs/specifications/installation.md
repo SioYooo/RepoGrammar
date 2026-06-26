@@ -52,16 +52,23 @@ Global user state may contain only installation and user-preference data:
 - global user preferences.
 
 Anonymous telemetry is off by default. Live `install --yes` must not imply
-telemetry consent. `--telemetry` is the explicit opt-in flag for install-time
+telemetry consent. When live `install --yes` runs without `--telemetry` or
+`--no-telemetry`, the product binary asks for anonymous telemetry consent with
+default-no `[y/N]`; empty input, `n`, or `no` disables telemetry, and only `y`
+or `yes` enables it. `--telemetry` is the explicit opt-in flag for install-time
 planning, receipts, and live preference persistence after agent installation
 succeeds. `--no-telemetry` remains accepted as an explicit disable and
-backward-compatible flag. `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, and CI force the
-effective install-time telemetry decision to disabled. Users can also change
-actual telemetry preference with `repogrammar telemetry on` and
-`repogrammar telemetry off`.
+backward-compatible flag. `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, and CI
+force the effective install-time telemetry decision to disabled and skip the
+prompt. Users can also change actual telemetry preference with
+`repogrammar telemetry on` and `repogrammar telemetry off`.
 
 It must not contain source-derived family facts, evidence text, source paths,
 symbol names, query text, raw prompts, or repository-specific SQLite indexes.
+Machine-level integration receipts may contain the configured RepoGrammar
+executable path and native agent command arguments because they are required
+for precise uninstall; they must not contain paths discovered from an indexed
+repository, source evidence paths, prompts, or query targets.
 
 ## Instruction-file integration
 
@@ -104,10 +111,16 @@ Live `install` and `uninstall` writes are intentionally narrow:
 - install writes a RepoGrammar-owned receipt under the user install data
   directory after native configuration succeeds and rolls back the native entry
   if receipt writing fails;
-- uninstall removes only targets with a matching RepoGrammar receipt.
+- uninstall removes only targets with a matching RepoGrammar receipt and
+  refuses missing or foreign receipts rather than removing unmanaged
+  configuration.
 - live install persists the final anonymous telemetry preference after
-  successful agent configuration; `--yes` alone persists disabled telemetry, and
-  environment/CI disablement overrides `--telemetry`.
+  successful agent configuration; non-interactive `--yes` alone persists
+  disabled telemetry, interactive install without telemetry flags prompts
+  default-no, and environment/CI disablement overrides `--telemetry`.
+- dry-run output names the native MCP command shape for Codex and Claude Code
+  global installs, while project-local and `--target all` live writes remain
+  deferred unless separately specified and tested.
 
 The installer still does not copy executables, edit instruction files, repair
 malformed native agent config, or touch `.repogrammar/`.

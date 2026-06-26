@@ -95,6 +95,12 @@ pub const ANONYMOUS_TELEMETRY_SCHEMA: AnonymousTelemetrySchema = AnonymousTeleme
         "typed_error_code_counts_bucket",
         "source_snippets_returned",
         "measured_token_savings_bucket",
+        "experiment_mode",
+        "experiment_measurement_source_category",
+        "experiment_token_savings_ratio_bucket",
+        "experiment_correctness_category",
+        "experiment_read_plan_used",
+        "experiment_read_plan_item_count_bucket",
     ],
     forbidden_payloads: &[
         "code",
@@ -145,12 +151,15 @@ pub struct TelemetryStatusReport {
     pub enabled: bool,
     pub research_enabled: bool,
     pub disabled_by_environment: bool,
+    pub disabled_by_ci: bool,
     pub effective_enabled: bool,
     pub anonymous_machine_id: String,
     pub schema_version: String,
+    pub rollup_count: usize,
     pub queue_count: usize,
     pub sent_receipt_count: usize,
     pub network_upload_configured: bool,
+    pub upload_would_open_network_connection: bool,
     pub updated_at: u64,
 }
 
@@ -339,6 +348,8 @@ pub struct ExperimentReport {
     pub correctness_comparison: String,
     pub claim_validity: String,
     pub measurement_source: Option<String>,
+    pub read_plan_used: Option<bool>,
+    pub read_plan_item_count_bucket: Option<String>,
     pub reason: Option<String>,
     pub caveat: String,
     pub cost_notice_may_have_increased_usage: bool,
@@ -373,6 +384,13 @@ where
         || env_truthy(lookup("CI"))
 }
 
+pub fn telemetry_disabled_by_ci<F>(lookup: F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env_truthy(lookup("CI"))
+}
+
 pub fn telemetry_status<F>(
     paths: &TelemetryPaths,
     endpoint: Option<&str>,
@@ -382,18 +400,24 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let disabled_by_environment = telemetry_disabled_by_environment(env_lookup);
+    let disabled_by_ci = telemetry_disabled_by_ci(env_lookup);
     let preference = load_or_default_preference(&paths.global_data_dir)?;
-    let (queue_count, sent_receipt_count) = telemetry_file_counts(paths)?;
+    let (rollup_count, queue_count, sent_receipt_count) = telemetry_file_counts(paths)?;
+    let network_upload_configured = endpoint.is_some_and(|endpoint| !endpoint.trim().is_empty());
+    let effective_enabled = preference.enabled && !disabled_by_environment;
     Ok(TelemetryStatusReport {
         enabled: preference.enabled,
         research_enabled: preference.research_enabled,
         disabled_by_environment,
-        effective_enabled: preference.enabled && !disabled_by_environment,
+        disabled_by_ci,
+        effective_enabled,
         anonymous_machine_id: preference.anonymous_machine_id,
         schema_version: preference.schema_version,
+        rollup_count,
         queue_count,
         sent_receipt_count,
-        network_upload_configured: endpoint.is_some_and(|endpoint| !endpoint.trim().is_empty()),
+        network_upload_configured,
+        upload_would_open_network_connection: effective_enabled && network_upload_configured,
         updated_at: preference.updated_at,
     })
 }
@@ -446,6 +470,40 @@ pub fn export_anonymous_telemetry(
         payload_bytes,
         queued: false,
     })
+}
+
+pub fn record_passive_diagnostics_rollup<F>(
+    paths: &TelemetryPaths,
+    repogrammar_version: &str,
+    diagnostics: Option<TelemetryDiagnostics>,
+    measured_token_savings: Option<&ExperimentReport>,
+    env_lookup: &F,
+) -> Result<bool, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if telemetry_disabled_by_environment(env_lookup) {
+        return Ok(false);
+    }
+    let preference = load_or_default_preference(&paths.global_data_dir)?;
+    if !preference.enabled {
+        return Ok(false);
+    }
+    let payload = build_anonymous_payload(
+        paths,
+        repogrammar_version,
+        &preference,
+        diagnostics,
+        measured_token_savings,
+    );
+    validate_anonymous_payload(&payload)?;
+    if payload.to_string().len() > MAX_TELEMETRY_PAYLOAD_BYTES {
+        return Err(invalid_input(
+            "telemetry payload exceeds the maximum supported size",
+        ));
+    }
+    write_rollup(paths, &payload)?;
+    Ok(true)
 }
 
 pub fn upload_anonymous_telemetry<F>(
@@ -666,6 +724,44 @@ pub fn validate_anonymous_payload(payload: &Value) -> Result<(), RepoGrammarErro
             )?;
         }
     }
+    require_nullable_enum_value(
+        payload.get("experiment_mode"),
+        "experiment_mode",
+        &["record_existing", "controlled_pair"],
+    )?;
+    require_nullable_enum_value(
+        payload.get("experiment_measurement_source_category"),
+        "experiment_measurement_source_category",
+        &["host_reported", "user_entered", "documented_tokenizer"],
+    )?;
+    require_enum_value(
+        field_value(payload, "experiment_token_savings_ratio_bucket")?,
+        "experiment_token_savings_ratio_bucket",
+        RATIO_BUCKETS,
+    )?;
+    require_nullable_enum_value(
+        payload.get("experiment_correctness_category"),
+        "experiment_correctness_category",
+        &[
+            "both_passed",
+            "treatment_failed",
+            "baseline_failed",
+            "unknown",
+        ],
+    )?;
+    if payload
+        .get("experiment_read_plan_used")
+        .is_some_and(|value| !value.is_null() && !value.is_boolean())
+    {
+        return Err(invalid_input(
+            "telemetry experiment read-plan flag is invalid",
+        ));
+    }
+    require_nullable_enum_value(
+        payload.get("experiment_read_plan_item_count_bucket"),
+        "experiment_read_plan_item_count_bucket",
+        COUNT_BUCKETS,
+    )?;
     if payload
         .get("source_snippets_returned")
         .and_then(Value::as_bool)
@@ -873,6 +969,8 @@ pub fn experiment_report_json(report: &ExperimentReport) -> Value {
         },
         "claim_validity": report.claim_validity,
         "measurement_source": report.measurement_source,
+        "read_plan_used": report.read_plan_used,
+        "read_plan_item_count_bucket": report.read_plan_item_count_bucket,
         "reason": report.reason,
         "cost_notice": {
             "may_have_increased_usage": report.cost_notice_may_have_increased_usage,
@@ -1014,6 +1112,17 @@ fn build_anonymous_payload(
     let measured_token_savings_bucket = measured_token_savings
         .and_then(|report| report.token_savings)
         .map(token_savings_bucket);
+    let experiment_mode =
+        measured_token_savings.and_then(|report| report.experiment_mode.as_deref());
+    let experiment_measurement_source_category =
+        measured_token_savings.and_then(|report| report.measurement_source.as_deref());
+    let experiment_token_savings_ratio_bucket =
+        ratio_bucket(measured_token_savings.and_then(|report| report.token_savings_ratio));
+    let experiment_correctness_category =
+        measured_token_savings.map(experiment_correctness_category);
+    let experiment_read_plan_used = measured_token_savings.and_then(|report| report.read_plan_used);
+    let experiment_read_plan_item_count_bucket =
+        measured_token_savings.and_then(|report| report.read_plan_item_count_bucket.as_deref());
     json!({
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "repogrammar_version": repogrammar_version,
@@ -1037,14 +1146,23 @@ fn build_anonymous_payload(
         "typed_error_code_counts_bucket": empty_bucket_map(),
         "source_snippets_returned": false,
         "measured_token_savings_bucket": measured_token_savings_bucket,
+        "experiment_mode": experiment_mode,
+        "experiment_measurement_source_category": experiment_measurement_source_category,
+        "experiment_token_savings_ratio_bucket": experiment_token_savings_ratio_bucket,
+        "experiment_correctness_category": experiment_correctness_category,
+        "experiment_read_plan_used": experiment_read_plan_used,
+        "experiment_read_plan_item_count_bucket": experiment_read_plan_item_count_bucket,
     })
 }
 
-fn telemetry_file_counts(paths: &TelemetryPaths) -> Result<(usize, usize), RepoGrammarError> {
+fn telemetry_file_counts(
+    paths: &TelemetryPaths,
+) -> Result<(usize, usize, usize), RepoGrammarError> {
     let Some(root) = repo_telemetry_dir(paths)? else {
-        return Ok((0, 0));
+        return Ok((0, 0, 0));
     };
     Ok((
+        count_json_files(&root.join("rollups"))?,
         count_json_files(&root.join("queue"))?,
         count_json_files(&root.join("sent"))?,
     ))
@@ -1065,8 +1183,11 @@ fn write_upload_queue(
 }
 
 fn write_rollup(paths: &TelemetryPaths, payload: &Value) -> Result<(), RepoGrammarError> {
-    let root = require_repo_telemetry_dir(paths)?;
-    let rollups_dir = root.join("rollups");
+    let location = repository_state_location(RepositoryStatusRequest {
+        path: paths.repository_root.display().to_string(),
+        state_dir_override: paths.state_dir_override.clone(),
+    })?;
+    let rollups_dir = location.state_dir.join("telemetry").join("rollups");
     fs::create_dir_all(&rollups_dir)
         .map_err(|_| invalid_input("failed to create telemetry rollups"))?;
     let path = rollups_dir.join(format!("{}.telemetry.json", unix_day()));
@@ -1246,6 +1367,8 @@ fn report_for_sessions(name: &str, sessions: &[ExperimentSession]) -> Experiment
         correctness_comparison,
         claim_validity: claim_validity.to_string(),
         measurement_source: Some(baseline.measurement_source.as_str().to_string()),
+        read_plan_used: treatment.read_plan_used,
+        read_plan_item_count_bucket: treatment.read_plan_item_count_bucket.clone(),
         reason: None,
         cost_notice_may_have_increased_usage: baseline.experiment_mode
             == ExperimentWorkflowMode::ControlledPair,
@@ -1273,6 +1396,8 @@ fn missing_report(
         correctness_comparison: "unknown".to_string(),
         claim_validity: "unknown".to_string(),
         measurement_source: None,
+        read_plan_used: None,
+        read_plan_item_count_bucket: None,
         reason: Some(reason.to_string()),
         cost_notice_may_have_increased_usage: experiment_mode
             == Some(ExperimentWorkflowMode::ControlledPair),
@@ -1312,6 +1437,15 @@ fn correctness_comparison(baseline: Option<bool>, treatment: Option<bool>) -> St
         (Some(true), Some(false)) => "treatment_failed".to_string(),
         (Some(false), Some(false)) => "both_failed".to_string(),
         _ => "unknown".to_string(),
+    }
+}
+
+fn experiment_correctness_category(report: &ExperimentReport) -> &'static str {
+    match (report.baseline_success, report.treatment_success) {
+        (Some(true), Some(true)) => "both_passed",
+        (_, Some(false)) => "treatment_failed",
+        (Some(false), _) => "baseline_failed",
+        _ => "unknown",
     }
 }
 
@@ -1360,6 +1494,8 @@ fn redacted_experiment_report_json(report: &ExperimentReport) -> Value {
         },
         "claim_validity": report.claim_validity,
         "measurement_source": report.measurement_source,
+        "read_plan_used": report.read_plan_used,
+        "read_plan_item_count_bucket": report.read_plan_item_count_bucket,
         "reason": report.reason,
         "cost_notice": {
             "may_have_increased_usage": report.cost_notice_may_have_increased_usage,
@@ -1544,6 +1680,20 @@ fn require_enum_value(
         return Err(invalid_input(format!("telemetry {field} is invalid")));
     }
     Ok(())
+}
+
+fn require_nullable_enum_value(
+    value: Option<&Value>,
+    field: &str,
+    allowed: &[&str],
+) -> Result<(), RepoGrammarError> {
+    let Some(value) = value else {
+        return Err(invalid_input(format!("telemetry {field} is invalid")));
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    require_enum_value(value, field, allowed)
 }
 
 fn require_prefixed_hex(
@@ -2227,7 +2377,69 @@ mod tests {
         assert_eq!(report.measurement_status, "paired_measurement_available");
         assert_eq!(report.claim_validity, "valid_for_product_claim");
         assert_eq!(report.measurement_source.as_deref(), Some("user_entered"));
+        assert_eq!(report.read_plan_used, Some(true));
+        assert_eq!(report.read_plan_item_count_bucket.as_deref(), Some("1-2"));
         assert!(report.caveat.contains("comparable paired"));
+    }
+
+    #[test]
+    fn anonymous_payload_includes_bucketed_experiment_aggregates_only() {
+        let workspace = TempWorkspace::new("telemetry-experiment-aggregate");
+        let paths = paths(&workspace);
+        let data_dir = workspace.path().join("global");
+
+        for (mode, input_tokens, read_plan_used, read_plan_count) in [
+            (ExperimentMode::Baseline, 100, None, None),
+            (ExperimentMode::Treatment, 50, Some(true), Some("1-2")),
+        ] {
+            experiment_start(
+                &data_dir,
+                ExperimentStartRequest {
+                    name: "task-a".to_string(),
+                    experiment_mode: ExperimentWorkflowMode::RecordExisting,
+                    mode,
+                    measurement_source: MeasurementSource::UserEntered,
+                    coarse_task_kind: None,
+                    elapsed_time_bucket: None,
+                    read_plan_used,
+                    read_plan_item_count_bucket: read_plan_count.map(ToString::to_string),
+                },
+            )
+            .expect("start");
+            experiment_record(
+                &data_dir,
+                ExperimentRecordRequest {
+                    name: "task-a".to_string(),
+                    input_tokens,
+                    output_tokens: 10,
+                    tool_tokens: 0,
+                    success: true,
+                    test_outcome: TestOutcome::Passed,
+                },
+            )
+            .expect("record");
+            experiment_stop(&data_dir, "task-a").expect("stop");
+        }
+        let report = experiment_report(&data_dir, "task-a").expect("report");
+
+        let payload = export_anonymous_telemetry(&paths, "0.1.0", None, Some(&report))
+            .expect("export")
+            .payload;
+
+        assert_eq!(payload["measured_token_savings_bucket"], "1-999");
+        assert_eq!(payload["experiment_mode"], "record_existing");
+        assert_eq!(
+            payload["experiment_measurement_source_category"],
+            "user_entered"
+        );
+        assert_eq!(payload["experiment_token_savings_ratio_bucket"], "25-50");
+        assert_eq!(payload["experiment_correctness_category"], "both_passed");
+        assert_eq!(payload["experiment_read_plan_used"], true);
+        assert_eq!(payload["experiment_read_plan_item_count_bucket"], "1-2");
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("task-a"));
+        assert!(!serialized.contains("baseline_total_tokens"));
+        assert!(!serialized.contains("treatment_total_tokens"));
     }
 
     #[test]

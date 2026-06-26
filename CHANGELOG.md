@@ -117,13 +117,25 @@
   environment opt-outs, validates a versioned allowlist payload schema, and
   keeps research trace consent separate. The anonymous payload no longer carries
   a repository instance id, includes only coarse external-dependency risk, and
-  treats export as inspect-only rather than queue creation. Local paired token
+  treats export as inspect-only rather than queue creation. Enabled
+  `stats --json` now writes only an allowlisted local rollup and still performs
+  no network upload or queue creation. Telemetry status now reports rollup
+  counts, CI disablement, and whether explicit upload would open a network
+  connection. Live install now keeps telemetry consent independent from agent
+  configuration: `--yes` alone does not enable telemetry, the product binary
+  prompts with default-no `[y/N]` when no telemetry flag is supplied, and
+  dry-run output names the planned native Codex/Claude Code MCP command shape.
+  Local paired token
   experiments can now record baseline/treatment token counts through explicit
   `record-existing` or `controlled-pair` confirmation so `stats --json` reports
-  measured token savings only when comparable measurements exist. Experiment
-  export is redacted by default, controlled-pair reports warn about possible
-  extra token/time/provider cost, and failed treatment correctness invalidates
-  product token-saving claims even when a raw token delta is available.
+  measured token savings only when comparable measurements exist. The product
+  binary prompts for experiment recording with default-no `[y/N]` when `--yes`
+  is absent; controlled-pair prompts warn about possible extra
+  token/time/provider cost. Anonymous telemetry payloads include only coarse
+  experiment aggregate categories, experiment export is redacted by default,
+  and failed treatment correctness invalidates product token-saving claims even
+  when a raw token delta is available. Uninstall now refuses missing managed
+  receipts instead of silently succeeding.
   FastAPI exact-anchor regression coverage now spans all supported
   FastAPI/APIRouter HTTP route methods (`delete`, `get`, `head`, `options`,
   `patch`, `post`, and `put`) and keeps `api_route`/WebSocket decorators

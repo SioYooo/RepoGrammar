@@ -215,6 +215,11 @@ Live `--target all` and all project-local writes remain deferred to avoid
 partial or unsupported agent configuration. `install` runs a read-only MCP
 self-test before native configuration and writes a managed receipt after native
 configuration succeeds; `uninstall` removes only receipt-owned managed entries.
+Dry-run install output reports the native MCP command shape for supported
+global Codex and Claude Code targets. Live `install --yes` without
+`--telemetry` or `--no-telemetry` asks for anonymous telemetry consent with a
+default-no `[y/N]` prompt in the product binary; non-interactive runners use the
+same default-no behavior. `--yes` itself never implies telemetry consent.
 
 ## Metrics commands
 
@@ -259,8 +264,13 @@ Endpoints must be HTTPS except localhost test endpoints. No endpoint configured
 returns a parseable not-uploaded result. `upload --dry-run` validates and
 prints the exact allowlisted payload without opening a network connection.
 Non-dry-run upload requires `--yes`.
+`telemetry status --json` reports anonymous and research preferences, effective
+environment/CI disablement, rollup/queue/sent counts, endpoint configuration,
+and whether an explicit upload would open a network connection.
 `telemetry export --json` is inspect-only and does not create a queue or
-rollup.
+rollup. `stats --json` never uploads; when anonymous telemetry is effectively
+enabled it may update a local allowlisted passive-diagnostics rollup without
+creating an upload queue.
 
 Paired token measurements are local only unless the user also opts into
 anonymous telemetry upload of aggregate buckets. Actual token savings are:
@@ -272,7 +282,10 @@ baseline_total_tokens - treatment_total_tokens
 They are reported only when comparable baseline and treatment sessions share a
 measurement source. Accepted sources are `host_reported`, `user_entered`, and
 `documented_tokenizer`.
-Experiment start requires explicit `--yes` in non-interactive use.
+Experiment start requires explicit confirmation. In non-interactive use,
+`--yes` confirms recording. In interactive product runs without `--yes`,
+`experiment-start` prompts with default-no `[y/N]`; empty input, `n`, or `no`
+does not create an experiment record, and only `y` or `yes` proceeds.
 `--experiment-mode record-existing` records counts from already performed
 sessions and usually does not increase token usage. `--experiment-mode
 controlled-pair` records comparable baseline/treatment measurements and warns

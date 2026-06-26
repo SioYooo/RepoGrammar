@@ -27,9 +27,11 @@ use repogrammar::application::repository::{
 };
 use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
+#[cfg(test)]
+use repogrammar::interfaces::cli::run_with_runtime;
 use repogrammar::interfaces::cli::{
-    parse_serve_options, repository_root, run_with_runtime, state_dir_override, CliIndexRequest,
-    CliRuntime,
+    parse_serve_options, repository_root, run_with_runtime_and_install_prompt, state_dir_override,
+    CliIndexRequest, CliRuntime, InstallTelemetryPrompt,
 };
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
@@ -46,13 +48,38 @@ fn main() {
         let status = run_serve_command(&args[1..], &runtime);
         std::process::exit(status);
     }
-    let output = run_with_runtime(args, &runtime);
+    let output =
+        run_with_runtime_and_install_prompt(args, &runtime, &ProductInstallTelemetryPrompt);
     print!("{}", output.stdout);
     eprint!("{}", output.stderr);
     std::process::exit(output.status);
 }
 
 struct ProductCliRuntime;
+
+struct ProductInstallTelemetryPrompt;
+
+impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
+    fn prompt_install_telemetry(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
+    fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+}
+
+fn read_prompt_response(prompt: &str) -> Result<String, String> {
+    eprint!("{prompt}");
+    std::io::stderr()
+        .flush()
+        .map_err(|error| format!("failed to write prompt: {error}"))?;
+    let mut response = String::new();
+    std::io::stdin()
+        .read_line(&mut response)
+        .map_err(|error| format!("failed to read prompt: {error}"))?;
+    Ok(response)
+}
 
 impl ProductCliRuntime {
     fn store_for_status_request(
@@ -441,11 +468,14 @@ impl McpSelfTestRunner for ProductMcpSelfTester {
         let value: serde_json::Value = serde_json::from_str(first).map_err(|_| {
             RepoGrammarError::InvalidInput("MCP self-test output was not JSON".to_string())
         })?;
-        if value["result"]["tools"][0]["name"] == McpToolName::Context.as_str() {
+        let tools = value["result"]["tools"].as_array().ok_or_else(|| {
+            RepoGrammarError::InvalidInput("MCP self-test tools/list shape is invalid".to_string())
+        })?;
+        if tools.len() == 1 && tools[0]["name"] == McpToolName::Context.as_str() {
             Ok(())
         } else {
             Err(RepoGrammarError::InvalidInput(
-                "MCP self-test did not expose repogrammar_context".to_string(),
+                "MCP self-test did not expose exactly one repogrammar_context tool".to_string(),
             ))
         }
     }
@@ -4033,6 +4063,10 @@ class User(Base):
             "/opt/rg"
         )
         .is_err());
+
+        let (_program, codex_remove_args) =
+            native_remove_command(AgentTarget::Codex, InstallScope::Global).expect("codex remove");
+        assert_eq!(codex_remove_args, vec!["mcp", "remove", "repogrammar"]);
 
         let (_program, remove_args) =
             native_remove_command(AgentTarget::ClaudeCode, InstallScope::Global)

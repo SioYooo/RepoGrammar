@@ -110,17 +110,19 @@ allowed.
   mode serialization, target and token-budget validation, metadata-only greedy
   evidence selection, metadata-only read plans for all supported operations,
   missing variation/exception coverage reporting, JSON-RPC
-  initialize/tools/list/tools/call/shutdown handling, and absence of source
+  initialize/exact-one-tool tools/list/tools/call/shutdown handling, and absence of source
   snippets or absolute paths.
 - Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
-  creation, and no native configuration delegation, plus live-write `--yes`
-  gating, MCP self-test before native configuration, hanging MCP self-test
-  timeout/kill behavior, unsupported broad `--target all`, unsupported native
-  scopes, receipt writing, receipt-write rollback, receipt-owned uninstall,
-  foreign receipt refusal, install `--yes` not enabling telemetry, install
-  `--telemetry` persisting consent only after successful live install,
-  environment/CI telemetry disablement overriding install consent, and no
-  `.repogrammar/` mutation.
+  creation, no native configuration delegation, and native Codex/Claude Code
+  MCP command-shape reporting for dry-run global installs, plus live-write
+  `--yes` gating, MCP self-test before native configuration, hanging MCP
+  self-test timeout/kill behavior, unsupported broad `--target all`,
+  unsupported native scopes, receipt writing, receipt-write rollback,
+  receipt-owned uninstall, missing/foreign receipt refusal, install `--yes` not
+  enabling telemetry, default-no interactive telemetry prompt behavior,
+  explicit prompt yes/no handling, install `--telemetry` persisting consent
+  only after successful live install, environment/CI telemetry disablement
+  overriding install consent, and no `.repogrammar/` mutation.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry
@@ -129,12 +131,18 @@ allowed.
   telemetry payload validation, absence of source snippets/prompts/query
   text/paths/repository names/symbols/raw errors/env values from exported
   payloads, explicit upload receipt behavior with fake transports, inspect-only
-  telemetry export without queue/rollup creation, redacted research export,
+  telemetry export without queue/rollup creation, enabled `stats --json`
+  writing only a bucketed local rollup and disabled stats writing no telemetry
+  state, redacted research export,
   redacted experiment export without raw names/session ids/token counts, paired
-  baseline/treatment token experiment recording,
+  baseline/treatment token experiment recording, default-no experiment prompts,
+  record-existing prompt no-extra-session wording, controlled-pair
+  token/time/provider-cost prompt warnings,
   missing pairs yielding `token_savings: null`, comparable pairs computing
   token savings and ratio, required measurement source, and `stats --json`
   reporting measured savings only when a valid paired measurement exists.
+  Anonymous telemetry schema tests must cover bucketed experiment aggregate
+  fields without raw token counts or user-provided experiment names.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,

@@ -37,7 +37,8 @@ absolute paths, symbol names, query text, repository names, repository root
 hashes, content hashes, byte ranges, raw targets, credentials, raw environment
 variables, or raw error messages. They may use typed event names, coarse
 buckets, schema versions, anonymous machine id, external-dependency risk
-buckets, and typed error codes.
+buckets, typed error codes, and bucketed/category experiment aggregates for
+local paired token measurements.
 
 Global state must not contain repository-specific SQLite indexes or
 source-derived family/evidence facts.
@@ -72,13 +73,27 @@ anonymous machine id in global user state. `repogrammar telemetry status`,
 is inspect-only and does not create a queue or rollup. Telemetry is off by
 default, `--yes` during install does not imply telemetry consent, `--telemetry`
 during live install persists anonymous telemetry only after agent installation
-succeeds, and `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, or CI forces
-effective telemetry off.
+succeeds, and live install without `--telemetry` or `--no-telemetry` prompts
+with default-no `[y/N]` in the product binary. `REPOGRAMMAR_TELEMETRY=0`,
+`DO_NOT_TRACK=1`, or CI forces effective telemetry off and skips consent
+prompting.
+Telemetry status reports effective environment disablement, CI disablement,
+rollup/queue/sent counts, endpoint configuration, and whether an explicit
+upload would open a network connection.
+`repogrammar stats --json` remains local and never uploads; when anonymous
+telemetry is effectively enabled it may update one allowlisted bucketed rollup
+under `.repogrammar/telemetry/rollups/` without creating an upload queue or
+opening a network connection.
+Local experiment recording remains separate from anonymous telemetry consent.
+`experiment-start --yes` is the non-interactive confirmation path; interactive
+product runs without `--yes` prompt with default-no `[y/N]`, and the
+controlled-pair prompt warns about additional token usage, time, and provider
+cost.
 When telemetry is disabled, upload returns without opening a network
 connection. Upload is explicit only; no MCP request path performs telemetry
 network I/O.
 
 Repo-local telemetry state lives under `.repogrammar/telemetry/` and may hold
-coarse aggregate queue files and upload receipts. It must not contain source
-snippets, prompts, query text, paths, repository names, symbols, credentials,
-environment variables, evidence text, or raw error messages.
+coarse aggregate rollups, queue files, and upload receipts. It must not contain
+source snippets, prompts, query text, paths, repository names, symbols,
+credentials, environment variables, evidence text, or raw error messages.

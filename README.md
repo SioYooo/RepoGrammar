@@ -98,8 +98,10 @@ generations from syntax-only code-unit/IR generations. `serve` exposes the same
 conservative query path through the single default MCP tool
 `repogrammar_context`. `install` and `uninstall` support narrow explicit-target
 Codex/Claude Code MCP configuration through native agent CLIs after a read-only
-MCP self-test; broad `--target all`, unsupported native scopes, executable
-copying, and instruction-file edits remain deferred.
+MCP self-test and RepoGrammar-owned receipts. Uninstall refuses missing or
+foreign receipts instead of removing unmanaged agent configuration; broad
+`--target all`, unsupported native scopes, executable copying, and
+instruction-file edits remain deferred.
 
 ## Why RepoGrammar?
 
@@ -167,12 +169,23 @@ as local pattern density, family support coverage, abstention rate, and
 thin-wrapper/token-saving risk. These diagnostics are not measured token
 savings; actual token savings are reported only after a local paired
 baseline/treatment token experiment records comparable measurements. Experiment
-recording requires explicit confirmation: `record-existing` uses sessions the
-user already performed, while `controlled-pair` warns that separate baseline
-and treatment sessions may increase token usage, time, and provider cost.
+recording requires explicit confirmation: `--yes` is the non-interactive path,
+while interactive runs prompt with default-no `[y/N]`. `record-existing` uses
+sessions the user already performed, while `controlled-pair` warns that
+separate baseline and treatment sessions may increase token usage, time, and
+provider cost.
 Anonymous telemetry is off by default and can be inspected, enabled, disabled,
 exported, uploaded, or purged through `repogrammar telemetry ...`; environment
 opt-outs and CI force upload disabled, and research trace consent is separate.
+When anonymous telemetry is enabled, `stats --json` may update a bucketed local
+rollup only; it never opens a network connection or creates an upload queue.
+Telemetry status reports rollup/queue/sent counts and whether an explicit
+upload would open a network connection; allowlisted uploads include only coarse
+experiment aggregate categories when paired measurements exist.
+Live install keeps telemetry independent from agent setup: `--yes` never
+implies telemetry consent, the product binary prompts with default-no `[y/N]`
+when no telemetry flag is supplied, and `--telemetry`/`--no-telemetry` remain
+explicit overrides.
 `files` and `units` are limited to active file-manifest-only or syntax-only
 index metadata.
 

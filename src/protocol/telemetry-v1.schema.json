@@ -26,7 +26,13 @@
     "unknown_reason_code_counts_bucket",
     "typed_error_code_counts_bucket",
     "source_snippets_returned",
-    "measured_token_savings_bucket"
+    "measured_token_savings_bucket",
+    "experiment_mode",
+    "experiment_measurement_source_category",
+    "experiment_token_savings_ratio_bucket",
+    "experiment_correctness_category",
+    "experiment_read_plan_used",
+    "experiment_read_plan_item_count_bucket"
   ],
   "properties": {
     "schema_version": { "const": "telemetry.v1" },
@@ -57,6 +63,37 @@
       "anyOf": [
         { "type": "null" },
         { "enum": ["negative", "0", "1-999", "1000-9999", "10000+"] }
+      ]
+    },
+    "experiment_mode": {
+      "anyOf": [
+        { "type": "null" },
+        { "enum": ["record_existing", "controlled_pair"] }
+      ]
+    },
+    "experiment_measurement_source_category": {
+      "anyOf": [
+        { "type": "null" },
+        { "enum": ["host_reported", "user_entered", "documented_tokenizer"] }
+      ]
+    },
+    "experiment_token_savings_ratio_bucket": { "$ref": "#/$defs/ratioBucket" },
+    "experiment_correctness_category": {
+      "anyOf": [
+        { "type": "null" },
+        { "enum": ["both_passed", "treatment_failed", "baseline_failed", "unknown"] }
+      ]
+    },
+    "experiment_read_plan_used": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" }
+      ]
+    },
+    "experiment_read_plan_item_count_bucket": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/countBucket" }
       ]
     }
   },
