@@ -102,6 +102,7 @@ impl CliRuntime for ProductCliRuntime {
             repository_root: request.repository_root,
             state_dir_override: request.state_dir_override,
             max_file_bytes: request.max_file_bytes,
+            strict_gitignore: request.strict_gitignore,
         };
         let framework_roles = SyntaxFrameworkRoleDetector;
         let parser = RepoGrammarSourceParser::default();
@@ -1762,6 +1763,7 @@ mod tests {
                     repository_root: workspace.path().display().to_string(),
                     state_dir_override: None,
                     max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                    strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
                 },
@@ -2308,6 +2310,7 @@ mod tests {
                     repository_root: workspace.path().display().to_string(),
                     state_dir_override: None,
                     max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                    strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
                 },
@@ -3420,6 +3423,7 @@ def create_user(
                     repository_root: workspace.path().display().to_string(),
                     state_dir_override: None,
                     max_file_bytes: repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    strict_gitignore: false,
                     semantic_worker_executable: Some(missing_worker.display().to_string()),
                     semantic_worker_args: Vec::new(),
                 },
@@ -3809,6 +3813,7 @@ EOF
                     repository_root: workspace.path().display().to_string(),
                     state_dir_override: None,
                     max_file_bytes: repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    strict_gitignore: false,
                     semantic_worker_executable: Some("/bin/sh".to_string()),
                     semantic_worker_args: vec![worker_script.display().to_string()],
                 },

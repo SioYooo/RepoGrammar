@@ -2431,7 +2431,7 @@ def list_users():
             .parse(document(source))
             .expect("parse python");
 
-        assert!(report
+        assert!(!report
             .units
             .iter()
             .any(|unit| unit.kind.as_str() == "fastapi_route"));
@@ -2839,7 +2839,7 @@ class User:
             .parse(document(source))
             .expect("parse python");
 
-        assert!(report
+        assert!(!report
             .units
             .iter()
             .any(|unit| unit.kind.as_str() == "sqlalchemy_model"));

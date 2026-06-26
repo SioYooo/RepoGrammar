@@ -89,8 +89,10 @@ The current implementation covers the first structural slice only:
   decorator, monkey-patch, dynamic pytest fixture-name, and unresolved import
   `UNKNOWN` facts. Top-level import bindings are the only file-level alias
   source for exact framework anchors; function-local imports are not promoted to
-  file-global aliases, and top-level framework imports shadowed by later
-  same-name definitions or assignments cannot produce exact family support;
+  file-global aliases. Framework import visibility is source-position scoped:
+  units before a top-level shadowing definition or assignment may still use the
+  import alias, while later units cannot use the shadowed name for exact family
+  support;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -198,10 +200,14 @@ The current implementation covers the first structural slice only:
 - a conservative Python EC-MVFI-lite clustering step that builds internal
   feature vectors from language, unit kind, framework role, normalized shape,
   exact support target, support-family group, parser anchor categories, import
-  context, call/effect markers, fixture context, path context, and available
-  AST-skeleton labels, then uses a complete-link constraint so bridge members
-  cannot single-link incompatible Python support families into one confident
-  claim;
+  context, call/effect markers, fixture context, Pydantic/SQLAlchemy
+  model-context markers, path context, and available AST-skeleton labels, then
+  uses a complete-link constraint so bridge members cannot single-link
+  incompatible Python support families into one confident claim. Parser-origin
+  context facts participate in compatibility, while parser-origin blocking
+  `UNKNOWN` facts remove the affected unit from confident support unless the
+  UNKNOWN is scoped to a non-membership subclaim such as
+  `fastapi_dependency_target`;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
@@ -517,8 +523,8 @@ Recommended bounds:
 - max fixpoint iterations: 4;
 - max cross-file propagation depth: 2;
 - site-packages traversal: disabled;
-- dynamic `getattr`, `setattr`, `globals`, `locals`, `eval`, `exec`,
-  `compile`, and `__import__`: typed `UNKNOWN`.
+- dynamic `getattr`, `setattr`, bare or indexed `globals`/`locals`, `eval`,
+  `exec`, `compile`, and `__import__`: typed `UNKNOWN`.
 
 ### Layer 6: Application-centered Call Recovery
 

@@ -77,15 +77,22 @@
   each boundary is persisted as typed parser-origin `UNKNOWN`, blocked from
   claim-input readiness, and kept out of derived support.
   Exact-anchor derivation now treats only top-level imports as file-level
-  framework aliases, drops framework imports shadowed by later same-name
-  definitions or assignments before support-worthy anchor derivation, and copies
-  module-level dynamic import or `sys.path` mutation into unit-scoped blocking
-  `UNKNOWN`s for later family-shaped units in the same file.
+  framework aliases and resolves those aliases by source position: units before
+  a top-level shadowing definition or assignment may still use the framework
+  import, while later units cannot. Module-level dynamic import or `sys.path`
+  mutation is copied into unit-scoped blocking `UNKNOWN`s only for later
+  family-shaped units in the same file. Final Python family construction also
+  consumes parser-origin context features for complete-link compatibility and
+  repeats claim-scoped blocking `UNKNOWN` checks before emitting a confident
+  family.
   Release smoke coverage now exercises the committed `stale-evidence` fixture
   for mutation/deletion freshness failures and the FastAPI/APIRouter route
   method variation fixture across the full `delete`/`get`/`head`/`options`/
   `patch`/`post`/`put` matrix. Discovery regression coverage explicitly covers
-  the Python v0.1 virtualenv/cache/build/dependency skip directory matrix.
+  the Python v0.1 virtualenv/cache/build/dependency skip directory matrix,
+  Python gitignore behavior in root and parent-worktree layouts, and explicit
+  strict gitignore failure when Git ignore checks are unavailable. CLI/MCP
+  query inputs share target and token-budget bounds.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -182,8 +189,9 @@ are not treated as fixture injection UNKNOWNs,
 Pydantic field/config/member anchors, typed dynamic Pydantic model factory
 framework-identity `UNKNOWN`, typed dynamic/unresolved decorator
 framework-identity `UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed
-dynamic/unresolved import `UNKNOWN` cases including `__import__`, plus
-`locals()[...]`/`eval`/`exec`/`compile` call-target `UNKNOWN`s, plus bounded same-function FastAPI
+  dynamic/unresolved import `UNKNOWN` cases including `__import__`, plus bare
+  or indexed `locals`/`globals`, `eval`, `exec`, and `compile` call-target
+  `UNKNOWN`s, plus bounded same-function FastAPI
 service-call anchors with reassignment invalidation,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,

@@ -77,6 +77,20 @@ PYDANTIC_VALIDATOR_TARGETS = {
     "pydantic.model_validator",
     "pydantic.validator",
 }
+PYDANTIC_MODEL_BASES = {
+    "pydantic.BaseModel",
+    "pydantic.BaseSettings",
+    "pydantic_settings.BaseSettings",
+}
+SQLALCHEMY_MODEL_BASES = {
+    "sqlalchemy.orm.DeclarativeBase",
+}
+SQLALCHEMY_MAPPED_TYPES = {
+    "sqlalchemy.orm.Mapped",
+}
+SQLALCHEMY_MAPPED_CALLS = {
+    "sqlalchemy.orm.mapped_column",
+}
 
 
 def read_stdin() -> str:
@@ -326,10 +340,13 @@ def canonical_decorator_names(
     return [canonical_name(name, aliases, assignments) for name in decorator_names(node)]
 
 
-def has_fastapi_route_decorator(node: ast.AST) -> bool:
-    for name in decorator_names(node):
-        parts = name.split(".")
-        if len(parts) >= 2 and parts[-1] in ROUTE_METHODS:
+def has_fastapi_route_decorator(
+    node: ast.AST,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> bool:
+    for name in canonical_decorator_names(node, aliases, assignments):
+        if decorator_anchor_kind(name) == "fastapi_route_decorator":
             return True
     return False
 
@@ -405,23 +422,29 @@ def base_names(node: ast.ClassDef) -> list[str]:
     return [name for base in node.bases if (name := dotted_name(base))]
 
 
-def is_pydantic_model(node: ast.ClassDef) -> bool:
-    return any(name.endswith("BaseModel") or name.endswith("BaseSettings") for name in base_names(node))
+def is_pydantic_model(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> bool:
+    aliases = aliases or {}
+    return any(
+        canonical_name(name, aliases, {}) in PYDANTIC_MODEL_BASES
+        for name in base_names(node)
+    )
 
 
-def is_sqlalchemy_model(node: ast.ClassDef) -> bool:
-    if any(name.endswith("DeclarativeBase") or name == "Base" for name in base_names(node)):
+def is_sqlalchemy_model(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> bool:
+    aliases = aliases or {}
+    if any(
+        canonical_name(name, aliases, {}) in SQLALCHEMY_MODEL_BASES
+        for name in base_names(node)
+    ):
         return True
     for item in node.body:
         if isinstance(item, (ast.AnnAssign, ast.Assign)):
             targets = [item.target] if isinstance(item, ast.AnnAssign) else list(item.targets)
             annotation = dotted_name(item.annotation) if isinstance(item, ast.AnnAssign) else None
             value_name = dotted_name(item.value) if isinstance(getattr(item, "value", None), ast.AST) else None
-            if annotation and (annotation.endswith("Mapped") or annotation.startswith("Mapped")):
+            if annotation and canonical_name(annotation, aliases, {}) in SQLALCHEMY_MAPPED_TYPES:
                 return True
-            if value_name and (value_name.endswith("mapped_column") or value_name.endswith("Column")):
-                return True
-            if any(isinstance(target, ast.Name) and target.id == "__tablename__" for target in targets):
+            if value_name and canonical_name(value_name, aliases, {}) in SQLALCHEMY_MAPPED_CALLS:
                 return True
     return False
 
@@ -446,7 +469,7 @@ def function_kind(
     aliases: dict[str, str] | None = None,
     assignments: dict[str, str] | None = None,
 ) -> str:
-    if has_fastapi_route_decorator(node):
+    if has_fastapi_route_decorator(node, aliases, assignments):
         return "fastapi_route"
     if has_pytest_fixture_decorator(node, aliases, assignments):
         return "pytest_fixture"
@@ -463,10 +486,10 @@ def function_kind(
     return "function"
 
 
-def class_kind(node: ast.ClassDef) -> str:
-    if is_pydantic_model(node):
+def class_kind(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> str:
+    if is_pydantic_model(node, aliases):
         return "pydantic_model"
-    if is_sqlalchemy_model(node):
+    if is_sqlalchemy_model(node, aliases):
         return "sqlalchemy_model"
     return "class"
 
@@ -984,6 +1007,50 @@ def drop_shadowed_import_aliases(
     if not shadowed:
         return aliases
     return {name: target for name, target in aliases.items() if name not in shadowed}
+
+
+def aliases_at_offset(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+    offset: int,
+) -> dict[str, str]:
+    visible: dict[str, str] = {}
+    for node in sorted(tree.body, key=lambda item: node_range(starts, item)):
+        start, _end = node_range(starts, node)
+        if start >= offset:
+            break
+        for name in import_local_names(node):
+            if name in aliases:
+                visible[name] = aliases[name]
+        for name in top_level_rebound_names(node):
+            visible.pop(name, None)
+    return visible
+
+
+def collect_assignment_roles_until(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+    offset: int,
+) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    for node in sorted(tree.body, key=lambda item: node_range(starts, item)):
+        start, _end = node_range(starts, node)
+        if start >= offset:
+            break
+        if not isinstance(node, ast.Assign):
+            continue
+        node_aliases = aliases_at_offset(tree, starts, aliases, start)
+        role = assignment_role(node.value, node_aliases, assignments)
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if role is None:
+                assignments.pop(target.id, None)
+                continue
+            assignments[target.id] = role
+    return assignments
 
 
 def collect_parameter_roles(
@@ -1513,7 +1580,7 @@ def collect_pydantic_model_member_facts(
     aliases: dict[str, str],
     facts: list[dict[str, Any]],
 ) -> None:
-    if not is_pydantic_model(node):
+    if not is_pydantic_model(node, aliases):
         return
     for item in node.body:
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
@@ -1734,6 +1801,8 @@ def dynamic_unknown_for_call(
         return "DynamicImport", "python_import_resolution"
     if canonical == "importlib.import_module" and resolved_dynamic_import_literal_target(call, module_index) is None:
         return "DynamicImport", "python_import_resolution"
+    if canonical in {"globals", "locals"}:
+        return "FrameworkMagic", "python_call_target"
     if is_dynamic_execution_call(canonical):
         return "FrameworkMagic", "python_call_target"
     if is_dynamic_call(call):
@@ -1783,12 +1852,14 @@ def module_level_dynamic_unknown_specs(
             key=lambda child: node_range(starts, child),
         ):
             name = dotted_name(call.func)
-            canonical = canonical_name(name, aliases, assignments) if name else None
+            start, end = node_range(starts, call)
+            call_aliases = aliases_at_offset(tree, starts, aliases, start)
+            call_assignments = collect_assignment_roles_until(tree, starts, aliases, start)
+            canonical = canonical_name(name, call_aliases, call_assignments) if name else None
             unknown = dynamic_unknown_for_call(call, canonical, module_index)
             if unknown is None:
                 continue
             reason_code, affected_claim = unknown
-            start, end = node_range(starts, call)
             specs.append((reason_code, affected_claim, start, end))
     return specs
 
@@ -1803,6 +1874,8 @@ def add_unknown_specs_for_unit(
     evidence_range: tuple[int, int] | None = None,
 ) -> None:
     for reason_code, affected_claim, start, end in specs:
+        if evidence_range is not None and start > evidence_range[0]:
+            continue
         fact_start, fact_end = evidence_range or (start, end)
         add_unknown_fact(
             facts,
@@ -1949,6 +2022,21 @@ def collect_call_facts(
                         end=end,
                     ),
                 )
+            continue
+        if canonical in {"globals", "locals"}:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_call_target",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
             continue
         if is_dynamic_execution_call(canonical):
             add_fact(
@@ -2441,7 +2529,6 @@ def analyze_source(
     )
     for item in import_facts:
         add_fact(facts, item)
-    aliases = drop_shadowed_import_aliases(tree, starts, aliases)
     defined_names = top_level_defined_names(tree)
     collect_module_identity_and_scope_facts(
         tree,
@@ -2452,7 +2539,8 @@ def analyze_source(
         module_unit_id,
         facts,
     )
-    assignments = collect_assignment_roles(tree, aliases)
+    source_end = len(source.encode("utf-8"))
+    assignments = collect_assignment_roles_until(tree, starts, aliases, source_end + 1)
     module_dynamic_unknowns = module_level_dynamic_unknown_specs(
         tree,
         starts,
@@ -2484,10 +2572,12 @@ def analyze_source(
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             start, end = node_range(starts, item)
+            item_aliases = aliases_at_offset(tree, starts, aliases, start)
+            item_assignments = collect_assignment_roles_until(tree, starts, aliases, start)
             units.append(
                 unit(
                     item.name,
-                    function_kind(item, None, aliases, assignments),
+                    function_kind(item, None, item_aliases, item_assignments),
                     start,
                     end,
                     ordinal,
@@ -2497,16 +2587,19 @@ def analyze_source(
             ordinal += 1
         elif isinstance(item, ast.ClassDef):
             start, end = node_range(starts, item)
-            units.append(unit(item.name, class_kind(item), start, end, ordinal))
+            item_aliases = aliases_at_offset(tree, starts, aliases, start)
+            units.append(unit(item.name, class_kind(item, item_aliases), start, end, ordinal))
             unit_by_node[id(item)] = units[-1]
             ordinal += 1
             for child in item.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     start, end = node_range(starts, child)
+                    child_aliases = aliases_at_offset(tree, starts, aliases, start)
+                    child_assignments = collect_assignment_roles_until(tree, starts, aliases, start)
                     units.append(
                         unit(
                             child.name,
-                            function_kind(child, item.name, aliases, assignments),
+                            function_kind(child, item.name, child_aliases, child_assignments),
                             start,
                             end,
                             ordinal,
@@ -2519,6 +2612,13 @@ def analyze_source(
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
             item_unit = unit_by_node[id(item)]
+            item_aliases = aliases_at_offset(tree, starts, aliases, item_unit["start_byte"])
+            item_assignments = collect_assignment_roles_until(
+                tree,
+                starts,
+                aliases,
+                item_unit["start_byte"],
+            )
             add_unknown_specs_for_unit(
                 facts,
                 subject_unit_id,
@@ -2535,13 +2635,13 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
-                assignments,
+                item_aliases,
+                item_assignments,
                 defined_names,
                 facts,
             )
             _fixture_names, has_unknown_fixture_name = pytest_fixture_binding_names(
-                item, aliases, assignments
+                item, item_aliases, item_assignments
             )
             if has_unknown_fixture_name:
                 start, end = node_range(starts, item)
@@ -2563,11 +2663,11 @@ def analyze_source(
                     content_hash_value,
                     repository_revision,
                     subject_unit_id,
-                    aliases,
+                    item_aliases,
                     facts,
                 )
             parametrize_names, indirect_parametrize_names = pytest_parametrize_name_sets(
-                item, aliases, assignments
+                item, item_aliases, item_assignments
             )
             collect_fixture_facts(
                 item,
@@ -2580,8 +2680,8 @@ def analyze_source(
                 conftest_fixture_name_counts,
                 parametrize_names,
                 indirect_parametrize_names,
-                aliases,
-                assignments,
+                item_aliases,
+                item_assignments,
                 facts,
             )
             collect_call_facts(
@@ -2592,9 +2692,9 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
-                assignments,
-                collect_parameter_roles(item, aliases),
+                item_aliases,
+                item_assignments,
+                collect_parameter_roles(item, item_aliases),
                 defined_names,
                 module_index,
                 facts,
@@ -2602,6 +2702,13 @@ def analyze_source(
         elif isinstance(item, ast.ClassDef):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
             item_unit = unit_by_node[id(item)]
+            item_aliases = aliases_at_offset(tree, starts, aliases, item_unit["start_byte"])
+            item_assignments = collect_assignment_roles_until(
+                tree,
+                starts,
+                aliases,
+                item_unit["start_byte"],
+            )
             add_unknown_specs_for_unit(
                 facts,
                 subject_unit_id,
@@ -2618,7 +2725,7 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
+                item_aliases,
                 facts,
             )
             collect_pydantic_model_member_facts(
@@ -2628,7 +2735,7 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
+                item_aliases,
                 facts,
             )
             collect_sqlalchemy_model_field_facts(
@@ -2638,7 +2745,7 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
+                item_aliases,
                 facts,
             )
             collect_decorator_facts(
@@ -2648,17 +2755,24 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                aliases,
-                assignments,
+                item_aliases,
+                item_assignments,
                 defined_names,
                 facts,
             )
-            instance_attribute_roles = collect_instance_attribute_roles(item, aliases)
+            instance_attribute_roles = collect_instance_attribute_roles(item, item_aliases)
             for child in item.body:
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 child_unit_id = unit_id(path, unit_by_node[id(child)])
                 child_unit = unit_by_node[id(child)]
+                child_aliases = aliases_at_offset(tree, starts, aliases, child_unit["start_byte"])
+                child_assignments = collect_assignment_roles_until(
+                    tree,
+                    starts,
+                    aliases,
+                    child_unit["start_byte"],
+                )
                 add_unknown_specs_for_unit(
                     facts,
                     child_unit_id,
@@ -2669,7 +2783,7 @@ def analyze_source(
                     (child_unit["start_byte"], child_unit["end_byte"]),
                 )
                 parameter_roles = {
-                    **collect_parameter_roles(child, aliases),
+                    **collect_parameter_roles(child, child_aliases),
                     **instance_attribute_roles,
                 }
                 collect_decorator_facts(
@@ -2679,8 +2793,8 @@ def analyze_source(
                     content_hash_value,
                     repository_revision,
                     child_unit_id,
-                    aliases,
-                    assignments,
+                    child_aliases,
+                    child_assignments,
                     defined_names,
                     facts,
                 )
@@ -2692,8 +2806,8 @@ def analyze_source(
                     content_hash_value,
                     repository_revision,
                     child_unit_id,
-                    aliases,
-                    assignments,
+                    child_aliases,
+                    child_assignments,
                     parameter_roles,
                     defined_names,
                     module_index,

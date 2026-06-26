@@ -7,9 +7,10 @@ use crate::application::install::{
 };
 use crate::application::query::{
     query_preflight, repository_status_unavailable_fallback, select_family_evidence,
-    FamilyDetailReport, FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+    validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    QueryPreflightOperation, QueryPreflightReport,
 };
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -29,6 +30,7 @@ pub struct CliIndexRequest {
     pub repository_root: String,
     pub state_dir_override: Option<String>,
     pub max_file_bytes: u64,
+    pub strict_gitignore: bool,
     pub semantic_worker_executable: Option<String>,
     pub semantic_worker_args: Vec<String>,
 }
@@ -1111,6 +1113,7 @@ where
         repository_root: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
         max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
         semantic_worker_executable,
         semantic_worker_args,
     };
@@ -1500,7 +1503,10 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
             }
             "--token-budget" => {
                 let value = option_value(rest, index, "--token-budget", "a token budget")?;
-                options.token_budget = Some(parse_positive_usize(value, "--token-budget")?);
+                let parsed = parse_positive_usize(value, "--token-budget")?;
+                validate_query_token_budget(parsed)
+                    .map_err(|error| format!("--token-budget {error}"))?;
+                options.token_budget = Some(parsed);
                 if !options.mode_explicit && options.evidence_mode == FamilyEvidenceMode::Compact {
                     options.evidence_mode = FamilyEvidenceMode::Evidence;
                 }
@@ -1527,6 +1533,7 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
             }
             value if !value.starts_with('-') => {
                 if options.target.is_none() {
+                    validate_query_target(value).map_err(|error| format!("target {error}"))?;
                     options.target = Some(value.to_string());
                 }
                 index += 1;
@@ -1637,6 +1644,20 @@ where
     F: Fn(&str) -> Option<String>,
 {
     env_lookup("REPOGRAMMAR_DIR")
+}
+
+fn env_flag_enabled<F>(env_lookup: &F, name: &str) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env_lookup(name)
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn init_outcome_human(outcome: &RepositoryInitOutcome) -> String {
@@ -2199,12 +2220,48 @@ mod tests {
             _command: &str,
             request: CliIndexRequest,
         ) -> Result<IndexingOutcome, RepoGrammarError> {
+            assert!(!request.strict_gitignore);
             assert_eq!(request.semantic_worker_executable, None);
             assert_eq!(request.semantic_worker_args, Vec::<String>::new());
             Ok(IndexingOutcome {
                 indexed_units: 1,
                 semantic_facts: 0,
                 discovered_files: 1,
+                skipped_paths: 0,
+                active_generation: Some("gen-000001".to_string()),
+                semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("index command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("index command should not request doctor through CLI test runtime")
+        }
+    }
+
+    struct StrictGitignoreEnvRuntime;
+
+    impl CliRuntime for StrictGitignoreEnvRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            assert!(request.strict_gitignore);
+            Ok(IndexingOutcome {
+                indexed_units: 0,
+                semantic_facts: 0,
+                discovered_files: 0,
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
@@ -2395,6 +2452,7 @@ mod tests {
                     repository_root: request.repository_root,
                     state_dir_override: request.state_dir_override,
                     max_file_bytes: request.max_file_bytes,
+                    strict_gitignore: request.strict_gitignore,
                 },
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
@@ -2638,6 +2696,26 @@ mod tests {
     }
 
     #[test]
+    fn strict_gitignore_env_is_passed_to_index_request() {
+        let workspace = TempWorkspace::new("cli-strict-gitignore-env");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_STRICT_GITIGNORE" => Some("true".to_string()),
+            _ => None,
+        };
+        let output = run_with_context_and_runtime(
+            ["index", "--json"],
+            workspace.path(),
+            &env,
+            &StrictGitignoreEnvRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["command"], "index");
+    }
+
+    #[test]
     fn invalid_semantic_worker_args_json_is_rejected_without_echoing_value() {
         let workspace = TempWorkspace::new("cli-bad-worker-args-env");
         let env = |key: &str| match key {
@@ -2805,6 +2883,12 @@ mod tests {
             assert_eq!(output.status, 2);
             assert!(output.stdout.is_empty());
         }
+
+        let over_budget = (crate::application::query::MAX_QUERY_TOKEN_BUDGET + 1).to_string();
+        assert!(parse_query_options(&["--token-budget".to_string(), over_budget,]).is_err());
+        let over_target = "x".repeat(crate::application::query::MAX_QUERY_TARGET_BYTES + 1);
+        assert!(parse_query_options(&[over_target]).is_err());
+        assert!(parse_query_options(&["contains\nnewline".to_string()]).is_err());
     }
 
     #[test]

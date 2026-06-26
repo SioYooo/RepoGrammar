@@ -64,7 +64,7 @@ the conformance result advisory `UNKNOWN`.
 All query commands must support:
 
 - `--project <path>`
-- `--token-budget <n>`
+- `--token-budget <n>` where `n` is positive and no greater than 200000
 - `--mode compact|evidence|deep`
 - `--json`
 - `--include-variations`
@@ -168,6 +168,8 @@ user to `repogrammar doctor` rather than masking the corruption with a new
 generation. Before discovery, source reads, generation preparation, validation,
 and activation, both commands acquire `.repogrammar/locks/index.lock` and hold
 it through validation and activation.
+`REPOGRAMMAR_STRICT_GITIGNORE=true` makes unavailable Git ignore checks a hard
+index/sync error; otherwise discovery keeps the warning fallback and continues.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -339,12 +341,13 @@ operand as their target. `family <target>` is an exact family-id lookup.
 and `check` may use fuzzy matching over supported query-safe path suffixes,
 exact member roles, and exact ids, but must not treat short substrings such as a
 framework name, classification label, or directory fragment as a successful
-family match. Matched family output defaults to `--mode compact`: family id,
+family match. Query targets must be non-empty, at most 8192 bytes, and free of
+control characters. Matched family output defaults to `--mode compact`: family id,
 classification, support, members, variation slots, typed unknowns, selected
 output metadata, and no evidence records or source snippets. `--mode evidence`
 adds budgeted repo-relative evidence metadata: evidence id, family id,
 code-unit id, path, content hash, byte range, note, estimated token cost, and
-covered claim labels. `--token-budget <n>` validates a positive integer and
+covered claim labels. `--token-budget <n>` validates a positive bounded integer and
 implies `--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
 family evidence carries schema-backed `covered_claims` labels from the

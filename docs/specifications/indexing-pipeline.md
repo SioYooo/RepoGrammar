@@ -83,10 +83,12 @@ Discovery must honor `.gitignore` rules when Git is available and use a safe
 warning fallback when Git checks are unavailable. When the project path is a
 subdirectory of a parent Git worktree, discovery must resolve the Git top-level
 and check ignore rules using Git-root-relative paths while still reporting
-project-relative paths. It must apply default exclusions for dependency, build,
-cache, coverage, virtual environment, and generated output directories. Files
-larger than the configured size limit are skipped, with 1 MB as the default
-inclusive limit.
+project-relative paths. `REPOGRAMMAR_STRICT_GITIGNORE=true` makes unavailable
+Git ignore checks a hard indexing/discovery error instead of the normal warning
+fallback. It must apply default exclusions for dependency, build, cache,
+coverage, virtual environment, and generated output directories. Files larger
+than the configured size limit are skipped, with 1 MB as the default inclusive
+limit.
 
 The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, and
 `.py`.
@@ -129,6 +131,8 @@ should add Tree-sitter as a tolerant structural fallback only. Python
 syntax-only facts still cannot become semantic claims or family evidence by
 themselves; only separately synthesized exact-anchor `DATAFLOW_DERIVED` support
 facts or future provider-backed facts may enter the EC-MVFI-lite support gate.
+Git ignore regression coverage includes ignored Python files in both repository
+roots and parent-worktree subdirectory projects.
 
 ## Tree-sitter parsing
 

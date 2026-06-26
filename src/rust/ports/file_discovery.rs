@@ -35,6 +35,7 @@ impl DiscoveredLanguage {
 pub struct FileDiscoveryRequest {
     pub repository_root: String,
     pub max_file_bytes: u64,
+    pub strict_gitignore: bool,
 }
 
 impl FileDiscoveryRequest {
@@ -42,7 +43,13 @@ impl FileDiscoveryRequest {
         Self {
             repository_root: repository_root.into(),
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            strict_gitignore: false,
         }
+    }
+
+    pub fn with_strict_gitignore(mut self, strict: bool) -> Self {
+        self.strict_gitignore = strict;
+        self
     }
 }
 

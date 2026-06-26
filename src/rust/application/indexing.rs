@@ -2,7 +2,7 @@
 
 use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
-    python_support_target_is_role_compatible,
+    python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
 };
 use crate::core::model::{
     CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
@@ -37,6 +37,7 @@ pub struct IndexingRequest {
     pub repository_root: String,
     pub state_dir_override: Option<String>,
     pub max_file_bytes: u64,
+    pub strict_gitignore: bool,
 }
 
 impl IndexingRequest {
@@ -45,6 +46,7 @@ impl IndexingRequest {
             repository_root: repository_root.into(),
             state_dir_override: None,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            strict_gitignore: false,
         }
     }
 }
@@ -108,6 +110,7 @@ pub fn discover_repository_files(
         .discover(FileDiscoveryRequest {
             repository_root: request.repository_root,
             max_file_bytes: request.max_file_bytes,
+            strict_gitignore: request.strict_gitignore,
         })
         .map_err(discovery_error)
 }
@@ -412,8 +415,12 @@ fn index_repository_with_optional_semantic_worker(
 
     if let Some(family_store) = options.family_store {
         let mut family_facts = Vec::with_capacity(
-            framework_role_facts.len() + derived_python_support_facts.len() + worker_facts.len(),
+            parser_semantic_facts.len()
+                + framework_role_facts.len()
+                + derived_python_support_facts.len()
+                + worker_facts.len(),
         );
+        family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(worker_facts);
@@ -781,39 +788,9 @@ fn python_framework_support_blocked_units(
 }
 
 fn python_framework_support_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> bool {
-    if fact.kind != SemanticFactKind::Unknown
-        || fact.certainty != FactCertainty::Unknown
-        || fact.origin.engine != "python"
-        || fact.origin.method != "cpython_ast"
-    {
-        return false;
-    }
-
-    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
-        return false;
-    };
-    match reason {
-        "DynamicImport" | "RuntimeDependencyInjection" | "UnresolvedImport" => fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "affected_claim=python_import_resolution"),
-        "FrameworkMagic" => fact.assumptions.iter().any(|assumption| {
-            assumption == "affected_claim=python_framework_identity"
-                || assumption == "affected_claim=python_call_target"
-        }),
-        "MonkeyPatch" => fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "affected_claim=python_call_target"),
-        "PytestFixtureInjection" | "ConflictingFacts" => {
-            framework_role.starts_with("framework:pytest")
-                && fact
-                    .assumptions
-                    .iter()
-                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
-        }
-        _ => false,
-    }
+    fact.origin.engine == "python"
+        && fact.origin.method == "cpython_ast"
+        && python_family_unknown_blocks_claim(fact, framework_role)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

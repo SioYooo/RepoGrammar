@@ -435,6 +435,72 @@ assert route_matrix_unit_kinds.count("fastapi_route") == len(route_methods) * 2
 serialized_route_matrix = json.dumps(route_matrix_messages)
 assert "@router." not in serialized_route_matrix
 assert "@app." not in serialized_route_matrix
+
+local_client_route_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "client_route_false_positive.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+client = object()
+
+@client.get("/users")
+def not_a_fastapi_route():
+    return {}
+""",
+    }
+)
+local_client_units = local_client_route_messages[0]["units"]
+local_client_facts = local_client_route_messages[0]["facts"]
+assert not any(unit["kind"] == "fastapi_route" for unit in local_client_units)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"].startswith("fastapi.")
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in local_client_facts
+)
+
+range_shadow_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "range_shadow_routes.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/before")
+def before_shadow():
+    return {}
+
+router = object()
+
+@router.get("/after")
+def after_shadow():
+    return {}
+""",
+    }
+)
+range_shadow_units = range_shadow_messages[0]["units"]
+range_shadow_facts = range_shadow_messages[0]["facts"]
+assert sum(1 for unit in range_shadow_units if unit["kind"] == "fastapi_route") == 1
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "before_shadow" in fact["subject"]
+    for fact in range_shadow_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "after_shadow" in fact["subject"]
+    for fact in range_shadow_facts
+)
 assert any(
     fact["fact_kind"] == "TYPE"
     and fact["target"] == "fastapi.response_model.UserOut"
@@ -768,6 +834,71 @@ assert any(
 )
 assert "from pydantic import" not in json.dumps(settings_parse_messages)
 
+aliased_framework_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "aliased_models.py",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import BaseModel as BM
+from sqlalchemy.orm import Mapped as M, mapped_column as col
+
+class UserOut(BM):
+    id: int
+
+class User:
+    id: M[int] = col(primary_key=True)
+""",
+    }
+)
+aliased_framework_units = aliased_framework_model_messages[0]["units"]
+aliased_framework_facts = aliased_framework_model_messages[0]["facts"]
+assert any(unit["kind"] == "pydantic_model" for unit in aliased_framework_units)
+assert any(unit["kind"] == "sqlalchemy_model" for unit in aliased_framework_units)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel"
+    for fact in aliased_framework_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped"
+    for fact in aliased_framework_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.mapped_column"
+    for fact in aliased_framework_facts
+)
+
+local_base_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "local_base_model.py",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+class BaseModel:
+    pass
+
+class UserOut(BaseModel):
+    id: int
+
+class Base:
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+""",
+    }
+)
+local_base_units = local_base_model_messages[0]["units"]
+local_base_facts = local_base_model_messages[0]["facts"]
+assert not any(unit["kind"] == "pydantic_model" for unit in local_base_units)
+assert not any(unit["kind"] == "sqlalchemy_model" for unit in local_base_units)
+assert not any(fact.get("target") == "pydantic.BaseModel" for fact in local_base_facts)
+assert not any(fact.get("target") == "sqlalchemy.orm.DeclarativeBase" for fact in local_base_facts)
+
 alias_parse_messages = run_worker(
     {
         "protocol_version": 1,
@@ -1041,6 +1172,45 @@ serialized_module_dynamic_boundary = json.dumps(module_dynamic_boundary_messages
 assert "/tmp/secret" not in serialized_module_dynamic_boundary
 assert "plugins.dynamic" not in serialized_module_dynamic_boundary
 
+module_dynamic_after_route_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "module_dynamic_after_route.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/before")
+def before_dynamic():
+    return {}
+
+importlib.import_module("plugins.dynamic")
+
+@router.get("/after")
+def after_dynamic():
+    return {}
+""",
+    }
+)
+module_dynamic_after_route_facts = module_dynamic_after_route_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "before_dynamic" in fact["subject"]
+    for fact in module_dynamic_after_route_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "after_dynamic" in fact["subject"]
+    for fact in module_dynamic_after_route_facts
+)
+
 bad_parse = run_worker(
     {
         "protocol_version": 1,
@@ -1129,6 +1299,32 @@ assert "__import__(name)" not in json.dumps(dynamic_messages)
 assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
 assert "setattr(obj" not in json.dumps(dynamic_messages)
 assert "/tmp/secret" not in json.dumps(dynamic_messages)
+
+bare_dynamic_lookup_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "bare_dynamic_lookup.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def inspect_scope():
+    globals()
+    locals()
+""",
+    }
+)
+bare_dynamic_lookup_facts = bare_dynamic_lookup_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in bare_dynamic_lookup_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_call_target" in fact["assumptions"]
+    )
+    == 2
+)
 
 unresolved_decorator_messages = run_worker(
     {

@@ -282,8 +282,12 @@ Required verification:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+python3 src/workers/python/worker.test.py
 node src/workers/typescript/worker.test.js
 cargo run --quiet --bin repo-guard -- check
+cargo run --quiet --bin repo-guard -- check-diff --base origin/main --head HEAD
+git diff --check origin/main...HEAD
+cmp -s AGENTS.md CLAUDE.md
 ```
 
 Repository documentation starts at [docs/README.md](docs/README.md). The mirrored

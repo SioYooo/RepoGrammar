@@ -128,6 +128,26 @@
   single-link incompatible Python support families into one confident claim, and
   multiple ready clusters inside one coarse bucket receive stable sanitized
   cluster ids without exposing source snippets or absolute paths.
+- Python family construction now also consumes parser-origin context facts in
+  its complete-link compatibility check and applies claim-scoped blocking
+  `UNKNOWN`s at the final family-builder boundary. Dynamic import/import
+  resolution UNKNOWNs block affected family membership, pytest fixture-binding
+  UNKNOWNs block pytest family support, and FastAPI dependency-target UNKNOWNs
+  remain scoped to the dependency subclaim rather than route-family membership.
+- The CPython AST worker now resolves import aliases and module-level dynamic
+  UNKNOWN propagation by source position. A route or model before a top-level
+  shadowing assignment can still use exact framework imports, later units
+  cannot, local `@client.get(...)` no longer becomes a FastAPI route, local
+  `BaseModel`/`Base` classes no longer become Pydantic/SQLAlchemy support, and
+  bare `locals()`/`globals()` calls now produce typed call-target `UNKNOWN`s.
+- Query input hardening now shares target and token-budget validation between
+  CLI and MCP. MCP schema exposes `target` max length and `token_budget`
+  maximum, and both interfaces reject oversized or control-character targets.
+- File discovery now supports explicit strict gitignore mode via
+  `REPOGRAMMAR_STRICT_GITIGNORE=true`, which treats unavailable Git ignore
+  checks as an error. Non-strict discovery keeps the previous warning fallback.
+  Gitignore regression coverage now includes Python files in root and parent
+  worktree project layouts.
 - Narrow Python exact-anchor variation metadata: when an already-ready Python
   family has multiple exact-compatible framework-anchor support targets, the
   family builder records a dedicated variation slot and one metadata-only

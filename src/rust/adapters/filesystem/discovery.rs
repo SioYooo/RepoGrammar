@@ -76,7 +76,7 @@ fn discover_files(
         files: Vec::new(),
         skipped: Vec::new(),
         warnings: Vec::new(),
-        git_ignore: GitIgnoreChecker::new(&request.repository_root),
+        git_ignore: GitIgnoreChecker::new(&request.repository_root, request.strict_gitignore),
     };
     state.walk(PathBuf::new())?;
     state.finish()
@@ -129,7 +129,7 @@ impl DiscoveryState {
             } else if metadata.is_dir() {
                 self.visit_directory(entry.path(), relative, relative_path)?;
             } else if metadata.is_file() {
-                self.visit_file(entry.path(), relative_path, metadata.len());
+                self.visit_file(entry.path(), relative_path, metadata.len())?;
             } else {
                 self.skipped.push(SkippedPath {
                     path: relative_path,
@@ -195,30 +195,35 @@ impl DiscoveryState {
         }
     }
 
-    fn visit_file(&mut self, path: PathBuf, relative_path: String, size_bytes: u64) {
+    fn visit_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        size_bytes: u64,
+    ) -> Result<(), FileDiscoveryError> {
         let Some(language) = language_for_path(&relative_path) else {
             self.skipped.push(SkippedPath {
                 path: relative_path,
                 reason: SkippedReason::UnsupportedExtension,
             });
-            return;
+            return Ok(());
         };
         if self
             .git_ignore
-            .is_ignored(&relative_path, &mut self.warnings)
+            .is_ignored(&relative_path, &mut self.warnings)?
         {
             self.skipped.push(SkippedPath {
                 path: relative_path,
                 reason: SkippedReason::GitIgnored,
             });
-            return;
+            return Ok(());
         }
         if size_bytes > self.max_file_bytes {
             self.skipped.push(SkippedPath {
                 path: relative_path,
                 reason: SkippedReason::TooLarge,
             });
-            return;
+            return Ok(());
         }
 
         let canonical = match fs::canonicalize(&path) {
@@ -228,14 +233,14 @@ impl DiscoveryState {
                     path: relative_path,
                     reason: SkippedReason::OutsideRepository,
                 });
-                return;
+                return Ok(());
             }
             Err(_) => {
                 self.skipped.push(SkippedPath {
                     path: relative_path,
                     reason: SkippedReason::Unreadable,
                 });
-                return;
+                return Ok(());
             }
         };
         let bytes = match read_file_bounded(&canonical, self.max_file_bytes) {
@@ -245,14 +250,14 @@ impl DiscoveryState {
                     path: relative_path,
                     reason: SkippedReason::TooLarge,
                 });
-                return;
+                return Ok(());
             }
             Err(BoundedReadError::Unreadable) => {
                 self.skipped.push(SkippedPath {
                     path: relative_path,
                     reason: SkippedReason::Unreadable,
                 });
-                return;
+                return Ok(());
             }
         };
         let actual_size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -265,6 +270,7 @@ impl DiscoveryState {
             content_hash,
             size_bytes: actual_size_bytes,
         });
+        Ok(())
     }
 
     fn finish(mut self) -> Result<FileDiscoveryReport, FileDiscoveryError> {
@@ -290,59 +296,80 @@ impl DiscoveryState {
 struct GitIgnoreChecker {
     context: Option<GitContext>,
     status: GitIgnoreStatus,
+    strict: bool,
 }
 
 impl GitIgnoreChecker {
-    fn new(root: &str) -> Self {
+    fn new(root: &str, strict: bool) -> Self {
         let root_path = Path::new(root);
         match GitContext::resolve(root_path) {
             Ok(context) => Self {
                 context: Some(context),
                 status: GitIgnoreStatus::Applied,
+                strict,
             },
             Err(GitContextResolution::NotRepository) => Self {
                 context: None,
                 status: GitIgnoreStatus::NotRepository,
+                strict,
             },
             Err(GitContextResolution::Unavailable) => Self {
                 context: None,
                 status: GitIgnoreStatus::Unavailable,
+                strict,
             },
         }
     }
 
-    fn is_ignored(&mut self, relative_path: &str, warnings: &mut Vec<String>) -> bool {
+    fn is_ignored(
+        &mut self,
+        relative_path: &str,
+        warnings: &mut Vec<String>,
+    ) -> Result<bool, FileDiscoveryError> {
         match self.status {
             GitIgnoreStatus::Applied => {
                 let Some(context) = &self.context else {
                     self.status = GitIgnoreStatus::Unavailable;
+                    if self.strict {
+                        return Err(strict_gitignore_error());
+                    }
                     warnings.push(
                         "git ignore checks became unavailable; using safe non-git fallback"
                             .to_string(),
                     );
-                    return false;
+                    return Ok(false);
                 };
                 match context.check_ignore(relative_path) {
-                    Ok(ignored) => ignored,
+                    Ok(ignored) => Ok(ignored),
                     Err(()) => {
                         self.status = GitIgnoreStatus::Unavailable;
+                        if self.strict {
+                            return Err(strict_gitignore_error());
+                        }
                         warnings.push(
                             "git ignore checks became unavailable; using safe non-git fallback"
                                 .to_string(),
                         );
-                        false
+                        Ok(false)
                     }
                 }
             }
             GitIgnoreStatus::Unavailable => {
+                if self.strict {
+                    return Err(strict_gitignore_error());
+                }
                 warnings.push(
                     "git ignore checks are unavailable; using safe non-git fallback".to_string(),
                 );
-                false
+                Ok(false)
             }
-            GitIgnoreStatus::NotRepository => false,
+            GitIgnoreStatus::NotRepository => Ok(false),
         }
     }
+}
+
+fn strict_gitignore_error() -> FileDiscoveryError {
+    FileDiscoveryError::Unavailable("git ignore checks are unavailable in strict mode".to_string())
 }
 
 fn is_repogrammar_state_dir(name: Option<&str>) -> bool {
@@ -670,6 +697,28 @@ mod tests {
     }
 
     #[test]
+    fn strict_git_ignore_fails_when_git_ignore_is_unavailable() {
+        let workspace = TempWorkspace::new("discovery-strict-git-unavailable");
+        fs::create_dir(workspace.path().join(".git")).expect("create invalid git dir");
+        fs::write(
+            workspace.path().join("included.py"),
+            "def included():\n    pass\n",
+        )
+        .expect("write source");
+
+        let error = FilesystemFileDiscovery
+            .discover(
+                FileDiscoveryRequest::new(workspace.path().display().to_string())
+                    .with_strict_gitignore(true),
+            )
+            .expect_err("strict mode must reject unavailable git ignore checks");
+
+        assert!(
+            matches!(error, FileDiscoveryError::Unavailable(message) if message.contains("strict mode"))
+        );
+    }
+
+    #[test]
     fn report_uses_relative_metadata_without_source_text_or_absolute_paths() {
         let workspace = TempWorkspace::new("discovery-no-leak");
         fs::create_dir_all(workspace.path().join("src")).expect("create src");
@@ -739,12 +788,21 @@ mod tests {
         if !git_init(&workspace) {
             return;
         }
-        fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
+        fs::write(
+            workspace.path().join(".gitignore"),
+            "ignored.ts\nignored.py\n",
+        )
+        .expect("write gitignore");
         fs::write(
             workspace.path().join("ignored.ts"),
             "export const ignored = true;\n",
         )
         .expect("write ignored");
+        fs::write(
+            workspace.path().join("ignored.py"),
+            "def ignored():\n    pass\n",
+        )
+        .expect("write ignored python");
         fs::write(
             workspace.path().join("included.ts"),
             "export const included = true;\n",
@@ -764,6 +822,10 @@ mod tests {
             .skipped
             .iter()
             .any(|skip| skip.path == "ignored.ts" && skip.reason == SkippedReason::GitIgnored));
+        assert!(report
+            .skipped
+            .iter()
+            .any(|skip| skip.path == "ignored.py" && skip.reason == SkippedReason::GitIgnored));
     }
 
     #[test]
@@ -775,7 +837,7 @@ mod tests {
         fs::create_dir_all(workspace.path().join("packages/app")).expect("create project");
         fs::write(
             workspace.path().join(".gitignore"),
-            "packages/app/ignored.ts\npackages/app/secrets/\n",
+            "packages/app/ignored.ts\npackages/app/ignored.py\npackages/app/secrets/\n",
         )
         .expect("write parent gitignore");
         fs::create_dir_all(workspace.path().join("packages/app/secrets"))
@@ -785,6 +847,11 @@ mod tests {
             "export const ignored = true;\n",
         )
         .expect("write ignored");
+        fs::write(
+            workspace.path().join("packages/app/ignored.py"),
+            "def ignored():\n    pass\n",
+        )
+        .expect("write ignored python");
         fs::write(
             workspace.path().join("packages/app/secrets/hidden.ts"),
             "export const hidden = true;\n",
@@ -809,6 +876,10 @@ mod tests {
             .skipped
             .iter()
             .any(|skip| skip.path == "ignored.ts" && skip.reason == SkippedReason::GitIgnored));
+        assert!(report
+            .skipped
+            .iter()
+            .any(|skip| skip.path == "ignored.py" && skip.reason == SkippedReason::GitIgnored));
         assert!(report.skipped.iter().any(|skip| {
             skip.path == "secrets/hidden.ts" && skip.reason == SkippedReason::GitIgnored
         }));

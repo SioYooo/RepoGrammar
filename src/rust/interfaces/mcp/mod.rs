@@ -2,8 +2,9 @@
 
 use crate::application::query::{
     query_preflight, repository_status_unavailable_fallback, select_family_evidence,
-    FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport,
+    validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
+    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown,
+    QueryPreflightOperation, QueryPreflightReport, MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::error::RepoGrammarError;
@@ -12,6 +13,8 @@ use std::io::{BufRead, Write};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_MCP_LINE_BYTES: usize = 1_048_576;
+pub const MAX_MCP_TARGET_BYTES: usize = MAX_QUERY_TARGET_BYTES;
+pub const MAX_MCP_TOKEN_BUDGET: usize = MAX_QUERY_TOKEN_BUDGET;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpToolName {
@@ -162,10 +165,12 @@ pub fn tool_schema() -> Value {
                 "target": {
                     "type": "string",
                     "minLength": 1,
+                    "maxLength": MAX_MCP_TARGET_BYTES,
                 },
                 "token_budget": {
                     "type": "integer",
                     "minimum": 1,
+                    "maximum": MAX_MCP_TOKEN_BUDGET,
                 },
                 "mode": {
                     "type": "string",
@@ -426,11 +431,11 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
         })?;
     let target = match object.get("target") {
         None | Some(Value::Null) => None,
-        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
-        Some(Value::String(_)) => {
-            return Err(McpProtocolError::invalid_params(
-                "repogrammar_context target must be non-empty when provided",
-            ));
+        Some(Value::String(value)) => {
+            validate_query_target(value).map_err(|error| {
+                McpProtocolError::invalid_params(format!("repogrammar_context {error}"))
+            })?;
+            Some(value.clone())
         }
         Some(_) => {
             return Err(McpProtocolError::invalid_params(
@@ -444,16 +449,15 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
                 "repogrammar_context token_budget must be a positive integer",
             ));
         };
-        if value == 0 {
-            return Err(McpProtocolError::invalid_params(
-                "repogrammar_context token_budget must be a positive integer",
-            ));
-        }
-        Some(usize::try_from(value).map_err(|_| {
+        let parsed = usize::try_from(value).map_err(|_| {
             McpProtocolError::invalid_params(
                 "repogrammar_context token_budget must fit in the local machine word size",
             )
-        })?)
+        })?;
+        validate_query_token_budget(parsed).map_err(|error| {
+            McpProtocolError::invalid_params(format!("repogrammar_context {error}"))
+        })?;
+        Some(parsed)
     } else {
         None
     };
@@ -667,9 +671,33 @@ mod tests {
             1
         );
         assert_eq!(
+            schema["inputSchema"]["properties"]["target"]["maxLength"],
+            MAX_MCP_TARGET_BYTES
+        );
+        assert_eq!(
+            schema["inputSchema"]["properties"]["token_budget"]["maximum"],
+            MAX_MCP_TOKEN_BUDGET
+        );
+        assert_eq!(
             schema["inputSchema"]["properties"]["mode"]["enum"],
             json!(["compact", "evidence", "deep"])
         );
+    }
+
+    #[test]
+    fn context_arguments_reject_oversized_or_control_text_inputs() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+        let oversized_target = "x".repeat(MAX_MCP_TARGET_BYTES + 1);
+        for arguments in [
+            json!({"operation": "find_analogues", "target": oversized_target}),
+            json!({"operation": "find_analogues", "target": "contains\nnewline"}),
+            json!({"operation": "find_analogues", "token_budget": MAX_MCP_TOKEN_BUDGET + 1}),
+        ] {
+            let error = handle_context_call(&runtime, &context(), &arguments)
+                .expect_err("invalid query input must be rejected");
+
+            assert_eq!(error.code(), -32602);
+        }
     }
 
     #[test]

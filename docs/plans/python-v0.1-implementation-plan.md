@@ -88,12 +88,13 @@ only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
 input. The worker performs file-local simple FastAPI router/app alias
 propagation with same-name top-level reassignment invalidation, now treats only
-top-level imports as file-level exact-anchor aliases, drops shadowed framework
-import aliases before support-worthy anchor derivation, copies module-level
-dynamic import or `sys.path` mutation into unit-scoped blocking `UNKNOWN`s for
-later family-shaped units in the file, emits typed
+top-level imports as file-level exact-anchor aliases, and resolves framework
+aliases by source position so units before a top-level shadowing assignment can
+still use the import while later units cannot. Module-level dynamic import or
+`sys.path` mutation is copied into unit-scoped blocking `UNKNOWN`s only for
+later family-shaped units in the file. The worker emits typed
 `UNKNOWN` for dynamic decorators, unresolved bare decorators, monkey-patching,
-dynamic calls including `locals()[...]`, `eval`, `exec`, and `compile`,
+dynamic calls including bare or indexed `locals`/`globals`, `eval`, `exec`, and `compile`,
 dynamic Pydantic model factories, dynamic imports including `__import__` and
 literal `importlib.import_module(...)` without unique repo-local resolution,
 `sys.path` mutation, unresolved imports, and fixture ambiguity, and
@@ -111,9 +112,9 @@ and no claim-relevant parser-origin blocking `UNKNOWN`. This implements
 sound-by-abstention bounded Python framework-family claims, not sound Python
 semantic analysis; raw parser facts and framework heuristics still remain
 blocked from direct claim input. The family builder now applies bounded
-complete-link clustering over Python support-family features, refusing
-single-link bridge clusters and assigning sanitized cluster ids only when one
-coarse bucket contains multiple ready clusters.
+complete-link clustering over Python support-family and parser-context
+features, refusing single-link bridge clusters and assigning sanitized cluster
+ids only when one coarse bucket contains multiple ready clusters.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but

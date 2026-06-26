@@ -81,6 +81,15 @@ pub struct FamilyBuildReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyClaimInput<'a> {
+    pub units: &'a [IndexedCodeUnitRecord],
+    pub role_facts: Vec<SemanticFact>,
+    pub support_facts: Vec<SemanticFact>,
+    pub context_facts: Vec<SemanticFact>,
+    pub unknown_facts: Vec<SemanticFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyStorageRecords {
     pub family: IndexedFamilyRecord,
     pub members: Vec<IndexedFamilyMemberRecord>,
@@ -96,22 +105,72 @@ struct FamilyKey {
     normalized_shape: String,
 }
 
+impl<'a> FamilyClaimInput<'a> {
+    pub fn from_facts(units: &'a [IndexedCodeUnitRecord], facts: &[SemanticFact]) -> Self {
+        let mut role_facts = Vec::new();
+        let mut support_facts = Vec::new();
+        let mut context_facts = Vec::new();
+        let mut unknown_facts = Vec::new();
+
+        for fact in facts {
+            if fact.kind == SemanticFactKind::FrameworkRole {
+                role_facts.push(fact.clone());
+            } else if fact.kind == SemanticFactKind::Unknown
+                || fact.certainty == FactCertainty::Unknown
+            {
+                unknown_facts.push(fact.clone());
+            } else if fact.certainty.supports_family_membership()
+                && fact.kind != SemanticFactKind::ProjectConfig
+            {
+                support_facts.push(fact.clone());
+            } else {
+                context_facts.push(fact.clone());
+            }
+        }
+
+        Self {
+            units,
+            role_facts,
+            support_facts,
+            context_facts,
+            unknown_facts,
+        }
+    }
+}
+
 pub fn build_family_claims(
     units: &[IndexedCodeUnitRecord],
     semantic_facts: &[SemanticFact],
 ) -> FamilyBuildReport {
-    let role_by_unit = framework_roles_by_unit(semantic_facts);
-    let support_targets_by_unit = eligible_support_by_unit(units, semantic_facts, &role_by_unit);
+    build_family_claims_from_input(&FamilyClaimInput::from_facts(units, semantic_facts))
+}
+
+pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBuildReport {
+    let role_by_unit = framework_roles_by_unit(&input.role_facts);
+    let support_targets_by_unit =
+        eligible_support_by_unit(input.units, &input.support_facts, &role_by_unit);
+    let blocking_unknowns =
+        python_family_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
+    let mut all_facts = Vec::with_capacity(
+        input.role_facts.len()
+            + input.support_facts.len()
+            + input.context_facts.len()
+            + input.unknown_facts.len(),
+    );
+    all_facts.extend(input.role_facts.iter().cloned());
+    all_facts.extend(input.support_facts.iter().cloned());
+    all_facts.extend(input.context_facts.iter().cloned());
+    all_facts.extend(input.unknown_facts.iter().cloned());
     let features_by_unit = family_features_by_unit(
-        units,
-        semantic_facts,
+        input.units,
+        &all_facts,
         &role_by_unit,
         &support_targets_by_unit,
     );
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
     let mut unknowns = Vec::new();
 
-    for unit in units {
+    for unit in input.units {
         if !family_eligible_kind(&unit.kind) {
             continue;
         }
@@ -138,10 +197,14 @@ pub fn build_family_claims(
             content_hash: unit.content_hash.clone(),
             start_byte: unit.start_byte,
             end_byte: unit.end_byte,
-            support_targets: support_targets_by_unit
-                .get(&unit.id)
-                .map(|targets| targets.iter().cloned().collect())
-                .unwrap_or_default(),
+            support_targets: if blocking_unknowns.contains_key(&unit.id) {
+                Vec::new()
+            } else {
+                support_targets_by_unit
+                    .get(&unit.id)
+                    .map(|targets| targets.iter().cloned().collect())
+                    .unwrap_or_default()
+            },
         });
     }
 
@@ -457,6 +520,10 @@ fn family_features_by_unit(
             let target = fact.target.as_ref().map(|target| target.as_str());
             match anchor_kind {
                 "fastapi_route_decorator" | "decorator_binding" => {
+                    entry.insert(format!(
+                        "decorator_shape:{}",
+                        stable_token("fastapi_route_decorator")
+                    ));
                     if let Some(target) = target {
                         entry.insert(format!("decorator_anchor:{}", stable_token(target)));
                     }
@@ -470,7 +537,13 @@ fn family_features_by_unit(
                 | "call_target"
                 | "sqlalchemy_select"
                 | "sqlalchemy_session_call" => {
-                    if let Some(target) = target {
+                    entry.insert(format!("call_shape_kind:{}", stable_token(anchor_kind)));
+                    let is_support_target = target.is_some_and(|target| {
+                        support_targets_by_unit
+                            .get(code_unit_id)
+                            .is_some_and(|targets| targets.contains(target))
+                    });
+                    if let Some(target) = target.filter(|_| !is_support_target) {
                         entry.insert(format!("call_shape:{}", stable_token(target)));
                     }
                 }
@@ -485,12 +558,17 @@ fn family_features_by_unit(
                 | "fastapi_request_body_model"
                 | "fastapi_response_model"
                 | "sqlalchemy_relationship" => {
-                    entry.insert(format!("effect_marker:{}", stable_token(anchor_kind)));
+                    entry.insert(format!("effect_shape:{}", stable_token(anchor_kind)));
+                    let marker = target
+                        .map(|target| format!("{anchor_kind}:{target}"))
+                        .unwrap_or_else(|| anchor_kind.to_string());
+                    entry.insert(format!("effect_marker:{}", stable_token(&marker)));
                 }
                 "pytest_fixture_edge"
                 | "pytest_conftest_fixture_edge"
                 | "pytest_builtin_fixture_context"
                 | "pytest_parametrize_arg" => {
+                    entry.insert(format!("fixture_shape:{}", stable_token(anchor_kind)));
                     if let Some(target) = target {
                         entry.insert(format!("fixture_context:{}", stable_token(target)));
                     }
@@ -509,12 +587,130 @@ fn family_features_by_unit(
                         ));
                     }
                 }
+                "pydantic_field"
+                | "pydantic_field_type"
+                | "pydantic_model_config"
+                | "pydantic_config_class"
+                | "pydantic_computed_field"
+                | "pydantic_validator"
+                | "pydantic_model_validator"
+                | "sqlalchemy_mapped_field"
+                | "sqlalchemy_mapped_column" => {
+                    entry.insert(format!("model_shape:{}", stable_token(anchor_kind)));
+                    let marker = target
+                        .map(|target| format!("{anchor_kind}:{target}"))
+                        .unwrap_or_else(|| anchor_kind.to_string());
+                    entry.insert(format!("model_context:{}", stable_token(&marker)));
+                }
                 _ => {}
             }
         }
     }
 
     features
+}
+
+fn python_family_blocking_unknowns_by_unit(
+    units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, ClaimUnknown> {
+    let unit_by_id = units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocking = BTreeMap::new();
+
+    for fact in facts {
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if let Some(unknown) = python_family_blocking_unknown(fact, framework_role) {
+            blocking.entry(code_unit_id.to_string()).or_insert(unknown);
+        }
+    }
+
+    blocking
+}
+
+pub(crate) fn python_family_unknown_blocks_claim(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> bool {
+    python_family_blocking_unknown(fact, framework_role).is_some()
+}
+
+fn python_family_blocking_unknown(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("python_family_membership");
+
+    if !python_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role) {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::Blocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve the blocking Python UNKNOWN before claiming a family".to_string()),
+    })
+}
+
+fn python_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::DynamicImport
+        | UnknownReasonCode::RuntimeDependencyInjection
+        | UnknownReasonCode::FrameworkMagic
+        | UnknownReasonCode::ConflictingFacts
+        | UnknownReasonCode::StaleEvidence
+        | UnknownReasonCode::UnresolvedImport
+        | UnknownReasonCode::MissingProjectConfig
+        | UnknownReasonCode::MissingDependency => {
+            python_unknown_affected_claim_blocks_family(affected_claim, framework_role)
+        }
+        UnknownReasonCode::PytestFixtureInjection => framework_role.starts_with("framework:pytest"),
+        UnknownReasonCode::MonkeyPatch
+        | UnknownReasonCode::MacroOrPreprocessor
+        | UnknownReasonCode::BuildVariantAmbiguity
+        | UnknownReasonCode::InsufficientSupport => false,
+    }
+}
+
+fn python_unknown_affected_claim_blocks_family(affected_claim: &str, framework_role: &str) -> bool {
+    match affected_claim {
+        "fastapi_dependency_target" => false,
+        "pytest_fixture_binding" => framework_role.starts_with("framework:pytest"),
+        "python_family_membership" | "python_import_resolution" | "python_call_target" => true,
+        claim if claim.starts_with("family:") => true,
+        _ => framework_role.starts_with("framework:pytest") && affected_claim.contains("fixture"),
+    }
 }
 
 fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
@@ -555,7 +751,44 @@ fn python_evidence_pair_is_compatible(
 ) -> bool {
     let left_groups = prefixed_features(left, features_by_unit, "support_family:");
     let right_groups = prefixed_features(right, features_by_unit, "support_family:");
-    !left_groups.is_disjoint(&right_groups)
+    if left_groups.is_empty() || left_groups.is_disjoint(&right_groups) {
+        return false;
+    }
+
+    let left_roles = prefixed_features(left, features_by_unit, "framework_role:");
+    let right_roles = prefixed_features(right, features_by_unit, "framework_role:");
+    if left_roles != right_roles {
+        return false;
+    }
+
+    let role = left_roles.iter().next().map(String::as_str).unwrap_or("");
+    match role {
+        "framework_fastapi_route" => {
+            equal_feature_profiles(left, right, features_by_unit, &["decorator_shape:"])
+        }
+        "framework_pytest_test" | "framework_pytest_fixture" => {
+            equal_feature_profiles(left, right, features_by_unit, &["fixture_shape:"])
+        }
+        "framework_pydantic_model" => {
+            equal_feature_profiles(left, right, features_by_unit, &["class_base:"])
+        }
+        "framework_sqlalchemy_model" | "framework_sqlalchemy_repository_method" => {
+            equal_feature_profiles(left, right, features_by_unit, &[])
+        }
+        _ => true,
+    }
+}
+
+fn equal_feature_profiles(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    prefixes: &[&str],
+) -> bool {
+    prefixes.iter().all(|prefix| {
+        prefixed_features(left, features_by_unit, prefix)
+            == prefixed_features(right, features_by_unit, prefix)
+    })
 }
 
 fn prefixed_features(
@@ -575,16 +808,32 @@ fn python_cluster_signature(
     cluster: &[FamilyEvidence],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
 ) -> String {
-    let support_groups = cluster
+    let signature_features = cluster
         .iter()
-        .flat_map(|evidence| prefixed_features(evidence, features_by_unit, "support_family:"))
+        .flat_map(|evidence| {
+            [
+                "support_family:",
+                "decorator_shape:",
+                "effect_shape:",
+                "call_shape_kind:",
+                "fixture_shape:",
+                "model_shape:",
+                "effect_marker:",
+                "call_shape:",
+                "fixture_context:",
+                "model_context:",
+                "class_base:",
+            ]
+            .into_iter()
+            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
+        })
         .collect::<BTreeSet<_>>();
-    if support_groups.is_empty() {
+    if signature_features.is_empty() {
         return "python_family_cluster".to_string();
     }
     format!(
         "cluster:{}",
-        support_groups.into_iter().collect::<Vec<_>>().join("+")
+        signature_features.into_iter().collect::<Vec<_>>().join("+")
     )
 }
 
@@ -1029,6 +1278,70 @@ mod tests {
         fact
     }
 
+    fn python_context_fact(
+        unit: &IndexedCodeUnitRecord,
+        anchor_kind: &str,
+        target: Option<&str>,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Symbol,
+            subject: format!("{}#{anchor_kind}", unit.id),
+            target: target.map(|target| SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "3.12.0".to_string(),
+                method: "cpython_ast".to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "python parser context fact",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("python_anchor_kind={anchor_kind}")],
+        }
+    }
+
+    fn python_unknown_fact(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: format!("{}#unknown", unit.id),
+            target: Some(
+                SymbolId::new(reason.as_protocol_str()).expect("valid UNKNOWN reason target"),
+            ),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "3.12.0".to_string(),
+                method: "cpython_ast".to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "python typed UNKNOWN",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("affected_claim={affected_claim}")],
+        }
+    }
+
     #[test]
     fn framework_heuristic_role_support_stays_unknown_without_semantic_support() {
         let first = unit("src/a.ts", "express_route", 0);
@@ -1290,6 +1603,127 @@ mod tests {
         assert!(ids.contains(
             "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:cluster_sqlalchemy_transaction_boundary"
         ));
+    }
+
+    #[test]
+    fn python_fastapi_dependency_target_variation_does_not_block_route_membership() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_context_fact(
+                    &first,
+                    "fastapi_dependency_target",
+                    Some("app.dependencies.get_db"),
+                ),
+                python_context_fact(
+                    &second,
+                    "fastapi_dependency_target",
+                    Some("app.dependencies.get_cache"),
+                ),
+                python_context_fact(
+                    &third,
+                    "fastapi_dependency_target",
+                    Some("app.dependencies.get_session"),
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].support, 3);
+        assert_eq!(report.claims[0].readiness, ClaimReadiness::Ready);
+    }
+
+    #[test]
+    fn python_blocking_unknown_removes_claim_relevant_support() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_unknown_fact(
+                    &third,
+                    UnknownReasonCode::DynamicImport,
+                    "python_import_resolution",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn fastapi_dependency_target_unknown_does_not_block_route_family_membership() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_unknown_fact(
+                    &third,
+                    UnknownReasonCode::RuntimeDependencyInjection,
+                    "fastapi_dependency_target",
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn pytest_fixture_binding_unknown_blocks_pytest_family_membership() {
+        let first = python_unit("tests/test_a.py", "pytest_test", 0);
+        let second = python_unit("tests/test_b.py", "pytest_test", 1);
+        let third = python_unit("tests/test_c.py", "pytest_test", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:pytest.test"),
+                role_fact(&second, "framework:pytest.test"),
+                role_fact(&third, "framework:pytest.test"),
+                semantic_support_fact_with_target(&first, "pytest.test"),
+                semantic_support_fact_with_target(&second, "pytest.test"),
+                semantic_support_fact_with_target(&third, "pytest.test"),
+                python_unknown_fact(
+                    &third,
+                    UnknownReasonCode::PytestFixtureInjection,
+                    "pytest_fixture_binding",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
     }
 
     #[test]

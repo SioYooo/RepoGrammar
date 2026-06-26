@@ -22,6 +22,32 @@ use crate::ports::index_store::{
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const MAX_QUERY_TARGET_BYTES: usize = 8 * 1024;
+pub const MAX_QUERY_TOKEN_BUDGET: usize = 200_000;
+
+pub fn validate_query_target(value: &str) -> Result<(), &'static str> {
+    if value.trim().is_empty() {
+        return Err("target must be non-empty when provided");
+    }
+    if value.len() > MAX_QUERY_TARGET_BYTES {
+        return Err("target exceeds the maximum query target length");
+    }
+    if value.chars().any(char::is_control) {
+        return Err("target must not contain control characters");
+    }
+    Ok(())
+}
+
+pub fn validate_query_token_budget(value: usize) -> Result<(), &'static str> {
+    if value == 0 {
+        return Err("token budget must be a positive integer");
+    }
+    if value > MAX_QUERY_TOKEN_BUDGET {
+        return Err("token budget exceeds the maximum supported value");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryPreflightOperation {
     PatternFamilyQuery,

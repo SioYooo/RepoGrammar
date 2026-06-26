@@ -44,12 +44,14 @@ allowed.
   warnings, parent Git worktree ignore rules for subdirectory projects, the
   inclusive 1 MB size boundary, oversized skips, strict SHA-256 hash
   generation, bounded max-plus-one content reads for hashing,
-  deterministic ordering, symlink escape skips, invalid roots, and absence of
-  source snippets or absolute paths in reports. Python discovery coverage must
+  deterministic ordering, symlink escape skips, invalid roots, strict gitignore
+  failure when Git ignore checks are unavailable, and absence of source snippets
+  or absolute paths in reports. Python discovery coverage must
   include common virtualenv/cache/dependency/build directories such as
   `.venv`, `venv`, `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`,
   `.mypy_cache`, `.ruff_cache`, `build`, `dist`, and `site-packages`,
-  including nested path segments where applicable.
+  including nested path segments where applicable, and Git-ignored `.py` files
+  in root and parent-worktree subdirectory projects.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, activation pointer validation, preservation of the
@@ -94,8 +96,8 @@ allowed.
   `InsufficientSupport`, exact family/member lookup versus fuzzy
   find/explain/check lookup, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
-  mode behavior, token-budget validation, greedy evidence coverage metadata,
-  missing variation/exception coverage reporting, JSON/human CLI output,
+  mode behavior, target and token-budget validation, greedy evidence coverage
+  metadata, missing variation/exception coverage reporting, JSON/human CLI output,
   advisory `check` behavior, and absence of source snippets or absolute paths.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
@@ -103,8 +105,8 @@ allowed.
   no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
   `check_conformance` with `CONTEXT_ONLY` context success when conformance is
   unproven, exact `show_family` target handling, compact/evidence/deep output
-  mode serialization, token-budget validation, metadata-only greedy evidence
-  selection, missing variation/exception coverage reporting, JSON-RPC
+  mode serialization, target and token-budget validation, metadata-only greedy
+  evidence selection, missing variation/exception coverage reporting, JSON-RPC
   initialize/tools/list/tools/call/shutdown handling, and absence of source
   snippets or absolute paths.
 - Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
@@ -322,3 +324,19 @@ bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory
 projects, index/sync lock acquisition and doctor lock-state reporting, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
+
+## Required local gate
+
+Use the full gate before committing implementation changes:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+python3 src/workers/python/worker.test.py
+node src/workers/typescript/worker.test.js
+cargo run --quiet --bin repo-guard -- check
+cargo run --quiet --bin repo-guard -- check-diff --base origin/main --head HEAD
+git diff --check origin/main...HEAD
+cmp -s AGENTS.md CLAUDE.md
+```

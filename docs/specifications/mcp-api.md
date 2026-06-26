@@ -25,10 +25,11 @@ operation semantics. The CLI remains multi-command for human discoverability.
 The current input schema is intentionally small:
 
 - required `operation`: one of the four operation strings above.
-- optional `target`: non-empty string.
-- optional `token_budget`: positive integer used to cap selected evidence
-  metadata. Supplying it implies `mode: evidence` unless an explicit mode is
-  provided.
+- optional `target`: non-empty string, at most 8192 bytes, with no control
+  characters.
+- optional `token_budget`: positive integer up to 200000 used to cap selected
+  evidence metadata. Supplying it implies `mode: evidence` unless an explicit
+  mode is provided.
 - optional `mode`: one of `compact`, `evidence`, or `deep`.
 - optional `include_variations` and `include_exceptions`: booleans requesting
   those evidence-coverage labels. Current output reports them as missing unless
@@ -155,7 +156,8 @@ item:
 
 Missing state, missing active indexes, and typed analysis uncertainty are normal
 tool results. Unknown JSON-RPC methods, unknown tool names, invalid operations,
-blank targets, and malformed argument types are transport/schema errors.
+blank, oversized, or control-character-containing targets, oversized token
+budgets, and malformed argument types are transport/schema errors.
 
 MCP calls must not wait on telemetry network activity.
 
