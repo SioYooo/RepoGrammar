@@ -71,5 +71,9 @@ it must not include source snippets, query text, repository names, absolute
 paths, or causal token-savings claims. Missing repository state or a missing
 active index should use the standard parseable fallback rather than inventing
 repository metrics.
+`stats --json` never opens a telemetry network connection. When anonymous
+telemetry is effectively enabled, it may update a repo-local bucketed passive
+diagnostics rollup only; disabled telemetry keeps the same diagnostics
+local-only and must not create upload queue entries.
 If treatment correctness fails, raw token deltas may still be reported, but the
 result must be marked invalid for product token-saving claims.

@@ -193,7 +193,20 @@ decisions. Anonymous telemetry is disabled by default, upload is explicit, and
 environment opt-outs prevent network upload. Context compression metrics are not
 actual token savings unless a comparable baseline and treatment token
 measurement exist.
+Live install keeps telemetry consent independent from agent configuration:
+`--yes` never implies telemetry consent, `--telemetry` and `--no-telemetry` are
+the explicit non-interactive choices, and product interactive installs prompt
+with default-no `[y/N]` when no telemetry flag is supplied. Enabled
+`stats --json` may update only a bucketed repo-local passive diagnostics
+rollup; network upload remains limited to explicit `repogrammar telemetry
+upload`.
 Anonymous telemetry payloads must not include a repository instance id,
 repository root hash, source path, symbol, content hash, byte range, raw target,
 prompt, source snippet, or raw error. Experiment export is redacted by default
 and reports token/count data only through coarse buckets.
+
+RepoGrammar v0.1 first-class coding-agent integrations are Claude Code and
+Codex. Both integrations use the same read-only `repogrammar_context` MCP
+server through native agent CLI commands and RepoGrammar-owned receipts.
+Project-local live writes, `--target all` live writes, executable copying, and
+instruction-file edits remain deferred unless separately specified and tested.

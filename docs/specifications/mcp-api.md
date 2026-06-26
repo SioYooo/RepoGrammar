@@ -173,6 +173,9 @@ budgets, and malformed argument types are transport/schema errors.
 MCP calls must not wait on telemetry network activity and must not trigger
 telemetry upload. Anonymous telemetry upload is only attempted by explicit
 `repogrammar telemetry upload` after consent and endpoint validation.
+Claude Code and Codex integrations both point at this same read-only MCP server;
+agent installation and uninstallation are machine-level configuration workflows
+and must not change MCP tool semantics or enable telemetry by themselves.
 
 ## Agent guidance
 
