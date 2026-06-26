@@ -37,6 +37,7 @@ use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -60,6 +61,22 @@ struct ProductCliRuntime;
 struct ProductInstallTelemetryPrompt;
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
+    fn is_interactive(&self) -> bool {
+        std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+    }
+
+    fn prompt_agent_selection(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
+    fn prompt_install_telemetry_consent(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
+    fn prompt_install_confirmation(&self, prompt: &str) -> Result<String, String> {
+        read_prompt_response(prompt)
+    }
+
     fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
         read_prompt_response(prompt)
     }

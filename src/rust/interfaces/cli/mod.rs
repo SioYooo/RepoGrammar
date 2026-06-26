@@ -2,8 +2,9 @@
 
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    plan_install, AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
-    InstallScope,
+    normalize_concrete_targets, owned_install_receipt_exists, plan_install,
+    supported_concrete_targets, AgentTarget, InstallExecutionContext, InstallExecutionOutcome,
+    InstallRequest, InstallScope,
 };
 use crate::application::query::{
     build_read_plan, query_preflight, repository_status_unavailable_fallback,
@@ -151,6 +152,28 @@ impl CliRuntime for DeferredCliRuntime {
 }
 
 pub trait InstallTelemetryPrompt {
+    fn is_interactive(&self) -> bool {
+        false
+    }
+
+    fn prompt_agent_selection(&self, _prompt: &str) -> Result<String, String> {
+        Err(
+            "interactive install requires a terminal; use --dry-run or --target <agent> --yes"
+                .to_string(),
+        )
+    }
+
+    fn prompt_install_telemetry_consent(&self, prompt: &str) -> Result<String, String> {
+        self.prompt_experiment_consent(prompt)
+    }
+
+    fn prompt_install_confirmation(&self, _prompt: &str) -> Result<String, String> {
+        Err(
+            "interactive install requires a terminal; use --dry-run or --target <agent> --yes"
+                .to_string(),
+        )
+    }
+
     fn prompt_experiment_consent(&self, _prompt: &str) -> Result<String, String> {
         Ok(String::new())
     }
@@ -299,9 +322,14 @@ where
         [command, rest @ ..] if is_query_command(command) => {
             handle_query(command, rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if is_installer_command(command) => {
-            handle_installer(command, rest, current_dir, env_lookup, runtime)
-        }
+        [command, rest @ ..] if is_installer_command(command) => handle_installer(
+            command,
+            rest,
+            current_dir,
+            env_lookup,
+            runtime,
+            install_prompt,
+        ),
         [command, rest @ ..] if command == "stats" => {
             handle_stats(rest, current_dir, env_lookup, runtime)
         }
@@ -1025,6 +1053,7 @@ fn handle_installer<F>(
     current_dir: &Path,
     env_lookup: &F,
     runtime: &impl CliRuntime,
+    install_prompt: &impl InstallTelemetryPrompt,
 ) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
@@ -1068,19 +1097,43 @@ where
         );
         CliOutput::success(output)
     } else {
-        if !request.assume_yes {
+        let mut wizard_prefix = String::new();
+        if command == "install" && !request.assume_yes && !install_prompt.is_interactive() {
             return CliOutput::failure(
                 2,
-                format!("{command} live writes require --yes; rerun with --dry-run to inspect the safe integration plan\n"),
+                "interactive install requires a terminal; use --dry-run or --target <agent> --yes\n",
             );
         }
         let context = match install_execution_context(current_dir, env_lookup) {
             Ok(context) => context,
             Err(error) => return CliOutput::failure(2, format!("{error}\n")),
         };
+        if command == "install" && !request.assume_yes {
+            match run_interactive_install_wizard(
+                &mut request,
+                &context,
+                env_lookup,
+                telemetry_env_disabled,
+                install_prompt,
+            ) {
+                Ok(InteractiveInstallDecision::Proceed(prefix)) => {
+                    wizard_prefix = prefix;
+                }
+                Ok(InteractiveInstallDecision::Exit(output)) => {
+                    return CliOutput::success(output);
+                }
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            }
+        } else if !request.assume_yes {
+            return CliOutput::failure(
+                2,
+                format!("{command} live writes require --yes; rerun with --dry-run to inspect the safe integration plan\n"),
+            );
+        }
         match runtime.install_agent_integration(command, request.clone(), context.clone()) {
             Ok(outcome) => {
-                let mut output = install_outcome_human(&outcome);
+                let mut output = wizard_prefix;
+                output.push_str(&install_outcome_human(&outcome));
                 if command == "install" {
                     match apply_install_telemetry_preference(&request, &context, env_lookup) {
                         Ok(status) => output.push_str(&install_telemetry_human(&status)),
@@ -1092,6 +1145,274 @@ where
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstallAgentStatus {
+    target: AgentTarget,
+    detected: bool,
+    installed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InteractiveInstallDecision {
+    Proceed(String),
+    Exit(String),
+}
+
+fn run_interactive_install_wizard<F>(
+    request: &mut InstallRequest,
+    context: &InstallExecutionContext,
+    env_lookup: &F,
+    telemetry_env_disabled: bool,
+    install_prompt: &impl InstallTelemetryPrompt,
+) -> Result<InteractiveInstallDecision, String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let statuses = install_agent_statuses(context, request.scope, env_lookup)?;
+    if statuses.iter().all(|status| status.installed) {
+        return Ok(InteractiveInstallDecision::Exit(
+            all_agents_installed_guidance(&statuses),
+        ));
+    }
+
+    let selection = prompt_agent_selection_until_valid(&statuses, install_prompt)?;
+    let Some(selected_targets) = selection else {
+        return Ok(InteractiveInstallDecision::Exit(
+            "install cancelled; no changes made\n".to_string(),
+        ));
+    };
+    if selected_targets.is_empty() {
+        return Ok(InteractiveInstallDecision::Exit(
+            "install: selected agents are already managed by RepoGrammar; no changes made\n"
+                .to_string(),
+        ));
+    }
+    request.selected_targets = selected_targets;
+    request.target = if request.selected_targets.len() == supported_concrete_targets().len() {
+        AgentTarget::AllSupported
+    } else {
+        request.selected_targets[0]
+    };
+
+    if !request.telemetry_explicitly_configured && !telemetry_env_disabled {
+        let telemetry_response = install_prompt.prompt_install_telemetry_consent(
+            "Telemetry is optional and anonymous.\nIt never includes source code, prompts, paths, repo names, symbols, content hashes,\nbyte ranges, raw targets, evidence text, patches, diffs, env vars, credentials,\nor raw errors.\n\nEnable anonymous telemetry? [y/N] ",
+        )?;
+        request.telemetry_enabled = parse_default_no_prompt_response(&telemetry_response)?;
+        request.telemetry_explicitly_configured = true;
+    }
+    if telemetry_env_disabled {
+        request.telemetry_enabled = false;
+    }
+
+    let plan = interactive_install_plan(request, &statuses);
+    let confirmation = install_prompt
+        .prompt_install_confirmation(&format!("{plan}\nProceed with install? [y/N] "))?;
+    if !parse_default_no_prompt_response(&confirmation)? {
+        return Ok(InteractiveInstallDecision::Exit(
+            "install cancelled; no changes made\n".to_string(),
+        ));
+    }
+    request.assume_yes = true;
+    Ok(InteractiveInstallDecision::Proceed(plan))
+}
+
+fn install_agent_statuses<F>(
+    context: &InstallExecutionContext,
+    scope: InstallScope,
+    env_lookup: &F,
+) -> Result<Vec<InstallAgentStatus>, String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    supported_concrete_targets()
+        .into_iter()
+        .map(|target| {
+            let installed = owned_install_receipt_exists(context, target, scope)
+                .map_err(|error| error.to_string())?;
+            Ok(InstallAgentStatus {
+                target,
+                detected: agent_cli_detected(target, env_lookup),
+                installed,
+            })
+        })
+        .collect()
+}
+
+fn prompt_agent_selection_until_valid(
+    statuses: &[InstallAgentStatus],
+    install_prompt: &impl InstallTelemetryPrompt,
+) -> Result<Option<Vec<AgentTarget>>, String> {
+    let prompt = install_agent_selection_prompt(statuses);
+    let mut last_error = None;
+    for _ in 0..3 {
+        let response = install_prompt.prompt_agent_selection(&prompt)?;
+        match parse_interactive_agent_selection(&response, statuses) {
+            Ok(selection) => return Ok(selection),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "invalid agent selection".to_string()))
+}
+
+fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
+    let mut prompt = String::from(
+        "RepoGrammar installer\n\nThis configures RepoGrammar as a read-only MCP server for coding agents.\nIt does not index this repository.\nIt does not create or modify .repogrammar/.\nIt does not enable telemetry unless you explicitly opt in.\n\nDetected agents:\n",
+    );
+    for (index, status) in statuses.iter().enumerate() {
+        prompt.push_str(&format!(
+            "  [{}] {:<15} {:<12} {}\n",
+            index + 1,
+            install_target_label(status.target),
+            if status.detected {
+                "detected"
+            } else {
+                "not detected"
+            },
+            if status.installed {
+                "installed"
+            } else {
+                "not installed"
+            }
+        ));
+    }
+    if statuses.iter().all(|status| !status.detected) {
+        prompt.push_str(
+            "\nWarning: no supported agent CLI was detected on PATH; selected native configuration may fail.\n",
+        );
+    }
+    prompt.push_str(
+        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = all available not-yet-installed agents\n  q = cancel\n\nSelection [a]: ",
+    );
+    prompt
+}
+
+fn parse_interactive_agent_selection(
+    response: &str,
+    statuses: &[InstallAgentStatus],
+) -> Result<Option<Vec<AgentTarget>>, String> {
+    let trimmed = response.trim();
+    if trimmed.eq_ignore_ascii_case("q") {
+        return Ok(None);
+    }
+    let mut selected = Vec::new();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("a") {
+        selected = default_interactive_targets(statuses);
+    } else {
+        for token in trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            let target = match token {
+                "1" => AgentTarget::Codex,
+                "2" => AgentTarget::ClaudeCode,
+                "codex" => AgentTarget::Codex,
+                "claude" | "claude-code" => AgentTarget::ClaudeCode,
+                _ => return Err("unknown agent selection".to_string()),
+            };
+            if !selected.contains(&target) {
+                selected.push(target);
+            }
+        }
+    }
+    let selected = normalize_concrete_targets(&selected).map_err(|error| error.to_string())?;
+    Ok(Some(selected))
+}
+
+fn default_interactive_targets(statuses: &[InstallAgentStatus]) -> Vec<AgentTarget> {
+    let detected_missing = statuses
+        .iter()
+        .filter(|status| status.detected && !status.installed)
+        .map(|status| status.target)
+        .collect::<Vec<_>>();
+    if !detected_missing.is_empty() {
+        return detected_missing;
+    }
+    statuses
+        .iter()
+        .filter(|status| !status.installed)
+        .map(|status| status.target)
+        .collect()
+}
+
+fn interactive_install_plan(request: &InstallRequest, statuses: &[InstallAgentStatus]) -> String {
+    let mut output = String::from("Plan:\n  - Run read-only MCP self-test\n");
+    let selected = if request.selected_targets.is_empty() {
+        supported_concrete_targets()
+    } else {
+        request.selected_targets.clone()
+    };
+    for target in selected {
+        let installed = statuses
+            .iter()
+            .find(|status| status.target == target)
+            .map(|status| status.installed)
+            .unwrap_or(false);
+        if installed {
+            output.push_str(&format!(
+                "  - Skip {}: already managed by RepoGrammar\n",
+                install_target_label(target)
+            ));
+        } else {
+            output.push_str(&format!(
+                "  - Configure {} MCP: {}\n",
+                install_target_label(target),
+                native_command_shape(target)
+            ));
+        }
+    }
+    output.push_str(
+        "  - Install the repogrammar command in a user-writable command directory\n  - Write RepoGrammar-owned receipts\n  - Roll back all changes from this run if any step fails\n",
+    );
+    output
+}
+
+fn all_agents_installed_guidance(statuses: &[InstallAgentStatus]) -> String {
+    let installed = statuses
+        .iter()
+        .filter(|status| status.installed)
+        .map(|status| install_target_label(status.target))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "install: all supported agents are already managed by RepoGrammar\ninstalled_agents={installed}\nuninstall: repogrammar uninstall --target all --scope global --yes\nreinstall: reinstall/refresh is deferred; uninstall a target first, then run repogrammar install again\n"
+    )
+}
+
+fn install_target_label(target: AgentTarget) -> &'static str {
+    match target {
+        AgentTarget::AllSupported => "All supported agents",
+        AgentTarget::Codex => "Codex CLI",
+        AgentTarget::ClaudeCode => "Claude Code",
+    }
+}
+
+fn native_command_shape(target: AgentTarget) -> &'static str {
+    match target {
+        AgentTarget::Codex => "codex mcp add repogrammar -- <repogrammar-executable> serve",
+        AgentTarget::ClaudeCode => {
+            "claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
+        }
+        AgentTarget::AllSupported => "all supported agent MCP command shapes",
+    }
+}
+
+fn agent_cli_detected<F>(target: AgentTarget, env_lookup: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let binary = match target {
+        AgentTarget::Codex => "codex",
+        AgentTarget::ClaudeCode => "claude",
+        AgentTarget::AllSupported => return false,
+    };
+    path_entries(env_lookup)
+        .into_iter()
+        .map(|entry| entry.join(binary))
+        .any(|candidate| candidate.is_file())
 }
 
 fn install_dry_run_native_plan(target: AgentTarget, scope: InstallScope) -> Vec<String> {
@@ -1149,8 +1470,11 @@ where
         Some(path) => path,
         None => default_install_data_dir(env_lookup)?,
     };
+    let (command_dir, command_dir_on_path) = default_install_command_dir(&data_dir, env_lookup)?;
     Ok(InstallExecutionContext {
         executable_path,
+        command_dir,
+        command_dir_on_path,
         data_dir,
         current_dir: current_dir.display().to_string(),
     })
@@ -1191,6 +1515,66 @@ where
         .to_string())
 }
 
+fn default_install_command_dir<F>(data_dir: &str, env_lookup: &F) -> Result<(String, bool), String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(value) =
+        env_lookup("REPOGRAMMAR_COMMAND_DIR").filter(|value| !value.trim().is_empty())
+    {
+        let path = Path::new(&value);
+        if !path.is_absolute() {
+            return Err("REPOGRAMMAR_COMMAND_DIR must be absolute".to_string());
+        }
+        return Ok((
+            path.display().to_string(),
+            path_is_on_env_path(path, env_lookup),
+        ));
+    }
+    if let Some(path) = path_entries(env_lookup)
+        .into_iter()
+        .find(|path| path.is_absolute() && path.is_dir() && !path_is_readonly(path))
+    {
+        return Ok((path.display().to_string(), true));
+    }
+    let path = env_lookup("HOME")
+        .or_else(|| env_lookup("USERPROFILE"))
+        .map(|home| Path::new(&home).join(".local").join("bin"))
+        .unwrap_or_else(|| Path::new(data_dir).join("bin"));
+    Ok((
+        path.display().to_string(),
+        path_is_on_env_path(&path, env_lookup),
+    ))
+}
+
+fn path_entries<F>(env_lookup: &F) -> Vec<PathBuf>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    env_lookup("PATH")
+        .unwrap_or_default()
+        .split(separator)
+        .filter(|entry| !entry.trim().is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn path_is_on_env_path<F>(path: &Path, env_lookup: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    path_entries(env_lookup)
+        .into_iter()
+        .any(|entry| entry == path)
+}
+
+fn path_is_readonly(path: &Path) -> bool {
+    path.metadata()
+        .map(|metadata| metadata.permissions().readonly())
+        .unwrap_or(true)
+}
+
 fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
     let targets = outcome
         .configured_targets
@@ -1198,7 +1582,13 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
         .map(|target| target.as_str())
         .collect::<Vec<_>>()
         .join(",");
-    format!(
+    let skipped = outcome
+        .skipped_targets
+        .iter()
+        .map(|target| target.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut output = format!(
         "{}: {}\ntarget={}\nscope={}\nconfigured_targets={}\nreceipts={}\n",
         outcome.command,
         outcome.message,
@@ -1206,7 +1596,18 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
         outcome.scope.as_str(),
         if targets.is_empty() { "none" } else { &targets },
         outcome.receipt_paths.len()
-    )
+    );
+    if !skipped.is_empty() {
+        output.push_str(&format!("skipped_targets={skipped}\n"));
+    }
+    if let Some(path) = &outcome.command_path {
+        output.push_str(&format!("command_path={path}\n"));
+        output.push_str(&format!(
+            "command_on_path={}\n",
+            if outcome.command_on_path { "yes" } else { "no" }
+        ));
+    }
+    output
 }
 
 fn install_telemetry_human(report: &TelemetryStatusReport) -> String {
@@ -3558,6 +3959,8 @@ mod tests {
     use crate::test_support::TempWorkspace;
     use rusqlite::Connection;
     use serde_json::{json, Value};
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
 
@@ -6117,8 +6520,199 @@ mod tests {
         let output = run(["install", "--target", "codex"]);
 
         assert_eq!(output.status, 2);
-        assert!(output.stderr.contains("live writes require --yes"));
+        assert!(output
+            .stderr
+            .contains("interactive install requires a terminal"));
         assert!(!output.stderr.contains("not implemented"));
+    }
+
+    #[test]
+    fn interactive_install_wizard_selects_multiple_agents_and_defaults_telemetry_off() {
+        #[derive(Default)]
+        struct InstallRuntime {
+            requests: RefCell<Vec<InstallRequest>>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer wizard test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer wizard test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer wizard test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                self.requests.borrow_mut().push(request.clone());
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: request.selected_targets.clone(),
+                    skipped_targets: Vec::new(),
+                    receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-wizard");
+        let command_dir = workspace.path().join("commands");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime::default();
+        let prompt = WizardPrompt::new(["2,1"], [""], ["y"]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stdout.contains("Plan:"));
+        assert!(output
+            .stdout
+            .contains("configured_targets=codex,claude-code"));
+        assert!(output.stdout.contains("telemetry=off"));
+        let requests = runtime.requests.borrow();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].assume_yes);
+        assert_eq!(
+            requests[0].selected_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert_eq!(prompt.selection_calls.get(), 1);
+        assert_eq!(prompt.telemetry_calls.get(), 1);
+        assert_eq!(prompt.confirmation_calls.get(), 1);
+    }
+
+    #[test]
+    fn interactive_install_cancel_stops_before_runtime_writes() {
+        struct InstallRuntime {
+            delegated: Cell<bool>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                _command: &str,
+                _request: InstallRequest,
+                _context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.delegated.set(true);
+                unreachable!("cancel must stop before native writes")
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-wizard-cancel");
+        let data_home = workspace.path().join("data-home");
+        let command_dir = workspace.path().join("commands");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime {
+            delegated: Cell::new(false),
+        };
+        let prompt = WizardPrompt::new(["q"], [], []);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("install cancelled"));
+        assert!(!runtime.delegated.get());
+    }
+
+    #[test]
+    fn interactive_agent_selection_normalizes_and_defaults() {
+        let statuses = vec![
+            InstallAgentStatus {
+                target: AgentTarget::Codex,
+                detected: true,
+                installed: false,
+            },
+            InstallAgentStatus {
+                target: AgentTarget::ClaudeCode,
+                detected: true,
+                installed: false,
+            },
+        ];
+
+        assert_eq!(
+            parse_interactive_agent_selection("1", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("2", &statuses).expect("selection"),
+            Some(vec![AgentTarget::ClaudeCode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("2,1", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("1,1", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("q", &statuses).expect("selection"),
+            None
+        );
+        assert!(parse_interactive_agent_selection("unknown", &statuses).is_err());
     }
 
     #[test]
@@ -6163,7 +6757,11 @@ mod tests {
                     target: request.target,
                     scope: request.scope,
                     configured_targets: vec![AgentTarget::Codex],
+                    skipped_targets: Vec::new(),
                     receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
                     message: "agent MCP integration installed after self-test".to_string(),
                 })
             }
@@ -6191,6 +6789,91 @@ mod tests {
             .stdout
             .contains("install: agent MCP integration installed"));
         assert!(output.stdout.contains("configured_targets=codex"));
+    }
+
+    #[test]
+    fn install_all_yes_is_noninteractive_and_delegates_safely() {
+        #[derive(Default)]
+        struct InstallRuntime {
+            requests: RefCell<Vec<InstallRequest>>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer all target test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer all target test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer all target test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                self.requests.borrow_mut().push(request.clone());
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: vec![AgentTarget::Codex, AgentTarget::ClaudeCode],
+                    skipped_targets: Vec::new(),
+                    receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-all-yes");
+        let data_home = workspace.path().join("data-home");
+        let command_dir = workspace.path().join("commands");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime::default();
+        let prompt = WizardPrompt::new([], [], []);
+
+        let output = run_with_context_runtime_prompt(
+            ["install", "--target", "all", "--yes", "--no-telemetry"],
+            workspace.path(),
+            &env,
+            &runtime,
+            &prompt,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(prompt.selection_calls.get(), 0);
+        assert_eq!(prompt.telemetry_calls.get(), 0);
+        assert_eq!(prompt.confirmation_calls.get(), 0);
+        let requests = runtime.requests.borrow();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, AgentTarget::AllSupported);
+        assert!(!requests[0].telemetry_enabled);
+        assert!(output
+            .stdout
+            .contains("configured_targets=codex,claude-code"));
     }
 
     #[test]
@@ -6233,7 +6916,11 @@ mod tests {
                     target: request.target,
                     scope: request.scope,
                     configured_targets: vec![request.target],
+                    skipped_targets: Vec::new(),
                     receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
                     message: "agent MCP integration installed after self-test".to_string(),
                 })
             }
@@ -6303,7 +6990,11 @@ mod tests {
                     target: request.target,
                     scope: request.scope,
                     configured_targets: vec![request.target],
+                    skipped_targets: Vec::new(),
                     receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
                     message: "agent MCP integration installed after self-test".to_string(),
                 })
             }
@@ -6408,7 +7099,11 @@ mod tests {
                     target: request.target,
                     scope: request.scope,
                     configured_targets: vec![request.target],
+                    skipped_targets: Vec::new(),
                     receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
                     message: "agent MCP integration installed after self-test".to_string(),
                 })
             }
@@ -6511,8 +7206,69 @@ mod tests {
         );
 
         assert_eq!(output.status, 2);
-        assert!(output.stderr.contains("live writes require --yes"));
+        assert!(output
+            .stderr
+            .contains("interactive install requires a terminal"));
         assert!(!runtime.delegated.get());
+    }
+
+    struct WizardPrompt {
+        selections: RefCell<VecDeque<String>>,
+        telemetry: RefCell<VecDeque<String>>,
+        confirmations: RefCell<VecDeque<String>>,
+        selection_calls: Cell<usize>,
+        telemetry_calls: Cell<usize>,
+        confirmation_calls: Cell<usize>,
+    }
+
+    impl WizardPrompt {
+        fn new<const S: usize, const T: usize, const C: usize>(
+            selections: [&str; S],
+            telemetry: [&str; T],
+            confirmations: [&str; C],
+        ) -> Self {
+            Self {
+                selections: RefCell::new(selections.into_iter().map(str::to_string).collect()),
+                telemetry: RefCell::new(telemetry.into_iter().map(str::to_string).collect()),
+                confirmations: RefCell::new(
+                    confirmations.into_iter().map(str::to_string).collect(),
+                ),
+                selection_calls: Cell::new(0),
+                telemetry_calls: Cell::new(0),
+                confirmation_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl InstallTelemetryPrompt for WizardPrompt {
+        fn is_interactive(&self) -> bool {
+            true
+        }
+
+        fn prompt_agent_selection(&self, _prompt: &str) -> Result<String, String> {
+            self.selection_calls.set(self.selection_calls.get() + 1);
+            self.selections
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| "missing fake selection".to_string())
+        }
+
+        fn prompt_install_telemetry_consent(&self, _prompt: &str) -> Result<String, String> {
+            self.telemetry_calls.set(self.telemetry_calls.get() + 1);
+            self.telemetry
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| "missing fake telemetry response".to_string())
+        }
+
+        fn prompt_install_confirmation(&self, _prompt: &str) -> Result<String, String> {
+            self.confirmation_calls
+                .set(self.confirmation_calls.get() + 1);
+            self.confirmations
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| "missing fake confirmation".to_string())
+        }
     }
 
     #[test]
