@@ -948,6 +948,11 @@ def load(name, obj, method):
     sys.path.append("/tmp/secret")
     getattr(obj, method)()
     globals()[name]()
+    locals()[name]()
+    eval("/tmp/secret")
+    exec("/tmp/secret")
+    compile("/tmp/secret", "/tmp/secret", "exec")
+    __import__(name)
     setattr(obj, method, object())
 
 def decorator_factory(name):
@@ -993,6 +998,11 @@ assert any(
     for fact in dynamic_facts
 )
 assert "importlib.import_module(name)" not in json.dumps(dynamic_messages)
+assert "locals()[name]" not in json.dumps(dynamic_messages)
+assert "eval(\"/tmp/secret\")" not in json.dumps(dynamic_messages)
+assert "exec(\"/tmp/secret\")" not in json.dumps(dynamic_messages)
+assert "compile(\"/tmp/secret\"" not in json.dumps(dynamic_messages)
+assert "__import__(name)" not in json.dumps(dynamic_messages)
 assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
 assert "setattr(obj" not in json.dumps(dynamic_messages)
 assert "/tmp/secret" not in json.dumps(dynamic_messages)
@@ -1044,6 +1054,83 @@ serialized_unresolved_decorator = json.dumps(unresolved_decorator_messages)
 assert "return function" not in serialized_unresolved_decorator
 assert "return \"resource\"" not in serialized_unresolved_decorator
 
+fixture_dependency_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/test_fixture_graph.py",
+        "content_hash": "sha256:" + "f" * 64,
+        "repository_revision": "UNKNOWN",
+        "conftest_files": [
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def external_user():
+    return object()
+""",
+            }
+        ],
+        "text": """
+import pytest
+
+fixture_alias = pytest.fixture
+
+@pytest.fixture
+def db():
+    return object()
+
+@fixture_alias(name="api_client")
+def client(db, external_user, tmp_path, missing_fixture):
+    return object()
+
+def helper(db):
+    return db
+
+def test_users(api_client):
+    assert api_client
+""",
+    }
+)
+fixture_dependency_facts = fixture_dependency_messages[0]["facts"]
+assert sum(
+    1
+    for fact in fixture_dependency_facts
+    if fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.db"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+) == 1
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.external_user"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.tmp_path"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.api_client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+serialized_fixture_dependency = json.dumps(fixture_dependency_messages)
+assert "return object" not in serialized_fixture_dependency
+assert "missing_fixture" not in serialized_fixture_dependency
+assert "tests/conftest.py" not in serialized_fixture_dependency
+
 unsafe_literal_import = run_worker(
     {
         "protocol_version": 1,
@@ -1066,6 +1153,33 @@ assert any(
     for fact in unsafe_literal_import[0]["facts"]
 )
 
+unresolved_literal_dynamic_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "missing_dynamic_import.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+
+def load():
+    return importlib.import_module("plugins.safe")
+""",
+    }
+)
+unresolved_literal_dynamic_import_facts = unresolved_literal_dynamic_import[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in unresolved_literal_dynamic_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "plugins.safe"
+    for fact in unresolved_literal_dynamic_import_facts
+)
+
 dynamic_import_boundary = run_worker(
     {
         "protocol_version": 1,
@@ -1073,6 +1187,7 @@ dynamic_import_boundary = run_worker(
         "path": "dynamic_import_boundary.py",
         "content_hash": "sha256:" + "4" * 64,
         "repository_revision": "UNKNOWN",
+        "module_paths": ["dynamic_import_boundary.py", "plugins/safe.py"],
         "text": """
 import importlib
 import sys

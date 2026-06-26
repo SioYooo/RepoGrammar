@@ -34,12 +34,14 @@ implemented. The first Python slice discovers `.py` files, extracts CPython
 `ast` structural code units for FastAPI route-shaped functions, pytest
 tests/fixtures, Pydantic models, and SQLAlchemy model/repository-shaped units,
 emits worker-local structural anchors for imports/decorators/class bases/simple
-calls/fixture edges, stores those anchors as internal parser-origin
+calls/test and fixture dependency edges, stores those anchors as internal parser-origin
 `STRUCTURAL`/`UNKNOWN` facts, and stores framework-role heuristic facts without
 turning raw facts into family claims. A bounded application-layer derivation
 step can now synthesize separate `DATAFLOW_DERIVED` support facts only when
 validated CPython anchors exact-match the Python framework compatibility table
-for a unit with one framework role; low-support and dynamic cases still return
+for a unit with one framework role and no claim-relevant parser-origin blocking
+`UNKNOWN`. This is sound-by-abstention bounded Python framework-family claims,
+not sound Python semantic analysis; low-support and dynamic cases still return
 typed `UNKNOWN`. Ready Python exact-anchor families may record metadata-only
 variation evidence when exact-compatible framework-anchor support targets
 differ. The Python plan still uses a

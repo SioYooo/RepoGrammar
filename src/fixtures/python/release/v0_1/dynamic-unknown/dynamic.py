@@ -19,6 +19,11 @@ def load_plugin(name: str, registry: dict[str, object], extra_path: str):
     sys.path.append(extra_path)
     module = importlib.import_module(name)
     handler = getattr(module, "handle")
+    locals()[name]()
+    eval(extra_path)
+    exec(extra_path)
+    compile(extra_path, "<repogrammar>", "exec")
+    __import__(name)
     registry[name] = handler
     return getattr(module, "handle")()
 

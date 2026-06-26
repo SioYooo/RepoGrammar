@@ -2593,7 +2593,11 @@ def test_users(client, missing_fixture):
 import pytest
 
 @pytest.fixture
-def client():
+def db():
+    return object()
+
+@pytest.fixture
+def client(db, tmp_path):
     return object()
 "#,
         )
@@ -2838,6 +2842,29 @@ project_includes = ["src"]
                 })
         }));
         assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/conftest.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.fixture.db")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/acme/conftest.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.builtin_fixture.tmp_path")
+                && fact.origin_engine == "python"
+                && fact.origin_method == "cpython_ast"
+                && fact.certainty == "STRUCTURAL"
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_builtin_fixture_context"
+                })
+        }));
+        assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "UNKNOWN"
                 && fact.target.as_deref() == Some("PytestFixtureInjection")
@@ -2934,10 +2961,7 @@ project_includes = ["src"]
                 assert!(
                     matches!(
                         target,
-                        "fastapi.APIRouter.get"
-                            | "pydantic.BaseModel"
-                            | "pytest.fixture"
-                            | "pytest.test"
+                        "fastapi.APIRouter.get" | "pydantic.BaseModel" | "pytest.fixture"
                     ),
                     "unexpected derived target {target}"
                 );
@@ -2952,7 +2976,10 @@ project_includes = ["src"]
         assert!(derived_targets.contains("fastapi.APIRouter.get"));
         assert!(derived_targets.contains("pydantic.BaseModel"));
         assert!(derived_targets.contains("pytest.fixture"));
-        assert!(derived_targets.contains("pytest.test"));
+        assert!(
+            !derived_targets.contains("pytest.test"),
+            "pytest fixture-binding UNKNOWN must block pytest test family support"
+        );
         for fact in readiness.facts {
             if derived_fact_ids.contains(&fact.fact_id) {
                 assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));

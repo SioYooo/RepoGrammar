@@ -98,10 +98,12 @@ virtualenv/cache/dependency skips, generation-scoped SQLite storage, syntax-only
 TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, `pytest.test` test-function anchors, alias-aware pytest
-fixture decorators, same-file pytest fixture edges, and typed dynamic
-Pydantic model factory, dynamic/unresolved decorator, dynamic call, monkey-patch, dynamic
-import, `sys.path` mutation, or unresolved import `UNKNOWN` cases persisted as
-internal parser-origin semantic facts. It also labels FastAPI route
+fixture decorators, same-file pytest test/fixture dependency edges, and typed
+dynamic Pydantic model factory, dynamic/unresolved decorator, dynamic call
+including `locals()[...]`, `eval`, `exec`, and `compile`, monkey-patch,
+dynamic import including `__import__`, `sys.path` mutation, or unresolved
+import `UNKNOWN` cases persisted as internal parser-origin semantic facts. It
+also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
 HTTPException status codes, static FastAPI body/path/query/header/cookie
 request-shape markers, literal pytest parametrize arguments, Pydantic
@@ -112,15 +114,17 @@ framework-identity `UNKNOWN` rather than static model-family support.
 Default parser-mode indexing now also carries sanitized root `pyproject.toml`
 source roots from parser/tomllib project-config facts plus bounded discovered
 `conftest.py` context into the CPython parse-document request so source-rooted
-repo-local import facts and parent-directory pytest fixture-edge facts can be
-persisted structurally; those facts are still not default family evidence. The
+repo-local import facts, same-file fixture dependency facts, and
+parent-directory pytest fixture-edge facts can be persisted structurally; those
+facts are still not default family evidence. The
 semantic-worker-compatible Python project mode can also output requested
 `conftest.py` fixture hierarchy edges. Root `pyproject.toml` is persisted as a
 `python-config` file and
 `project_config` unit with sanitized structural config metadata or typed config
 `UNKNOWN`,
 syntax-origin TS/JS and Python framework-role fact storage, bounded exact-anchor
-Python support derivation,
+Python support derivation that excludes units with claim-relevant parser-origin
+blocking `UNKNOWN`s,
 CodeUnit-derived structural IR node/containment-edge storage, Rust-side
 TypeScript semantic-worker
 request/output protocol validation and process validation, a dependency-free
@@ -160,13 +164,14 @@ code-unit extraction, CPython AST-backed Python structural code-unit
 extraction, worker-local Python structural fact payloads for import bindings,
 decorator anchors, class bases, simple call targets, `pytest.test`
 test-function anchors, alias-aware pytest fixture decorators, same-file pytest
-fixture edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
+test/fixture dependency edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
 dependency/error/request-shape anchors, pytest parametrize argument anchors that
 are not treated as fixture injection UNKNOWNs,
 Pydantic field/config/member anchors, typed dynamic Pydantic model factory
 framework-identity `UNKNOWN`, typed dynamic/unresolved decorator
 framework-identity `UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed
-dynamic/unresolved import `UNKNOWN` cases, plus bounded same-function FastAPI
+dynamic/unresolved import `UNKNOWN` cases including `__import__`, plus
+`locals()[...]`/`eval`/`exec`/`compile` call-target `UNKNOWN`s, plus bounded same-function FastAPI
 service-call anchors with reassignment invalidation,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
@@ -174,7 +179,8 @@ pytest, Pydantic, and SQLAlchemy code-unit shapes,
 root `pyproject.toml` discovery and sanitized structural project-config
 records, sanitized project-config source roots reused as default parser context,
 bounded `DATAFLOW_DERIVED` support facts derived only from exact canonical
-Python parser anchors and a single framework role,
+framework anchors when the unit has one Python framework role and no
+claim-relevant parser-origin blocking `UNKNOWN`,
 CodeUnit-derived structural IR nodes and
 conservative containment edges, generation-scoped SQLite
 migrations/storage/validation/activation, product runtime wiring for `index`

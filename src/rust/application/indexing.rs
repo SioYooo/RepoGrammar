@@ -703,6 +703,8 @@ fn derive_python_framework_support_facts(
         .map(|unit| (unit.id.as_str(), unit))
         .collect::<BTreeMap<_, _>>();
     let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        python_framework_support_blocked_units(code_units, parser_facts, &role_by_unit);
     let mut seen = BTreeSet::new();
     let mut derived = Vec::new();
 
@@ -723,6 +725,9 @@ fn derive_python_framework_support_facts(
         else {
             continue;
         };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
         let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
             continue;
         };
@@ -742,6 +747,73 @@ fn derive_python_framework_support_facts(
     }
 
     Ok(derived)
+}
+
+fn python_framework_support_blocked_units(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocked = BTreeSet::new();
+    for fact in parser_facts {
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "python" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if python_framework_support_blocking_unknown(fact, framework_role) {
+            blocked.insert(code_unit_id.to_string());
+        }
+    }
+    blocked
+}
+
+fn python_framework_support_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> bool {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != "python"
+        || fact.origin.method != "cpython_ast"
+    {
+        return false;
+    }
+
+    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
+        return false;
+    };
+    match reason {
+        "DynamicImport" | "RuntimeDependencyInjection" | "UnresolvedImport" => fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "affected_claim=python_import_resolution"),
+        "FrameworkMagic" => fact.assumptions.iter().any(|assumption| {
+            assumption == "affected_claim=python_framework_identity"
+                || assumption == "affected_claim=python_call_target"
+        }),
+        "MonkeyPatch" => fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "affected_claim=python_call_target"),
+        "PytestFixtureInjection" | "ConflictingFacts" => {
+            framework_role.starts_with("framework:pytest")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -972,7 +1044,7 @@ fn python_provider_planner_blocking_unknown(fact: &SemanticFact) -> bool {
             .assumptions
             .iter()
             .any(|assumption| assumption == "affected_claim=python_framework_identity"),
-        "PytestFixtureInjection" => fact
+        "PytestFixtureInjection" | "ConflictingFacts" => fact
             .assumptions
             .iter()
             .any(|assumption| assumption == "affected_claim=pytest_fixture_binding"),
@@ -2325,6 +2397,139 @@ mod tests {
     }
 
     #[test]
+    fn blocking_parser_unknowns_prevent_python_family_support_derivation() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let mut parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.get",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.FastAPI.post",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.delete",
+            ),
+        ];
+        parser_facts.push(parser_unknown_fact_for_unit(
+            &second,
+            "DynamicImport",
+            "python_import_resolution",
+        ));
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert_eq!(derived.len(), 2);
+        assert!(derived
+            .iter()
+            .all(|fact| { fact.evidence.code_unit_id.as_str() != second.id }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn fastapi_dependency_target_unknown_does_not_block_route_family_support() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let mut parser_facts = vec![
+            parser_structural_anchor_fact(
+                &first,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.get",
+            ),
+            parser_structural_anchor_fact(
+                &second,
+                SemanticFactKind::Symbol,
+                "fastapi.FastAPI.post",
+            ),
+            parser_structural_anchor_fact(
+                &third,
+                SemanticFactKind::Symbol,
+                "fastapi.APIRouter.delete",
+            ),
+        ];
+        parser_facts.push(parser_unknown_fact_for_unit(
+            &second,
+            "RuntimeDependencyInjection",
+            "fastapi_dependency_target",
+        ));
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert_eq!(derived.len(), 3);
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
+    }
+
+    #[test]
+    fn pytest_fixture_binding_unknown_blocks_pytest_family_support() {
+        let first = indexed_python_unit("tests/test_a.py", "pytest_test", 0);
+        let second = indexed_python_unit("tests/test_b.py", "pytest_test", 1);
+        let third = indexed_python_unit("tests/test_c.py", "pytest_test", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let mut parser_facts = units
+            .iter()
+            .map(|unit| {
+                parser_structural_anchor_fact(unit, SemanticFactKind::Symbol, "pytest.test")
+            })
+            .collect::<Vec<_>>();
+        parser_facts.push(parser_unknown_fact_for_unit(
+            &third,
+            "ConflictingFacts",
+            "pytest_fixture_binding",
+        ));
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pytest.test"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pytest support");
+
+        assert_eq!(derived.len(), 2);
+        assert!(derived
+            .iter()
+            .all(|fact| fact.evidence.code_unit_id.as_str() != third.id));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn exact_fastapi_route_method_matrix_derives_family_support() {
         let targets = [
             "fastapi.FastAPI.delete",
@@ -2539,6 +2744,7 @@ mod tests {
         let pytest_second = indexed_python_unit("tests/test_b.py", "pytest_test", 9);
         let pytest_third = indexed_python_unit("tests/test_c.py", "pytest_test", 10);
         let pytest_fourth = indexed_python_unit("tests/test_d.py", "pytest_test", 11);
+        let pytest_fifth = indexed_python_unit("tests/test_e.py", "pytest_test", 12);
         let units = vec![
             first.clone(),
             second.clone(),
@@ -2552,6 +2758,7 @@ mod tests {
             pytest_second.clone(),
             pytest_third.clone(),
             pytest_fourth.clone(),
+            pytest_fifth.clone(),
         ];
         let mut facts = units
             .iter()
@@ -2604,6 +2811,11 @@ mod tests {
             "PytestFixtureInjection",
             "pytest_fixture_binding",
         ));
+        facts.push(parser_unknown_fact_for_unit(
+            &pytest_third,
+            "ConflictingFacts",
+            "pytest_fixture_binding",
+        ));
 
         let planned = plan_pyrefly_framework_identity_requests(
             &units,
@@ -2639,7 +2851,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["tests/test_a.py", "tests/test_c.py", "tests/test_d.py"]
+            vec!["tests/test_a.py", "tests/test_d.py", "tests/test_e.py"]
         );
     }
 
@@ -3298,6 +3510,65 @@ mod tests {
             .unknowns
             .iter()
             .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn local_framework_like_names_do_not_derive_python_family_support() {
+        for (unit_kind, role, target_kind, targets) in [
+            (
+                "fastapi_route",
+                "framework:fastapi.route",
+                SemanticFactKind::Symbol,
+                ["client.get", "client.post", "client.put"],
+            ),
+            (
+                "pydantic_model",
+                "framework:pydantic.model",
+                SemanticFactKind::Type,
+                ["BaseModel", "app.models.BaseModel", "tests.BaseModel"],
+            ),
+            (
+                "sqlalchemy_model",
+                "framework:sqlalchemy.model",
+                SemanticFactKind::Type,
+                ["Base", "app.db.Base", "tests.Base"],
+            ),
+        ] {
+            let first = indexed_python_unit("app/a.py", unit_kind, 0);
+            let second = indexed_python_unit("app/b.py", unit_kind, 1);
+            let third = indexed_python_unit("app/c.py", unit_kind, 2);
+            let units = vec![first.clone(), second.clone(), third.clone()];
+            let role_facts = units
+                .iter()
+                .map(|unit| framework_role_fact_for_unit(unit, role))
+                .collect::<Vec<_>>();
+            let parser_facts = units
+                .iter()
+                .zip(targets)
+                .map(|(unit, target)| {
+                    parser_structural_anchor_fact(unit, target_kind.clone(), target)
+                })
+                .collect::<Vec<_>>();
+
+            let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+                .expect("derive exact Python support");
+
+            assert!(
+                derived.is_empty(),
+                "{unit_kind} local framework-like names must not derive support"
+            );
+            let mut family_facts = role_facts;
+            family_facts.extend(derived);
+            let report = build_family_claims(&units, &family_facts);
+            assert!(
+                report.claims.is_empty(),
+                "{unit_kind} local framework-like names must not produce a family"
+            );
+            assert!(report
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        }
     }
 
     #[test]

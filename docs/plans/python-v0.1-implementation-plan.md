@@ -80,16 +80,19 @@ project-mode module-level repo-local import resolution are implemented. Default
 indexing now passes discovered repo-relative `.py` inventory, sanitized root
 `pyproject.toml` source roots from parser/tomllib project-config facts, and
 bounded discovered `conftest.py` context into private parse-document requests
-so source-tied repo-local import and fixture-edge facts can be persisted as
-structural parser-origin facts. Default indexing also discovers root
+so source-tied repo-local import, same-file fixture dependency, and
+parent-directory fixture-edge facts can be persisted as structural
+parser-origin facts. Default indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
 input. The worker performs file-local simple FastAPI router/app alias
 propagation with same-name top-level reassignment invalidation, emits typed
 `UNKNOWN` for dynamic decorators, unresolved bare decorators, monkey-patching,
-dynamic calls, dynamic Pydantic model factories, dynamic imports, `sys.path`
-mutation, unresolved imports, and fixture ambiguity, and
+dynamic calls including `locals()[...]`, `eval`, `exec`, and `compile`,
+dynamic Pydantic model factories, dynamic imports including `__import__` and
+literal `importlib.import_module(...)` without unique repo-local resolution,
+`sys.path` mutation, unresolved imports, and fixture ambiguity, and
 emits static FastAPI request body/path/query/header/cookie marker anchors as
 route-shape context rather than family support; product-path tests now verify
 these anchors are persisted, blocked from claim-input readiness, and excluded
@@ -99,9 +102,11 @@ mutation, dynamic call target, dynamic/unresolved decorator, dynamic Pydantic
 model factory, and monkey patching without creating derived support or
 successful family queries. The application layer derives
 separate `DATAFLOW_DERIVED` support facts from
-exact canonical CPython anchors when a unit has one Python framework role; raw
-parser facts and framework heuristics still remain blocked from direct claim
-input.
+exact canonical CPython anchors only when a unit has one Python framework role
+and no claim-relevant parser-origin blocking `UNKNOWN`. This implements
+sound-by-abstention bounded Python framework-family claims, not sound Python
+semantic analysis; raw parser facts and framework heuristics still remain
+blocked from direct claim input.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but

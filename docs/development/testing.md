@@ -148,8 +148,8 @@ allowed.
   through `python3`, validate private parse-document JSON output, syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
   code-unit output, parse-document structural facts for imports/decorators/class
-  bases/calls/pytest test anchors/fixture edges, bounded parse-document
-  `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
+  bases/calls/pytest test anchors/test and fixture dependency edges, bounded
+  parse-document `conftest.py` fixture hierarchy context, FastAPI route/response-model/static
   dependency-target/dependency-call/error/status-code anchors, static FastAPI
   request body/path/query/header/cookie marker anchors, pytest fixture
   decorator aliases, literal pytest fixture `name=` aliases, dynamic fixture
@@ -230,8 +230,8 @@ allowed.
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors and static request body/parameter anchors staying out of
   support derivation, claim-input readiness, and support-target variation metadata,
-  pytest fixture-edge, builtin-fixture context, and parametrize-argument anchors
-  staying out of family support, SQLAlchemy relationship and Session.add
+  pytest test/fixture dependency-edge, builtin-fixture context, and
+  parametrize-argument anchors staying out of family support, SQLAlchemy relationship and Session.add
   structural anchors staying out of family support and claim-input readiness, SQLAlchemy
   `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and
   async equivalents becoming exact repository-method anchors, bounded

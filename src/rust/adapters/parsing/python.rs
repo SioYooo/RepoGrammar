@@ -2041,7 +2041,7 @@ class Plain:
     }
 
     #[test]
-    fn cpython_frontend_distinguishes_literal_dynamic_imports_and_plain_getattr() {
+    fn cpython_frontend_blocks_dynamic_imports_without_unique_repo_local_resolution() {
         let source = r#"
 import importlib
 import sys
@@ -2052,6 +2052,11 @@ def load(name, extra_path):
     importlib.import_module("../secret")
     importlib.import_module(name)
     handler = getattr(safe, "handle")
+    locals()[name]()
+    eval("/tmp/secret")
+    exec("/tmp/secret")
+    compile("/tmp/secret", "/tmp/secret", "exec")
+    __import__(name)
     return handler
 "#;
         let report = PythonAstParser::default()
@@ -2066,7 +2071,7 @@ def load(name, extra_path):
                     .iter()
                     .any(|assumption| assumption == "affected_claim=python_import_resolution")
         }));
-        assert!(report.semantic_facts.iter().any(|fact| {
+        assert!(!report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedImport
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("plugins.safe")
                 && fact
@@ -2086,8 +2091,8 @@ def load(name, extra_path):
                         .any(|assumption| assumption == "affected_claim=python_import_resolution")
             })
             .count();
-        assert!(dynamic_import_unknowns >= 2);
-        assert!(!report.semantic_facts.iter().any(|fact| {
+        assert!(dynamic_import_unknowns >= 4);
+        assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
                 && fact
@@ -2097,6 +2102,48 @@ def load(name, extra_path):
         }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("../secret"));
+        assert!(!debug.contains("locals()[name]"));
+        assert!(!debug.contains("eval(\"/tmp/secret\")"));
+        assert!(!debug.contains("__import__(name)"));
+    }
+
+    #[test]
+    fn cpython_frontend_resolves_literal_dynamic_imports_only_when_repo_local_unique() {
+        let source = r#"
+import importlib
+
+def load():
+    return importlib.import_module("plugins.safe")
+"#;
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "app.py".to_string(),
+                "plugins/__init__.py".to_string(),
+                "plugins/safe.py".to_string(),
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: Vec::new(),
+        };
+        let report = PythonAstParser::default()
+            .parse_with_context(document(source), &context)
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedImport
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("plugins.safe")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=dynamic_import_literal")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("DynamicImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
     }
 
     #[test]
@@ -2895,6 +2942,75 @@ from acme.missing import value\n";
         }));
         let debug = format!("{:?}", report);
         assert!(!debug.contains("tests/conftest.py"));
+        assert!(!debug.contains("return object"));
+        assert!(!debug.contains("missing_fixture"));
+    }
+
+    #[test]
+    fn parse_document_tracks_fixture_to_fixture_edges_without_source_leakage() {
+        let source = r#"
+import pytest
+
+fixture_alias = pytest.fixture
+
+@pytest.fixture
+def db():
+    return object()
+
+@fixture_alias(name="api_client")
+def client(db, tmp_path, missing_fixture):
+    return object()
+
+def helper(db):
+    return db
+
+def test_users(api_client):
+    assert api_client
+"#;
+        let report = PythonAstParser::default()
+            .parse(document_at("tests/test_fixture_graph.py", source))
+            .expect("parse fixture graph");
+
+        assert_eq!(
+            report
+                .semantic_facts
+                .iter()
+                .filter(|fact| {
+                    fact.kind == SemanticFactKind::Symbol
+                        && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.db")
+                        && fact.assumptions.iter().any(|assumption| {
+                            assumption == "python_anchor_kind=pytest_fixture_edge"
+                        })
+                })
+                .count(),
+            1,
+            "non-fixture helpers must not produce fixture edges"
+        );
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("pytest.builtin_fixture.tmp_path")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_builtin_fixture_context"
+                })
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.api_client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }));
+        let debug = format!("{:?}", report);
         assert!(!debug.contains("return object"));
         assert!(!debug.contains("missing_fixture"));
     }

@@ -213,9 +213,10 @@ anchors, typed SQLAlchemy session calls including `add`, `execute`, `scalar`,
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple calls, bounded same-function
 FastAPI service-call context anchors,
-`pytest.test` test-function anchors, same-file
-and unique parent-directory `conftest.py` pytest fixture edges, literal
-pytest fixture `name=` aliases, known pytest built-in fixture context, FastAPI static
+`pytest.test` test-function anchors, same-file pytest test and fixture
+dependency edges, unique parent-directory `conftest.py` pytest fixture edges,
+literal pytest fixture `name=` aliases, known pytest built-in fixture context,
+FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/

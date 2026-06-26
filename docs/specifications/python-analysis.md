@@ -83,11 +83,11 @@ The current implementation covers the first structural slice only:
 - CPython `ast` structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, bounded same-function application call
   targets, pytest test-function anchors, alias-aware pytest fixture decorators,
-  literal pytest fixture `name=` aliases, same-file pytest fixture edges,
-  literal pytest parametrize argument anchors, typed dynamic import, `sys.path`
-  mutation, dynamic call, dynamic decorator, unresolved bare decorator,
-  monkey-patch, dynamic pytest fixture-name, and unresolved import `UNKNOWN`
-  facts;
+  literal pytest fixture `name=` aliases, same-file pytest test and fixture
+  dependency edges, literal pytest parametrize argument anchors, typed dynamic
+  import, `sys.path` mutation, dynamic call, dynamic decorator, unresolved bare
+  decorator, monkey-patch, dynamic pytest fixture-name, and unresolved import
+  `UNKNOWN` facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -110,9 +110,10 @@ The current implementation covers the first structural slice only:
   `tomllib` project-config parser output, and bounded, hash-checked discovered
   `conftest.py` file contents into the private CPython parse-document request
   so the same source-tied parse pass can emit unique repo-local import facts,
-  `pytest.test` anchors, pytest parent-directory `conftest.py` fixture-edge
-  facts, known builtin-fixture context, and typed unresolved/ambiguous import
-  or fixture `UNKNOWN`s without launching a separate Python semantic worker;
+  `pytest.test` anchors, pytest same-file fixture dependency edges, pytest
+  parent-directory `conftest.py` fixture-edge facts, known builtin-fixture
+  context, and typed unresolved/ambiguous import or fixture `UNKNOWN`s without
+  launching a separate Python semantic worker;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a
@@ -147,7 +148,7 @@ The current implementation covers the first structural slice only:
   `pytest_fixture_binding`, known pytest built-in fixtures become
   `pytest.builtin_fixture.*` context anchors, plugin-style fixtures remain
   `PytestFixtureInjection` `UNKNOWN` until an allowlist or provider resolves
-  them, fixture-edge, builtin-fixture, and
+  them, test/fixture dependency-edge, builtin-fixture, and
   parametrize-argument anchors stay out of family membership support, and
   Pydantic member/config metadata likewise does not become support. Dynamic
   Pydantic model factories such as `pydantic.create_model(...)` remain typed
@@ -261,7 +262,11 @@ parser facts through CLI/MCP query commands or treat them as semantic-provider
 claims. The current product path may feed only separately synthesized
 `repogrammar-python-derived` / `bounded_ast_anchor_v1` facts to EC-MVFI-lite,
 and those facts use `DATAFLOW_DERIVED`, `provider_resolved=false`, and
-same-generation code-unit evidence.
+same-generation code-unit evidence. They are synthesized only for exact
+compatible framework anchors on a unit with one framework role and no
+claim-relevant parser-origin blocking `UNKNOWN`. This is
+sound-by-abstention bounded Python framework-family claims, not sound Python
+semantic analysis.
 
 The strong Python release smoke path is test-only. It uses the existing
 transitional worker executable boundary to inject fixture-controlled
@@ -497,8 +502,8 @@ Recommended bounds:
 - max fixpoint iterations: 4;
 - max cross-file propagation depth: 2;
 - site-packages traversal: disabled;
-- dynamic `getattr`, `setattr`, `globals`, `locals`, `eval`, and `exec`:
-  typed `UNKNOWN`.
+- dynamic `getattr`, `setattr`, `globals`, `locals`, `eval`, `exec`,
+  `compile`, and `__import__`: typed `UNKNOWN`.
 
 ### Layer 6: Application-centered Call Recovery
 

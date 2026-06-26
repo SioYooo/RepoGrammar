@@ -37,6 +37,14 @@
 - Python unresolved bare decorators remain typed `FrameworkMagic` `UNKNOWN` for
   framework identity. Locally defined decorators and native `property`,
   `classmethod`, and `staticmethod` remain structural metadata.
+- Python exact-anchor support derivation is sound-by-abstention for bounded
+  framework-family claims: claim-relevant parser-origin blocking `UNKNOWN`s
+  such as `DynamicImport`/`UnresolvedImport` for `python_import_resolution`,
+  `FrameworkMagic`/`MonkeyPatch` for call or framework identity, and
+  `PytestFixtureInjection`/`ConflictingFacts` for `pytest_fixture_binding`
+  prevent the affected unit from contributing family support. FastAPI
+  `fastapi_dependency_target` UNKNOWNs remain scoped to that subclaim and do
+  not block route-family support.
 - Python provider agreement, provider disagreement, and runtime observation are
   not current certainty tokens. Until the Rust domain, protocol, storage, CLI,
   MCP, and schemas change together, cross-check and observed-runtime details

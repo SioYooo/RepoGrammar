@@ -297,11 +297,12 @@ same-function FastAPI service-call context anchors, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, `pytest.test`
-test-function anchors, same-file pytest fixture edges with literal `name=`
-aliases, known pytest built-in fixture context, literal pytest parametrize
-argument anchors, path-derived module names, and CPython `symtable` scope
-anchors, plus typed `UNKNOWN` facts for dynamic import, unresolved import,
-framework magic, dynamic or unresolved decorators, dynamic Pydantic model factories, dynamic pytest fixture names,
+test-function anchors, same-file pytest test and fixture dependency edges with
+literal `name=` aliases, known pytest built-in fixture context, literal pytest
+parametrize argument anchors, path-derived module names, and CPython `symtable`
+scope anchors, plus typed `UNKNOWN` facts for dynamic import, `__import__`,
+`locals()[...]`, `eval`, `exec`, `compile`, unresolved import, framework magic,
+dynamic or unresolved decorators, dynamic Pydantic model factories, dynamic pytest fixture names,
 duplicate conftest fixture bindings, plugin-style fixture names without an
 allowlist or provider, and unresolved pytest fixture injection cases. Literal
 pytest parametrize arguments are structural parametrize facts, not unresolved
@@ -313,9 +314,10 @@ handler/service context only; neither category is an exact family-support
 target. Default indexing passes the
 discovered repo-relative `.py` inventory plus bounded, hash-checked discovered
 `conftest.py` file contents into that private parse-document request, so unique
-repo-local module imports and parent-directory pytest fixture bindings can be
-recorded as `STRUCTURAL` source-tied parser facts, known pytest built-ins can be
-recorded as external fixture context, and ambiguous/missing imports, dynamic
+repo-local module imports, same-file fixture dependencies, and
+parent-directory pytest fixture bindings can be recorded as `STRUCTURAL`
+source-tied parser facts, known pytest built-ins can be recorded as external
+fixture context, and ambiguous/missing imports, dynamic
 fixture names, duplicate
 conftest fixtures, or unresolved plugin fixtures remain typed `UNKNOWN`s. The
 semantic-worker-compatible Python project mode can also resolve requested

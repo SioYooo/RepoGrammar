@@ -1642,9 +1642,13 @@ def collect_sqlalchemy_model_field_facts(
 def is_dynamic_call(node: ast.Call) -> bool:
     if isinstance(node.func, ast.Call) and dotted_name(node.func) == "getattr":
         return True
-    if isinstance(node.func, ast.Subscript) and dotted_name(node.func) == "globals":
+    if isinstance(node.func, ast.Subscript) and dotted_name(node.func) in {"globals", "locals"}:
         return True
     return False
+
+
+def is_dynamic_execution_call(canonical: str | None) -> bool:
+    return canonical in {"eval", "exec", "compile"}
 
 
 def is_monkey_patch_call(node: ast.Call, canonical: str | None) -> bool:
@@ -1668,6 +1672,7 @@ def collect_call_facts(
     assignments: dict[str, str],
     parameter_roles: dict[str, str] | None,
     defined_names: set[str],
+    module_index: dict[str, list[str]] | None,
     facts: list[dict[str, Any]],
 ) -> None:
     parameter_roles = parameter_roles or {}
@@ -1736,12 +1741,28 @@ def collect_call_facts(
                 ),
             )
             continue
+        if canonical == "__import__":
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="DynamicImport",
+                    affected_claim="python_import_resolution",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
         if canonical == "importlib.import_module":
             first_arg = call.args[0] if call.args else None
             if (
                 isinstance(first_arg, ast.Constant)
                 and isinstance(first_arg.value, str)
                 and is_safe_fact_target(first_arg.value)
+                and repo_local_module_resolution(first_arg.value, module_index) == "resolved"
             ):
                 add_fact(
                     facts,
@@ -1771,6 +1792,21 @@ def collect_call_facts(
                         end=end,
                     ),
                 )
+            continue
+        if is_dynamic_execution_call(canonical):
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_call_target",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
             continue
         if is_dynamic_call(call):
             add_fact(
@@ -2074,26 +2110,33 @@ def collect_fixture_facts(
     conftest_fixture_name_counts: dict[str, int] | None,
     parametrize_names: set[str] | None,
     indirect_parametrize_names: set[str] | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
     facts: list[dict[str, Any]],
 ) -> None:
-    if not node.name.startswith("test_"):
+    is_test_function = node.name.startswith("test_")
+    is_fixture_function = has_pytest_fixture_decorator(node, aliases, assignments)
+    if not is_test_function and not is_fixture_function:
         return
     start, end = node_range(starts, node)
-    add_fact(
-        facts,
-        structural_fact(
-            kind="SYMBOL",
-            subject_unit_id=subject_unit_id,
-            target="pytest.test",
-            path=path,
-            content_hash_value=content_hash_value,
-            repository_revision=repository_revision,
-            start=start,
-            end=end,
-            anchor_kind="pytest_test_function",
-        ),
-    )
+    if is_test_function:
+        add_fact(
+            facts,
+            structural_fact(
+                kind="SYMBOL",
+                subject_unit_id=subject_unit_id,
+                target="pytest.test",
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind="pytest_test_function",
+            ),
+        )
     conftest_fixture_name_counts = conftest_fixture_name_counts or {}
+    parametrize_names = parametrize_names if is_test_function else set()
+    indirect_parametrize_names = indirect_parametrize_names if is_test_function else set()
     parametrize_names = parametrize_names or set()
     indirect_parametrize_names = indirect_parametrize_names or set()
     for arg in node.args.args:
@@ -2354,6 +2397,8 @@ def analyze_source(
                 conftest_fixture_name_counts,
                 parametrize_names,
                 indirect_parametrize_names,
+                aliases,
+                assignments,
                 facts,
             )
             collect_call_facts(
@@ -2368,6 +2413,7 @@ def analyze_source(
                 assignments,
                 collect_parameter_roles(item, aliases),
                 defined_names,
+                module_index,
                 facts,
             )
         elif isinstance(item, ast.ClassDef):
@@ -2447,6 +2493,7 @@ def analyze_source(
                     assignments,
                     parameter_roles,
                     defined_names,
+                    module_index,
                     facts,
                 )
 

@@ -27,19 +27,22 @@
   heuristic smoke output, without running repository code or provider tools.
 - Python worker structural fact output for import bindings, decorator anchors,
   class bases, simple call targets, `pytest.test` test-function anchors,
-  same-file pytest fixture edges, and typed dynamic/unresolved `UNKNOWN` cases,
-  now including path-derived module-name anchors, CPython `symtable`
+  same-file pytest test and fixture dependency edges, and typed
+  dynamic/unresolved `UNKNOWN` cases, now including path-derived module-name
+  anchors, CPython `symtable`
   structural scope anchors, and a private
   `tomllib` project-config summary mode. Its semantic-worker-compatible
   project mode now resolves only unique repo-local module imports as
   `STRUCTURAL` facts, resolves requested-project `conftest.py` fixture names
   through pytest's directory hierarchy as structural fixture-edge facts, and
-  reports ambiguous/missing repo-local imports or `sys.path` mutation as typed
-  `UNKNOWN`. Default parser-mode indexing now
+  reports ambiguous/missing repo-local imports, unsafe/unresolved literal
+  dynamic imports, `__import__`, `locals()[...]`, `eval`, `exec`, `compile`, or
+  `sys.path` mutation as typed `UNKNOWN`. Default parser-mode indexing now
   passes discovered repo-relative `.py` inventory and bounded discovered
   `conftest.py` contents into private parse-document requests so source-tied
-  repo-local import facts and parent-directory pytest fixture-edge facts can be
-  persisted without launching a Python semantic worker; oversized context
+  repo-local import facts, same-file fixture dependency facts, and
+  parent-directory pytest fixture-edge facts can be persisted without launching
+  a Python semantic worker; oversized context
   payloads fall back to contextless parsing. The worker now performs file-local
   simple FastAPI router/app alias propagation with same-name reassignment
   invalidation, emits structural FastAPI `response_model`, `Depends`, and
@@ -173,7 +176,11 @@
   claim-blocking parser `UNKNOWN`s without executing Pyrefly, storing provider
   facts, changing CLI/MCP output, or upgrading family claims. Planner tests now
   cover import-resolution, framework-identity, and pytest fixture-binding
-  blocking reasons while preserving non-blocking call-target UNKNOWNs.
+  blockers.
+- Exact-anchor Python support derivation is now sound-by-abstention for bounded
+  framework-family claims: a parser-origin blocking `UNKNOWN` prevents the
+  affected unit from contributing `DATAFLOW_DERIVED` family support, while
+  FastAPI dependency-target UNKNOWNs stay scoped to dependency-target subclaims.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and
