@@ -15,7 +15,7 @@ use crate::ports::parser::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -37,8 +37,7 @@ impl Default for PythonAstParser {
     fn default() -> Self {
         Self {
             executable: "python3".to_string(),
-            worker_script: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("src/workers/python/worker.py"),
+            worker_script: default_python_worker_script(),
         }
     }
 }
@@ -97,6 +96,39 @@ impl SourceParser for PythonAstParser {
         }
         Ok(report)
     }
+}
+
+fn default_python_worker_script() -> PathBuf {
+    if let Ok(worker) = std::env::var("REPOGRAMMAR_PYTHON_WORKER") {
+        if !worker.trim().is_empty() {
+            return PathBuf::from(worker);
+        }
+    }
+    let source_worker = source_checkout_python_worker_script();
+    if let Ok(executable) = std::env::current_exe() {
+        for candidate in python_worker_script_candidates(&executable) {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    source_worker
+}
+
+fn source_checkout_python_worker_script() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/workers/python/worker.py")
+}
+
+fn python_worker_script_candidates(executable: &Path) -> Vec<PathBuf> {
+    let Some(executable_dir) = executable.parent() else {
+        return Vec::new();
+    };
+    let mut candidates = vec![executable_dir.join("repogrammar-workers/python/worker.py")];
+    if let Some(prefix) = executable_dir.parent() {
+        candidates.push(prefix.join("share/repogrammar/workers/python/worker.py"));
+    }
+    candidates.push(executable_dir.join("workers/python/worker.py"));
+    candidates
 }
 
 impl PythonAstParser {
@@ -1359,6 +1391,21 @@ mod tests {
     use super::*;
     use crate::core::model::{ContentHash, RepositoryRevision};
     use crate::ports::parser::ParserProjectFileContext;
+
+    #[test]
+    fn python_worker_candidates_cover_installed_and_portable_layouts() {
+        let executable = Path::new("/opt/repogrammar/bin/repogrammar");
+        let candidates = python_worker_script_candidates(executable);
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/opt/repogrammar/bin/repogrammar-workers/python/worker.py"),
+                PathBuf::from("/opt/repogrammar/share/repogrammar/workers/python/worker.py"),
+                PathBuf::from("/opt/repogrammar/bin/workers/python/worker.py"),
+            ]
+        );
+    }
 
     fn document(text: &str) -> SourceDocument<'_> {
         document_at("app.py", text)

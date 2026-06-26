@@ -43,46 +43,58 @@ remain `UNKNOWN`.
 
 TypeScript and JavaScript are not official v0.1 support targets.
 
-## Install The CLI
+## Install
 
-RepoGrammar is currently built from source with Rust stable:
+For public-preview releases, install the prebuilt CLI binary first:
 
 ```text
-git clone https://github.com/SioYooo/RepoGrammar.git
-cd RepoGrammar
-cargo build --release
-./target/release/repogrammar version
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh
+bash install.sh
 ```
 
-From a source checkout, the recommended interactive setup entrypoint is:
+The installer downloads the matching macOS or Linux release artifact, verifies
+its checksum, installs `repogrammar` into a user-writable command directory, and
+then can launch the agent setup wizard. It does not require Rust, Cargo,
+Node.js, Docker, a local LLM, an embedding model, or a cloud API key. The
+current Python preview still requires a `python3` interpreter at indexing time
+to run RepoGrammar's bundled CPython AST worker; it does not require a Python
+virtualenv or project dependency installation.
+
+On Windows preview builds, use PowerShell:
+
+```text
+Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Agent integration requires the native CLI for the agent you choose: `codex` for
+Codex integration and `claude` for Claude Code integration. Missing agent CLIs
+are non-fatal; you can configure the agents that are available and rerun
+`repogrammar install` later.
+
+From a source checkout, the same installer lives at:
 
 ```text
 bash src/install/repogrammar-install.sh
 ```
 
-The setup script can build the release binary, install or repair the
-`repogrammar` command, configure Codex and Claude Code, uninstall connected
-agent integrations, or remove the local `repogrammar` command.
-
-The lower-level installer can also be run through the built binary:
-
-```text
-./target/release/repogrammar install
-```
-
-The installer configures machine-level coding-agent MCP integration and installs
-a stable `repogrammar` command in a user-writable command directory when
-possible. It does not index the current repository and does not create or modify
-`.repogrammar/`.
+That script can install or repair the `repogrammar` command from a release,
+configure Codex and Claude Code, uninstall connected agent integrations, remove
+the local `repogrammar` command, or, for contributors, build from source.
 
 You can also review the plan without writing anything:
 
 ```text
-./target/release/repogrammar install --target all --scope global --dry-run --no-telemetry
+repogrammar install --target all --scope global --dry-run --no-telemetry
 ```
 
-RepoGrammar is developed and tested on Unix-like local development machines.
-Windows support is not a public-preview guarantee yet.
+The installer configures machine-level coding-agent MCP integration. It does not
+index the current repository and does not create or modify `.repogrammar/`.
+
+Supported public-preview binary targets are macOS arm64/x86_64, Linux
+arm64/x86_64, and Windows x86_64 preview. Release artifacts include the
+RepoGrammar binary and the Python worker asset used by the current Python
+frontend.
 
 ## Quick Start
 
@@ -99,9 +111,6 @@ repogrammar family --project . --mode compact <family-id>
 repogrammar explain --project . --token-budget 8000 <target>
 repogrammar check --project . --token-budget 8000 <target>
 ```
-
-If you have not installed the binary onto your `PATH`, replace `repogrammar`
-with `./target/release/repogrammar` from this checkout.
 
 Before a repository is initialized or before enough evidence exists, query
 commands return explicit fallback or `UNKNOWN` results rather than pretending an
@@ -178,8 +187,10 @@ analyzer. In this preview:
 
 ## Development
 
-For contributor setup, architecture, and validation commands, start with
-[docs/README.md](docs/README.md) and
+Contributors building from source need Rust/Cargo. Node.js is needed only for
+TypeScript worker tests; Python 3 is needed for Python indexing and Python
+worker tests. For contributor setup, architecture, and validation commands,
+start with [docs/README.md](docs/README.md) and
 [docs/development/testing.md](docs/development/testing.md).
 
 ## Star History

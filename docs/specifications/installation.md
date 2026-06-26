@@ -5,19 +5,53 @@ indexing.
 
 Installation is three separate steps:
 
-1. install or build the `repogrammar` CLI binary;
+1. install the `repogrammar` CLI binary;
 2. run `repogrammar install` to wire machine-level coding-agent MCP
    integration;
 3. run `repogrammar init` and `repogrammar index` inside each repository that
    should have a local RepoGrammar index.
 
+End users must not need Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, a
+local LLM, an embedding model, or cloud API keys to install and run the
+RepoGrammar CLI. Rust/Cargo remains a contributor and source-build dependency
+only. The current Python preview still requires a `python3` interpreter at
+indexing time because RepoGrammar uses a bundled CPython AST worker asset; it
+must not require a Python virtualenv or project dependency installation. Node.js
+is needed only for TypeScript worker test development.
+
+Agent integration may require the selected native agent CLI:
+
+- `codex` for Codex integration;
+- `claude` for Claude Code integration.
+
+Missing agent CLIs must be non-fatal in interactive flows when other supported
+choices remain available.
+
+Public-preview release artifacts use these platform targets:
+
+- `repogrammar-aarch64-apple-darwin.tar.gz`;
+- `repogrammar-x86_64-apple-darwin.tar.gz`;
+- `repogrammar-aarch64-unknown-linux-gnu.tar.gz`;
+- `repogrammar-x86_64-unknown-linux-gnu.tar.gz`;
+- `repogrammar-x86_64-pc-windows-msvc.zip`.
+
+Every release artifact must include the `repogrammar` executable and the
+bundled Python worker asset under `workers/python/worker.py`, and must have a
+matching `.sha256` checksum asset.
+
 Source checkouts may provide a dependency-light wrapper script at
 `src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
-around the product binary: it may build `cargo build --release`, call
-`repogrammar install`, call `repogrammar uninstall`, remove the local
-user-writable `repogrammar` command path after confirmation, and display PATH
-guidance. It must not duplicate native agent configuration logic outside the
-Rust installer, and it must not create or modify `.repogrammar/`.
+around release artifacts and the product binary: it may download a prebuilt
+release artifact, verify its checksum, install or repair the user-writable
+`repogrammar` command, install bundled worker assets, call
+`repogrammar install`, call `repogrammar uninstall`, remove the local command
+path after confirmation, display PATH guidance, or build from source only when
+the user explicitly chooses the contributor source-build path. It must not
+duplicate native agent configuration logic outside the Rust installer, and it
+must not create or modify `.repogrammar/`.
+
+Windows public-preview source checkouts may provide `src/install/install.ps1`
+with the same binary-download and checksum-verification boundary.
 
 ## Commands
 
@@ -42,6 +76,8 @@ Repository lifecycle state is owned by `repogrammar init`,
 
 The installer must:
 
+- install from prebuilt release artifacts for end users;
+- verify release artifact checksums before installing a downloaded binary;
 - detect supported coding agents;
 - prefer native agent configuration commands where available;
 - preserve all unknown configuration fields;
@@ -116,6 +152,15 @@ Consuming repositories must not be forced to mirror RepoGrammar's own
 The current implementation supports deterministic dry-run planning,
 noninteractive live writes, and a dependency-light text wizard:
 
+- public-preview release packaging builds prebuilt `repogrammar` artifacts for
+  macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64 preview, each with
+  a bundled Python worker asset and `.sha256` checksum;
+- `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
+  default it downloads a prebuilt release artifact instead of requiring Cargo,
+  verifies the checksum, installs the CLI and bundled worker asset, and can then
+  launch agent wiring or uninstall flows;
+- `src/install/install.ps1` is the Windows preview installer wrapper for the
+  Windows x86_64 artifact;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,

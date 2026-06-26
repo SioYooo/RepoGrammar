@@ -131,9 +131,14 @@ allowed.
   configurators, fake prompts, and receipt behavior. Any real native-agent CLI
   integration test must be explicitly ignored or feature-gated outside default
   CI.
-- Source-checkout installer wrapper tests must at least run shell syntax
-  validation such as `bash -n src/install/repogrammar-install.sh`; default tests
-  must not use that script to call real `codex` or `claude` binaries.
+- Installer wrapper tests must run without network access and without real
+  native-agent CLIs. They must cover shell syntax validation and a local fake
+  release-artifact path for `src/install/repogrammar-install.sh`, including
+  checksum verification, CLI command installation, bundled worker asset
+  installation, delegated
+  `repogrammar install` / `repogrammar uninstall` invocation through a fake
+  binary, and command removal. Default tests must not use wrapper scripts to
+  call real `codex` or `claude` binaries.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry

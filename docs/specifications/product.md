@@ -182,6 +182,14 @@ Machine-level `install` and `uninstall` are separate from repository-level
 `init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
 dry-run friendly.
 
+End-user installation must be binary-first. Public-preview users should be able
+to install and run the RepoGrammar CLI from a prebuilt release artifact without
+Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, local LLMs, embedding models,
+or cloud API keys. Rust/Cargo remains a contributor and source-build dependency
+only. The current Python preview still requires a `python3` interpreter at
+indexing time for the bundled CPython AST worker asset; it must not require a
+Python virtualenv or project dependency installation.
+
 Repository-derived analysis state belongs in the current repository's
 `.repogrammar/` state directory, or the directory named by `REPOGRAMMAR_DIR`.
 Global user state may contain installation receipts, binary/cache metadata,

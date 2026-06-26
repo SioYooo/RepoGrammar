@@ -14,9 +14,14 @@
 - Re-running `repogrammar install` now still installs or repairs the
   user-writable `repogrammar` command when selected agents are already managed.
 - Source checkouts now include `src/install/repogrammar-install.sh`, a
-  dependency-light TUI wrapper for building the release binary, installing or
-  repairing the command, configuring or uninstalling Codex/Claude Code
-  integrations, and removing the local command path after confirmation.
+  dependency-light TUI wrapper for downloading and verifying a prebuilt release
+  binary, installing or repairing the command, configuring or uninstalling
+  Codex/Claude Code integrations, removing the local command path after
+  confirmation, or explicitly choosing a contributor source build.
+- Release automation now builds prebuilt `repogrammar` artifacts with checksum
+  assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
+  preview, bundles the current Python worker asset, and publishes `install.sh`
+  / `install.ps1` installer assets for tagged preview releases.
 - Repository bootstrap for the RepoGrammar Rust-core package layout.
 - Layered architecture skeleton for core, ports, application, interfaces, and
   adapters.
