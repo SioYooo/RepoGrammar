@@ -17,8 +17,8 @@
   bounded exact-anchor Python `DATAFLOW_DERIVED` support derivation,
   internal active claim-input snapshot reads, semantic-fact
   freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
-  serving, and narrow global
-  explicit-target installer writes. ADR-0011 makes
+  serving, and global Codex/Claude Code installer writes with an interactive
+  multi-select wizard and all-or-rollback `--target all` transaction. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current
   Python slice persists parser-origin Python facts and structural project-config
@@ -56,8 +56,12 @@
   telemetry independent from agent setup: `--yes` alone is not consent,
   `install --yes` without telemetry flags does not prompt and keeps telemetry
   disabled, env/CI opt-outs force disabled, and dry-run output names the planned
-  native Codex/Claude Code MCP command shape. Uninstall refuses missing or foreign
-  managed receipts. Ready Python exact-anchor families
+  native Codex/Claude Code MCP command shape. Interactive `repogrammar install`
+  can select Codex, Claude Code, or both in one run, skips already managed
+  RepoGrammar receipts, installs a stable `repogrammar` command when possible,
+  and does not touch `.repogrammar/` or instruction files. Uninstall refuses
+  missing or foreign managed receipts, while `uninstall --target all` removes
+  owned first-class agent receipts it finds. Ready Python exact-anchor families
   can also record metadata-only variation evidence when exact-compatible
   framework-anchor support targets differ. FastAPI static `response_model=...`, static
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
@@ -187,9 +191,10 @@ TypeScript worker stub that reports compiler analysis as unavailable, a
 validated semantic-fact storage writer, opt-in command-level semantic-worker
 fact ingestion through the same-generation storage gate, conservative
 FamilyStore-backed query reads, and a read-only MCP `repogrammar_context` stdio
-boundary. It also has narrow live installer/uninstaller writes for explicit
-global Codex and Claude Code MCP targets through native agent CLIs, gated by
-`--yes`, MCP self-test, and RepoGrammar-owned receipts. It also has an internal
+boundary. It also has live installer/uninstaller writes for global Codex and
+Claude Code MCP targets through native agent CLIs, gated by `--yes` or the
+interactive wizard, MCP self-test, all-or-rollback multi-target handling, and
+RepoGrammar-owned receipts. It also has an internal
 active-generation claim-input snapshot read path for future claim builders and
 an internal file-hash freshness/readiness gate that blocks stale facts,
 unsupported fact kinds, weak certainty, or conflicting certainty with typed
@@ -317,8 +322,8 @@ provider-backed Python project-configuration semantics, Pyrefly/Pyright
 provider execution, provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
 beyond the structural bootstrap graph, resolved framework semantics, full
-family mining, broad installer writes, project-local installer writes,
-instruction-file integration, and telemetry network transport are not
+family mining, project-local installer writes, instruction-file integration,
+additional coding-agent integrations, and telemetry network transport are not
 implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
@@ -333,8 +338,8 @@ must not be described as query-ready family evidence.
 
 Future agents must not claim compiler-backed TypeScript analysis,
 provider-backed Python semantic analysis, full pattern-family mining,
-freshness-validated semantic claims, installer writes
-beyond explicit Codex/Claude MCP registration, or stable MCP API support until
+freshness-validated semantic claims, installer writes beyond global
+Codex/Claude MCP registration, or stable MCP API support until
 those capabilities are implemented and tested.
 Agents also must not restart repo-local lifecycle, SQLite generation, opt-in
 semantic-worker ingestion, or Rust-side worker process validation work from

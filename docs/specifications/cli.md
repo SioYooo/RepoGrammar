@@ -207,21 +207,34 @@ snippets or absolute paths.
 - `--no-permissions`
 
 Installer commands configure agents and machine-level integration only. They do
-not create, delete, or rewrite `.repogrammar/`. Live writes require `--yes`.
-The current implementation supports explicit `--target codex --scope global`
-through the native Codex MCP CLI and explicit
-`--target claude-code --scope global` through the native Claude Code MCP CLI.
-Live `--target all` and all project-local writes remain deferred to avoid
-partial or unsupported agent configuration. `install` runs a read-only MCP
-self-test before native configuration and writes a managed receipt after native
-configuration succeeds; `uninstall` removes only receipt-owned managed entries.
+not create, delete, or rewrite `.repogrammar/`, and they do not run `init`,
+`index`, or `sync`. `repogrammar install` with no flags launches a simple
+TUI-style text wizard when running in an interactive terminal. The wizard
+supports multi-select Codex and Claude Code in one run, shows existing
+RepoGrammar-managed receipts, skips already managed agents by default, and lets
+users add missing supported agents on later runs.
+
+Noninteractive live writes require `--yes`. `install --yes`, `install
+--dry-run`, and explicit `--target ... --yes` must never prompt. The current
+implementation supports `--target codex --scope global` through the native
+Codex MCP CLI, `--target claude-code --scope global` through the native Claude
+Code MCP CLI, and safe `--target all --scope global --yes` through the same
+all-or-rollback transaction. Project-local writes remain deferred.
+
+`install` places the `repogrammar` command in a user-writable command directory
+when possible, runs a read-only MCP self-test before native configuration,
+writes one managed receipt per configured target, and rolls back all changes
+from the same run if any selected agent install or receipt write fails.
+`uninstall` removes only receipt-owned managed entries. `uninstall --target all
+--scope global --yes` removes every owned first-class agent receipt it finds,
+but refuses unmanaged or foreign receipts.
 Dry-run install output reports the native MCP command shape for supported
 global Codex and Claude Code targets. Live `install --yes` must not prompt for
 telemetry; if neither `--telemetry` nor `--no-telemetry` is provided,
 telemetry remains disabled. `--yes` itself never implies telemetry consent.
-Interactive telemetry prompts are allowed only for a future live install mode
-that runs without `--yes` and without explicit telemetry flags; current v0.1
-live writes are `--yes` gated.
+Interactive telemetry prompts are allowed only in the default TUI-style
+installer, only when no telemetry flag was supplied, and the default is no.
+Install does not upload telemetry or run paired token-saving experiments.
 
 ## Metrics commands
 

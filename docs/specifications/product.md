@@ -208,5 +208,12 @@ and reports token/count data only through coarse buckets.
 RepoGrammar v0.1 first-class coding-agent integrations are Claude Code and
 Codex. Both integrations use the same read-only `repogrammar_context` MCP
 server through native agent CLI commands and RepoGrammar-owned receipts.
-Project-local live writes, `--target all` live writes, executable copying, and
-instruction-file edits remain deferred unless separately specified and tested.
+Interactive `repogrammar install` is a machine-level TUI-style wizard that can
+wire Codex, Claude Code, or both in one run, skip already managed agents, and
+add missing supported agents later. Multi-agent live install is
+all-or-rollback, and `--target all --scope global --yes` uses that same
+transaction. The installer may place the `repogrammar` command in a
+user-writable command directory, but it must not index code, mutate
+`.repogrammar/`, edit instruction files, upload telemetry, or run paired
+experiments. Project-local live writes and instruction-file edits remain
+deferred unless separately specified and tested.

@@ -116,17 +116,21 @@ allowed.
   creation, no native configuration delegation, and native Codex/Claude Code
   MCP command-shape reporting for dry-run global installs, plus live-write
   `--yes` gating, MCP self-test before native configuration, hanging MCP
-  self-test timeout/kill behavior, unsupported broad `--target all`,
-  unsupported native scopes, receipt writing, receipt-write rollback,
-  receipt-owned uninstall, missing/foreign receipt refusal, install `--yes` not
-  enabling telemetry, `install --yes` not prompting for telemetry, install
-  `--telemetry` persisting consent only after successful live install,
-  environment/CI telemetry disablement overriding install consent, and no
-  `.repogrammar/` mutation. Default tests must not invoke real `codex` or
-  `claude` binaries; validate native integration through dry-run output,
-  command-vector construction, fake configurators, and receipt behavior. Any
-  real native-agent CLI integration test must be explicitly ignored or
-  feature-gated outside default CI.
+  self-test timeout/kill behavior, interactive TUI wizard routing, multi-select
+  Codex/Claude Code parsing and deterministic normalization, existing
+  RepoGrammar-owned receipt detection, already-managed target skipping,
+  safe `--target all --scope global --yes`, all-or-rollback multi-target
+  install, unsupported native scopes, receipt writing, receipt-write rollback,
+  receipt-owned uninstall, all-target uninstall of owned receipts,
+  missing/foreign receipt refusal, install `--yes` not enabling telemetry,
+  `install --yes` not prompting for telemetry, install `--telemetry` persisting
+  consent only after successful live install, environment/CI telemetry
+  disablement overriding install consent, and no `.repogrammar/` mutation.
+  Default tests must not invoke real `codex` or `claude` binaries; validate
+  native integration through dry-run output, command-vector construction, fake
+  configurators, fake prompts, and receipt behavior. Any real native-agent CLI
+  integration test must be explicitly ignored or feature-gated outside default
+  CI.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry

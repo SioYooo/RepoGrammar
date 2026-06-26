@@ -4,6 +4,13 @@
 
 ### Added
 
+- Interactive `repogrammar install` now provides a dependency-light text wizard
+  for machine-level Codex and Claude Code MCP wiring. The wizard supports
+  multi-select in one run, skips already managed RepoGrammar receipts by
+  default, keeps telemetry default-off, and does not initialize or index
+  repositories. Noninteractive `--target all --scope global --yes` uses the
+  same all-or-rollback multi-agent transaction, and `uninstall --target all`
+  removes only RepoGrammar-owned first-class agent receipts.
 - Repository bootstrap for the RepoGrammar Rust-core package layout.
 - Layered architecture skeleton for core, ports, application, interfaces, and
   adapters.
