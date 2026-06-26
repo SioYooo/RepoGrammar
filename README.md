@@ -55,8 +55,10 @@ parser-context profiles differ inside an already-supported family. Exact-anchor
 derivation now uses only
 top-level framework bindings that have not been shadowed, and module-scope
 dynamic import/path mutation becomes unit-scoped blocking `UNKNOWN` evidence
-instead of being guessed away. The Python plan still uses a
-claim-driven selective
+instead of being guessed away. Product-path regression coverage verifies local
+framework lookalikes such as `@client.get(...)`, user-defined `BaseModel`, and
+user-defined SQLAlchemy-shaped `Base` remain non-family evidence. The Python
+plan still uses a claim-driven selective
 cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
 plausible family candidates, Pyright only for claim-upgrading cross-checks, and
 typed `UNKNOWN` when evidence cannot support a claim.

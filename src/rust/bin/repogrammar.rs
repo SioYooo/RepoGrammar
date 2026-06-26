@@ -748,6 +748,7 @@ mod tests {
             "evidence",
             "output",
             "check",
+            "read_plan",
         ] {
             assert!(
                 value.get(field).is_none(),
@@ -3366,6 +3367,108 @@ def create_user(
             };
             let value = parse_machine_output(command, &output, &workspace);
             assert_unknown_query_json(command, &value);
+        }
+    }
+
+    #[test]
+    fn product_runtime_python_framework_lookalikes_do_not_produce_families() {
+        let workspace = TempWorkspace::new("product-runtime-python-framework-lookalikes");
+        fs::write(
+            workspace.path().join("lookalikes.py"),
+            r#"
+client = object()
+
+@client.get("/users")
+def not_a_fastapi_route():
+    return {}
+
+class BaseModel:
+    pass
+
+class UserOut(BaseModel):
+    id: int
+
+class Base:
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+"#,
+        )
+        .expect("write Python lookalike source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let files_json = parse_machine_output("files", &files, &workspace);
+        assert!(files_json["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .any(|file| file["path"] == "lookalikes.py"));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let unit_kinds = units_json["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .filter(|unit| unit["path"] == "lookalikes.py")
+            .filter_map(|unit| unit["kind"].as_str())
+            .collect::<BTreeSet<_>>();
+        for forbidden_kind in ["fastapi_route", "pydantic_model", "sqlalchemy_model"] {
+            assert!(
+                !unit_kinds.contains(forbidden_kind),
+                "lookalike source must not produce {forbidden_kind}: {unit_kinds:?}"
+            );
+        }
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_no_derived_python_support_for_targets(
+            &facts.facts,
+            &[
+                "fastapi.APIRouter.get",
+                "fastapi.FastAPI.get",
+                "pydantic.BaseModel",
+                "sqlalchemy.orm.DeclarativeBase",
+                "sqlalchemy.orm.Mapped",
+                "sqlalchemy.orm.mapped_column",
+            ],
+        );
+
+        for command in ["families", "find", "family", "member", "explain", "check"] {
+            let output = if command == "families" {
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime)
+            } else {
+                run_with_runtime(
+                    cli_args(command, workspace.path(), &["lookalikes.py", "--json"]),
+                    &runtime,
+                )
+            };
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+            assert_no_claim_payload(command, &value);
         }
     }
 

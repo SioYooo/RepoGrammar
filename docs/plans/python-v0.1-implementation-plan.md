@@ -115,6 +115,10 @@ blocked from direct claim input. The family builder now applies bounded
 complete-link clustering over Python support-family and parser-context
 features, refusing single-link bridge clusters and assigning sanitized cluster
 ids only when one coarse bucket contains multiple ready clusters.
+Product-path regression coverage now also indexes local framework lookalikes,
+including `@client.get(...)`, user-defined `BaseModel`, and user-defined
+SQLAlchemy-shaped `Base` classes, and verifies they remain non-family evidence
+through query output.
 The implemented SQLAlchemy slice now includes exact structural anchors for
 `Mapped[...]`, `mapped_column(...)`, and calls on parameters typed as
 `Session` or `AsyncSession`, keeping those facts provider-unresolved but

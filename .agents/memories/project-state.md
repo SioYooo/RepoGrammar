@@ -92,6 +92,10 @@
   consumes parser-origin context features for complete-link compatibility and
   repeats claim-scoped blocking `UNKNOWN` checks before emitting a confident
   family.
+  Product-path regression coverage now also indexes local framework lookalikes
+  such as `@client.get(...)`, user-defined `BaseModel`, and user-defined
+  SQLAlchemy-shaped `Base` classes and verifies they remain non-family
+  evidence through query output.
   Release smoke coverage now exercises the committed `stale-evidence` fixture
   for mutation/deletion freshness failures and the FastAPI/APIRouter route
   method variation fixture across the full `delete`/`get`/`head`/`options`/

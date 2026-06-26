@@ -158,6 +158,9 @@
   cannot, local `@client.get(...)` no longer becomes a FastAPI route, local
   `BaseModel`/`Base` classes no longer become Pydantic/SQLAlchemy support, and
   bare `locals()`/`globals()` calls now produce typed call-target `UNKNOWN`s.
+- Product-path regression coverage now indexes local framework lookalikes and
+  proves `@client.get(...)`, user-defined `BaseModel`, and user-defined
+  SQLAlchemy-shaped `Base` classes stay out of family support and query claims.
 - Query input hardening now shares target and token-budget validation between
   CLI and MCP. MCP schema exposes `target` max length and `token_budget`
   maximum, and both interfaces reject oversized or control-character targets.

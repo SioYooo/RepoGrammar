@@ -44,6 +44,32 @@ def assert_end_of_stream(messages):
     }
 
 
+def has_unknown_for_subject(facts, subject_name, reason_code, affected_claim):
+    return any(
+        fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == reason_code
+        and subject_name in fact["subject"]
+        and f"affected_claim={affected_claim}" in fact["assumptions"]
+        for fact in facts
+    )
+
+
+def assert_no_fact_source_payloads(facts):
+    forbidden = {"source", "source_text", "snippet", "source_snippet"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            assert forbidden.isdisjoint(value)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    for fact in facts:
+        walk(fact)
+
+
 parse_messages = run_worker(
     {
         "protocol_version": 1,
@@ -1299,6 +1325,121 @@ assert "__import__(name)" not in json.dumps(dynamic_messages)
 assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
 assert "setattr(obj" not in json.dumps(dynamic_messages)
 assert "/tmp/secret" not in json.dumps(dynamic_messages)
+assert_no_fact_source_payloads(dynamic_facts)
+
+typed_dynamic_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "typed_dynamic_boundaries.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+
+def dynamic_importlib(name):
+    importlib.import_module(name)
+
+def dynamic_builtin_import(name):
+    __import__(name)
+
+def dynamic_locals(name):
+    locals()[name]()
+
+def dynamic_globals(name):
+    globals()[name]()
+
+def dynamic_eval(expr):
+    eval(expr)
+
+def dynamic_exec(expr):
+    exec(expr)
+
+def dynamic_compile(expr):
+    compile(expr, "generated.py", "exec")
+
+def dynamic_getattr(obj, method):
+    getattr(obj, method)()
+
+def dynamic_path(extra_path):
+    sys.path.append(extra_path)
+
+def dynamic_setattr(obj, name):
+    setattr(obj, name, object())
+""",
+    }
+)
+typed_dynamic_boundary_facts = typed_dynamic_boundary_messages[0]["facts"]
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_importlib",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_builtin_import",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_locals",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_globals",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_eval",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_exec",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_compile",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_getattr",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_path",
+    "RuntimeDependencyInjection",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_setattr",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert_no_fact_source_payloads(typed_dynamic_boundary_facts)
+serialized_typed_dynamic_boundaries = json.dumps(typed_dynamic_boundary_messages)
+assert "locals()[name]" not in serialized_typed_dynamic_boundaries
+assert "globals()[name]" not in serialized_typed_dynamic_boundaries
+assert "eval(expr)" not in serialized_typed_dynamic_boundaries
+assert "exec(expr)" not in serialized_typed_dynamic_boundaries
+assert "compile(expr" not in serialized_typed_dynamic_boundaries
+assert "__import__(name)" not in serialized_typed_dynamic_boundaries
+assert "generated.py" not in serialized_typed_dynamic_boundaries
 
 bare_dynamic_lookup_messages = run_worker(
     {
@@ -1498,6 +1639,42 @@ assert not any(
     fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "plugins.safe"
     for fact in unresolved_literal_dynamic_import_facts
 )
+
+ambiguous_literal_dynamic_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "ambiguous_dynamic_import.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": [
+            "ambiguous_dynamic_import.py",
+            "src/plugins/safe.py",
+            "alt/plugins/safe.py",
+        ],
+        "source_roots": ["src", "alt"],
+        "text": """
+import importlib
+
+def load():
+    return importlib.import_module("plugins.safe")
+""",
+    }
+)
+ambiguous_literal_dynamic_import_facts = ambiguous_literal_dynamic_import[0]["facts"]
+assert has_unknown_for_subject(
+    ambiguous_literal_dynamic_import_facts,
+    "load",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in ambiguous_literal_dynamic_import_facts
+)
+assert_no_fact_source_payloads(ambiguous_literal_dynamic_import_facts)
 
 dynamic_import_boundary = run_worker(
     {

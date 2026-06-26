@@ -88,6 +88,9 @@ analysis rules.
   explicit compatibility table. Do not infer FastAPI, pytest, Pydantic,
   SQLAlchemy, or TS/JS framework compatibility from framework-name substrings in
   fact text, paths, notes, targets, or assumptions.
+  Local lookalikes such as `@client.get(...)`, user-defined `BaseModel`, or a
+  user-defined SQLAlchemy-shaped `Base` must remain non-family evidence unless
+  exact compatible framework evidence passes the current support gate.
 - Cross-checked and observed Python certainty labels are planned only; do not
   emit or test them as current protocol/storage/CLI/MCP tokens until all those
   contracts are updated together.

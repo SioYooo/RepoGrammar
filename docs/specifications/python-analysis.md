@@ -236,7 +236,10 @@ The current implementation covers the first structural slice only:
   prove dynamic-boundary facts remain typed `UNKNOWN`, blocked from claim-input
   readiness, and absent from derived support, including dynamic FastAPI
   dependency-target expressions that affect only the dependency-target
-  sub-claim rather than route-family membership,
+  sub-claim rather than route-family membership, and prove local framework
+  lookalikes such as `@client.get(...)`, user-defined `BaseModel`, or
+  user-defined SQLAlchemy-shaped `Base` classes do not become FastAPI,
+  Pydantic, or SQLAlchemy family support,
   prove supported MCP operations return the same family context,
   prove the committed stale-evidence fixture returns blocking `StaleEvidence`
   `UNKNOWN` after source mutation or deletion, and keep the test-injected

@@ -1046,8 +1046,8 @@ fn family_evidence_covered_claims(
 }
 
 fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> bool {
-    if let Some(result) = python_support_fact_is_role_compatible(fact, framework_role) {
-        return result;
+    if python_framework_role_is_known(framework_role) {
+        return python_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
 
     let mut evidence_text = format!(
@@ -2305,6 +2305,33 @@ mod tests {
                 semantic_support_fact_with_target(&first, "myproject.fastapi.APIRouter.get"),
                 semantic_support_fact_with_target(&second, "fastapi.APIRouter.get_extra"),
                 semantic_support_fact_with_target(&third, "notes:fastapi.FastAPI.post"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_framework_support_requires_target_before_fallback() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let mut targetless = semantic_support_fact_with_target(&third, "fastapi.APIRouter.get");
+        targetless.target = None;
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                targetless,
             ],
         );
 

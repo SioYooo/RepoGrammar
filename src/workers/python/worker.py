@@ -1941,65 +1941,30 @@ def collect_call_facts(
             ):
                 receiver = ".".join(parts[:-1])
                 canonical = f"{parameter_roles[receiver]}.{parts[-1]}"
-        if is_monkey_patch_call(call, canonical):
-            add_fact(
+        unknown = dynamic_unknown_for_call(call, canonical, module_index)
+        if unknown is not None:
+            reason_code, affected_claim = unknown
+            add_unknown_fact(
                 facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="MonkeyPatch",
-                    affected_claim="python_call_target",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
-            )
-            continue
-        if canonical in {"sys.path.append", "sys.path.insert"}:
-            add_fact(
-                facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="RuntimeDependencyInjection",
-                    affected_claim="python_import_resolution",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
-            )
-            continue
-        if canonical == "__import__":
-            add_fact(
-                facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="DynamicImport",
-                    affected_claim="python_import_resolution",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
+                subject_unit_id,
+                reason_code,
+                affected_claim,
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
             )
             continue
         if canonical == "importlib.import_module":
-            first_arg = call.args[0] if call.args else None
-            if (
-                isinstance(first_arg, ast.Constant)
-                and isinstance(first_arg.value, str)
-                and is_safe_fact_target(first_arg.value)
-                and repo_local_module_resolution(first_arg.value, module_index) == "resolved"
-            ):
+            literal_target = resolved_dynamic_import_literal_target(call, module_index)
+            if literal_target is not None:
                 add_fact(
                     facts,
                     structural_fact(
                         kind="RESOLVED_IMPORT",
                         subject_unit_id=subject_unit_id,
-                        target=first_arg.value,
+                        target=literal_target,
                         path=path,
                         content_hash_value=content_hash_value,
                         repository_revision=repository_revision,
@@ -2008,65 +1973,6 @@ def collect_call_facts(
                         anchor_kind="dynamic_import_literal",
                     ),
                 )
-            else:
-                add_fact(
-                    facts,
-                    unknown_fact(
-                        subject_unit_id=subject_unit_id,
-                        reason_code="DynamicImport",
-                        affected_claim="python_import_resolution",
-                        path=path,
-                        content_hash_value=content_hash_value,
-                        repository_revision=repository_revision,
-                        start=start,
-                        end=end,
-                    ),
-                )
-            continue
-        if canonical in {"globals", "locals"}:
-            add_fact(
-                facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="FrameworkMagic",
-                    affected_claim="python_call_target",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
-            )
-            continue
-        if is_dynamic_execution_call(canonical):
-            add_fact(
-                facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="FrameworkMagic",
-                    affected_claim="python_call_target",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
-            )
-            continue
-        if is_dynamic_call(call):
-            add_fact(
-                facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="FrameworkMagic",
-                    affected_claim="python_call_target",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
-            )
             continue
         if canonical == "pydantic.create_model":
             add_fact(
