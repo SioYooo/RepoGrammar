@@ -441,6 +441,8 @@ fn install_cli_command(
     }
 
     let executable_existed = installed_executable.exists();
+    let command_path_was_managed_copy =
+        command_path_is_managed_copy(&command_path, &installed_executable);
     if !same_path(source, &installed_executable) {
         fs::copy(source, &installed_executable).map_err(|error| {
             RepoGrammarError::InvalidInput(format!("failed to install RepoGrammar CLI: {error}"))
@@ -450,13 +452,21 @@ fn install_cli_command(
 
     if command_path.exists() {
         if !same_path(&command_path, &installed_executable) {
-            if record.created_executable {
-                let _ = fs::remove_file(&installed_executable);
+            if command_path_was_managed_copy {
+                refresh_command_copy(&installed_executable, &command_path).inspect_err(|_| {
+                    if record.created_executable {
+                        let _ = fs::remove_file(&installed_executable);
+                    }
+                })?;
+            } else {
+                if record.created_executable {
+                    let _ = fs::remove_file(&installed_executable);
+                }
+                return Err(RepoGrammarError::InvalidInput(
+                    "repogrammar command path already exists and is not managed by RepoGrammar"
+                        .to_string(),
+                ));
             }
-            return Err(RepoGrammarError::InvalidInput(
-                "repogrammar command path already exists and is not managed by RepoGrammar"
-                    .to_string(),
-            ));
         }
     } else {
         create_command_link_or_copy(&installed_executable, &command_path).inspect_err(|_| {
@@ -468,6 +478,25 @@ fn install_cli_command(
     }
 
     Ok(record)
+}
+
+fn command_path_is_managed_copy(command_path: &Path, installed_executable: &Path) -> bool {
+    if !command_path.is_file() || !installed_executable.is_file() {
+        return false;
+    }
+    if path_is_symlink(command_path) || path_is_symlink(installed_executable) {
+        return false;
+    }
+    match (fs::read(command_path), fs::read(installed_executable)) {
+        (Ok(command), Ok(installed)) => command == installed,
+        _ => false,
+    }
+}
+
+fn refresh_command_copy(source: &Path, destination: &Path) -> Result<(), RepoGrammarError> {
+    fs::copy(source, destination).map(|_| ()).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to refresh repogrammar command: {error}"))
+    })
 }
 
 fn rollback_install_run(
@@ -929,6 +958,66 @@ mod tests {
         assert!(workspace.command_path().exists());
         assert_eq!(configurator.actions.borrow().len(), 0);
         assert_eq!(self_test.calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn already_managed_install_refreshes_managed_command_copy_without_native_writes() {
+        let workspace = TempInstallWorkspace::new("already-managed-command-copy-refresh");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("initial install");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::remove_file(workspace.command_path()).expect("remove command symlink");
+        fs::copy(&installed, workspace.command_path()).expect("managed command copy");
+        fs::write(&workspace.context.executable_path, "updated stub\n").expect("update source");
+        configurator.actions.borrow_mut().clear();
+        self_test.calls.borrow_mut().clear();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("refresh managed copy");
+
+        assert!(outcome.configured_targets.is_empty());
+        assert_eq!(
+            outcome.skipped_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert_eq!(configurator.actions.borrow().len(), 0);
+        assert_eq!(self_test.calls.borrow().len(), 1);
+        assert_eq!(
+            fs::read_to_string(workspace.command_path()).expect("command copy"),
+            "updated stub\n"
+        );
+    }
+
+    #[test]
+    fn foreign_existing_command_path_is_refused_before_self_test_or_native_writes() {
+        let workspace = TempInstallWorkspace::new("foreign-command-refused");
+        fs::write(workspace.command_path(), "foreign command\n").expect("foreign command");
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let error = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect_err("foreign command must be refused");
+
+        assert!(error.to_string().contains("not managed by RepoGrammar"));
+        assert_eq!(configurator.actions.borrow().len(), 0);
+        assert_eq!(self_test.calls.borrow().len(), 0);
+        assert!(!workspace.data_dir.join("bin").join(binary_name()).exists());
     }
 
     #[test]

@@ -177,6 +177,48 @@ function testForwardsArgumentsThroughNpxLauncher() {
   }
 }
 
+function testBinaryOverrideBypassesReleaseDownload() {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-binary-"));
+  try {
+    const binary = path.join(root, "repogrammar");
+    const log = path.join(root, "fake.log");
+    fs.writeFileSync(
+      binary,
+      [
+        "#!/usr/bin/env sh",
+        "printf '%s' \"$1\" >> \"$REPOGRAMMAR_FAKE_LOG\"",
+        "shift",
+        "for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$REPOGRAMMAR_FAKE_LOG\"; done",
+        "printf '\\n' >> \"$REPOGRAMMAR_FAKE_LOG\"",
+        "",
+      ].join("\n")
+    );
+    fs.chmodSync(binary, 0o755);
+
+    const result = childProcess.spawnSync(
+      process.execPath,
+      [path.join(__dirname, "repogrammar.js"), "install", "--dry-run"],
+      {
+        env: {
+          ...process.env,
+          REPOGRAMMAR_BINARY: binary,
+          REPOGRAMMAR_RELEASE_DIR: path.join(root, "missing-release-dir"),
+          REPOGRAMMAR_FAKE_LOG: log,
+        },
+        encoding: "utf8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(log, "utf8"), "install --dry-run\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   assert.equal(launcher.platformTarget("darwin", "arm64"), "aarch64-apple-darwin");
   assert.equal(launcher.platformTarget("linux", "x64"), "x86_64-unknown-linux-gnu");
@@ -188,6 +230,7 @@ async function main() {
   testChecksumRejectsMismatch();
   await testInstallsFromLocalReleaseAndCachesWorker();
   testForwardsArgumentsThroughNpxLauncher();
+  testBinaryOverrideBypassesReleaseDownload();
 }
 
 main().catch((error) => {

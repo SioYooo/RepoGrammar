@@ -160,8 +160,16 @@ function isInstalled(binary) {
 }
 
 async function ensureBinary() {
-  if (process.env.REPOGRAMMAR_BINARY) {
-    return process.env.REPOGRAMMAR_BINARY;
+  const binaryOverride = process.env.REPOGRAMMAR_BINARY;
+  if (binaryOverride && binaryOverride.trim()) {
+    if (!path.isAbsolute(binaryOverride)) {
+      throw new Error("REPOGRAMMAR_BINARY must be an absolute path");
+    }
+    const stat = fs.statSync(binaryOverride, { throwIfNoEntry: false });
+    if (!stat || !stat.isFile()) {
+      throw new Error("REPOGRAMMAR_BINARY must point to an existing file");
+    }
+    return binaryOverride;
   }
   const target = platformTarget();
   const tag = defaultReleaseTag();

@@ -2,6 +2,7 @@ param(
     [string]$Version = $(if ($env:REPOGRAMMAR_VERSION) { $env:REPOGRAMMAR_VERSION } else { "latest" }),
     [string]$Repo = $(if ($env:REPOGRAMMAR_REPO) { $env:REPOGRAMMAR_REPO } else { "SioYooo/RepoGrammar" }),
     [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\RepoGrammar\bin" }),
+    [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "RepoGrammar" }),
     [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path (Split-Path -Parent $CommandDir) "share\repogrammar\workers" }),
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
@@ -25,6 +26,10 @@ Usage:
 The script downloads a prebuilt Windows x64 release artifact, verifies its
 checksum, installs repogrammar.exe into a user-writable command directory, and
 can launch repogrammar install for Codex / Claude Code MCP wiring.
+
+Windows source-checkout dogfood builds are deferred. For local artifact tests,
+set REPOGRAMMAR_RELEASE_DIR to a directory containing the Windows zip and
+matching .sha256 file.
 "@
 }
 
@@ -48,6 +53,11 @@ function Get-ReleaseBase {
 
 function Install-Cli {
     $artifact = "repogrammar-x86_64-pc-windows-msvc.zip"
+    $installedBinary = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
+    $commandPath = Join-Path $CommandDir "repogrammar.exe"
+    if ((Test-Path $commandPath) -and !(Test-ManagedCommandPath $commandPath $installedBinary)) {
+        throw "repogrammar command path already exists and is not managed by RepoGrammar; move it aside or choose a different CommandDir"
+    }
     $temp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "repogrammar-install-$([System.Guid]::NewGuid())"))
     try {
         $archive = Join-Path $temp.FullName $artifact
@@ -70,17 +80,47 @@ function Install-Cli {
         if (!(Test-Path $binary)) {
             throw "release artifact did not contain repogrammar.exe"
         }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
+        Copy-Item $binary $installedBinary -Force
         New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
-        Copy-Item $binary (Join-Path $CommandDir "repogrammar.exe") -Force
+        Copy-Item $installedBinary $commandPath -Force
         $worker = Join-Path $temp.FullName "workers\python\worker.py"
         if (Test-Path $worker) {
             $workerDest = Join-Path $WorkerRoot "python"
             New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
             Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
         }
-        Write-Output "Installed $(Join-Path $CommandDir "repogrammar.exe")"
+        Write-Output "Installed $commandPath"
     } finally {
         Remove-Item -Recurse -Force $temp.FullName -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ManagedCommandPath([string]$CommandPath, [string]$InstalledBinary) {
+    if (!(Test-Path $CommandPath)) {
+        return $true
+    }
+    if (!(Test-Path $InstalledBinary)) {
+        return $false
+    }
+    $commandHash = (Get-FileHash -Algorithm SHA256 $CommandPath).Hash.ToLowerInvariant()
+    $installedHash = (Get-FileHash -Algorithm SHA256 $InstalledBinary).Hash.ToLowerInvariant()
+    return $commandHash -eq $installedHash
+}
+
+function Invoke-WithInstallEnv([scriptblock]$Script) {
+    $previousInstallDir = $env:REPOGRAMMAR_INSTALL_DIR
+    $previousCommandDir = $env:REPOGRAMMAR_COMMAND_DIR
+    $previousExecutable = $env:REPOGRAMMAR_EXECUTABLE
+    try {
+        $env:REPOGRAMMAR_INSTALL_DIR = $InstallDir
+        $env:REPOGRAMMAR_COMMAND_DIR = $CommandDir
+        $env:REPOGRAMMAR_EXECUTABLE = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
+        & $Script
+    } finally {
+        $env:REPOGRAMMAR_INSTALL_DIR = $previousInstallDir
+        $env:REPOGRAMMAR_COMMAND_DIR = $previousCommandDir
+        $env:REPOGRAMMAR_EXECUTABLE = $previousExecutable
     }
 }
 
@@ -89,10 +129,12 @@ function Run-AgentInstall {
     if (!(Test-Path $command)) {
         throw "repogrammar.exe is not installed; install the CLI first"
     }
-    if ($Yes) {
-        & $command install --target all --scope global --yes --no-telemetry
-    } else {
-        & $command install
+    Invoke-WithInstallEnv {
+        if ($Yes) {
+            & $command install --target all --scope global --yes --no-telemetry
+        } else {
+            & $command install
+        }
     }
 }
 

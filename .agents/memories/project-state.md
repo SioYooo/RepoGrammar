@@ -65,9 +65,16 @@
   checkouts also include `src/install/repogrammar-install.sh` as the
   public-facing TUI wrapper for release-binary install/repair/uninstall choices,
   with Cargo kept as an explicit contributor source-build path only and release
-  artifacts bundling the current Python worker asset. The optional npm package
+  artifacts bundling the current Python worker asset. The source-checkout
+  wrapper can also dogfood before release assets exist by explicitly installing
+  from `target/release/repogrammar` into the same RepoGrammar-managed command
+  layout used by the Rust installer, then delegating agent wiring to
+  `repogrammar install`. It refuses foreign command paths rather than adopting
+  arbitrary existing binaries. The optional npm package
   `@sioyooo/repogrammar` is a thin npx launcher over those same release
-  artifacts, not a JavaScript implementation. Uninstall refuses
+  artifacts, not a JavaScript implementation; local npm dogfood can use
+  `REPOGRAMMAR_BINARY` to execute an already built binary without release
+  downloads. Uninstall refuses
   missing or foreign managed receipts, while `uninstall --target all` removes
   owned first-class agent receipts it finds. Ready Python exact-anchor families
   can also record metadata-only variation evidence when exact-compatible
@@ -137,7 +144,7 @@
   Python gitignore behavior in root and parent-worktree layouts, and explicit
   strict gitignore failure when Git ignore checks are unavailable. CLI/MCP
   query inputs share target and token-budget bounds.
-- Last updated: 2026-06-26
+- Last updated: 2026-06-27
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.

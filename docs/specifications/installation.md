@@ -50,8 +50,28 @@ the user explicitly chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
 
+Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
+through explicit contributor paths:
+
+- `bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes`;
+- `bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all`.
+
+The source path may require Rust/Cargo because it is a contributor workflow,
+but it must install the built binary into RepoGrammar-managed user state before
+refreshing the user-writable command path. It must pass
+`REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
+`REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
+It must not directly create a foreign unmanaged command path that later causes
+the Rust installer to refuse ownership. If no release artifact is available and
+the script is not running from a source checkout with `--from-source`, it must
+fail with actionable guidance, including `REPOGRAMMAR_RELEASE_DIR` for local
+artifact tests.
+
 Windows public-preview source checkouts may provide `src/install/install.ps1`
-with the same binary-download and checksum-verification boundary.
+with the same binary-download and checksum-verification boundary. Windows
+source-checkout builds are deferred in this preview; Windows dogfood should use
+a local release-artifact directory until a Windows source-build path is
+specified and tested.
 
 The npm package `@sioyooo/repogrammar` is a thin launcher only. Its `bin`
 entrypoint lives under `src/npm/`, detects OS/architecture, downloads the
@@ -62,6 +82,17 @@ source, run `cargo`, implement RepoGrammar analysis behavior in JavaScript, call
 real native Codex/Claude CLIs in tests, or become the only installation path.
 `npx` and global npm installs require Node/npm by definition, but they must not
 require Rust/Cargo.
+
+Before `@sioyooo/repogrammar` is published, npm dogfood may use either a local
+packed package or a direct binary override:
+
+- `npm pack` followed by
+  `npm install -g ./sioyooo-repogrammar-0.1.0.tgz`;
+- `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
+
+`REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
+path to an existing file and must not change the release-artifact default for
+published npm use.
 
 ## Commands
 
@@ -168,17 +199,22 @@ noninteractive live writes, and a dependency-light text wizard:
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, installs the CLI and bundled worker asset, and can then
-  launch agent wiring or uninstall flows;
+  launch agent wiring or uninstall flows. In a source checkout, its interactive
+  menu makes the contributor source-build path first-class, and its
+  noninteractive `--from-source` mode supports dogfood before release artifacts
+  exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
-  Windows x86_64 artifact;
+  Windows x86_64 artifact. Windows source-checkout dogfood builds remain
+  deferred;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
-- re-running the wizard can add missing supported agents later or repair the
-  user-writable `repogrammar` command path even when all selected agents are
-  already managed;
+- re-running the wizard can add missing supported agents later or refresh the
+  RepoGrammar-managed command path even when all selected agents are already
+  managed, without re-running native agent add commands for already managed
+  receipts;
 - noninteractive live writes still require `--yes`;
 - `install --yes`, `install --dry-run`, and explicit `--target ... --yes`
   never prompt;
@@ -192,9 +228,9 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary;
-- `@sioyooo/repogrammar` supports `npx @sioyooo/repogrammar ...` by downloading
-  and caching the matching prebuilt release artifact, then delegating all
-  behavior to the Rust binary;
+- the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
+  after package publication by downloading and caching the matching prebuilt
+  release artifact, then delegating all behavior to the Rust binary;
 - install runs a read-only MCP self-test before native agent configuration, with
   a bounded timeout that kills and reaps a hanging self-test process;
 - install writes one RepoGrammar-owned receipt per configured target under the

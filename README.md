@@ -52,14 +52,14 @@ curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/inst
 bash install.sh
 ```
 
-If you already use Node/npm, the npm wrapper can download the same prebuilt
-binary and run it through `npx`:
+After the npm package is published, users with Node/npm can use the wrapper to
+download the same prebuilt binary and run it through `npx`:
 
 ```text
 npx @sioyooo/repogrammar install
 ```
 
-You can also install the wrapper globally:
+After publication, you can also install the wrapper globally:
 
 ```text
 npm install -g @sioyooo/repogrammar
@@ -96,6 +96,29 @@ bash src/install/repogrammar-install.sh
 That script can install or repair the `repogrammar` command from a release,
 configure Codex and Claude Code, uninstall connected agent integrations, remove
 the local `repogrammar` command, or, for contributors, build from source.
+Before a prerelease artifact exists, source-checkout dogfood is explicit:
+
+```text
+cargo build --release
+bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
+repogrammar version
+bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all
+```
+
+The source path installs the built binary into RepoGrammar-managed user state
+and refreshes the user-writable `repogrammar` command without requiring a
+GitHub Release asset or published npm package.
+
+Before the npm package is published, local npm dogfood can bypass release
+downloads with an already built binary:
+
+```text
+REPOGRAMMAR_BINARY=/absolute/path/to/target/release/repogrammar node src/npm/repogrammar.js version
+npm pack
+npm install -g ./sioyooo-repogrammar-0.1.0.tgz
+```
+
+The published npm path still expects release artifacts by default.
 
 You can also review the plan without writing anything:
 

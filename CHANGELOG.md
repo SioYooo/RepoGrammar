@@ -8,6 +8,14 @@
   Human progress uses stderr and exact completed/total counts when known;
   `--json --progress always` emits progress NDJSON on stderr while preserving
   the final JSON result on stdout.
+- Source-checkout installer dogfood now works before GitHub prerelease assets
+  or npm publication exist. The Bash wrapper can install the built contributor
+  binary through explicit `--from-source` flows, writes the command through the
+  same managed install layout used by the Rust installer, delegates agent
+  wiring to `repogrammar install`, refuses foreign command paths, and reports
+  actionable missing-release guidance. The npm launcher now has a tested
+  `REPOGRAMMAR_BINARY` local dogfood bypass while keeping release artifacts as
+  the published default.
 - Interactive `repogrammar install` now provides a dependency-light text wizard
   for machine-level Codex and Claude Code MCP wiring. The wizard supports
   multi-select in one run, skips already managed RepoGrammar receipts by

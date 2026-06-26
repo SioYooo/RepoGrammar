@@ -5,9 +5,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 REPOGRAMMAR_REPO="${REPOGRAMMAR_REPO:-SioYooo/RepoGrammar}"
 REPOGRAMMAR_VERSION="${REPOGRAMMAR_VERSION:-latest}"
-REPOGRAMMAR_BIN="${REPO_ROOT}/target/release/repogrammar"
+REPOGRAMMAR_BIN="${REPOGRAMMAR_SOURCE_BINARY:-${REPO_ROOT}/target/release/repogrammar}"
 COMMAND_DIR="${REPOGRAMMAR_COMMAND_DIR:-${HOME:-}/.local/bin}"
 COMMAND_PATH="${COMMAND_DIR}/repogrammar"
+if [[ -n "${REPOGRAMMAR_INSTALL_DIR:-}" ]]; then
+  DATA_DIR="$REPOGRAMMAR_INSTALL_DIR"
+elif [[ -n "${XDG_DATA_HOME:-}" ]]; then
+  DATA_DIR="${XDG_DATA_HOME%/}/repogrammar"
+else
+  DATA_DIR="${HOME:-}/.local/share/repogrammar"
+fi
+DATA_BIN_DIR="${DATA_DIR}/bin"
+INSTALLED_EXECUTABLE="${DATA_BIN_DIR}/repogrammar"
 WORKER_ROOT="${REPOGRAMMAR_WORKER_ROOT:-}"
 ACTION="menu"
 ASSUME_YES=0
@@ -46,6 +55,7 @@ Options:
   --target <agent>       codex, claude-code, or all for noninteractive agent actions
   --version <tag>        Release tag to install; default: latest
   --command-dir <dir>    Directory for the repogrammar command
+  --install-dir <dir>    Directory for RepoGrammar-managed install state
   --from-source          Contributor path: build/copy target/release/repogrammar
   --print-target         Print detected release target and exit
   -h, --help             Show this help
@@ -54,6 +64,8 @@ Environment:
   REPOGRAMMAR_RELEASE_DIR    Local directory containing release artifacts, used by tests
   REPOGRAMMAR_RELEASE_BASE   Override release asset URL base
   REPOGRAMMAR_COMMAND_DIR    Directory for the repogrammar command
+  REPOGRAMMAR_INSTALL_DIR    Directory for RepoGrammar-managed install state
+  REPOGRAMMAR_SOURCE_BINARY  Prebuilt source-checkout binary for dogfood tests
   REPOGRAMMAR_WORKER_ROOT    Directory for bundled worker assets
   REPOGRAMMAR_VERSION        Release tag, or latest
   REPOGRAMMAR_USE_SOURCE_BUILD=1  Build from source instead of downloading
@@ -84,6 +96,13 @@ parse_args() {
         [[ $# -ge 2 ]] || die "--command-dir requires a value"
         COMMAND_DIR="$2"
         COMMAND_PATH="${COMMAND_DIR}/repogrammar"
+        shift 2
+        ;;
+      --install-dir)
+        [[ $# -ge 2 ]] || die "--install-dir requires a value"
+        DATA_DIR="$2"
+        DATA_BIN_DIR="${DATA_DIR}/bin"
+        INSTALLED_EXECUTABLE="${DATA_BIN_DIR}/repogrammar"
         shift 2
         ;;
       --from-source) USE_SOURCE_BUILD=1; shift ;;
@@ -143,19 +162,37 @@ fetch_asset() {
   local name="$1"
   local dest="$2"
   if [[ -n "${REPOGRAMMAR_RELEASE_DIR:-}" ]]; then
-    cp "${REPOGRAMMAR_RELEASE_DIR%/}/${name}" "$dest"
+    local local_asset="${REPOGRAMMAR_RELEASE_DIR%/}/${name}"
+    if [[ ! -f "$local_asset" ]]; then
+      die "release artifact not found in REPOGRAMMAR_RELEASE_DIR: ${name}"
+    fi
+    cp "$local_asset" "$dest"
     return
   fi
 
   local url
   url="$(release_asset_base)/${name}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    if ! curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+      release_asset_not_found "$url"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -q "$url" -O "$dest"
+    if ! wget -q "$url" -O "$dest" 2>/dev/null; then
+      release_asset_not_found "$url"
+    fi
   else
     die "curl or wget is required to download release artifacts"
   fi
+}
+
+release_asset_not_found() {
+  local url="$1"
+  printf "error: release artifact was not found: %s\n" "$url" >&2
+  if has_source_checkout; then
+    printf "This looks like a RepoGrammar source checkout; rerun with --from-source to build and install locally.\n" >&2
+  fi
+  printf "For local artifact testing, set REPOGRAMMAR_RELEASE_DIR to a directory containing the archive and .sha256 file.\n" >&2
+  exit 1
 }
 
 sha256_file() {
@@ -181,13 +218,40 @@ verify_checksum() {
   fi
 }
 
-copy_binary_to_command_path() {
+command_path_is_managed() {
+  if [[ ! -e "$COMMAND_PATH" && ! -L "$COMMAND_PATH" ]]; then
+    return 0
+  fi
+  if [[ -L "$COMMAND_PATH" ]]; then
+    local link_target
+    link_target="$(readlink "$COMMAND_PATH" 2>/dev/null || true)"
+    [[ "$link_target" == "$INSTALLED_EXECUTABLE" ]]
+    return
+  fi
+  [[ -f "$COMMAND_PATH" && -f "$INSTALLED_EXECUTABLE" ]] && cmp -s "$COMMAND_PATH" "$INSTALLED_EXECUTABLE"
+}
+
+install_managed_cli_binary() {
   local source="$1"
+  if ! command_path_is_managed; then
+    die "repogrammar command path already exists and is not managed by RepoGrammar; move it aside or choose --command-dir"
+  fi
+  mkdir -p "$DATA_BIN_DIR"
+  local tmp_executable="${INSTALLED_EXECUTABLE}.tmp.$$"
+  cp "$source" "$tmp_executable"
+  chmod 755 "$tmp_executable"
+  mv "$tmp_executable" "$INSTALLED_EXECUTABLE"
+
   mkdir -p "$COMMAND_DIR"
-  local tmp_command="${COMMAND_PATH}.tmp.$$"
-  cp "$source" "$tmp_command"
-  chmod 755 "$tmp_command"
-  mv "$tmp_command" "$COMMAND_PATH"
+  if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
+    rm -f "$COMMAND_PATH"
+  fi
+  if ! ln -s "$INSTALLED_EXECUTABLE" "$COMMAND_PATH" 2>/dev/null; then
+    local tmp_command="${COMMAND_PATH}.tmp.$$"
+    cp "$INSTALLED_EXECUTABLE" "$tmp_command"
+    chmod 755 "$tmp_command"
+    mv "$tmp_command" "$COMMAND_PATH"
+  fi
 }
 
 default_worker_root() {
@@ -236,7 +300,7 @@ install_cli_from_release() {
   verify_checksum "${tmpdir}/${artifact}" "${tmpdir}/${artifact}.sha256"
   tar -xzf "${tmpdir}/${artifact}" -C "$tmpdir"
   [[ -x "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
-  copy_binary_to_command_path "${tmpdir}/repogrammar"
+  install_managed_cli_binary "${tmpdir}/repogrammar"
   install_worker_asset "${tmpdir}/workers/python/worker.py"
   printf "Installed %s\n" "$COMMAND_PATH"
 }
@@ -253,7 +317,7 @@ install_cli_from_source() {
     fi
     (cd "$REPO_ROOT" && cargo build --release)
   fi
-  copy_binary_to_command_path "$REPOGRAMMAR_BIN"
+  install_managed_cli_binary "$REPOGRAMMAR_BIN"
   install_worker_asset "${REPO_ROOT}/src/workers/python/worker.py"
   printf "Installed %s from source build\n" "$COMMAND_PATH"
 }
@@ -278,15 +342,27 @@ resolve_repogrammar_command() {
 
 run_agent_install() {
   local command_path
+  local executable_path
   command_path="$(resolve_repogrammar_command)" || die "repogrammar command is not installed; choose install first"
+  if [[ -x "$INSTALLED_EXECUTABLE" ]]; then
+    executable_path="$INSTALLED_EXECUTABLE"
+  else
+    executable_path="$command_path"
+  fi
   if [[ "$ASSUME_YES" -eq 1 ]]; then
-    REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" "$command_path" install \
+    REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+    REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+    REPOGRAMMAR_EXECUTABLE="$executable_path" \
+    "$command_path" install \
       --target "$TARGET_SELECTION" \
       --scope global \
       --yes \
       --no-telemetry
   else
-    REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" "$command_path" install
+    REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+    REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+    REPOGRAMMAR_EXECUTABLE="$executable_path" \
+    "$command_path" install
   fi
 }
 
@@ -328,7 +404,10 @@ uninstall_connected_agents() {
     printf "Cancelled. No connected coding-agent integrations were removed.\n"
     return 0
   fi
-  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" "$command_path" uninstall \
+  REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+  REPOGRAMMAR_EXECUTABLE="$command_path" \
+  "$command_path" uninstall \
     --target "$target" \
     --scope global \
     --yes
@@ -380,14 +459,19 @@ main_menu() {
   printf "Telemetry remains controlled by repogrammar install prompts and flags.\n\n"
   printf "Command directory: %s\n\n" "$COMMAND_DIR"
   printf "Choose an action:\n"
-  printf "  1 = install or update repogrammar and configure coding agents\n"
-  printf "  2 = install or update repogrammar command only\n"
+  if has_source_checkout; then
+    printf "  1 = build/install from this source checkout and configure coding agents\n"
+    printf "  2 = build/install command from this source checkout only\n"
+  else
+    printf "  1 = install or update repogrammar and configure coding agents\n"
+    printf "  2 = install or update repogrammar command only\n"
+  fi
   printf "  3 = configure coding agents only\n"
   printf "  4 = uninstall connected coding-agent integrations\n"
   printf "  5 = uninstall repogrammar command only\n"
   printf "  6 = uninstall connected agents and repogrammar command\n"
   if has_source_checkout; then
-    printf "  7 = build/install repogrammar from this source checkout\n"
+    printf "  7 = install/update from release artifact instead\n"
   fi
   printf "  q = cancel\n\n"
   printf "Selection [1]: "
@@ -398,13 +482,24 @@ run_menu() {
   main_menu
   IFS= read -r choice || exit 1
   case "${choice:-1}" in
-    1) install_and_configure ;;
-    2) install_cli_binary; print_command_status ;;
+    1)
+      if has_source_checkout; then
+        USE_SOURCE_BUILD=1
+      fi
+      install_and_configure
+      ;;
+    2)
+      if has_source_checkout; then
+        USE_SOURCE_BUILD=1
+      fi
+      install_cli_binary
+      print_command_status
+      ;;
     3) run_agent_install ;;
     4) uninstall_connected_agents ;;
     5) uninstall_command ;;
     6) uninstall_connected_agents; uninstall_command ;;
-    7) USE_SOURCE_BUILD=1; install_cli_binary; print_command_status ;;
+    7) USE_SOURCE_BUILD=0; install_cli_binary; print_command_status ;;
     q|Q) printf "Cancelled. No changes made.\n" ;;
     *) printf "Invalid selection.\n" >&2; exit 2 ;;
   esac

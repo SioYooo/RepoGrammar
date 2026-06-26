@@ -239,6 +239,9 @@ all-or-rollback transaction. Project-local writes remain deferred.
 when possible, runs a read-only MCP self-test before native configuration,
 writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install or receipt write fails.
+Re-running `install` refreshes only a RepoGrammar-managed command path and
+skips native agent add commands for already managed target receipts. Existing
+foreign command paths must still be refused rather than adopted silently.
 `uninstall` removes only receipt-owned managed entries. `uninstall --target all
 --scope global --yes` removes every owned first-class agent receipt it finds,
 but refuses unmanaged or foreign receipts.

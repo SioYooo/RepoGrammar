@@ -1298,20 +1298,25 @@ fn parse_interactive_agent_selection(
         return Ok(None);
     }
     let mut selected = Vec::new();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("a") {
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("a")
+        || trimmed.eq_ignore_ascii_case("all")
+    {
         selected = default_interactive_targets(statuses);
     } else {
-        for token in trimmed
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-        {
-            let target = match token {
+        for token in trimmed.split(',').map(str::trim) {
+            let normalized = token.to_ascii_lowercase();
+            let target = match normalized.as_str() {
                 "1" => AgentTarget::Codex,
                 "2" => AgentTarget::ClaudeCode,
                 "codex" => AgentTarget::Codex,
                 "claude" | "claude-code" => AgentTarget::ClaudeCode,
-                _ => return Err("unknown agent selection".to_string()),
+                _ => {
+                    return Err(
+                        "unknown agent selection; use 1, 2, 1,2, codex, claude-code, all, or q"
+                            .to_string(),
+                    )
+                }
             };
             if !selected.contains(&target) {
                 selected.push(target);
@@ -6761,6 +6766,83 @@ mod tests {
     }
 
     #[test]
+    fn interactive_install_reprompts_invalid_agent_selection_before_telemetry() {
+        #[derive(Default)]
+        struct InstallRuntime {
+            requests: RefCell<Vec<InstallRequest>>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer invalid selection test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer invalid selection test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer invalid selection test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                self.requests.borrow_mut().push(request.clone());
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: request.selected_targets.clone(),
+                    skipped_targets: Vec::new(),
+                    receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-invalid-selection-reprompt");
+        let data_home = workspace.path().join("data-home");
+        let command_dir = workspace.path().join("commands");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime::default();
+        let prompt = WizardPrompt::new(["1a", "1"], [""], ["y"]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(
+            runtime.requests.borrow()[0].selected_targets,
+            vec![AgentTarget::Codex]
+        );
+        assert_eq!(prompt.selection_calls.get(), 2);
+        assert_eq!(prompt.telemetry_calls.get(), 1);
+        assert_eq!(prompt.confirmation_calls.get(), 1);
+    }
+
+    #[test]
     fn interactive_install_with_existing_receipts_still_repairs_command_path() {
         #[derive(Default)]
         struct InstallRuntime {
@@ -6945,6 +7027,10 @@ mod tests {
             Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
         );
         assert_eq!(
+            parse_interactive_agent_selection("all", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
+        );
+        assert_eq!(
             parse_interactive_agent_selection("1,1", &statuses).expect("selection"),
             Some(vec![AgentTarget::Codex])
         );
@@ -6957,6 +7043,8 @@ mod tests {
             None
         );
         assert!(parse_interactive_agent_selection("unknown", &statuses).is_err());
+        assert!(parse_interactive_agent_selection("1a", &statuses).is_err());
+        assert!(parse_interactive_agent_selection("1,,2", &statuses).is_err());
     }
 
     #[test]
