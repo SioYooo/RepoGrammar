@@ -519,6 +519,41 @@ assert any(
     and "python_anchor_kind=pydantic_model_validator" in fact["assumptions"]
     for fact in parse_facts
 )
+
+dynamic_pydantic_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "models.py",
+        "content_hash": "sha256:" + "d" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import create_model
+import pydantic as pyd
+
+DynamicUser = create_model("DynamicUser", secret=(str, ...))
+DynamicOrder = pyd.create_model("DynamicOrder", amount=(int, ...))
+""",
+    }
+)
+dynamic_pydantic_model_facts = dynamic_pydantic_model_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in dynamic_pydantic_model_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_framework_identity" in fact["assumptions"]
+    )
+    == 2
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "pydantic.create_model"
+    for fact in dynamic_pydantic_model_facts
+)
+serialized_dynamic_pydantic_models = json.dumps(dynamic_pydantic_model_messages)
+assert "secret=(str" not in serialized_dynamic_pydantic_models
+
 assert any(
     fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pytest.mark.parametrize"

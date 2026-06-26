@@ -161,7 +161,8 @@ allowed.
   rather than missing-fixture UNKNOWNs, plugin-style fixture names remaining
   typed `PytestFixtureInjection` `UNKNOWN`, Pydantic field, field-type,
   model-config, nested Config, computed-field, validator, and model-validator
-  anchors,
+  anchors, dynamic Pydantic model factories remaining typed `FrameworkMagic`
+  `UNKNOWN`,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed

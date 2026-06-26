@@ -148,7 +148,10 @@ The current implementation covers the first structural slice only:
   `PytestFixtureInjection` `UNKNOWN` until an allowlist or provider resolves
   them, fixture-edge, builtin-fixture, and
   parametrize-argument anchors stay out of family membership support, and
-  Pydantic member/config metadata likewise does not become support;
+  Pydantic member/config metadata likewise does not become support. Dynamic
+  Pydantic model factories such as `pydantic.create_model(...)` remain typed
+  `FrameworkMagic` `UNKNOWN` for framework identity instead of becoming static
+  model-family support;
 - bounded same-function application call recovery for import-resolved static forms such as
   `service = UserService(); service.list_users()` and
   `runner = run_query; runner()` inside FastAPI route units. These produce
@@ -705,6 +708,7 @@ The following conditions must produce typed `UNKNOWN` for affected claims:
 - monkey patching;
 - unresolved decorators;
 - runtime dependency injection;
+- dynamic Pydantic model factories;
 - ambiguous pytest fixture injection;
 - dynamic or unsafe pytest fixture `name=` aliases;
 - duplicate applicable `conftest.py` fixture names without provider resolution;

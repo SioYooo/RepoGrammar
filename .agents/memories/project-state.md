@@ -5,8 +5,8 @@
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error/request-shape anchors,
   pytest parametrize argument anchors, Pydantic field/config/member anchors, typed
-  dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
-  monkey-patch, and unresolved import `UNKNOWN` facts, private
+  dynamic Pydantic model factory, dynamic import, `sys.path` mutation, dynamic
+  call, dynamic decorator, monkey-patch, and unresolved import `UNKNOWN` facts, private
   `tomllib` project-config summaries, semantic-worker-compatible project-mode
   module-level repo-local import resolution, default parser-mode repo-local
   import context from discovered `.py` inventory and sanitized root
@@ -70,11 +70,11 @@
   provider-backed canonical evidence remain deferred. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
-  The `dynamic-unknown` release fixture now exercises dynamic import,
-  `sys.path` mutation, dynamic call target, dynamic decorator, and monkey-patch
-  boundaries through product indexing/query paths; each boundary is persisted
-  as typed parser-origin `UNKNOWN`, blocked from claim-input readiness, and
-  kept out of derived support.
+  The `dynamic-unknown` release fixture now exercises dynamic Pydantic model
+  factories, dynamic import, `sys.path` mutation, dynamic call target, dynamic
+  decorator, and monkey-patch boundaries through product indexing/query paths;
+  each boundary is persisted as typed parser-origin `UNKNOWN`, blocked from
+  claim-input readiness, and kept out of derived support.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
@@ -98,15 +98,16 @@ TS/JS code-unit indexing, CPython AST-backed Python structural code-unit
 indexing, worker-local Python structural facts for imports, decorators, class
 bases, simple calls, `pytest.test` test-function anchors, alias-aware pytest
 fixture decorators, same-file pytest fixture edges, and typed dynamic
-decorator, dynamic call, monkey-patch, dynamic import, `sys.path` mutation, or
-unresolved import `UNKNOWN` cases persisted as
+Pydantic model factory, dynamic decorator, dynamic call, monkey-patch, dynamic
+import, `sys.path` mutation, or unresolved import `UNKNOWN` cases persisted as
 internal parser-origin semantic facts. It also labels FastAPI route
 `response_model`, static dependency targets, `Depends`/`HTTPException`, literal
 HTTPException status codes, static FastAPI body/path/query/header/cookie
 request-shape markers, literal pytest parametrize arguments, Pydantic
 field/config/member declarations, and bounded FastAPI same-function service
 calls as structural parser-origin anchors without upgrading them to
-provider-backed semantics.
+provider-backed semantics. Dynamic Pydantic model factories remain typed
+framework-identity `UNKNOWN` rather than static model-family support.
 Default parser-mode indexing now also carries sanitized root `pyproject.toml`
 source roots from parser/tomllib project-config facts plus bounded discovered
 `conftest.py` context into the CPython parse-document request so source-rooted
@@ -161,10 +162,11 @@ test-function anchors, alias-aware pytest fixture decorators, same-file pytest
 fixture edges, parent-directory `conftest.py` fixture hierarchy edges, FastAPI
 dependency/error/request-shape anchors, pytest parametrize argument anchors that
 are not treated as fixture injection UNKNOWNs,
-Pydantic field/config/member anchors, typed dynamic decorator
-framework-identity `UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed
-dynamic/unresolved import `UNKNOWN` cases, plus bounded same-function FastAPI
-service-call anchors with reassignment invalidation,
+Pydantic field/config/member anchors, typed dynamic Pydantic model factory
+framework-identity `UNKNOWN`, typed dynamic decorator framework-identity
+`UNKNOWN`, monkey-patch call-target `UNKNOWN`, and typed dynamic/unresolved
+import `UNKNOWN` cases, plus bounded same-function FastAPI service-call anchors
+with reassignment invalidation,
 syntax-origin
 framework-role facts for recognized Express, React, Jest/Vitest, FastAPI,
 pytest, Pydantic, and SQLAlchemy code-unit shapes,
@@ -187,8 +189,9 @@ conservative `UNKNOWN` query results by default. Python release fixtures cover
 direct FastAPI, FastAPI alias, pytest, alias-aware pytest fixtures,
 Pydantic model/settings, SQLAlchemy,
 mixed, dynamic-unknown, and low-support examples. The dynamic fixture covers
-dynamic import, `sys.path` mutation, dynamic call target, dynamic decorator,
-and monkey patching without producing family claims. Positive direct FastAPI,
+dynamic Pydantic model factories, dynamic import, `sys.path` mutation, dynamic
+call target, dynamic decorator, and monkey patching without producing family
+claims. Positive direct FastAPI,
 FastAPI alias, pytest tests, pytest fixtures, Pydantic model/settings,
 SQLAlchemy model-field, and SQLAlchemy session/repository including
 commit/rollback and scalar/scalars fixtures now validate the

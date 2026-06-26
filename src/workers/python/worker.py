@@ -1763,6 +1763,21 @@ def collect_call_facts(
                 ),
             )
             continue
+        if canonical == "pydantic.create_model":
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_framework_identity",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
         if canonical:
             add_fact(
                 facts,
@@ -1801,6 +1816,40 @@ def collect_call_facts(
                     subject_unit_id,
                     facts,
                 )
+
+
+def collect_module_dynamic_pydantic_model_facts(
+    tree: ast.Module,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    facts: list[dict[str, Any]],
+) -> None:
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for call in [child for child in ast.walk(item) if isinstance(child, ast.Call)]:
+            name = dotted_name(call.func)
+            if not name or canonical_name(name, aliases, assignments) != "pydantic.create_model":
+                continue
+            start, end = node_range(starts, call)
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=subject_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="python_framework_identity",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
 
 
 def collect_fastapi_dependency_target_fact(
@@ -2179,6 +2228,17 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
+    collect_module_dynamic_pydantic_model_facts(
+        tree,
+        starts,
+        path,
+        content_hash_value,
+        repository_revision,
+        module_unit_id,
+        aliases,
+        assignments,
+        facts,
+    )
     fixture_name_counts = pytest_fixture_name_counts_from_tree(tree, aliases, assignments)
 
     for item in tree.body:

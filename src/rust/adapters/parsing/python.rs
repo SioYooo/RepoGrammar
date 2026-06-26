@@ -1911,6 +1911,40 @@ def decorated(target, method):
     }
 
     #[test]
+    fn cpython_frontend_marks_dynamic_pydantic_models_unknown() {
+        let source = r#"
+from pydantic import create_model
+import pydantic as pyd
+
+DynamicUser = create_model("DynamicUser", secret=(str, ...))
+DynamicOrder = pyd.create_model("DynamicOrder", amount=(int, ...))
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse dynamic pydantic models");
+
+        let dynamic_model_unknowns = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "affected_claim=python_framework_identity")
+            })
+            .count();
+        assert_eq!(dynamic_model_unknowns, 2);
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.create_model")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("secret=(str"));
+    }
+
+    #[test]
     fn cpython_frontend_emits_generic_python_code_units() {
         let source = r#"
 def helper():

@@ -221,8 +221,8 @@ dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
 `Cookie` request-shape anchors, path-derived module names, CPython `symtable`
 scope anchors, and typed dynamic decorator, dynamic call, monkey-patch,
-dynamic/unresolved/ambiguous import, dynamic pytest fixture name, duplicate
-conftest fixture, plugin fixture,
+dynamic/unresolved/ambiguous import, dynamic Pydantic model factory, dynamic
+pytest fixture name, duplicate conftest fixture, plugin fixture,
 and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
@@ -375,8 +375,9 @@ context/abstention metadata and do not prove support. Pydantic field,
 field-type, `model_config`, nested `Config`,
 computed-field, field-validator, legacy validator, and model-validator anchors
 likewise stay model schema/config/member metadata and do not prove membership
-support. FastAPI service-call anchors stay handler/service context metadata and
-also do not prove membership support.
+support; dynamic Pydantic `create_model(...)` factories remain typed UNKNOWNs
+instead of static model support. FastAPI service-call anchors stay
+handler/service context metadata and also do not prove membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

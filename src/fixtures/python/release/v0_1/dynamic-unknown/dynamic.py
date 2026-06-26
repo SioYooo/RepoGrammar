@@ -2,9 +2,11 @@ import importlib
 import sys
 
 from fastapi import APIRouter, Depends
+from pydantic import create_model
 
 
 router = APIRouter()
+DynamicUser = create_model("DynamicUser", secret=(str, ...))
 
 
 def decorator_factory(name: str):

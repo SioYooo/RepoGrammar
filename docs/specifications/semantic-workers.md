@@ -301,10 +301,11 @@ test-function anchors, same-file pytest fixture edges with literal `name=`
 aliases, known pytest built-in fixture context, literal pytest parametrize
 argument anchors, path-derived module names, and CPython `symtable` scope
 anchors, plus typed `UNKNOWN` facts for dynamic import, unresolved import,
-framework magic, dynamic pytest fixture names, duplicate conftest fixture
-bindings, plugin-style fixture names without an allowlist or provider, and
-unresolved pytest fixture injection cases. Literal pytest parametrize
-arguments are structural parametrize facts, not unresolved fixture injections.
+framework magic, dynamic Pydantic model factories, dynamic pytest fixture names,
+duplicate conftest fixture bindings, plugin-style fixture names without an
+allowlist or provider, and unresolved pytest fixture injection cases. Literal
+pytest parametrize arguments are structural parametrize facts, not unresolved
+fixture injections.
 Pydantic field,
 field-type, config, computed-field, and model-validator anchors are
 schema/config/member context only, and FastAPI service-call anchors are

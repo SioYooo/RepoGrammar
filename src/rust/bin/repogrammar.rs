@@ -799,6 +799,7 @@ mod tests {
             "importlib.import_module",
             "sys.path.append",
             "getattr(module",
+            "secret=(str",
             "decorator_factory(\"secret\")",
             "setattr(target",
             "Depends(make_dependency",
@@ -1584,6 +1585,23 @@ mod tests {
                 "pytest_builtin_fixture_context",
             );
         }
+        let framework_identity_unknowns = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.path == "dynamic.py"
+                    && fact.kind == "UNKNOWN"
+                    && fact.target.as_deref() == Some("FrameworkMagic")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "affected_claim=python_framework_identity")
+            })
+            .count();
+        assert!(
+            framework_identity_unknowns >= 2,
+            "dynamic decorator and dynamic pydantic model factory must both remain UNKNOWN"
+        );
         assert!(facts.facts.iter().all(|fact| {
             !(fact.path == "tests/sub/test_fixture_boundaries.py"
                 && fact.kind == "SYMBOL"
@@ -1617,6 +1635,8 @@ mod tests {
                 "pytest.fixture.client",
                 "FrameworkMagic",
                 "MonkeyPatch",
+                "pydantic.create_model",
+                "pydantic.BaseModel",
             ],
         );
 

@@ -84,6 +84,8 @@ Some unknowns block only specific claims:
   source-range evidence from the current file hash;
 - Python fixture injection may block test-behavior equivalence
   while still allowing structural pytest test discovery;
+- dynamic Python Pydantic model factories may block static model-family
+  identity without blocking unrelated model classes in the same file;
 - dynamic or unsafe Python pytest fixture `name=` aliases may block fixture
   binding without changing the structural fact that the function is decorated
   as a pytest fixture;

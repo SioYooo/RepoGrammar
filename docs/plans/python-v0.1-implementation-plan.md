@@ -88,14 +88,16 @@ only a `python-config`/`project_config` structural summary or typed config
 input. The worker performs file-local simple FastAPI router/app alias
 propagation with same-name top-level reassignment invalidation, emits typed
 `UNKNOWN` for dynamic decorators, monkey-patching, dynamic calls, dynamic
-imports, `sys.path` mutation, unresolved imports, and fixture ambiguity, and
+Pydantic model factories, dynamic imports, `sys.path` mutation, unresolved
+imports, and fixture ambiguity, and
 emits static FastAPI request body/path/query/header/cookie marker anchors as
 route-shape context rather than family support; product-path tests now verify
 these anchors are persisted, blocked from claim-input readiness, and excluded
 from derived support. Product-path tests also verify the `dynamic-unknown`
 release fixture persists typed `UNKNOWN`s for dynamic import, `sys.path`
-mutation, dynamic call target, dynamic decorator, and monkey patching without
-creating derived support or successful family queries. The application layer derives
+mutation, dynamic call target, dynamic decorator, dynamic Pydantic model
+factory, and monkey patching without creating derived support or successful
+family queries. The application layer derives
 separate `DATAFLOW_DERIVED` support facts from
 exact canonical CPython anchors when a unit has one Python framework role; raw
 parser facts and framework heuristics still remain blocked from direct claim

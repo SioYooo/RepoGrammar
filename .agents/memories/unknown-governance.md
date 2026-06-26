@@ -31,6 +31,9 @@
   builders. It is not a pattern-family classification or conformance result.
 - Tests for new analyzers should include uncertain, conflicting, stale,
   unsupported, and dynamic cases.
+- Python dynamic Pydantic model factories such as `pydantic.create_model(...)`
+  remain typed `FrameworkMagic` `UNKNOWN` for framework identity unless a later
+  provider-backed design proves a narrower claim.
 - Python provider agreement, provider disagreement, and runtime observation are
   not current certainty tokens. Until the Rust domain, protocol, storage, CLI,
   MCP, and schemas change together, cross-check and observed-runtime details
