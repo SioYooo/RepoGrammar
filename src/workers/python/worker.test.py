@@ -1,0 +1,2491 @@
+#!/usr/bin/env python3
+"""Smoke tests for the dependency-free Python worker."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+WORKER = Path(__file__).with_name("worker.py")
+
+
+def run_worker(payload):
+    data = payload if isinstance(payload, str) else json.dumps(payload) + "\n"
+    result = subprocess.run(
+        [sys.executable, str(WORKER)],
+        input=data,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+
+def valid_request(root: str):
+    return {
+        "protocol_version": 1,
+        "request_id": "repogrammar-python-semantic-worker",
+        "project_root": root,
+        "changed_files": ["app.py"],
+    }
+
+
+def assert_end_of_stream(messages):
+    assert messages[-1] == {
+        "protocol_version": 1,
+        "message_type": "end_of_stream",
+        "request_id": "repogrammar-python-semantic-worker",
+    }
+
+
+def has_unknown_for_subject(facts, subject_name, reason_code, affected_claim):
+    return any(
+        fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == reason_code
+        and subject_name in fact["subject"]
+        and f"affected_claim={affected_claim}" in fact["assumptions"]
+        for fact in facts
+    )
+
+
+def assert_no_fact_source_payloads(facts):
+    forbidden = {"source", "source_text", "snippet", "source_snippet"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            assert forbidden.isdisjoint(value)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    for fact in facts:
+        walk(fact)
+
+
+parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "app.py",
+        "content_hash": "sha256:" + "0" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Path, Query
+from app.services import UserService, run_query
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator, validator
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
+from typing import Annotated
+import pytest
+import pytest as pt
+from pytest import fixture as pytest_fixture
+
+router = APIRouter()
+
+class UserOut(BaseModel):
+    model_config: ConfigDict = ConfigDict(from_attributes=True)
+    id: int
+    display_name: str
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value):
+        return value
+
+    @validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value):
+        return value
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        return self.display_name
+
+    @model_validator(mode="after")
+    def validate_model(self):
+        return self
+
+    class Config:
+        arbitrary_types_allowed = True
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    id: Mapped[int] = mapped_column(primary_key=True)
+    accounts = relationship("Account")
+
+class UserRepository:
+    def list_users(self, session: Session):
+        session.add(User())
+        return session.execute("select users")
+
+    def get_user(self, session: Session):
+        return session.scalar("select user")
+
+    def stream_users(self, session: Session):
+        return session.scalars("select users")
+
+    async def list_accounts(self, db: AsyncSession):
+        return await db.execute("select accounts")
+
+    async def get_account(self, db: AsyncSession):
+        return await db.scalar("select account")
+
+    async def stream_accounts(self, db: AsyncSession):
+        return await db.scalars("select accounts")
+
+class StoredSessionRepository:
+    def __init__(self, session: Session, db: AsyncSession):
+        self.session = session
+        self.db: AsyncSession = db
+
+    def commit_users(self):
+        self.session.commit()
+        return self.session.execute("select users")
+
+    def rollback_users(self):
+        self.session.rollback()
+
+    async def commit_accounts(self):
+        await self.db.commit()
+
+    async def rollback_accounts(self):
+        await self.db.rollback()
+
+def get_db():
+    return object()
+
+def read_users():
+    service = UserService()
+    alias = service
+    return alias.list_users()
+
+def read_products():
+    service = UserService()
+    service = object()
+    return service.list_products()
+
+def run_imported():
+    runner = run_query
+    return runner()
+
+@router.get("/users/{user_id}", response_model=list[UserOut])
+async def list_users(
+    user_id: int = Path(...),
+    payload: Annotated[UserOut, Body()] = None,
+    query: str = Query(""),
+    request_id: str = Header(""),
+    session_id: str = Cookie(""),
+    dependency=Depends(get_db),
+):
+    service = UserService()
+    alias = service
+    getattr(alias, "dynamic_users")()
+    if False:
+        raise HTTPException(status_code=404)
+    return alias.list_users()
+
+@router.get("/products")
+def list_products():
+    return run_query()
+
+@router.get("/orders")
+def list_orders():
+    service = UserService()
+    service = object()
+    return service.list_orders()
+
+def raises_not_found():
+    raise HTTPException(status_code=404)
+
+@pytest_fixture
+def client():
+    return object()
+
+@pt.fixture
+def db():
+    return object()
+
+@pytest.mark.parametrize("status", [200])
+def test_users(client, status, missing_fixture):
+    assert client.get("/users").status_code == status
+""",
+    }
+)
+assert len(parse_messages) == 1
+unit_kinds = [unit["kind"] for unit in parse_messages[0]["units"]]
+assert "module" in unit_kinds
+assert "fastapi_route" in unit_kinds
+assert "pytest_test" in unit_kinds
+assert sum(1 for kind in unit_kinds if kind == "pytest_fixture") == 2
+assert "pydantic_model" in unit_kinds
+assert "sqlalchemy_model" in unit_kinds
+assert "async_function" not in unit_kinds
+generic_unit_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "generic_units.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def helper():
+    return 1
+
+async def fetch():
+    return 2
+
+class Plain:
+    def method(self):
+        return helper()
+
+    async def async_method(self):
+        return await fetch()
+""",
+    }
+)
+generic_unit_kinds = [unit["kind"] for unit in generic_unit_messages[0]["units"]]
+assert "module" in generic_unit_kinds
+assert "function" in generic_unit_kinds
+assert "async_function" in generic_unit_kinds
+assert "class" in generic_unit_kinds
+assert sum(1 for kind in generic_unit_kinds if kind == "method") == 2
+assert not any(
+    kind
+    in {
+        "fastapi_route",
+        "pytest_test",
+        "pytest_fixture",
+        "pydantic_model",
+        "sqlalchemy_model",
+        "sqlalchemy_repository_method",
+    }
+    for kind in generic_unit_kinds
+)
+parse_facts = parse_messages[0]["facts"]
+assert any(fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "fastapi.APIRouter" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "app" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.imported.APIRouter" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.namespace.UserOut" for fact in parse_facts)
+assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "scope.assigned.router" for fact in parse_facts)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field.id"
+    and "python_anchor_kind=pydantic_field" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "pydantic.field_type.int"
+    and "python_anchor_kind=pydantic_field_type" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.model_config"
+    and "python_anchor_kind=pydantic_model_config" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert not any(fact.get("target") == "pydantic.field.model_config" for fact in parse_facts)
+assert not any(fact.get("target") == "pydantic.field_type.pydantic.ConfigDict" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.Config"
+    and "python_anchor_kind=pydantic_config_class" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.DeclarativeBase" for fact in parse_facts)
+assert any(fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.mapped_column"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.relationship"
+    and "python_anchor_kind=sqlalchemy_relationship" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.Session.add"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.Session.execute"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.scalar"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.scalars"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.scalar"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.scalars"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.commit"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.rollback"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.commit"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.rollback"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.UserService.list_users"
+    and "python_anchor_kind=fastapi_service_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.run_query"
+    and "python_anchor_kind=fastapi_service_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "app.services.UserService.list_users"
+    and "python_anchor_kind=call_target" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert not any(fact.get("target") == "app.services.UserService.list_orders" for fact in parse_facts)
+assert not any(
+    fact.get("target") == "service.list_orders"
+    and "python_anchor_kind=fastapi_service_call" in fact.get("assumptions", [])
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in parse_facts
+)
+route_methods = ["delete", "get", "head", "options", "patch", "post", "put"]
+route_matrix_source = "\n".join(
+    [
+        "from fastapi import APIRouter, FastAPI",
+        "router = APIRouter()",
+        "app = FastAPI()",
+        "",
+        *[
+            f"@router.{method}('/router-{method}')\n"
+            f"def router_{method}():\n"
+            f"    return {{}}\n"
+            for method in route_methods
+        ],
+        *[
+            f"@app.{method}('/app-{method}')\n"
+            f"def app_{method}():\n"
+            f"    return {{}}\n"
+            for method in route_methods
+        ],
+    ]
+)
+route_matrix_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "routes.py",
+        "content_hash": "sha256:" + "7" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": route_matrix_source,
+    }
+)
+route_matrix_facts = route_matrix_messages[0]["facts"]
+route_matrix_targets = {
+    fact["target"]
+    for fact in route_matrix_facts
+    if fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+}
+assert route_matrix_targets == {
+    *(f"fastapi.APIRouter.{method}" for method in route_methods),
+    *(f"fastapi.FastAPI.{method}" for method in route_methods),
+}
+route_matrix_unit_kinds = [unit["kind"] for unit in route_matrix_messages[0]["units"]]
+assert route_matrix_unit_kinds.count("fastapi_route") == len(route_methods) * 2
+serialized_route_matrix = json.dumps(route_matrix_messages)
+assert "@router." not in serialized_route_matrix
+assert "@app." not in serialized_route_matrix
+
+local_client_route_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "client_route_false_positive.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+client = object()
+
+@client.get("/users")
+def not_a_fastapi_route():
+    return {}
+""",
+    }
+)
+local_client_units = local_client_route_messages[0]["units"]
+local_client_facts = local_client_route_messages[0]["facts"]
+assert not any(unit["kind"] == "fastapi_route" for unit in local_client_units)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"].startswith("fastapi.")
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in local_client_facts
+)
+
+range_shadow_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "range_shadow_routes.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/before")
+def before_shadow():
+    return {}
+
+router = object()
+
+@router.get("/after")
+def after_shadow():
+    return {}
+""",
+    }
+)
+range_shadow_units = range_shadow_messages[0]["units"]
+range_shadow_facts = range_shadow_messages[0]["facts"]
+assert sum(1 for unit in range_shadow_units if unit["kind"] == "fastapi_route") == 1
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "before_shadow" in fact["subject"]
+    for fact in range_shadow_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "after_shadow" in fact["subject"]
+    for fact in range_shadow_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "fastapi.response_model.UserOut"
+    and "python_anchor_kind=fastapi_response_model" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "fastapi.request_body.UserOut"
+    and "python_anchor_kind=fastapi_request_body_model" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.path.user_id"
+    and "python_anchor_kind=fastapi_path_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.query.query"
+    and "python_anchor_kind=fastapi_query_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.header.request_id"
+    and "python_anchor_kind=fastapi_header_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.request_param.cookie.session_id"
+    and "python_anchor_kind=fastapi_cookie_param" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "fastapi.Depends"
+    and "python_anchor_kind=fastapi_dependency" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.dependency.get_db"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "fastapi.HTTPException"
+    and "python_anchor_kind=fastapi_http_exception" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.http_exception.status_code.404"
+    and "python_anchor_kind=fastapi_http_exception_status" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field_validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.computed_field"
+    and "python_anchor_kind=pydantic_computed_field" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.model_validator"
+    and "python_anchor_kind=pydantic_model_validator" in fact["assumptions"]
+    for fact in parse_facts
+)
+
+dynamic_pydantic_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "models.py",
+        "content_hash": "sha256:" + "d" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import create_model
+import pydantic as pyd
+
+DynamicUser = create_model("DynamicUser", secret=(str, ...))
+DynamicOrder = pyd.create_model("DynamicOrder", amount=(int, ...))
+""",
+    }
+)
+dynamic_pydantic_model_facts = dynamic_pydantic_model_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in dynamic_pydantic_model_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_framework_identity" in fact["assumptions"]
+    )
+    == 2
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "pydantic.create_model"
+    for fact in dynamic_pydantic_model_facts
+)
+serialized_dynamic_pydantic_models = json.dumps(dynamic_pydantic_model_messages)
+assert "secret=(str" not in serialized_dynamic_pydantic_models
+
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.mark.parametrize"
+    and "python_anchor_kind=pytest_parametrize" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture"
+    and "python_anchor_kind=pytest_fixture_decorator" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.status"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "client.get" for fact in parse_facts)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.test"
+    and "python_anchor_kind=pytest_test_function" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in parse_facts
+)
+for fact in parse_facts:
+    assert fact["origin"]["engine"] == "python"
+    assert fact["origin"]["method"] == "cpython_ast"
+    assert fact["certainty"] in {"STRUCTURAL", "UNKNOWN"}
+    assert fact["evidence"]["path"] == "app.py"
+    assert fact["evidence"]["content_hash"] == "sha256:" + "0" * 64
+    assert "start_byte" in fact["evidence"]
+    assert "end_byte" in fact["evidence"]
+assert "from fastapi" not in json.dumps(parse_messages)
+assert "Body()" not in json.dumps(parse_messages)
+assert "Path(" not in json.dumps(parse_messages)
+assert "Query(" not in json.dumps(parse_messages)
+assert "Header(" not in json.dumps(parse_messages)
+assert "Cookie(" not in json.dumps(parse_messages)
+assert "model_config =" not in json.dumps(parse_messages)
+assert "arbitrary_types_allowed" not in json.dumps(parse_messages)
+assert "dynamic_users" not in json.dumps(parse_messages)
+assert "@router.get" not in json.dumps(parse_messages)
+assert "response_model=" not in json.dumps(parse_messages)
+assert "list[UserOut]" not in json.dumps(parse_messages)
+assert "Depends(" not in json.dumps(parse_messages)
+assert "Depends(get_db" not in json.dumps(parse_messages)
+assert "HTTPException(" not in json.dumps(parse_messages)
+
+shadowed_session_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "repository.py",
+        "content_hash": "sha256:" + "d" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from sqlalchemy.orm import Session
+
+class UserRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list_users(self):
+        self.session = object()
+        return self.session.execute("select users")
+""",
+    }
+)
+shadowed_session_facts = shadowed_session_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.execute"
+    for fact in shadowed_session_facts
+)
+assert "return self.session.execute" not in json.dumps(shadowed_session_messages)
+
+indirect_parametrize_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "test_indirect.py",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import pytest
+
+@pytest.mark.parametrize("client,status", [("api", 200)], indirect=["client"])
+def test_indirect_list(client, status):
+    assert status == 200
+
+@pytest.mark.parametrize("resource", ["db"], indirect=True)
+def test_indirect_all(resource):
+    assert resource
+""",
+    }
+)
+assert len(indirect_parametrize_messages) == 1
+indirect_facts = indirect_parametrize_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.status"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in indirect_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "pytest.parametrize.client"
+    for fact in indirect_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "pytest.parametrize.resource"
+    for fact in indirect_facts
+)
+assert sum(
+    1
+    for fact in indirect_facts
+    if fact["fact_kind"] == "UNKNOWN" and fact["target"] == "PytestFixtureInjection"
+) >= 2
+
+parametrize_fixture_collision_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "test_parametrize_collision.py",
+        "content_hash": "sha256:" + "e" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+
+@pytest.mark.parametrize("client", ["api"])
+def test_direct_client(client):
+    assert client
+
+@pytest.mark.parametrize("db", ["db"], indirect=True)
+def test_indirect_db(db):
+    assert db
+""",
+    }
+)
+collision_facts = parametrize_fixture_collision_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.client"
+    and "python_anchor_kind=pytest_parametrize_arg" in fact["assumptions"]
+    for fact in collision_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in collision_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.parametrize.db"
+    for fact in collision_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in collision_facts
+)
+
+settings_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "settings.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import BaseSettings as LegacyBaseSettings
+from pydantic_settings import BaseSettings
+
+
+class LegacySettings(LegacyBaseSettings):
+    debug: bool = False
+
+
+class AppSettings(BaseSettings):
+    debug: bool = False
+""",
+    }
+)
+settings_units = settings_parse_messages[0]["units"]
+settings_facts = settings_parse_messages[0]["facts"]
+assert sum(1 for unit in settings_units if unit["kind"] == "pydantic_model") == 2
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseSettings"
+    for fact in settings_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic_settings.BaseSettings"
+    for fact in settings_facts
+)
+assert "from pydantic import" not in json.dumps(settings_parse_messages)
+
+aliased_framework_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "aliased_models.py",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from pydantic import BaseModel as BM
+from sqlalchemy.orm import Mapped as M, mapped_column as col
+
+class UserOut(BM):
+    id: int
+
+class User:
+    id: M[int] = col(primary_key=True)
+""",
+    }
+)
+aliased_framework_units = aliased_framework_model_messages[0]["units"]
+aliased_framework_facts = aliased_framework_model_messages[0]["facts"]
+assert any(unit["kind"] == "pydantic_model" for unit in aliased_framework_units)
+assert any(unit["kind"] == "sqlalchemy_model" for unit in aliased_framework_units)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel"
+    for fact in aliased_framework_facts
+)
+assert any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "sqlalchemy.orm.Mapped"
+    for fact in aliased_framework_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.mapped_column"
+    for fact in aliased_framework_facts
+)
+
+local_base_model_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "local_base_model.py",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+class BaseModel:
+    pass
+
+class UserOut(BaseModel):
+    id: int
+
+class Base:
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+""",
+    }
+)
+local_base_units = local_base_model_messages[0]["units"]
+local_base_facts = local_base_model_messages[0]["facts"]
+assert not any(unit["kind"] == "pydantic_model" for unit in local_base_units)
+assert not any(unit["kind"] == "sqlalchemy_model" for unit in local_base_units)
+assert not any(fact.get("target") == "pydantic.BaseModel" for fact in local_base_facts)
+assert not any(fact.get("target") == "sqlalchemy.orm.DeclarativeBase" for fact in local_base_facts)
+
+alias_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "alias_routes.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter, Depends, HTTPException
+
+router = APIRouter()
+api = router
+v1 = api
+
+@v1.get("/users")
+def list_users():
+    return []
+
+@v1.get("/dynamic", response_model=make_response_model())
+def dynamic_response_model(dependency=Depends(make_dependency())):
+    raise HTTPException(status_code=make_status())
+    return []
+""",
+    }
+)
+alias_units = alias_parse_messages[0]["units"]
+alias_facts = alias_parse_messages[0]["facts"]
+assert any(unit["kind"] == "fastapi_route" for unit in alias_units)
+assert any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get"
+    for fact in alias_facts
+)
+assert not any(
+    fact["fact_kind"] == "TYPE"
+    and "python_anchor_kind=fastapi_response_model" in fact["assumptions"]
+    for fact in alias_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in alias_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=fastapi_dependency_target" in fact["assumptions"]
+    for fact in alias_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_http_exception_status" in fact["assumptions"]
+    for fact in alias_facts
+)
+assert "@v1.get" not in json.dumps(alias_parse_messages)
+assert "response_model=" not in json.dumps(alias_parse_messages)
+assert "Depends(make_dependency" not in json.dumps(alias_parse_messages)
+assert "HTTPException(" not in json.dumps(alias_parse_messages)
+
+dependency_unknown_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dependency_unknowns.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+def make_dependency():
+    return object()
+
+@router.get("/call")
+def call_dependency(current_user=Depends(make_dependency())):
+    return {}
+
+@router.get("/lambda")
+def lambda_dependency(current_user=Depends(lambda: object())):
+    return {}
+
+@router.get("/conditional")
+def conditional_dependency(current_user=Depends(make_dependency if True else None)):
+    return {}
+
+@router.get("/missing")
+def missing_dependency(current_user=Depends(missing_dep)):
+    return {}
+
+@router.get("/attribute")
+def attribute_dependency(current_user=Depends(plugins.current_user)):
+    return {}
+
+@router.get("/empty")
+def empty_dependency(current_user=Depends()):
+    return {}
+""",
+    }
+)
+dependency_unknown_facts = dependency_unknown_messages[0]["facts"]
+dependency_unknowns = [
+    fact
+    for fact in dependency_unknown_facts
+    if fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=fastapi_dependency_target" in fact["assumptions"]
+]
+assert len(dependency_unknowns) == 5
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in dependency_unknown_facts
+)
+assert sum(
+    1
+    for fact in dependency_unknown_facts
+    if fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "fastapi.Depends"
+) == 6
+serialized_dependency_unknowns = json.dumps(dependency_unknown_messages)
+assert "Depends(make_dependency" not in serialized_dependency_unknowns
+assert "lambda: object" not in serialized_dependency_unknowns
+assert "plugins.current_user" not in serialized_dependency_unknowns
+
+shadowed_alias_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "shadowed_routes.py",
+        "content_hash": "sha256:" + "b" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+
+router = APIRouter()
+api = router
+api = object()
+
+@api.get("/users")
+def list_users():
+    return []
+""",
+    }
+)
+shadowed_facts = shadowed_alias_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL" and fact["target"] == "fastapi.APIRouter.get"
+    for fact in shadowed_facts
+)
+assert "@api.get" not in json.dumps(shadowed_alias_messages)
+
+shadowed_framework_import_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "shadowed_framework_imports.py",
+        "content_hash": "sha256:" + "f" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+from pydantic import BaseModel
+from pytest import fixture
+from sqlalchemy.orm import Mapped, mapped_column
+
+APIRouter = object
+BaseModel = object
+fixture = object
+Mapped = list
+mapped_column = object
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+
+class UserOut(BaseModel):
+    id: int
+
+@fixture
+def client():
+    return object()
+
+class User:
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column()
+""",
+    }
+)
+shadowed_framework_import_facts = shadowed_framework_import_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel"
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture"
+    and "python_anchor_kind=pytest_fixture_decorator" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    (
+        fact["fact_kind"] == "TYPE"
+        and fact["target"] == "sqlalchemy.orm.Mapped"
+        and "python_anchor_kind=sqlalchemy_mapped_field" in fact["assumptions"]
+    )
+    or (
+        fact["fact_kind"] == "RESOLVED_CALL"
+        and fact["target"] == "sqlalchemy.orm.mapped_column"
+        and "python_anchor_kind=sqlalchemy_mapped_column" in fact["assumptions"]
+    )
+    for fact in shadowed_framework_import_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_framework_identity" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+
+module_dynamic_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "module_dynamic_boundary.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+from fastapi import APIRouter
+
+sys.path.insert(0, "/tmp/secret")
+importlib.import_module("plugins.dynamic")
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+""",
+    }
+)
+module_dynamic_boundary_facts = module_dynamic_boundary_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+serialized_module_dynamic_boundary = json.dumps(module_dynamic_boundary_messages)
+assert "/tmp/secret" not in serialized_module_dynamic_boundary
+assert "plugins.dynamic" not in serialized_module_dynamic_boundary
+
+module_dynamic_after_route_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "module_dynamic_after_route.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/before")
+def before_dynamic():
+    return {}
+
+importlib.import_module("plugins.dynamic")
+
+@router.get("/after")
+def after_dynamic():
+    return {}
+""",
+    }
+)
+module_dynamic_after_route_facts = module_dynamic_after_route_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "before_dynamic" in fact["subject"]
+    for fact in module_dynamic_after_route_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "after_dynamic" in fact["subject"]
+    for fact in module_dynamic_after_route_facts
+)
+
+bad_parse = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "broken.py",
+        "content_hash": "sha256:" + "1" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "def broken(:\n",
+    }
+)
+assert bad_parse[0]["units"] == []
+assert bad_parse[0]["diagnostics"][0]["message"] == "python ast parse failed"
+assert bad_parse[0]["facts"] == []
+
+dynamic_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dynamic.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+
+def load(name, obj, method):
+    importlib.import_module(name)
+    sys.path.append("/tmp/secret")
+    getattr(obj, method)()
+    globals()[name]()
+    locals()[name]()
+    eval("/tmp/secret")
+    exec("/tmp/secret")
+    compile("/tmp/secret", "/tmp/secret", "exec")
+    __import__(name)
+    setattr(obj, method, object())
+
+def decorator_factory(name):
+    def inner(function):
+        return function
+    return inner
+
+@decorator_factory("secret")
+def decorated():
+    return None
+""",
+    }
+)
+dynamic_facts = dynamic_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "MonkeyPatch"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_framework_identity" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_facts
+)
+assert "importlib.import_module(name)" not in json.dumps(dynamic_messages)
+assert "locals()[name]" not in json.dumps(dynamic_messages)
+assert "eval(\"/tmp/secret\")" not in json.dumps(dynamic_messages)
+assert "exec(\"/tmp/secret\")" not in json.dumps(dynamic_messages)
+assert "compile(\"/tmp/secret\"" not in json.dumps(dynamic_messages)
+assert "__import__(name)" not in json.dumps(dynamic_messages)
+assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
+assert "setattr(obj" not in json.dumps(dynamic_messages)
+assert "/tmp/secret" not in json.dumps(dynamic_messages)
+assert_no_fact_source_payloads(dynamic_facts)
+
+typed_dynamic_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "typed_dynamic_boundaries.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+
+def dynamic_importlib(name):
+    importlib.import_module(name)
+
+def dynamic_builtin_import(name):
+    __import__(name)
+
+def dynamic_locals(name):
+    locals()[name]()
+
+def dynamic_globals(name):
+    globals()[name]()
+
+def dynamic_eval(expr):
+    eval(expr)
+
+def dynamic_exec(expr):
+    exec(expr)
+
+def dynamic_compile(expr):
+    compile(expr, "generated.py", "exec")
+
+def dynamic_getattr(obj, method):
+    getattr(obj, method)()
+
+def dynamic_path(extra_path):
+    sys.path.append(extra_path)
+
+def dynamic_setattr(obj, name):
+    setattr(obj, name, object())
+""",
+    }
+)
+typed_dynamic_boundary_facts = typed_dynamic_boundary_messages[0]["facts"]
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_importlib",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_builtin_import",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_locals",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_globals",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_eval",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_exec",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_compile",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_getattr",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_path",
+    "RuntimeDependencyInjection",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    typed_dynamic_boundary_facts,
+    "dynamic_setattr",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert_no_fact_source_payloads(typed_dynamic_boundary_facts)
+serialized_typed_dynamic_boundaries = json.dumps(typed_dynamic_boundary_messages)
+assert "locals()[name]" not in serialized_typed_dynamic_boundaries
+assert "globals()[name]" not in serialized_typed_dynamic_boundaries
+assert "eval(expr)" not in serialized_typed_dynamic_boundaries
+assert "exec(expr)" not in serialized_typed_dynamic_boundaries
+assert "compile(expr" not in serialized_typed_dynamic_boundaries
+assert "__import__(name)" not in serialized_typed_dynamic_boundaries
+assert "generated.py" not in serialized_typed_dynamic_boundaries
+
+additional_dynamic_call_form_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "additional_dynamic_forms.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["additional_dynamic_forms.py", "plugins/safe.py"],
+        "text": """
+import importlib
+from importlib import import_module as load_module
+
+module_loader = importlib.import_module
+module_scope = globals()
+module_patch = setattr
+
+def alias_nonliteral(name):
+    loader = importlib.import_module
+    return loader(name)
+
+def alias_literal():
+    loader = importlib.import_module
+    return loader("plugins.safe")
+
+def imported_alias_nonliteral(name):
+    return load_module(name)
+
+def namespace_alias(name):
+    scope = globals()
+    scope[name]()
+
+def namespace_get_call(name):
+    globals().get(name)()
+
+def dynamic_lookup_alias(obj, method):
+    handler = getattr(obj, method)
+    handler()
+
+def monkey_patch_alias(obj, name):
+    patch = setattr
+    patch(obj, name, object())
+
+def execution_alias(expr):
+    runner = eval
+    runner(expr)
+
+def module_alias_import(name):
+    return module_loader(name)
+
+def module_namespace_alias(name):
+    module_scope[name]()
+
+def module_patch_alias(obj, name):
+    module_patch(obj, name, object())
+""",
+    }
+)
+additional_dynamic_call_form_facts = additional_dynamic_call_form_messages[0]["facts"]
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "alias_nonliteral",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "alias_literal" in fact["subject"]
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in additional_dynamic_call_form_facts
+)
+assert not has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "alias_literal",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "imported_alias_nonliteral",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "namespace_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "namespace_get_call",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "dynamic_lookup_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "monkey_patch_alias",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "execution_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_alias_import",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_namespace_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_patch_alias",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert_no_fact_source_payloads(additional_dynamic_call_form_facts)
+serialized_additional_dynamic_forms = json.dumps(additional_dynamic_call_form_messages)
+assert "loader(name)" not in serialized_additional_dynamic_forms
+assert "scope[name]" not in serialized_additional_dynamic_forms
+assert "globals().get" not in serialized_additional_dynamic_forms
+assert "getattr(obj" not in serialized_additional_dynamic_forms
+assert "module_loader(name)" not in serialized_additional_dynamic_forms
+
+bare_dynamic_lookup_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "bare_dynamic_lookup.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def inspect_scope():
+    globals()
+    locals()
+""",
+    }
+)
+bare_dynamic_lookup_facts = bare_dynamic_lookup_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in bare_dynamic_lookup_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_call_target" in fact["assumptions"]
+    )
+    == 2
+)
+
+unresolved_decorator_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "decorators.py",
+        "content_hash": "sha256:" + "e" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def local_decorator(function):
+    return function
+
+@local_decorator
+def local_view():
+    return {}
+
+@unknown_policy
+def protected_view():
+    return {}
+
+class Resource:
+    @property
+    def label(self):
+        return "resource"
+""",
+    }
+)
+unresolved_decorator_facts = unresolved_decorator_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in unresolved_decorator_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_framework_identity" in fact["assumptions"]
+    )
+    == 1
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "unknown_policy"
+    and "python_anchor_kind=decorator_binding" in fact["assumptions"]
+    for fact in unresolved_decorator_facts
+)
+serialized_unresolved_decorator = json.dumps(unresolved_decorator_messages)
+assert "return function" not in serialized_unresolved_decorator
+assert "return \"resource\"" not in serialized_unresolved_decorator
+
+fixture_dependency_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/test_fixture_graph.py",
+        "content_hash": "sha256:" + "f" * 64,
+        "repository_revision": "UNKNOWN",
+        "conftest_files": [
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def external_user():
+    return object()
+""",
+            }
+        ],
+        "text": """
+import pytest
+
+fixture_alias = pytest.fixture
+
+@pytest.fixture
+def db():
+    return object()
+
+@fixture_alias(name="api_client")
+def client(db, external_user, tmp_path, missing_fixture):
+    return object()
+
+def helper(db):
+    return db
+
+def test_users(api_client):
+    assert api_client
+""",
+    }
+)
+fixture_dependency_facts = fixture_dependency_messages[0]["facts"]
+assert sum(
+    1
+    for fact in fixture_dependency_facts
+    if fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.db"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+) == 1
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.external_user"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.tmp_path"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.api_client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_dependency_facts
+)
+serialized_fixture_dependency = json.dumps(fixture_dependency_messages)
+assert "return object" not in serialized_fixture_dependency
+assert "missing_fixture" not in serialized_fixture_dependency
+assert "tests/conftest.py" not in serialized_fixture_dependency
+
+unsafe_literal_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "unsafe_import.py",
+        "content_hash": "sha256:" + "3" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+
+def load():
+    importlib.import_module("/tmp/secret")
+""",
+    }
+)
+serialized_unsafe_import = json.dumps(unsafe_literal_import)
+assert "/tmp/secret" not in serialized_unsafe_import
+assert any(
+    fact["fact_kind"] == "UNKNOWN" and fact["target"] == "DynamicImport"
+    for fact in unsafe_literal_import[0]["facts"]
+)
+
+unresolved_literal_dynamic_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "missing_dynamic_import.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+
+def load():
+    return importlib.import_module("plugins.safe")
+""",
+    }
+)
+unresolved_literal_dynamic_import_facts = unresolved_literal_dynamic_import[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in unresolved_literal_dynamic_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "plugins.safe"
+    for fact in unresolved_literal_dynamic_import_facts
+)
+
+ambiguous_literal_dynamic_import = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "ambiguous_dynamic_import.py",
+        "content_hash": "sha256:" + "6" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": [
+            "ambiguous_dynamic_import.py",
+            "src/plugins/safe.py",
+            "alt/plugins/safe.py",
+        ],
+        "source_roots": ["src", "alt"],
+        "text": """
+import importlib
+
+def load():
+    return importlib.import_module("plugins.safe")
+""",
+    }
+)
+ambiguous_literal_dynamic_import_facts = ambiguous_literal_dynamic_import[0]["facts"]
+assert has_unknown_for_subject(
+    ambiguous_literal_dynamic_import_facts,
+    "load",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in ambiguous_literal_dynamic_import_facts
+)
+assert_no_fact_source_payloads(ambiguous_literal_dynamic_import_facts)
+
+dynamic_import_boundary = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dynamic_import_boundary.py",
+        "content_hash": "sha256:" + "4" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["dynamic_import_boundary.py", "plugins/safe.py"],
+        "text": """
+import importlib
+import sys
+
+def load(name, extra_path):
+    sys.path.insert(0, extra_path)
+    safe = importlib.import_module("plugins.safe")
+    importlib.import_module("../secret")
+    importlib.import_module(name)
+    handler = getattr(safe, "handle")
+    return handler
+""",
+    }
+)
+dynamic_import_boundary_facts = dynamic_import_boundary[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert (
+    sum(
+        1
+        for fact in dynamic_import_boundary_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "DynamicImport"
+        and "affected_claim=python_import_resolution" in fact["assumptions"]
+    )
+    >= 2
+)
+assert not any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_call_target" in fact["assumptions"]
+    for fact in dynamic_import_boundary_facts
+)
+assert "../secret" not in json.dumps(dynamic_import_boundary)
+
+config_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "pyproject.toml",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+[project]
+name = "demo-api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "../secret"]
+pythonpath = ["src", "/tmp/secret"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src/lib", "C:/secret"]
+
+[tool.pyrefly]
+project_includes = ["src"]
+""",
+    }
+)
+assert len(config_messages) == 1
+assert config_messages[0]["mode"] == "parse_project_config"
+assert config_messages[0]["path"] == "pyproject.toml"
+if sys.version_info >= (3, 11):
+    assert config_messages[0]["config"]["project_name"] == "demo-api"
+    assert config_messages[0]["config"]["source_roots"] == ["src", "src/lib", "tests"]
+    assert config_messages[0]["config"]["tool_sections"] == ["pyrefly", "pyright", "pytest"]
+    assert config_messages[0]["unknowns"] == []
+else:
+    assert config_messages[0]["config"]["source_roots"] == []
+    assert config_messages[0]["unknowns"] == [
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+    ]
+serialized_config = json.dumps(config_messages)
+assert "../secret" not in serialized_config
+assert "/tmp/secret" not in serialized_config
+assert "C:/secret" not in serialized_config
+
+bad_config_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "pyproject.toml",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "[project\nname = 'broken'\n",
+    }
+)
+if sys.version_info >= (3, 11):
+    assert bad_config_messages[0]["unknowns"] == [
+        {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
+    ]
+else:
+    assert bad_config_messages[0]["unknowns"] == [
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+    ]
+assert "[project" not in json.dumps(bad_config_messages)
+
+parse_context_hash = "sha256:" + "6" * 64
+parse_context_payload = {
+    "protocol_version": 1,
+    "mode": "parse_document",
+    "path": "src/acme/api.py",
+    "content_hash": parse_context_hash,
+    "repository_revision": "UNKNOWN",
+    "module_paths": [
+        "src/acme/api.py",
+        "src/acme/__init__.py",
+        "src/acme/services/__init__.py",
+        "src/acme/services/users.py",
+    ],
+    "source_roots": [],
+    "text": """
+from acme.services import users
+from .services import users as relative_users
+from acme.missing import value
+""",
+}
+parse_context_messages = run_worker(parse_context_payload)
+parse_context_reordered = dict(parse_context_payload)
+parse_context_reordered["module_paths"] = list(reversed(parse_context_payload["module_paths"]))
+assert parse_context_messages == run_worker(parse_context_reordered)
+parse_context_facts = parse_context_messages[0]["facts"]
+repo_local_import_facts = [
+        fact
+        for fact in parse_context_facts
+        if fact["fact_kind"] == "RESOLVED_IMPORT"
+        and fact["target"] == "acme.services.users"
+        and "python_anchor_kind=repo_local_import_binding" in fact["assumptions"]
+]
+assert len(repo_local_import_facts) == 2
+for fact in repo_local_import_facts:
+    assert fact["certainty"] == "STRUCTURAL"
+    assert fact["origin"]["method"] == "cpython_ast"
+    assert fact["evidence"]["path"] == "src/acme/api.py"
+    assert fact["evidence"]["content_hash"] == parse_context_hash
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "acme.missing.value"
+    for fact in parse_context_facts
+)
+unresolved_import_facts = [
+    fact
+    for fact in parse_context_facts
+    if fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "reason_code=UnresolvedImport" in fact["assumptions"]
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+]
+assert len(unresolved_import_facts) == 1
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in parse_context_facts
+)
+serialized_parse_context = json.dumps(parse_context_messages)
+assert "from acme.services" not in serialized_parse_context
+assert "src/acme/services/users.py" not in serialized_parse_context
+
+conftest_parse_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/sub/test_api.py",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["tests/conftest.py", "tests/sub/test_api.py"],
+        "source_roots": [],
+        "conftest_files": [
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest as pt
+
+@pt.fixture
+def client():
+    return object()
+""",
+            }
+        ],
+        "text": """
+def test_users(client, missing_fixture):
+    assert client is not None
+""",
+    }
+)
+conftest_parse_facts = conftest_parse_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.test"
+    and "python_anchor_kind=pytest_test_function" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in conftest_parse_facts
+)
+serialized_conftest_parse = json.dumps(conftest_parse_messages)
+assert "tests/conftest.py" not in serialized_conftest_parse
+assert "return object" not in serialized_conftest_parse
+assert "missing_fixture" not in serialized_conftest_parse
+
+fixture_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/sub/test_fixture_boundaries.py",
+        "content_hash": "sha256:" + "b" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": [
+            "conftest.py",
+            "tests/conftest.py",
+            "tests/sub/test_fixture_boundaries.py",
+        ],
+        "source_roots": [],
+        "conftest_files": [
+            {
+                "path": "conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+            },
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+            },
+        ],
+        "text": """
+def test_fixture_boundaries(client, tmp_path, capsys, django_db):
+    assert tmp_path
+""",
+    }
+)
+fixture_boundary_facts = fixture_boundary_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "ConflictingFacts"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.tmp_path"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.capsys"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+serialized_fixture_boundaries = json.dumps(fixture_boundary_messages)
+assert "tests/conftest.py" not in serialized_fixture_boundaries
+assert "return object" not in serialized_fixture_boundaries
+assert "django_db" not in serialized_fixture_boundaries
+
+fixture_name_alias_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/test_fixture_alias_name.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["tests/test_fixture_alias_name.py"],
+        "source_roots": [],
+        "conftest_files": [],
+        "text": """
+import pytest
+
+fixture_name = "dynamic_client"
+fixture_alias = pytest.fixture
+
+@pytest.fixture(name="api_client")
+def _api_client():
+    return object()
+
+@pytest.fixture(name=fixture_name)
+def dynamic_client():
+    return object()
+
+@fixture_alias(name="settings")
+def _settings():
+    return object()
+
+@pytest.fixture(name="bad/client")
+def unsafe_client():
+    return object()
+
+def test_fixture_aliases(api_client, settings, _api_client, dynamic_client, unsafe_client):
+    assert api_client
+""",
+    }
+)
+fixture_name_alias_facts = fixture_name_alias_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.api_client"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.settings"
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"]
+    in {
+        "pytest.fixture._api_client",
+        "pytest.fixture._settings",
+        "pytest.fixture.dynamic_client",
+        "pytest.fixture.unsafe_client",
+    }
+    and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_name_alias_facts
+)
+serialized_fixture_name_aliases = json.dumps(fixture_name_alias_messages)
+assert "name=fixture_name" not in serialized_fixture_name_aliases
+assert "bad/client" not in serialized_fixture_name_aliases
+assert "return object" not in serialized_fixture_name_aliases
+
+ambiguous_context_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "src/pkg/api.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["src/pkg/api.py", "src/pkg/util.py", "alt/pkg/util.py"],
+        "source_roots": ["src", "alt"],
+        "text": "from pkg import util\n",
+    }
+)
+ambiguous_context_facts = ambiguous_context_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "pkg.util"
+    and "python_anchor_kind=repo_local_import_binding" in fact["assumptions"]
+    for fact in ambiguous_context_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "reason_code=UnresolvedImport" in fact["assumptions"]
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in ambiguous_context_facts
+)
+
+bad_parse_context_payload = {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "app.py",
+        "content_hash": "sha256:" + "7" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["../secret.py"],
+        "text": "import secret\n",
+}
+bad_parse_context = subprocess.run(
+    [sys.executable, str(WORKER)],
+    input=json.dumps(bad_parse_context_payload) + "\n",
+    text=True,
+    capture_output=True,
+    check=False,
+)
+assert bad_parse_context.returncode == 2
+assert bad_parse_context.stdout == ""
+assert "secret" not in bad_parse_context.stderr
+
+bad_conftest_context_payload = {
+    "protocol_version": 1,
+    "mode": "parse_document",
+    "path": "app.py",
+    "content_hash": "sha256:" + "a" * 64,
+    "repository_revision": "UNKNOWN",
+    "conftest_files": [{"path": "../conftest.py", "text": "def secret(): pass\n"}],
+    "text": "def test_secret(secret):\n    pass\n",
+}
+bad_conftest_context = subprocess.run(
+    [sys.executable, str(WORKER)],
+    input=json.dumps(bad_conftest_context_payload) + "\n",
+    text=True,
+    capture_output=True,
+    check=False,
+)
+assert bad_conftest_context.returncode == 2
+assert bad_conftest_context.stdout == ""
+assert "secret" not in bad_conftest_context.stderr
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "pyproject.toml").write_text(
+        """
+[tool.pyright]
+include = ["src", "../secret", "/tmp/secret"]
+extraPaths = ["src/lib", "C:/secret"]
+""",
+        encoding="utf-8",
+    )
+    Path(root, "acme/services").mkdir(parents=True)
+    Path(root, "acme/__init__.py").write_text("", encoding="utf-8")
+    Path(root, "acme/services/__init__.py").write_text("", encoding="utf-8")
+    Path(root, "acme/services/users.py").write_text("def list_users():\n    return []\n", encoding="utf-8")
+    Path(root, "acme/api.py").write_text(
+        """
+from acme.services import users
+from .services import users as relative_users
+import acme.services.users as user_module
+from acme.missing import value
+""",
+        encoding="utf-8",
+    )
+    request = valid_request(root)
+    request["changed_files"] = [
+        "acme/api.py",
+        "acme/services/users.py",
+        "acme/__init__.py",
+        "acme/services/__init__.py",
+    ]
+    messages = run_worker(request)
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    repo_local_imports = [
+        fact
+        for fact in facts
+        if fact.get("fact_kind") == "RESOLVED_IMPORT"
+        and fact.get("target") == "acme.services.users"
+        and "python_anchor_kind=repo_local_import_binding" in fact.get("assumptions", [])
+    ]
+    assert len(repo_local_imports) == 3
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "UnresolvedImport"
+        and "affected_claim=python_import_resolution" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    serialized_module_graph = json.dumps(messages)
+    assert "../secret" not in serialized_module_graph
+    assert "/tmp/secret" not in serialized_module_graph
+    assert "C:/secret" not in serialized_module_graph
+    assert root not in serialized_module_graph
+    assert "from acme.services" not in serialized_module_graph
+
+if sys.version_info >= (3, 11):
+    with tempfile.TemporaryDirectory() as root:
+        Path(root, "pyproject.toml").write_text(
+            """
+[tool.pyright]
+include = ["src", "alt"]
+""",
+            encoding="utf-8",
+        )
+        Path(root, "src/pkg").mkdir(parents=True)
+        Path(root, "alt/pkg").mkdir(parents=True)
+        Path(root, "src/pkg/util.py").write_text("VALUE = 1\n", encoding="utf-8")
+        Path(root, "alt/pkg/util.py").write_text("VALUE = 2\n", encoding="utf-8")
+        Path(root, "src/pkg/api.py").write_text("from pkg import util\n", encoding="utf-8")
+        request = valid_request(root)
+        request["changed_files"] = ["src/pkg/api.py", "src/pkg/util.py", "alt/pkg/util.py"]
+        messages = run_worker(request)
+        facts = [message for message in messages if message.get("message_type") == "fact"]
+        assert_end_of_stream(messages)
+        assert not any(
+            fact.get("fact_kind") == "RESOLVED_IMPORT"
+            and fact.get("target") == "pkg.util"
+            and "python_anchor_kind=repo_local_import_binding" in fact.get("assumptions", [])
+            for fact in facts
+        )
+        assert any(
+            fact.get("fact_kind") == "UNKNOWN"
+            and fact.get("target") == "UnresolvedImport"
+            and "affected_claim=python_import_resolution" in fact.get("assumptions", [])
+            for fact in facts
+        )
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "tests/sub").mkdir(parents=True)
+    Path(root, "tests/conftest.py").write_text(
+        """
+import pytest as pt
+
+@pt.fixture
+def client():
+    return object()
+""",
+        encoding="utf-8",
+    )
+    Path(root, "tests/sub/test_api.py").write_text(
+        """
+def test_users(client, missing_fixture):
+    assert client is not None
+""",
+        encoding="utf-8",
+    )
+    request = valid_request(root)
+    request["changed_files"] = ["tests/sub/test_api.py", "tests/conftest.py"]
+    messages = run_worker(request)
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    assert any(
+        fact.get("fact_kind") == "SYMBOL"
+        and fact.get("target") == "pytest.fixture.client"
+        and "python_anchor_kind=pytest_conftest_fixture_edge" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "PytestFixtureInjection"
+        and "affected_claim=pytest_fixture_binding" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    serialized_conftest = json.dumps(messages)
+    assert root not in serialized_conftest
+    assert "return object" not in serialized_conftest
+    assert "missing_fixture" not in serialized_conftest
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "app.py").write_text(
+        """
+from fastapi import APIRouter
+from fastapi import Depends
+from pydantic import BaseModel
+router = APIRouter()
+
+class UserOut(BaseModel):
+    id: int
+
+def get_user():
+    return object()
+
+@router.post("/users", response_model=UserOut)
+def create_user(current_user=Depends(dependency=get_user)):
+    return {}
+""",
+        encoding="utf-8",
+    )
+    messages = run_worker(valid_request(root))
+    assert_end_of_stream(messages)
+    assert any(message.get("fact_kind") == "FRAMEWORK_ROLE" for message in messages)
+    assert any(
+        message.get("fact_kind") == "RESOLVED_IMPORT" and message.get("target") == "fastapi.APIRouter"
+        for message in messages
+    )
+    assert any(
+        message.get("fact_kind") == "SYMBOL" and message.get("target") == "fastapi.APIRouter.post"
+        for message in messages
+    )
+    assert any(
+        message.get("fact_kind") == "TYPE"
+        and message.get("target") == "fastapi.response_model.UserOut"
+        and "python_anchor_kind=fastapi_response_model" in message.get("assumptions", [])
+        for message in messages
+    )
+    assert any(
+        message.get("fact_kind") == "SYMBOL"
+        and message.get("target") == "fastapi.dependency.get_user"
+        and "python_anchor_kind=fastapi_dependency_target" in message.get("assumptions", [])
+        for message in messages
+    )
+    serialized = json.dumps(messages)
+    assert root not in serialized
+    assert "@router.post" not in serialized
+    assert "response_model=" not in serialized
+    assert "Depends(" not in serialized
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")
+    Path(root, "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+    first = valid_request(root)
+    first["changed_files"] = ["b.py", "a.py"]
+    second = valid_request(root)
+    second["changed_files"] = ["a.py", "b.py"]
+    assert run_worker(first) == run_worker(second)
+
+if hasattr(os, "symlink"):
+    with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+        Path(outside, "outside.py").write_text(
+            """
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get("/outside")
+def outside_route():
+    return {}
+""",
+            encoding="utf-8",
+        )
+        try:
+            os.symlink(Path(outside, "outside.py"), Path(root, "link.py"))
+        except OSError:
+            pass
+        else:
+            request = valid_request(root)
+            request["changed_files"] = ["link.py"]
+            messages = run_worker(request)
+            assert_end_of_stream(messages)
+            assert not any(message.get("fact_kind") == "FRAMEWORK_ROLE" for message in messages)
+            assert outside not in json.dumps(messages)
+
+for changed_files in [
+    ["/tmp/secret.py"],
+    ["../secret.py"],
+    ["src/../secret.py"],
+    ["./app.py"],
+    ["src\\app.py"],
+    ["file:///tmp/secret.py"],
+    ["C:tmp/source.py"],
+    ["app.py", "app.py"],
+]:
+    with tempfile.TemporaryDirectory() as root:
+        request = valid_request(root)
+        request["changed_files"] = changed_files
+        messages = run_worker(request)
+        assert messages[0]["error_code"] == "SEMANTIC_PROTOCOL_VIOLATION"
+        assert_end_of_stream(messages)
+        assert "/tmp/secret" not in json.dumps(messages)
+
+oversized = run_worker("x" * 1_048_577)
+assert oversized[0]["error_code"] == "SEMANTIC_PROTOCOL_VIOLATION"
+assert_end_of_stream(oversized)

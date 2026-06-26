@@ -43,16 +43,70 @@ impl SourceRange {
 pub enum Language {
     TypeScript,
     JavaScript,
+    Python,
+    PythonConfig,
     Unknown(String),
+}
+
+impl Language {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::TypeScript => "typescript",
+            Self::JavaScript => "javascript",
+            Self::Python => "python",
+            Self::PythonConfig => "python-config",
+            Self::Unknown(value) => value.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeUnitKind {
-    Function,
-    Class,
     Module,
+    Function,
+    AsyncFunction,
+    ArrowFunction,
+    Class,
+    Method,
+    ReactComponent,
+    ReactHook,
+    ExpressRoute,
+    TestSuite,
     TestCase,
+    FastApiRoute,
+    PytestTest,
+    PytestFixture,
+    PydanticModel,
+    SqlAlchemyModel,
+    SqlAlchemyRepositoryMethod,
+    ProjectConfig,
     Unknown,
+}
+
+impl CodeUnitKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Module => "module",
+            Self::Function => "function",
+            Self::AsyncFunction => "async_function",
+            Self::ArrowFunction => "arrow_function",
+            Self::Class => "class",
+            Self::Method => "method",
+            Self::ReactComponent => "react_component",
+            Self::ReactHook => "react_hook",
+            Self::ExpressRoute => "express_route",
+            Self::TestSuite => "test_suite",
+            Self::TestCase => "test_case",
+            Self::FastApiRoute => "fastapi_route",
+            Self::PytestTest => "pytest_test",
+            Self::PytestFixture => "pytest_fixture",
+            Self::PydanticModel => "pydantic_model",
+            Self::SqlAlchemyModel => "sqlalchemy_model",
+            Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
+            Self::ProjectConfig => "project_config",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,5 +152,22 @@ mod tests {
         };
 
         assert_eq!(unit.id.as_str(), "unit:handler");
+    }
+
+    #[test]
+    fn python_language_and_unit_kinds_use_stable_tokens() {
+        assert_eq!(Language::Python.as_str(), "python");
+        assert_eq!(Language::PythonConfig.as_str(), "python-config");
+        assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");
+        assert_eq!(CodeUnitKind::FastApiRoute.as_str(), "fastapi_route");
+        assert_eq!(CodeUnitKind::PytestTest.as_str(), "pytest_test");
+        assert_eq!(CodeUnitKind::PytestFixture.as_str(), "pytest_fixture");
+        assert_eq!(CodeUnitKind::PydanticModel.as_str(), "pydantic_model");
+        assert_eq!(CodeUnitKind::SqlAlchemyModel.as_str(), "sqlalchemy_model");
+        assert_eq!(
+            CodeUnitKind::SqlAlchemyRepositoryMethod.as_str(),
+            "sqlalchemy_repository_method"
+        );
+        assert_eq!(CodeUnitKind::ProjectConfig.as_str(), "project_config");
     }
 }

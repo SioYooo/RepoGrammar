@@ -42,7 +42,16 @@ generate candidates but cannot alone prove semantic family membership.
 Compiler-native facts take precedence over structural heuristics. Conflicting or
 unavailable facts become `UNKNOWN` or abstention.
 
+The Rust-side TypeScript adapter may depend on transport-neutral JSON parsing to
+validate NDJSON worker output and translate it into RepoGrammar-owned semantic
+facts. It must sanitize worker process failures and must not expose raw
+compiler, stderr, source-snippet, or absolute-path payloads outside the adapter.
+Worker execution must use an explicit executable and argument vector rather than
+shell interpolation.
+
 ## Follow-up work
 
-Design and validate the TypeScript worker toolchain, version policy, protocol
-tests, and package lockfile before adding executable worker code.
+Design and validate the TypeScript worker toolchain, package lockfile, richer
+version policy, freshness metadata, and claim gates before adding executable
+TypeScript compiler worker code or allowing stored worker facts to support
+pattern-family claims.

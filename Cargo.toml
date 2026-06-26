@@ -18,8 +18,12 @@ path = "src/rust/bin/repo_guard.rs"
 path = "src/rust/lib.rs"
 
 [dependencies]
-
-[dev-dependencies]
-# Dev-only: protocol fixture tests must parse NDJSON as JSON without adding
-# runtime dependencies to the bootstrap core.
+# Production: the repository-local storage adapter owns SQLite migrations and
+# generation validation. `bundled` keeps behavior independent of host SQLite.
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+# Production: semantic-worker adapters validate NDJSON v1 from isolated worker
+# processes before translating messages into RepoGrammar-owned facts.
 serde_json = "1"
+# Production: filesystem adapters compute strict SHA-256 content hashes for
+# repository evidence using the standard RustCrypto implementation.
+sha2 = "0.10"

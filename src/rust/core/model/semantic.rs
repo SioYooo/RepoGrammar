@@ -27,6 +27,7 @@ pub enum SemanticFactKind {
     Symbol,
     Type,
     FrameworkRole,
+    ProjectConfig,
     Unknown,
 }
 
@@ -38,6 +39,7 @@ impl SemanticFactKind {
             Self::Symbol => "SYMBOL",
             Self::Type => "TYPE",
             Self::FrameworkRole => "FRAMEWORK_ROLE",
+            Self::ProjectConfig => "PROJECT_CONFIG",
             Self::Unknown => "UNKNOWN",
         }
     }
@@ -49,6 +51,7 @@ impl SemanticFactKind {
             "SYMBOL" => Ok(Self::Symbol),
             "TYPE" => Ok(Self::Type),
             "FRAMEWORK_ROLE" => Ok(Self::FrameworkRole),
+            "PROJECT_CONFIG" => Ok(Self::ProjectConfig),
             "UNKNOWN" => Ok(Self::Unknown),
             _ => Err(format!("unsupported semantic fact kind {value}")),
         }
@@ -119,7 +122,9 @@ mod tests {
     #[test]
     fn structural_certainty_does_not_prove_semantic_family_membership() {
         assert!(FactCertainty::Semantic.supports_family_membership());
+        assert!(FactCertainty::DataflowDerived.supports_family_membership());
         assert!(!FactCertainty::Structural.supports_family_membership());
+        assert!(!FactCertainty::FrameworkHeuristic.supports_family_membership());
         assert!(!FactCertainty::Conflicting.supports_family_membership());
         assert!(!FactCertainty::Unknown.supports_family_membership());
     }
@@ -132,6 +137,7 @@ mod tests {
             (SemanticFactKind::Symbol, "SYMBOL"),
             (SemanticFactKind::Type, "TYPE"),
             (SemanticFactKind::FrameworkRole, "FRAMEWORK_ROLE"),
+            (SemanticFactKind::ProjectConfig, "PROJECT_CONFIG"),
             (SemanticFactKind::Unknown, "UNKNOWN"),
         ];
 

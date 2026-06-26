@@ -3,3 +3,4 @@
 pub mod abstention;
 pub mod compatibility;
 pub mod freshness;
+pub mod paths;

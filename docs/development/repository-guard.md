@@ -20,7 +20,11 @@ The check command verifies:
 - both guides are regular files and not symlinks.
 - both guides are byte-identical.
 - required bootstrap docs and workflows exist, including
-  `docs/decisions/ADR-0008-repo-local-state-boundary.md`.
+  `docs/decisions/ADR-0008-repo-local-state-boundary.md`, the v0.1 planning
+  documents, the Python v0.1 analysis specification, ADR-0011, ADR-0012, the
+  substrate hardening checkpoint, typed UNKNOWN specification, ADR-0009/ADR-0010,
+  and their durable memory mirrors under
+  `.agents/memories/`.
 - required skills exist and have `name` and `description` front matter.
 - nested `AGENTS.md` or `CLAUDE.md` files do not exist.
 - lowercase `agents.md` or `claude.md` duplicates do not exist.

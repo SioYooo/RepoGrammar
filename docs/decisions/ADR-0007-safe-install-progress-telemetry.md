@@ -42,12 +42,16 @@ Metrics must be classified as `MEASURED`, `DERIVED`, `ESTIMATED`, or
 
 ## Consequences
 
-The CLI has explicit `install` and repository lifecycle commands. The bootstrap
-implements typed contracts and safe dry-run behavior first, while write paths
-remain deferred until storage and agent integration are implemented.
+The CLI has explicit `install` and repository lifecycle commands. Repository
+lifecycle and syntax-only indexing write paths now operate on repo-local state.
+Narrow global Codex and Claude Code MCP registration writes are allowed only
+after `--yes`, a read-only MCP self-test, native agent CLI execution, and
+RepoGrammar-owned receipt creation. Broader agent integration writes and
+telemetry network transport remain deferred until their safety contracts are
+implemented.
 
 ## Follow-up work
 
-Implement native agent detection, MCP self-tests, receipts, index generations,
-local telemetry storage, repo-local state creation, and uninit behavior with
-tests before enabling write behavior.
+Broaden native agent detection, project-local writes, instruction-file
+integration, local telemetry storage, and telemetry export behavior with tests
+before enabling those write paths.

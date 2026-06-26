@@ -10,8 +10,10 @@ pub mod semantic;
 
 pub use code_unit::{CodeUnit, CodeUnitId, CodeUnitKind, Language, SourceRange};
 pub use evidence::Evidence;
-pub use family::{FamilyId, PatternClassification, UnknownReason};
-pub use ir::{IrEdge, IrNode, IrNodeId};
+pub use family::{
+    FamilyId, PatternClassification, TypedUnknown, UnknownClass, UnknownReason, UnknownReasonCode,
+};
+pub use ir::{IrEdge, IrEdgeLabel, IrNode, IrNodeId, IrNodeKind};
 pub use measurement::{MeasurementKind, MetricReport};
 pub use provenance::{ContentHash, Provenance, RepositoryRevision};
 pub use semantic::{FactCertainty, FactOrigin, SemanticFact, SemanticFactKind, SymbolId};

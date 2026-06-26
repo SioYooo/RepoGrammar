@@ -1,5 +1,7 @@
 //! Typed progress events independent of terminal rendering.
 
+use serde_json::json;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressStage {
     ProjectDiscovery,
@@ -97,18 +99,21 @@ impl ProgressEvent {
 
     pub fn render_ndjson(&self) -> String {
         let work = match self.work {
-            WorkUnits::Unknown => "\"work\":{\"kind\":\"unknown\"}".to_string(),
-            WorkUnits::Known(work) => format!(
-                "\"work\":{{\"kind\":\"known\",\"completed\":{},\"total\":{}}}",
-                work.completed(),
-                work.total()
-            ),
+            WorkUnits::Unknown => json!({"kind": "unknown"}),
+            WorkUnits::Known(work) => json!({
+                "kind": "known",
+                "completed": work.completed(),
+                "total": work.total(),
+            }),
         };
-        format!(
-            "{{\"stage\":\"{}\",\"message\":\"{}\",{work}}}\n",
-            self.stage.as_str(),
-            escape_json_string(&self.message)
-        )
+        let mut output = json!({
+            "stage": self.stage.as_str(),
+            "message": self.message,
+            "work": work,
+        })
+        .to_string();
+        output.push('\n');
+        output
     }
 }
 
@@ -123,24 +128,6 @@ pub fn initialization_stages() -> Vec<ProgressStage> {
         ProgressStage::FamilyConstruction,
         ProgressStage::PersistenceValidation,
     ]
-}
-
-fn escape_json_string(value: &str) -> String {
-    let mut escaped = String::new();
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            control if (control as u32) <= 0x1f => {
-                escaped.push_str(&format!("\\u{:04x}", control as u32));
-            }
-            other => escaped.push(other),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
@@ -197,7 +184,9 @@ mod tests {
             WorkUnits::Unknown,
         );
 
-        assert!(event.render_ndjson().contains("\"kind\":\"unknown\""));
+        let value: serde_json::Value =
+            serde_json::from_str(event.render_ndjson().trim()).expect("progress JSON");
+        assert_eq!(value["work"]["kind"], "unknown");
     }
 
     #[test]
@@ -217,9 +206,10 @@ mod tests {
             WorkUnits::Unknown,
         );
         let rendered = event.render_ndjson();
+        let value: serde_json::Value =
+            serde_json::from_str(rendered.trim()).expect("progress JSON");
 
-        assert!(rendered.contains("\\u0000"));
-        assert!(rendered.contains("\\u0008"));
+        assert_eq!(value["message"], "nul:\u{0000} backspace:\u{0008}");
         assert!(!rendered.contains('\u{0000}'));
         assert!(!rendered.contains('\u{0008}'));
     }

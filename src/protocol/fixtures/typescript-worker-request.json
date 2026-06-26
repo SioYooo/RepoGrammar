@@ -1,0 +1,9 @@
+{
+  "protocol_version": 1,
+  "request_id": "repogrammar-typescript-semantic-worker",
+  "project_root": "/repo",
+  "changed_files": [
+    "src/a.ts",
+    "src/b.tsx"
+  ]
+}

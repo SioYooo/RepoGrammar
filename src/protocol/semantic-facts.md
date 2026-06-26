@@ -12,6 +12,7 @@ The v1 transport is newline-delimited JSON over stdio. Each line is one of:
 
 Schemas live beside this document:
 
+- `semantic-worker-request.schema.json`: Rust-to-worker stdin request envelope.
 - `semantic-worker-message.schema.json`: full NDJSON message envelope.
 - `semantic-worker.schema.json`: fact payload shape retained for focused tests.
 - `progress-event.schema.json`: transport-neutral progress event shape.

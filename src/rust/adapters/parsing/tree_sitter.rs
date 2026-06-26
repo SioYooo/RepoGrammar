@@ -3,14 +3,13 @@
 //! The actual Tree-sitter dependency is intentionally deferred until parser
 //! behavior and language grammar wiring are designed.
 
-use crate::core::model::CodeUnit;
-use crate::ports::parser::{ParseError, SourceDocument, SourceParser};
+use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParser};
 
 #[derive(Debug, Default)]
 pub struct TreeSitterParserBoundary;
 
 impl SourceParser for TreeSitterParserBoundary {
-    fn parse(&self, _document: SourceDocument<'_>) -> Result<Vec<CodeUnit>, ParseError> {
+    fn parse(&self, _document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
         Err(ParseError::UnsupportedLanguage)
     }
 }
