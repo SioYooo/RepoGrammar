@@ -71,6 +71,17 @@ SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.ext.asyncio.AsyncSession",
 }
 SAFE_NATIVE_DECORATORS = {"classmethod", "property", "staticmethod"}
+DYNAMIC_NAMESPACE_FUNCTIONS = {"globals", "locals", "vars"}
+DYNAMIC_CALL_ALIAS_TARGETS = {
+    "__import__",
+    "compile",
+    "eval",
+    "exec",
+    "getattr",
+    "importlib.import_module",
+    "setattr",
+    *DYNAMIC_NAMESPACE_FUNCTIONS,
+}
 PYDANTIC_VALIDATOR_TARGETS = {
     "pydantic.computed_field",
     "pydantic.field_validator",
@@ -1750,13 +1761,49 @@ def collect_sqlalchemy_model_field_facts(
                 )
 
 
-def is_dynamic_call(node: ast.Call) -> bool:
+def canonical_call_name(
+    name: str | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    call_aliases: dict[str, str],
+) -> str | None:
+    if not name:
+        return None
+    canonical = canonical_name(name, aliases, assignments)
+    parts = canonical.split(".")
+    if parts and parts[0] in call_aliases:
+        return ".".join([call_aliases[parts[0]], *parts[1:]])
+    return canonical
+
+
+def is_dynamic_namespace_source(node: ast.AST, namespace_aliases: set[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in namespace_aliases
+    if isinstance(node, ast.Call):
+        return dotted_name(node.func) in DYNAMIC_NAMESPACE_FUNCTIONS
+    return False
+
+
+def is_dynamic_namespace_lookup(node: ast.AST, namespace_aliases: set[str]) -> bool:
+    if isinstance(node, ast.Subscript):
+        return is_dynamic_namespace_source(node.value, namespace_aliases)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "__getitem__"}
+    ):
+        return is_dynamic_namespace_source(node.func.value, namespace_aliases)
+    return False
+
+
+def is_dynamic_call(node: ast.Call, namespace_aliases: set[str] | None = None) -> bool:
+    namespace_aliases = namespace_aliases or set()
     if isinstance(node.func, ast.Call) and dotted_name(node.func) == "getattr":
         return True
+    if isinstance(node.func, ast.Call) and is_dynamic_namespace_lookup(node.func, namespace_aliases):
+        return True
     if isinstance(node.func, ast.Subscript):
-        value = node.func.value
-        if isinstance(value, ast.Call) and dotted_name(value.func) in {"globals", "locals"}:
-            return True
+        return is_dynamic_namespace_lookup(node.func, namespace_aliases)
     return False
 
 
@@ -1792,7 +1839,15 @@ def dynamic_unknown_for_call(
     call: ast.Call,
     canonical: str | None,
     module_index: dict[str, list[str]] | None,
+    namespace_aliases: set[str] | None = None,
+    dynamic_value_aliases: dict[str, tuple[str, str]] | None = None,
 ) -> tuple[str, str] | None:
+    namespace_aliases = namespace_aliases or set()
+    dynamic_value_aliases = dynamic_value_aliases or {}
+    if canonical:
+        root = canonical.split(".", 1)[0]
+        if root in dynamic_value_aliases:
+            return dynamic_value_aliases[root]
     if is_monkey_patch_call(call, canonical):
         return "MonkeyPatch", "python_call_target"
     if canonical in {"sys.path.append", "sys.path.insert"}:
@@ -1801,13 +1856,128 @@ def dynamic_unknown_for_call(
         return "DynamicImport", "python_import_resolution"
     if canonical == "importlib.import_module" and resolved_dynamic_import_literal_target(call, module_index) is None:
         return "DynamicImport", "python_import_resolution"
-    if canonical in {"globals", "locals"}:
+    if canonical in DYNAMIC_NAMESPACE_FUNCTIONS:
         return "FrameworkMagic", "python_call_target"
     if is_dynamic_execution_call(canonical):
         return "FrameworkMagic", "python_call_target"
-    if is_dynamic_call(call):
+    if is_dynamic_call(call, namespace_aliases):
         return "FrameworkMagic", "python_call_target"
     return None
+
+
+def dynamic_call_alias_target(
+    value: ast.AST | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    call_aliases: dict[str, str],
+) -> str | None:
+    if value is None:
+        return None
+    name = static_reference_name(value)
+    target = canonical_call_name(name, aliases, assignments, call_aliases)
+    if target in DYNAMIC_CALL_ALIAS_TARGETS:
+        return target
+    return None
+
+
+def dynamic_namespace_assignment(
+    value: ast.AST | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    call_aliases: dict[str, str],
+) -> bool:
+    if not isinstance(value, ast.Call):
+        return False
+    name = dotted_name(value.func)
+    target = canonical_call_name(name, aliases, assignments, call_aliases)
+    return target in DYNAMIC_NAMESPACE_FUNCTIONS
+
+
+def dynamic_value_unknown_assignment(
+    value: ast.AST | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    call_aliases: dict[str, str],
+    namespace_aliases: set[str],
+) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    if is_dynamic_namespace_lookup(value, namespace_aliases):
+        return "FrameworkMagic", "python_call_target"
+    if isinstance(value, ast.Call):
+        name = dotted_name(value.func)
+        target = canonical_call_name(name, aliases, assignments, call_aliases)
+        if target == "getattr":
+            return "FrameworkMagic", "python_call_target"
+    return None
+
+
+def update_dynamic_bindings_from_assignment(
+    event: ast.Assign | ast.AnnAssign | ast.AugAssign,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    call_aliases: dict[str, str],
+    namespace_aliases: set[str],
+    dynamic_value_aliases: dict[str, tuple[str, str]],
+) -> None:
+    value = event.value if isinstance(event, (ast.Assign, ast.AnnAssign)) else None
+    call_alias = dynamic_call_alias_target(value, aliases, assignments, call_aliases)
+    is_namespace_alias = dynamic_namespace_assignment(value, aliases, assignments, call_aliases)
+    value_unknown = dynamic_value_unknown_assignment(
+        value,
+        aliases,
+        assignments,
+        call_aliases,
+        namespace_aliases,
+    )
+    for target in assignment_target_names(event):
+        call_aliases.pop(target, None)
+        namespace_aliases.discard(target)
+        dynamic_value_aliases.pop(target, None)
+        if call_alias is not None:
+            call_aliases[target] = call_alias
+        if is_namespace_alias:
+            namespace_aliases.add(target)
+        if value_unknown is not None:
+            dynamic_value_aliases[target] = value_unknown
+
+
+def collect_dynamic_bindings_until(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+    offset: int,
+) -> tuple[dict[str, str], set[str], dict[str, tuple[str, str]]]:
+    dynamic_call_aliases: dict[str, str] = {}
+    namespace_aliases: set[str] = set()
+    dynamic_value_aliases: dict[str, tuple[str, str]] = {}
+    for item in tree.body:
+        item_start, _item_end = node_range(starts, item)
+        if item_start >= offset:
+            break
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        events = [
+            child
+            for child in ast.walk(item)
+            if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+        ]
+        events.sort(key=lambda child: node_range(starts, child))
+        for event in events:
+            event_start, _event_end = node_range(starts, event)
+            if event_start >= offset:
+                continue
+            event_aliases = aliases_at_offset(tree, starts, aliases, event_start)
+            event_assignments = collect_assignment_roles_until(tree, starts, aliases, event_start)
+            update_dynamic_bindings_from_assignment(
+                event,
+                event_aliases,
+                event_assignments,
+                dynamic_call_aliases,
+                namespace_aliases,
+                dynamic_value_aliases,
+            )
+    return dynamic_call_aliases, namespace_aliases, dynamic_value_aliases
 
 
 def add_unknown_fact(
@@ -1844,19 +2014,42 @@ def module_level_dynamic_unknown_specs(
     module_index: dict[str, list[str]] | None,
 ) -> list[tuple[str, str, int, int]]:
     specs: list[tuple[str, str, int, int]] = []
+    dynamic_call_aliases: dict[str, str] = {}
+    namespace_aliases: set[str] = set()
+    dynamic_value_aliases: dict[str, tuple[str, str]] = {}
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
-        for call in sorted(
-            [child for child in ast.walk(item) if isinstance(child, ast.Call)],
-            key=lambda child: node_range(starts, child),
-        ):
-            name = dotted_name(call.func)
-            start, end = node_range(starts, call)
-            call_aliases = aliases_at_offset(tree, starts, aliases, start)
+        events = [
+            child
+            for child in ast.walk(item)
+            if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Call))
+        ]
+        events.sort(key=lambda child: (node_range(starts, child), 0 if not isinstance(child, ast.Call) else 1))
+        for event in events:
+            start, end = node_range(starts, event)
+            event_aliases = aliases_at_offset(tree, starts, aliases, start)
             call_assignments = collect_assignment_roles_until(tree, starts, aliases, start)
-            canonical = canonical_name(name, call_aliases, call_assignments) if name else None
-            unknown = dynamic_unknown_for_call(call, canonical, module_index)
+            if not isinstance(event, ast.Call):
+                update_dynamic_bindings_from_assignment(
+                    event,
+                    event_aliases,
+                    call_assignments,
+                    dynamic_call_aliases,
+                    namespace_aliases,
+                    dynamic_value_aliases,
+                )
+                continue
+            call = event
+            name = dotted_name(call.func)
+            canonical = canonical_call_name(name, event_aliases, call_assignments, dynamic_call_aliases)
+            unknown = dynamic_unknown_for_call(
+                call,
+                canonical,
+                module_index,
+                namespace_aliases,
+                dynamic_value_aliases,
+            )
             if unknown is None:
                 continue
             reason_code, affected_claim = unknown
@@ -1904,6 +2097,9 @@ def collect_call_facts(
     defined_names: set[str],
     module_index: dict[str, list[str]] | None,
     facts: list[dict[str, Any]],
+    initial_dynamic_call_aliases: dict[str, str] | None = None,
+    initial_namespace_aliases: set[str] | None = None,
+    initial_dynamic_value_aliases: dict[str, tuple[str, str]] | None = None,
 ) -> None:
     parameter_roles = parameter_roles or {}
     shadowed_receivers = assigned_role_receivers(node)
@@ -1914,6 +2110,9 @@ def collect_call_facts(
     ]
     events.sort(key=lambda child: (node_range(starts, child), 0 if not isinstance(child, ast.Call) else 1))
     local_assignments = dict(assignments)
+    dynamic_call_aliases = dict(initial_dynamic_call_aliases or {})
+    namespace_aliases = set(initial_namespace_aliases or set())
+    dynamic_value_aliases = dict(initial_dynamic_value_aliases or {})
     for event in events:
         if not isinstance(event, ast.Call):
             role = (
@@ -1926,11 +2125,19 @@ def collect_call_facts(
                     local_assignments.pop(target, None)
                 else:
                     local_assignments[target] = role
+            update_dynamic_bindings_from_assignment(
+                event,
+                aliases,
+                local_assignments,
+                dynamic_call_aliases,
+                namespace_aliases,
+                dynamic_value_aliases,
+            )
             continue
         call = event
         start, end = node_range(starts, call)
         name = dotted_name(call.func)
-        canonical = canonical_name(name, aliases, local_assignments) if name else None
+        canonical = canonical_call_name(name, aliases, local_assignments, dynamic_call_aliases)
         if canonical:
             parts = canonical.split(".")
             if (
@@ -1941,7 +2148,13 @@ def collect_call_facts(
             ):
                 receiver = ".".join(parts[:-1])
                 canonical = f"{parameter_roles[receiver]}.{parts[-1]}"
-        unknown = dynamic_unknown_for_call(call, canonical, module_index)
+        unknown = dynamic_unknown_for_call(
+            call,
+            canonical,
+            module_index,
+            namespace_aliases,
+            dynamic_value_aliases,
+        )
         if unknown is not None:
             reason_code, affected_claim = unknown
             add_unknown_fact(
@@ -2572,6 +2785,11 @@ def analyze_source(
                     item_aliases,
                     facts,
                 )
+            (
+                initial_dynamic_call_aliases,
+                initial_namespace_aliases,
+                initial_dynamic_value_aliases,
+            ) = collect_dynamic_bindings_until(tree, starts, aliases, item_unit["start_byte"])
             parametrize_names, indirect_parametrize_names = pytest_parametrize_name_sets(
                 item, item_aliases, item_assignments
             )
@@ -2604,6 +2822,9 @@ def analyze_source(
                 defined_names,
                 module_index,
                 facts,
+                initial_dynamic_call_aliases,
+                initial_namespace_aliases,
+                initial_dynamic_value_aliases,
             )
         elif isinstance(item, ast.ClassDef):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
@@ -2692,6 +2913,11 @@ def analyze_source(
                     **collect_parameter_roles(child, child_aliases),
                     **instance_attribute_roles,
                 }
+                (
+                    initial_dynamic_call_aliases,
+                    initial_namespace_aliases,
+                    initial_dynamic_value_aliases,
+                ) = collect_dynamic_bindings_until(tree, starts, aliases, child_unit["start_byte"])
                 collect_decorator_facts(
                     child,
                     starts,
@@ -2718,6 +2944,9 @@ def analyze_source(
                     defined_names,
                     module_index,
                     facts,
+                    initial_dynamic_call_aliases,
+                    initial_namespace_aliases,
+                    initial_dynamic_value_aliases,
                 )
 
     units.sort(key=lambda item: (item["start_byte"], item["end_byte"], item["kind"], item["name"]))

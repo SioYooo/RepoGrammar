@@ -1441,6 +1441,145 @@ assert "compile(expr" not in serialized_typed_dynamic_boundaries
 assert "__import__(name)" not in serialized_typed_dynamic_boundaries
 assert "generated.py" not in serialized_typed_dynamic_boundaries
 
+additional_dynamic_call_form_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "additional_dynamic_forms.py",
+        "content_hash": "sha256:" + "2" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["additional_dynamic_forms.py", "plugins/safe.py"],
+        "text": """
+import importlib
+from importlib import import_module as load_module
+
+module_loader = importlib.import_module
+module_scope = globals()
+module_patch = setattr
+
+def alias_nonliteral(name):
+    loader = importlib.import_module
+    return loader(name)
+
+def alias_literal():
+    loader = importlib.import_module
+    return loader("plugins.safe")
+
+def imported_alias_nonliteral(name):
+    return load_module(name)
+
+def namespace_alias(name):
+    scope = globals()
+    scope[name]()
+
+def namespace_get_call(name):
+    globals().get(name)()
+
+def dynamic_lookup_alias(obj, method):
+    handler = getattr(obj, method)
+    handler()
+
+def monkey_patch_alias(obj, name):
+    patch = setattr
+    patch(obj, name, object())
+
+def execution_alias(expr):
+    runner = eval
+    runner(expr)
+
+def module_alias_import(name):
+    return module_loader(name)
+
+def module_namespace_alias(name):
+    module_scope[name]()
+
+def module_patch_alias(obj, name):
+    module_patch(obj, name, object())
+""",
+    }
+)
+additional_dynamic_call_form_facts = additional_dynamic_call_form_messages[0]["facts"]
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "alias_nonliteral",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_IMPORT"
+    and fact["target"] == "plugins.safe"
+    and "alias_literal" in fact["subject"]
+    and "python_anchor_kind=dynamic_import_literal" in fact["assumptions"]
+    for fact in additional_dynamic_call_form_facts
+)
+assert not has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "alias_literal",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "imported_alias_nonliteral",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "namespace_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "namespace_get_call",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "dynamic_lookup_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "monkey_patch_alias",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "execution_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_alias_import",
+    "DynamicImport",
+    "python_import_resolution",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_namespace_alias",
+    "FrameworkMagic",
+    "python_call_target",
+)
+assert has_unknown_for_subject(
+    additional_dynamic_call_form_facts,
+    "module_patch_alias",
+    "MonkeyPatch",
+    "python_call_target",
+)
+assert_no_fact_source_payloads(additional_dynamic_call_form_facts)
+serialized_additional_dynamic_forms = json.dumps(additional_dynamic_call_form_messages)
+assert "loader(name)" not in serialized_additional_dynamic_forms
+assert "scope[name]" not in serialized_additional_dynamic_forms
+assert "globals().get" not in serialized_additional_dynamic_forms
+assert "getattr(obj" not in serialized_additional_dynamic_forms
+assert "module_loader(name)" not in serialized_additional_dynamic_forms
+
 bare_dynamic_lookup_messages = run_worker(
     {
         "protocol_version": 1,
