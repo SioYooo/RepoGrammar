@@ -34,7 +34,11 @@
   compact/evidence/deep metadata modes shared by CLI and MCP; compact is the
   default, evidence/deep use greedy metadata coverage selection, all matched
   modes include metadata-only read plans, and deep does not yet include source
-  snippets. Read plans use repo-relative paths, strict content hashes, byte
+  snippets. Supported Python members can preserve non-blocking subclaim
+  `UNKNOWN`s, such as unresolved FastAPI dependency targets, as metadata-only
+  family detail entries keyed by the concrete family id and subclaim without
+  turning those subclaims into route-membership support. Read plans use
+  repo-relative paths, strict content hashes, byte
   ranges, purpose labels, estimated token costs, and no source text; target
   source remains required before edits and line ranges are `null` until safe
   source-span rendering exists. `repogrammar stats --json` now reports
@@ -94,7 +98,11 @@
   family-shaped units in the same file. Final Python family construction also
   consumes parser-origin context features for complete-link compatibility and
   repeats claim-scoped blocking `UNKNOWN` checks before emitting a confident
-  family.
+  family. Python worker dynamic call aliases now keep assigned or chained
+  `importlib.import_module`, `__import__`, `eval`, `exec`, `compile`,
+  `locals`/`globals`/`vars`, `getattr`, and `setattr` dynamic use as typed
+  `UNKNOWN` unless the literal import can be uniquely resolved as repo-local
+  structural context.
   Product-path regression coverage now also indexes local framework lookalikes
   such as `@client.get(...)`, user-defined `BaseModel`, and user-defined
   SQLAlchemy-shaped `Base` classes and verifies they remain non-family

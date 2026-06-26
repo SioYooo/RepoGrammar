@@ -45,6 +45,10 @@
   prevent the affected unit from contributing family support. FastAPI
   `fastapi_dependency_target` UNKNOWNs remain scoped to that subclaim and do
   not block route-family support.
+- Supported Python family members preserve non-blocking subclaim `UNKNOWN`s in
+  family detail/query metadata with concrete affected claims such as
+  `<family_id>:fastapi_dependency_target`; preserving the UNKNOWN does not make
+  the subclaim true.
 - The family builder repeats the same claim-scoped blocking check after support
   derivation. Parser-origin context facts can split complete-link Python
   clusters or create metadata-only variation slots, but parser-origin blocking

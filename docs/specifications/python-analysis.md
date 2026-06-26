@@ -196,7 +196,10 @@ The current implementation covers the first structural slice only:
   facts and synthesizes separate `DATAFLOW_DERIVED` support facts only when the
   code unit has exactly one Python framework role, the structural evidence
   stays inside the same code-unit path/hash/range, and the target exact-matches
-  the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table;
+  the canonical FastAPI/pytest/Pydantic/SQLAlchemy compatibility table. Dynamic
+  call/import aliases such as assigned `importlib.import_module`, `__import__`,
+  `eval`, `exec`, `compile`, namespace lookups, `getattr`, and `setattr` remain
+  typed `UNKNOWN` rather than becoming support;
 - a conservative Python EC-MVFI-lite clustering step that builds internal
   feature vectors from language, unit kind, framework role, normalized shape,
   exact support target, support-family group, parser anchor categories, import
@@ -207,10 +210,13 @@ The current implementation covers the first structural slice only:
   context facts participate in compatibility, while parser-origin blocking
   `UNKNOWN` facts remove the affected unit from confident support unless the
   UNKNOWN is scoped to a non-membership subclaim such as
-  `fastapi_dependency_target`. When parser-context profiles differ inside an
-  already-supported Python family, the builder records metadata-only variation
-  slots for those context categories instead of silently collapsing the
-  difference into an unqualified runtime-equivalence claim. pytest
+  `fastapi_dependency_target`. Non-blocking subclaim `UNKNOWN`s on supported
+  members are preserved in family detail/query metadata with the concrete
+  family id and subclaim name, so route membership does not silently imply that
+  a dependency target was resolved. When parser-context profiles differ inside
+  an already-supported Python family, the builder records metadata-only
+  variation slots for those context categories instead of silently collapsing
+  the difference into an unqualified runtime-equivalence claim. pytest
   non-builtin fixture dependency profiles remain compatibility constraints;
   only known builtin fixture-context differences may stay in the same ready
   family as metadata variation/context;
@@ -778,7 +784,10 @@ structural pytest-test family candidate.
 When a claim-relevant `UNKNOWN` removes a unit from confident family support,
 family output must preserve that original reason code and affected claim in
 addition to any aggregate `InsufficientSupport` result caused by the remaining
-support count.
+support count. When a non-blocking subclaim `UNKNOWN` does not remove support,
+family detail/query output must still preserve the subclaim, such as
+`<family_id>:fastapi_dependency_target`, rather than implying that the subclaim
+is known.
 
 ## References
 

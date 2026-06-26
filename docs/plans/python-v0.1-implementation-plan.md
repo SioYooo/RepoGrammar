@@ -94,8 +94,10 @@ still use the import while later units cannot. Module-level dynamic import or
 `sys.path` mutation is copied into unit-scoped blocking `UNKNOWN`s only for
 later family-shaped units in the file. The worker emits typed
 `UNKNOWN` for dynamic decorators, unresolved bare decorators, monkey-patching,
-dynamic calls including bare or indexed `locals`/`globals`, `eval`, `exec`, and `compile`,
-dynamic Pydantic model factories, dynamic imports including `__import__` and
+dynamic calls including bare or indexed `locals`/`globals`, namespace aliases,
+assigned dynamic call aliases for `importlib.import_module`, `__import__`,
+`eval`, `exec`, `compile`, `getattr`, and `setattr`, dynamic Pydantic model
+factories, dynamic imports including `__import__` and
 literal `importlib.import_module(...)` without unique repo-local resolution,
 `sys.path` mutation, unresolved imports, and fixture ambiguity, and
 emits static FastAPI request body/path/query/header/cookie marker anchors as
@@ -111,8 +113,10 @@ exact canonical CPython anchors only when a unit has one Python framework role
 and no claim-relevant parser-origin blocking `UNKNOWN`. This implements
 sound-by-abstention bounded Python framework-family claims, not sound Python
 semantic analysis; raw parser facts and framework heuristics still remain
-blocked from direct claim input. The family builder now applies bounded
-complete-link clustering over Python support-family and parser-context
+blocked from direct claim input. Non-blocking subclaim `UNKNOWN`s such as
+FastAPI dependency-target uncertainty are preserved in family detail/query
+metadata when membership support remains valid. The family builder now applies
+bounded complete-link clustering over Python support-family and parser-context
 features, refusing single-link bridge clusters and assigning sanitized cluster
 ids only when one coarse bucket contains multiple ready clusters.
 Product-path regression coverage now also indexes local framework lookalikes,

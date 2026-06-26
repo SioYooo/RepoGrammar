@@ -101,6 +101,8 @@ pub struct FamilyStorageRecords {
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
 }
 
+pub const FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX: &str = "unknown|";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct FamilyKey {
     language: String,
@@ -155,6 +157,11 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         eligible_support_by_unit(input.units, &input.support_facts, &role_by_unit);
     let blocking_unknowns =
         python_family_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
+    let non_blocking_unknowns = python_family_non_blocking_unknowns_by_unit(
+        input.units,
+        &input.unknown_facts,
+        &role_by_unit,
+    );
     let mut all_facts = Vec::with_capacity(
         input.role_facts.len()
             + input.support_facts.len()
@@ -269,6 +276,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
                 normalized_shape,
                 cluster,
                 &features_by_unit,
+                &non_blocking_unknowns,
             ));
             emitted_ready_clusters += 1;
         }
@@ -297,6 +305,7 @@ fn family_claim_from_supported_evidence(
     normalized_shape: String,
     supported_evidence: Vec<FamilyEvidence>,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    non_blocking_unknowns_by_unit: &BTreeMap<String, Vec<ClaimUnknown>>,
 ) -> FamilyClaim {
     let family_id = family_id(key, cluster_suffix);
     let runtime_unknown = ClaimUnknown {
@@ -305,14 +314,22 @@ fn family_claim_from_supported_evidence(
         affected_claim: format!("{family_id}:runtime_equivalence"),
         recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
     };
+    let non_blocking_unknowns = family_non_blocking_unknowns_for_evidence(
+        &family_id,
+        &supported_evidence,
+        non_blocking_unknowns_by_unit,
+    );
+    let runtime_unknown_slot_description = format!(
+        "{}:{}:{}",
+        runtime_unknown.class.as_protocol_str(),
+        runtime_unknown.reason.as_protocol_str(),
+        "runtime equivalence remains unproven"
+    );
+    let mut claim_unknowns = vec![runtime_unknown];
+    claim_unknowns.extend(non_blocking_unknowns);
     let mut variation_slots = vec![VariationSlot {
         slot_id: "slot:runtime_unknown".to_string(),
-        description: format!(
-            "{}:{}:{}",
-            runtime_unknown.class.as_protocol_str(),
-            runtime_unknown.reason.as_protocol_str(),
-            "runtime equivalence remains unproven"
-        ),
+        description: runtime_unknown_slot_description,
     }];
     if python_framework_anchor_target_varies(key, &supported_evidence) {
         variation_slots.push(VariationSlot {
@@ -327,6 +344,7 @@ fn family_claim_from_supported_evidence(
         &supported_evidence,
         features_by_unit,
     ));
+    variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
     FamilyClaim {
         family_id,
         classification: "DOMINANT_PATTERN".to_string(),
@@ -338,9 +356,79 @@ fn family_claim_from_supported_evidence(
         evidence: supported_evidence,
         variation_slots,
         exceptions: Vec::new(),
-        unknowns: vec![runtime_unknown],
+        unknowns: claim_unknowns,
         readiness: ClaimReadiness::Ready,
     }
+}
+
+fn family_non_blocking_unknowns_for_evidence(
+    family_id: &str,
+    evidence: &[FamilyEvidence],
+    unknowns_by_unit: &BTreeMap<String, Vec<ClaimUnknown>>,
+) -> Vec<ClaimUnknown> {
+    let mut unknowns = evidence
+        .iter()
+        .flat_map(|evidence| {
+            unknowns_by_unit
+                .get(&evidence.code_unit_id)
+                .into_iter()
+                .flat_map(|unknowns| unknowns.iter())
+        })
+        .map(|unknown| ClaimUnknown {
+            class: unknown.class,
+            reason: unknown.reason,
+            affected_claim: family_subclaim(family_id, &unknown.affected_claim),
+            recovery: unknown.recovery.clone(),
+        })
+        .collect::<Vec<_>>();
+    unknowns.sort_by(|left, right| {
+        (
+            left.affected_claim.as_str(),
+            left.class.as_protocol_str(),
+            left.reason.as_protocol_str(),
+        )
+            .cmp(&(
+                right.affected_claim.as_str(),
+                right.class.as_protocol_str(),
+                right.reason.as_protocol_str(),
+            ))
+    });
+    unknowns.dedup();
+    unknowns
+}
+
+fn family_subclaim(family_id: &str, affected_claim: &str) -> String {
+    if affected_claim.starts_with(family_id) {
+        affected_claim.to_string()
+    } else {
+        format!("{family_id}:{affected_claim}")
+    }
+}
+
+fn non_blocking_unknown_variation_slots(unknowns: &[ClaimUnknown]) -> Vec<VariationSlot> {
+    unknowns
+        .iter()
+        .filter(|unknown| {
+            !(unknown.reason == UnknownReasonCode::FrameworkMagic
+                && unknown.affected_claim.ends_with(":runtime_equivalence"))
+        })
+        .enumerate()
+        .map(|(index, unknown)| VariationSlot {
+            slot_id: format!(
+                "slot:unknown:{}:{}:{index:06}",
+                stable_token(unknown.reason.as_protocol_str()),
+                stable_token(&unknown.affected_claim)
+            ),
+            description: format!(
+                "{}{}|{}|{}|{}",
+                FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
+                unknown.class.as_protocol_str(),
+                unknown.reason.as_protocol_str(),
+                unknown.affected_claim,
+                unknown.recovery.as_deref().unwrap_or("")
+            ),
+        })
+        .collect()
 }
 
 fn python_context_variation_slots(
@@ -715,6 +803,42 @@ fn python_family_blocking_unknowns_by_unit(
     blocking
 }
 
+fn python_family_non_blocking_unknowns_by_unit(
+    units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, Vec<ClaimUnknown>> {
+    let unit_by_id = units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut non_blocking: BTreeMap<String, Vec<ClaimUnknown>> = BTreeMap::new();
+
+    for fact in facts {
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if let Some(unknown) = python_family_non_blocking_unknown(fact, framework_role) {
+            non_blocking
+                .entry(code_unit_id.to_string())
+                .or_default()
+                .push(unknown);
+        }
+    }
+
+    non_blocking
+}
+
 pub(crate) fn python_family_unknown_blocks_claim(
     fact: &SemanticFact,
     framework_role: &str,
@@ -748,6 +872,37 @@ fn python_family_blocking_unknown(
         reason,
         affected_claim: affected_claim.to_string(),
         recovery: Some("resolve the blocking Python UNKNOWN before claiming a family".to_string()),
+    })
+}
+
+fn python_family_non_blocking_unknown(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("python_family_membership");
+
+    if python_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+        || !python_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
+    {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::NonBlocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve this Python subclaim before relying on it".to_string()),
     })
 }
 
@@ -786,6 +941,16 @@ fn python_unknown_affected_claim_blocks_family(affected_claim: &str, framework_r
         claim if claim.starts_with("family:") => true,
         _ => framework_role.starts_with("framework:pytest") && affected_claim.contains("fixture"),
     }
+}
+
+fn python_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    matches!(reason, UnknownReasonCode::RuntimeDependencyInjection)
+        && framework_role == "framework:fastapi.route"
+        && affected_claim == "fastapi_dependency_target"
 }
 
 fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {

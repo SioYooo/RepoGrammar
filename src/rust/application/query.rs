@@ -1,5 +1,6 @@
 //! Query use-case boundary for finding repository analogues.
 
+use crate::application::family::FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX;
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
@@ -1096,6 +1097,31 @@ fn family_store_error(error: StoreError) -> RepoGrammarError {
 
 fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
     let family_id = family.family.family_id;
+    let mut unknowns = vec![FamilyQueryUnknown {
+        class: UnknownClass::NonBlocking,
+        reason: UnknownReasonCode::FrameworkMagic,
+        affected_claim: format!("{family_id}:runtime_equivalence"),
+        recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+    }];
+    unknowns.extend(
+        family
+            .variation_slots
+            .iter()
+            .filter_map(family_unknown_from_variation_slot),
+    );
+    unknowns.sort_by(|left, right| {
+        (
+            left.affected_claim.as_str(),
+            left.class.as_protocol_str(),
+            left.reason.as_protocol_str(),
+        )
+            .cmp(&(
+                right.affected_claim.as_str(),
+                right.class.as_protocol_str(),
+                right.reason.as_protocol_str(),
+            ))
+    });
+    unknowns.dedup();
     FamilyDetailReport {
         active_generation: family.generation_id,
         family_id: family_id.clone(),
@@ -1104,13 +1130,30 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         members: family.members,
         variation_slots: family.variation_slots,
         evidence: family.evidence,
-        unknowns: vec![FamilyQueryUnknown {
-            class: UnknownClass::NonBlocking,
-            reason: UnknownReasonCode::FrameworkMagic,
-            affected_claim: format!("{family_id}:runtime_equivalence"),
-            recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
-        }],
+        unknowns,
     }
+}
+
+fn family_unknown_from_variation_slot(
+    slot: &IndexedVariationSlotRecord,
+) -> Option<FamilyQueryUnknown> {
+    let payload = slot
+        .description
+        .strip_prefix(FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX)?;
+    let mut parts = payload.splitn(4, '|');
+    let class = UnknownClass::parse_protocol_str(parts.next()?).ok()?;
+    let reason = UnknownReasonCode::parse_protocol_str(parts.next()?).ok()?;
+    let affected_claim = parts.next()?.to_string();
+    let recovery = parts
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    Some(FamilyQueryUnknown {
+        class,
+        reason,
+        affected_claim,
+        recovery,
+    })
 }
 
 fn family_matches_target(family: &ActiveFamily, target: &str, mode: FamilyLookupMode) -> bool {
@@ -1565,6 +1608,48 @@ mod tests {
             evidence,
             unknowns: Vec::new(),
         }
+    }
+
+    #[test]
+    fn family_detail_restores_non_blocking_unknowns_from_variation_slot_metadata() {
+        let family_id = "family:python:fastapi_route:framework_fastapi_route".to_string();
+        let detail = family_detail(ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.clone(),
+                classification: "DOMINANT_PATTERN".to_string(),
+            },
+            members: Vec::new(),
+            variation_slots: vec![
+                IndexedVariationSlotRecord {
+                    family_id: family_id.clone(),
+                    slot_id: "slot:unknown:runtime_dependency_injection:000000".to_string(),
+                    description: format!(
+                        "unknown|non_blocking_unknown|RuntimeDependencyInjection|{family_id}:fastapi_dependency_target|resolve this Python subclaim before relying on it"
+                    ),
+                },
+                IndexedVariationSlotRecord {
+                    family_id: family_id.clone(),
+                    slot_id: "slot:ordinary".to_string(),
+                    description: "variation:ordinary:metadata differs".to_string(),
+                },
+            ],
+            evidence: Vec::new(),
+        });
+
+        assert!(detail.unknowns.iter().any(|unknown| {
+            unknown.class == UnknownClass::NonBlocking
+                && unknown.reason == UnknownReasonCode::RuntimeDependencyInjection
+                && unknown.affected_claim == format!("{family_id}:fastapi_dependency_target")
+                && unknown.recovery.as_deref()
+                    == Some("resolve this Python subclaim before relying on it")
+        }));
+        assert!(detail.unknowns.iter().any(|unknown| {
+            unknown.class == UnknownClass::NonBlocking
+                && unknown.reason == UnknownReasonCode::FrameworkMagic
+                && unknown.affected_claim == format!("{family_id}:runtime_equivalence")
+        }));
+        assert_eq!(detail.variation_slots.len(), 2);
     }
 
     fn family_store_with_members(members: Vec<IndexedFamilyMemberRecord>) -> FakeFamilyStore {

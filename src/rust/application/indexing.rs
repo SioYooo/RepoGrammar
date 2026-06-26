@@ -1494,7 +1494,7 @@ mod tests {
     use crate::core::model::{
         CodeUnitId, CodeUnitKind, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdgeLabel,
         IrNodeId, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
-        UnknownReasonCode,
+        UnknownClass, UnknownReasonCode,
     };
     use crate::core::policy::freshness::ClaimInputReadiness;
     use crate::ports::family_store::FamilyStore;
@@ -2479,7 +2479,21 @@ mod tests {
         let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert_eq!(report.claims.len(), 1);
-        assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
+        let claim = &report.claims[0];
+        assert_eq!(claim.framework_role, "framework:fastapi.route");
+        assert!(claim.unknowns.iter().any(|unknown| {
+            unknown.class == UnknownClass::NonBlocking
+                && unknown.reason == UnknownReasonCode::RuntimeDependencyInjection
+                && unknown.affected_claim
+                    == format!("{}:fastapi_dependency_target", claim.family_id)
+        }));
+        let records = family_storage_records(claim);
+        assert!(records.variation_slots.iter().any(|slot| {
+            slot.description == format!(
+                "unknown|non_blocking_unknown|RuntimeDependencyInjection|{}:fastapi_dependency_target|resolve this Python subclaim before relying on it",
+                claim.family_id
+            )
+        }));
     }
 
     #[test]

@@ -99,7 +99,11 @@ Some unknowns block only specific claims:
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as
 `<family_id>:runtime_equivalence`, so downstream agents do not treat the
-unknown as repository-global.
+unknown as repository-global. Current Python family detail/query output also
+preserves supported-member non-blocking subclaim unknowns, such as
+`<family_id>:fastapi_dependency_target`, through metadata-only family output;
+the route family can remain confident while the dependency-target subclaim
+stays `UNKNOWN`.
 
 ## Recovery Actions
 

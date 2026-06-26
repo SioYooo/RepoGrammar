@@ -66,7 +66,10 @@
   Dynamic decorator factories now produce typed `FrameworkMagic` UNKNOWNs for
   `python_framework_identity`, and `setattr(...)` monkey-patching produces typed
   `MonkeyPatch` UNKNOWNs for `python_call_target`; neither path becomes family
-  evidence. Dynamic FastAPI dependency target expressions such as
+  evidence. Assigned aliases of dynamic import/execution/namespace/lookup and
+  monkey-patch functions now remain typed `UNKNOWN` as well, while uniquely
+  repo-local literal `importlib.import_module(...)` can still become structural
+  import context. Dynamic FastAPI dependency target expressions such as
   `Depends(make_dependency())` now produce typed `RuntimeDependencyInjection`
   UNKNOWNs for the dependency-target sub-claim instead of silently disappearing.
   Literal pytest fixture `name=` aliases now define the fixture binding name,
@@ -101,7 +104,10 @@
   estimated token costs, and `source_snippets_included: false`. Read plans mark
   target source as required before edits, keep line ranges `null` until safe
   source-span rendering exists, and are suppressed when stale or insufficient
-  evidence returns typed `UNKNOWN`.
+  evidence returns typed `UNKNOWN`. Non-blocking supported-member subclaim
+  UNKNOWNs, such as unresolved FastAPI dependency targets, are preserved in
+  family detail/query metadata with the concrete family id instead of being
+  silently dropped from confident route-family reads.
   `repogrammar stats --json` now reports repo-shape diagnostics for local
   pattern density, family support coverage, abstention rate, and
   thin-wrapper/token-saving risk without reporting measured token savings or
