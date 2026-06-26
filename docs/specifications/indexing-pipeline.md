@@ -352,16 +352,21 @@ produce `DOMINANT_PATTERN` only for repeated compatible candidates backed by
 strong semantic/dataflow support; otherwise query output remains typed
 `UNKNOWN`.
 FastAPI route decorator targets can become derived support only when they
-exact-match the canonical route-method table. Static `response_model=...`,
-static `Depends(get_db)` dependency-target, `Depends(...)`, and
-`HTTPException(...)` parser anchors, including literal status-code effect
+exact-match the canonical route-method table:
+`fastapi.FastAPI.{delete,get,head,options,patch,post,put}` and
+`fastapi.APIRouter.{delete,get,head,options,patch,post,put}`. Generic
+`api_route` and WebSocket decorators are not v0.1 support targets. Static
+`response_model=...`, static `Depends(get_db)` dependency-target, `Depends(...)`,
+and `HTTPException(...)` parser anchors, including literal status-code effect
 anchors, plus static FastAPI request body and request-parameter anchors, stay
-schema/context/effect metadata and do not prove membership support. Pydantic
-field, field-type, `model_config`, nested `Config`, computed-field,
-field-validator, legacy validator, and model-validator anchors likewise stay
-model schema/config/member metadata and do not prove membership support.
-FastAPI service-call anchors stay handler/service context metadata and also do
-not prove membership support.
+schema/context/effect metadata and do not prove membership support. Canonical
+`pytest.mark.parametrize` decorator anchors can support pytest test families,
+but `pytest.parametrize.<name>` argument anchors remain context metadata and do
+not prove support. Pydantic field, field-type, `model_config`, nested `Config`,
+computed-field, field-validator, legacy validator, and model-validator anchors
+likewise stay model schema/config/member metadata and do not prove membership
+support. FastAPI service-call anchors stay handler/service context metadata and
+also do not prove membership support.
 
 `UNKNOWN` classifications and sub-claim unknowns must use the taxonomy in
 `docs/specifications/unknowns.md`. Unknowns caused by dynamic imports, monkey

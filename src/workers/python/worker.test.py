@@ -388,6 +388,53 @@ assert any(
     and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
     for fact in parse_facts
 )
+route_methods = ["delete", "get", "head", "options", "patch", "post", "put"]
+route_matrix_source = "\n".join(
+    [
+        "from fastapi import APIRouter, FastAPI",
+        "router = APIRouter()",
+        "app = FastAPI()",
+        "",
+        *[
+            f"@router.{method}('/router-{method}')\n"
+            f"def router_{method}():\n"
+            f"    return {{}}\n"
+            for method in route_methods
+        ],
+        *[
+            f"@app.{method}('/app-{method}')\n"
+            f"def app_{method}():\n"
+            f"    return {{}}\n"
+            for method in route_methods
+        ],
+    ]
+)
+route_matrix_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "routes.py",
+        "content_hash": "sha256:" + "7" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": route_matrix_source,
+    }
+)
+route_matrix_facts = route_matrix_messages[0]["facts"]
+route_matrix_targets = {
+    fact["target"]
+    for fact in route_matrix_facts
+    if fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+}
+assert route_matrix_targets == {
+    *(f"fastapi.APIRouter.{method}" for method in route_methods),
+    *(f"fastapi.FastAPI.{method}" for method in route_methods),
+}
+route_matrix_unit_kinds = [unit["kind"] for unit in route_matrix_messages[0]["units"]]
+assert route_matrix_unit_kinds.count("fastapi_route") == len(route_methods) * 2
+serialized_route_matrix = json.dumps(route_matrix_messages)
+assert "@router." not in serialized_route_matrix
+assert "@app." not in serialized_route_matrix
 assert any(
     fact["fact_kind"] == "TYPE"
     and fact["target"] == "fastapi.response_model.UserOut"

@@ -73,6 +73,12 @@
   `find`, `explain`, advisory `check`, token-budget auto evidence, explicit
   compact/evidence/deep metadata modes, MCP parity for supported operations,
   and stale source mutation/deletion returning `StaleEvidence` `UNKNOWN`.
+  FastAPI exact-anchor regression coverage now spans all supported
+  FastAPI/APIRouter HTTP route methods (`delete`, `get`, `head`, `options`,
+  `patch`, `post`, and `put`) and keeps `api_route`/WebSocket decorators
+  deferred. pytest regression coverage now distinguishes the support-eligible
+  `pytest.mark.parametrize` decorator from context-only parametrize argument
+  anchors.
   Default indexing validates and persists
   parser-origin
   `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction

@@ -1818,6 +1818,59 @@ def test_users(client, status, missing_fixture):
     }
 
     #[test]
+    fn cpython_frontend_preserves_fastapi_route_method_matrix() {
+        let route_methods = ["delete", "get", "head", "options", "patch", "post", "put"];
+        let mut source = String::from(
+            "from fastapi import APIRouter, FastAPI\nrouter = APIRouter()\napp = FastAPI()\n\n",
+        );
+        for method in route_methods {
+            source.push_str(&format!("@router.{method}('/router-{method}')\ndef router_{method}():\n    return {{}}\n\n@app.{method}('/app-{method}')\ndef app_{method}():\n    return {{}}\n\n"));
+        }
+
+        let report = PythonAstParser::default()
+            .parse(document_at("routes.py", &source))
+            .expect("parse FastAPI route matrix");
+
+        let route_targets = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Symbol
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "python_anchor_kind=fastapi_route_decorator"
+                    })
+            })
+            .filter_map(|fact| fact.target.as_ref().map(SymbolId::as_str))
+            .collect::<BTreeSet<_>>();
+        let expected_targets = route_methods
+            .iter()
+            .flat_map(|method| {
+                [
+                    format!("fastapi.APIRouter.{method}"),
+                    format!("fastapi.FastAPI.{method}"),
+                ]
+            })
+            .collect::<BTreeSet<_>>();
+        let actual_targets = route_targets
+            .iter()
+            .map(|target| target.to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual_targets, expected_targets);
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .filter(|unit| unit.kind.as_str() == "fastapi_route")
+                .count(),
+            route_methods.len() * 2
+        );
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("@router."));
+        assert!(!debug.contains("@app."));
+    }
+
+    #[test]
     fn cpython_frontend_marks_dynamic_decorators_and_monkey_patches_unknown() {
         let source = r#"
 def decorator_factory(name):

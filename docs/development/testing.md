@@ -209,7 +209,9 @@ allowed.
   heuristic framework-role facts staying out of family claims, raw parser-origin
   facts staying out of family construction,
   exact-anchor derived support facts producing no-worker direct FastAPI,
-  FastAPI alias, pytest test, pytest fixture, Pydantic model/settings,
+  the complete FastAPI/APIRouter `delete`, `get`, `head`, `options`, `patch`,
+  `post`, and `put` route-method matrix, FastAPI alias, pytest test,
+  pytest `mark.parametrize` decorator support, pytest fixture, Pydantic model/settings,
   SQLAlchemy model-field, and SQLAlchemy session/repository families only when
   Python support reaches three members, their CLI/MCP metadata-only
   compact/evidence/deep query paths,

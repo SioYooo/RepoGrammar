@@ -338,8 +338,11 @@ PythonSemanticFact =
 Compatibility examples:
 
 - FastAPI route: decorator or call target resolves to
-  `fastapi.FastAPI.get`, `fastapi.FastAPI.post`, `fastapi.APIRouter.get`,
-  `fastapi.APIRouter.post`, or another supported FastAPI route method.
+  `fastapi.FastAPI.{delete,get,head,options,patch,post,put}` or
+  `fastapi.APIRouter.{delete,get,head,options,patch,post,put}`. The generic
+  `api_route` decorator and WebSocket routes are deferred and must not become
+  v0.1 exact-anchor membership support without an explicit compatibility-table
+  update and tests.
 - pytest fixture: decorator resolves to `pytest.fixture`, or the provider
   resolves a fixture binding.
 - Pydantic model/settings: subclass relation resolves to `pydantic.BaseModel`,
@@ -413,9 +416,10 @@ Required evidence includes test function naming, alias-normalized
 explicit fixture definitions, built-in/plugin fixture allowlists, and ambiguity
 detection. Bare canonical fixture decorators may become exact-anchor support for
 pytest fixture families when the compatibility table, support count, and
-freshness/readiness gates pass. `pytest.fixture.<name>` fixture-edge anchors and
-`pytest.parametrize.<name>` argument anchors are context only and must not derive
-family support.
+freshness/readiness gates pass. Canonical `pytest.mark.parametrize` decorator
+anchors may support `framework:pytest.test` families under the same gates.
+`pytest.fixture.<name>` fixture-edge anchors and `pytest.parametrize.<name>`
+argument anchors are context only and must not derive family support.
 
 Pydantic roles:
 

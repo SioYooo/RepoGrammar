@@ -2325,6 +2325,90 @@ mod tests {
     }
 
     #[test]
+    fn exact_fastapi_route_method_matrix_derives_family_support() {
+        let targets = [
+            "fastapi.FastAPI.delete",
+            "fastapi.FastAPI.get",
+            "fastapi.FastAPI.head",
+            "fastapi.FastAPI.options",
+            "fastapi.FastAPI.patch",
+            "fastapi.FastAPI.post",
+            "fastapi.FastAPI.put",
+            "fastapi.APIRouter.delete",
+            "fastapi.APIRouter.get",
+            "fastapi.APIRouter.head",
+            "fastapi.APIRouter.options",
+            "fastapi.APIRouter.patch",
+            "fastapi.APIRouter.post",
+            "fastapi.APIRouter.put",
+        ];
+        let units = targets
+            .iter()
+            .enumerate()
+            .map(|(index, _target)| {
+                indexed_python_unit(&format!("app/route_{index}.py"), "fastapi_route", index)
+            })
+            .collect::<Vec<_>>();
+        let mut parser_facts = units
+            .iter()
+            .zip(targets)
+            .map(|(unit, target)| {
+                parser_structural_anchor_fact(unit, SemanticFactKind::Symbol, target)
+            })
+            .collect::<Vec<_>>();
+        parser_facts.push(parser_structural_anchor_fact(
+            &units[0],
+            SemanticFactKind::Symbol,
+            "fastapi.APIRouter.api_route",
+        ));
+        parser_facts.push(parser_structural_anchor_fact(
+            &units[1],
+            SemanticFactKind::Symbol,
+            "fastapi.FastAPI.websocket",
+        ));
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let mut derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact FastAPI support");
+        derived.sort_by(|left, right| {
+            left.target
+                .as_ref()
+                .map(SymbolId::as_str)
+                .cmp(&right.target.as_ref().map(SymbolId::as_str))
+        });
+        let mut derived_targets = derived
+            .iter()
+            .map(|fact| fact.target.as_ref().map(SymbolId::as_str).expect("target"))
+            .collect::<Vec<_>>();
+        let mut expected_targets = targets.to_vec();
+        derived_targets.sort_unstable();
+        expected_targets.sort_unstable();
+
+        assert_eq!(derived_targets, expected_targets);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+        }));
+        assert!(!derived.iter().any(|fact| {
+            matches!(
+                fact.target.as_ref().map(SymbolId::as_str),
+                Some("fastapi.APIRouter.api_route") | Some("fastapi.FastAPI.websocket")
+            )
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
+        assert_eq!(report.claims[0].support, targets.len());
+    }
+
+    #[test]
     fn plans_provider_identity_request_for_same_role_python_candidates() {
         let first = indexed_python_unit("app/b.py", "fastapi_route", 1);
         let second = indexed_python_unit("app/a.py", "fastapi_route", 0);
@@ -2745,6 +2829,46 @@ mod tests {
                 && fact.origin.engine == "repogrammar-python-derived"
                 && fact.origin.method == "bounded_ast_anchor_v1"
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.test")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "python");
+        assert_eq!(report.claims[0].framework_role, "framework:pytest.test");
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn exact_pytest_parametrize_decorator_anchors_derive_family_support() {
+        let first = indexed_python_unit("tests/test_api.py", "pytest_test", 0);
+        let second = indexed_python_unit("tests/test_api.py", "pytest_test", 1);
+        let third = indexed_python_unit("tests/test_api.py", "pytest_test", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = units
+            .iter()
+            .map(|unit| {
+                parser_structural_anchor_fact(
+                    unit,
+                    SemanticFactKind::Symbol,
+                    "pytest.mark.parametrize",
+                )
+            })
+            .collect::<Vec<_>>();
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:pytest.test"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact pytest parametrize support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == "repogrammar-python-derived"
+                && fact.origin.method == "bounded_ast_anchor_v1"
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.mark.parametrize")
         }));
         let mut family_facts = role_facts;
         family_facts.extend(derived);
