@@ -21,6 +21,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: node src/workers/typescript/worker.test.js
+      - run: node src/npm/repogrammar.test.js
+      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
       - run: python3 src/workers/python/worker.test.py
       - run: bash src/install/repogrammar-install.test.sh
       - run: cargo run --quiet --bin repo-guard -- check

@@ -63,7 +63,9 @@
   checkouts also include `src/install/repogrammar-install.sh` as the
   public-facing TUI wrapper for release-binary install/repair/uninstall choices,
   with Cargo kept as an explicit contributor source-build path only and release
-  artifacts bundling the current Python worker asset. Uninstall refuses
+  artifacts bundling the current Python worker asset. The optional npm package
+  `@sioyooo/repogrammar` is a thin npx launcher over those same release
+  artifacts, not a JavaScript implementation. Uninstall refuses
   missing or foreign managed receipts, while `uninstall --target all` removes
   owned first-class agent receipts it finds. Ready Python exact-anchor families
   can also record metadata-only variation evidence when exact-compatible

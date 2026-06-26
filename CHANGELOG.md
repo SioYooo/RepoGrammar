@@ -22,6 +22,10 @@
   assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
   preview, bundles the current Python worker asset, and publishes `install.sh`
   / `install.ps1` installer assets for tagged preview releases.
+- Added the `@sioyooo/repogrammar` npm package manifest and thin `npx`
+  launcher. The launcher downloads and verifies the same prebuilt release
+  artifacts, caches the binary and bundled worker asset, and delegates all
+  behavior to the Rust CLI without requiring Cargo.
 - Repository bootstrap for the RepoGrammar Rust-core package layout.
 - Layered architecture skeleton for core, ports, application, interfaces, and
   adapters.

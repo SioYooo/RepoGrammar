@@ -52,6 +52,20 @@ curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/inst
 bash install.sh
 ```
 
+If you already use Node/npm, the npm wrapper can download the same prebuilt
+binary and run it through `npx`:
+
+```text
+npx @sioyooo/repogrammar install
+```
+
+You can also install the wrapper globally:
+
+```text
+npm install -g @sioyooo/repogrammar
+repogrammar install
+```
+
 The installer downloads the matching macOS or Linux release artifact, verifies
 its checksum, installs `repogrammar` into a user-writable command directory, and
 then can launch the agent setup wizard. It does not require Rust, Cargo,
@@ -60,7 +74,8 @@ current Python preview still requires a `python3` interpreter at indexing time
 to run RepoGrammar's bundled CPython AST worker; it does not require a Python
 virtualenv or project dependency installation.
 
-On Windows preview builds, use PowerShell:
+The `npx` / npm path requires Node/npm by definition, but still does not require
+Rust or Cargo. On Windows preview builds, use PowerShell:
 
 ```text
 Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.ps1 -OutFile install.ps1
@@ -94,7 +109,8 @@ index the current repository and does not create or modify `.repogrammar/`.
 Supported public-preview binary targets are macOS arm64/x86_64, Linux
 arm64/x86_64, and Windows x86_64 preview. Release artifacts include the
 RepoGrammar binary and the Python worker asset used by the current Python
-frontend.
+frontend. The npm wrapper is a thin launcher for those same release artifacts;
+it is not the implementation of RepoGrammar.
 
 ## Quick Start
 

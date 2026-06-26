@@ -53,6 +53,16 @@ must not create or modify `.repogrammar/`.
 Windows public-preview source checkouts may provide `src/install/install.ps1`
 with the same binary-download and checksum-verification boundary.
 
+The npm package `@sioyooo/repogrammar` is a thin launcher only. Its `bin`
+entrypoint lives under `src/npm/`, detects OS/architecture, downloads the
+matching GitHub Release artifact, verifies the `.sha256` checksum, caches the
+binary and bundled worker assets under user-local state, and execs the Rust
+`repogrammar` binary with the original arguments. It must not compile Rust
+source, run `cargo`, implement RepoGrammar analysis behavior in JavaScript, call
+real native Codex/Claude CLIs in tests, or become the only installation path.
+`npx` and global npm installs require Node/npm by definition, but they must not
+require Rust/Cargo.
+
 ## Commands
 
 - `repogrammar install`
@@ -182,6 +192,9 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary;
+- `@sioyooo/repogrammar` supports `npx @sioyooo/repogrammar ...` by downloading
+  and caching the matching prebuilt release artifact, then delegating all
+  behavior to the Rust binary;
 - install runs a read-only MCP self-test before native agent configuration, with
   a bounded timeout that kills and reaps a hanging self-test process;
 - install writes one RepoGrammar-owned receipt per configured target under the

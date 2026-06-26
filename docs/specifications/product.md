@@ -189,6 +189,9 @@ or cloud API keys. Rust/Cargo remains a contributor and source-build dependency
 only. The current Python preview still requires a `python3` interpreter at
 indexing time for the bundled CPython AST worker asset; it must not require a
 Python virtualenv or project dependency installation.
+The npm package is an optional thin launcher for users who already have
+Node/npm; it downloads and execs the same release binary and must not become a
+JavaScript reimplementation of RepoGrammar.
 
 Repository-derived analysis state belongs in the current repository's
 `.repogrammar/` state directory, or the directory named by `REPOGRAMMAR_DIR`.

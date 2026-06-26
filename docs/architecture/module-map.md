@@ -22,6 +22,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/bin/repogrammar.rs` | Product composition root | `README.md`, CLI documentation |
 | `src/rust/bin/repo_guard.rs` | Repository governance CLI | `docs/development/repository-guard.md` |
 | `src/install/` | End-user and source-checkout installer wrapper scripts that install release binaries and call the product binary without duplicating native agent logic | `README.md`, `docs/specifications/installation.md`, `docs/development/testing.md` |
+| `src/npm/` | Thin npm/npx launcher and tests that download release binaries and exec the product binary without reimplementing RepoGrammar | `README.md`, `docs/specifications/installation.md`, `docs/development/testing.md` |
 | `src/rust/test_support/` | Shared deterministic Rust test helpers | `docs/development/testing.md` |
 | `src/rust/integration_tests/` | Crate-level Rust integration-style tests | `docs/development/testing.md` |
 | `src/workers/typescript/` | Transitional TypeScript semantic worker executable stub and future compiler-backed worker | `docs/specifications/semantic-workers.md` |
