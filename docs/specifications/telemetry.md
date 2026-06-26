@@ -102,4 +102,7 @@ behind `TelemetryUploadTransport` with fake/mock transport tests and preserve
 Repo-local telemetry state lives under `.repogrammar/telemetry/` and may hold
 coarse aggregate rollups, queue files, and upload receipts. It must not contain
 source snippets, prompts, query text, paths, repository names, symbols,
-credentials, environment variables, evidence text, or raw error messages.
+content hashes, byte ranges, credentials, environment variables, evidence text,
+or raw error messages. Source-span telemetry, if added, is limited to
+aggregate/bucketed counts such as whether a source-span opt-in was used and how
+many spans were returned or omitted.

@@ -20,11 +20,12 @@ use crate::ports::index_store::{
     IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedSemanticFactRecord,
 };
-use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_QUERY_TARGET_BYTES: usize = 8 * 1024;
 pub const MAX_QUERY_TOKEN_BUDGET: usize = 200_000;
+pub const MAX_RENDERED_SOURCE_SPAN_BYTES: usize = 16 * 1024;
 
 pub fn validate_query_target(value: &str) -> Result<(), &'static str> {
     if value.trim().is_empty() {
@@ -375,6 +376,54 @@ pub struct ReadPlan {
     pub budget_satisfied: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpanRenderRequest {
+    pub repository_root: String,
+    pub max_file_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSourceSpan {
+    pub purpose: ReadPlanPurpose,
+    pub path: String,
+    pub content_hash: crate::core::model::ContentHash,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub estimated_tokens: usize,
+    pub why: String,
+    pub source_required_before_edit: bool,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpanOmission {
+    pub purpose: ReadPlanPurpose,
+    pub path: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub reason: &'static str,
+    pub guidance: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpanPolicy {
+    pub requested: bool,
+    pub source_snippets_included: bool,
+    pub estimated_tokens: usize,
+    pub budget_satisfied: bool,
+    pub selection_strategy: &'static str,
+    pub fallback_guidance: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpanRenderReport {
+    pub policy: SourceSpanPolicy,
+    pub spans: Vec<RenderedSourceSpan>,
+    pub omissions: Vec<SourceSpanOmission>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FamilyLookupMode {
     ExactFamilyId,
@@ -680,6 +729,264 @@ pub fn build_read_plan(
         selection_strategy: "deterministic_read_plan_v1",
         items: selected,
     }
+}
+
+pub fn render_source_spans(
+    request: SourceSpanRenderRequest,
+    source_store: &impl SourceStore,
+    read_plan: &ReadPlan,
+    include_source_spans: bool,
+    token_budget: Option<usize>,
+) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+    if !include_source_spans {
+        return Ok(SourceSpanRenderReport {
+            policy: SourceSpanPolicy {
+                requested: false,
+                source_snippets_included: false,
+                estimated_tokens: 0,
+                budget_satisfied: true,
+                selection_strategy: "metadata_only_v1",
+                fallback_guidance:
+                    "source spans were not requested; use the read_plan before editing",
+            },
+            spans: Vec::new(),
+            omissions: Vec::new(),
+        });
+    }
+
+    let mut spans = Vec::new();
+    let mut omissions = Vec::new();
+    let mut estimated_tokens = 0usize;
+    let mut budget_satisfied = true;
+
+    for item in &read_plan.items {
+        let source = match source_store.read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: item.path.clone(),
+            expected_content_hash: item.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        }) {
+            Ok(source) => source,
+            Err(SourceStoreError::InvalidRequest(_)) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "stored read-plan source path is invalid".to_string(),
+                ));
+            }
+            Err(SourceStoreError::Missing(_)) | Err(SourceStoreError::HashMismatch(_)) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "stale_evidence",
+                    "source changed or disappeared; use normal Read/Grep for this span",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::TooLarge(_)) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "source_too_large",
+                    "source exceeds the configured read limit; use normal Read/Grep if needed",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::NonUtf8(_)) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "non_utf8_source",
+                    "source is not UTF-8; use normal tooling for this file",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::Unavailable(_)) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "source_unavailable",
+                    "source store is unavailable; use normal Read/Grep for this span",
+                ));
+                continue;
+            }
+        };
+
+        if source.path != item.path || source.content_hash != item.content_hash {
+            return Err(RepoGrammarError::InvalidInput(
+                "source store returned mismatched source for read-plan span".to_string(),
+            ));
+        }
+
+        let rendered = match render_source_span_item(item, &source) {
+            Ok(rendered) => rendered,
+            Err(RenderSourceSpanItemError::InvalidRange) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "invalid_source_range",
+                    "stored source range is invalid; use normal Read/Grep for this span",
+                ));
+                continue;
+            }
+            Err(RenderSourceSpanItemError::SpanTooLarge) => {
+                omissions.push(source_span_omission(
+                    item,
+                    "source_span_too_large",
+                    "source span exceeds the configured render limit; use normal Read if needed",
+                ));
+                continue;
+            }
+        };
+        let next_estimated_tokens = estimated_tokens.saturating_add(rendered.estimated_tokens);
+        if let Some(budget) = token_budget {
+            if next_estimated_tokens > budget {
+                budget_satisfied = false;
+                omissions.push(source_span_omission(
+                    item,
+                    "token_budget_exceeded",
+                    "source span omitted to stay within the requested token budget; use normal Read if this span is necessary",
+                ));
+                continue;
+            }
+        }
+        estimated_tokens = next_estimated_tokens;
+        spans.push(rendered);
+    }
+
+    Ok(SourceSpanRenderReport {
+        policy: SourceSpanPolicy {
+            requested: true,
+            source_snippets_included: !spans.is_empty(),
+            estimated_tokens,
+            budget_satisfied,
+            selection_strategy: "hash_checked_line_numbered_spans_v1",
+            fallback_guidance: if omissions.is_empty() {
+                "use rendered source spans only for the listed byte ranges; use normal Read before editing outside them"
+            } else {
+                "some spans were omitted; use normal Read/Grep for omitted or stale cases"
+            },
+        },
+        spans,
+        omissions,
+    })
+}
+
+pub fn read_plan_with_rendered_spans(
+    read_plan: &ReadPlan,
+    rendered: &SourceSpanRenderReport,
+) -> ReadPlan {
+    let mut output = read_plan.clone();
+    output.source_snippets_included = rendered.policy.source_snippets_included;
+    output.budget_satisfied = output.budget_satisfied && rendered.policy.budget_satisfied;
+    for item in &mut output.items {
+        if let Some(span) = rendered.spans.iter().find(|span| {
+            span.path == item.path
+                && span.content_hash == item.content_hash
+                && span.start_byte == item.start_byte
+                && span.end_byte == item.end_byte
+                && span.purpose == item.purpose
+        }) {
+            item.start_line = Some(span.start_line);
+            item.end_line = Some(span.end_line);
+            item.source_snippets_included = true;
+        }
+    }
+    output
+}
+
+fn render_source_span_item(
+    item: &ReadPlanItem,
+    source: &SourceText,
+) -> Result<RenderedSourceSpan, RenderSourceSpanItemError> {
+    let (text, start_line, end_line) =
+        line_numbered_span(&source.text, item.start_byte, item.end_byte)?;
+    if text.len() > MAX_RENDERED_SOURCE_SPAN_BYTES {
+        return Err(RenderSourceSpanItemError::SpanTooLarge);
+    }
+    let estimated_tokens = estimate_text_tokens(&text);
+    Ok(RenderedSourceSpan {
+        purpose: item.purpose,
+        path: item.path.clone(),
+        content_hash: item.content_hash.clone(),
+        start_byte: item.start_byte,
+        end_byte: item.end_byte,
+        start_line,
+        end_line,
+        estimated_tokens,
+        why: item.why.clone(),
+        source_required_before_edit: item.source_required_before_edit,
+        text,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderSourceSpanItemError {
+    InvalidRange,
+    SpanTooLarge,
+}
+
+fn source_span_omission(
+    item: &ReadPlanItem,
+    reason: &'static str,
+    guidance: &'static str,
+) -> SourceSpanOmission {
+    SourceSpanOmission {
+        purpose: item.purpose,
+        path: item.path.clone(),
+        start_byte: item.start_byte,
+        end_byte: item.end_byte,
+        reason,
+        guidance,
+    }
+}
+
+fn line_numbered_span(
+    source: &str,
+    start_byte: usize,
+    end_byte: usize,
+) -> Result<(String, usize, usize), RenderSourceSpanItemError> {
+    if start_byte >= end_byte || end_byte > source.len() {
+        return Err(RenderSourceSpanItemError::InvalidRange);
+    }
+    if !source.is_char_boundary(start_byte) || !source.is_char_boundary(end_byte) {
+        return Err(RenderSourceSpanItemError::InvalidRange);
+    }
+
+    let line_starts = source_line_starts(source);
+    let mut selected = Vec::new();
+    for (index, line_start) in line_starts.iter().copied().enumerate() {
+        let line_end = line_starts.get(index + 1).copied().unwrap_or(source.len());
+        if line_end > start_byte && line_start < end_byte {
+            selected.push((index + 1, line_start, line_end));
+        }
+    }
+    let Some((start_line, _, _)) = selected.first().copied() else {
+        return Err(RenderSourceSpanItemError::InvalidRange);
+    };
+    let end_line = selected
+        .last()
+        .map(|(line_number, _, _)| *line_number)
+        .unwrap_or(start_line);
+
+    let mut rendered = String::new();
+    for (line_number, line_start, line_end) in selected {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        let mut line = &source[line_start..line_end];
+        line = line.strip_suffix('\n').unwrap_or(line);
+        line = line.strip_suffix('\r').unwrap_or(line);
+        rendered.push_str(&format!("{line_number}\t{line}"));
+    }
+    Ok((rendered, start_line, end_line))
+}
+
+fn source_line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (index, byte) in source.bytes().enumerate() {
+        if byte == b'\n' && index + 1 < source.len() {
+            starts.push(index + 1);
+        }
+    }
+    starts
+}
+
+fn estimate_text_tokens(text: &str) -> usize {
+    text.len().max(1).div_ceil(4)
 }
 
 fn read_plan_candidates(
@@ -2205,6 +2512,138 @@ mod tests {
         assert!(first_plan.estimated_tokens > 1);
         assert!(!first_plan.budget_satisfied);
         assert!(!first_plan.source_snippets_included);
+    }
+
+    fn read_plan_for_source_span(start_byte: usize, end_byte: usize) -> ReadPlan {
+        ReadPlan {
+            items: vec![ReadPlanItem {
+                purpose: ReadPlanPurpose::CanonicalEvidence,
+                path: "src/a.ts".to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte,
+                end_byte,
+                start_line: None,
+                end_line: None,
+                estimated_tokens: 8,
+                why: "canonical source span supporting the family claim".to_string(),
+                source_required_before_edit: false,
+                source_snippets_included: false,
+            }],
+            estimated_tokens: 8,
+            source_snippets_included: false,
+            requires_source_before_edit: false,
+            selection_strategy: "deterministic_read_plan_v1",
+            budget_satisfied: true,
+        }
+    }
+
+    #[test]
+    fn source_span_rendering_is_explicit_opt_in() {
+        let read_plan = read_plan_for_source_span(6, 12);
+        let report = render_source_spans(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &source_store_with_hash(semantic_fact().content_hash),
+            &read_plan,
+            false,
+            None,
+        )
+        .expect("render report");
+
+        assert!(!report.policy.requested);
+        assert!(!report.policy.source_snippets_included);
+        assert!(report.spans.is_empty());
+        assert!(report.omissions.is_empty());
+        let hydrated = read_plan_with_rendered_spans(&read_plan, &report);
+        assert!(!hydrated.source_snippets_included);
+        assert_eq!(hydrated.items[0].start_line, None);
+    }
+
+    #[test]
+    fn source_span_rendering_returns_line_numbered_hash_checked_spans() {
+        let source = SourceText {
+            path: "src/a.ts".to_string(),
+            content_hash: semantic_fact().content_hash,
+            text: "first\nsecond\nthird\n".to_string(),
+        };
+        let read_plan = read_plan_for_source_span(6, 12);
+
+        let report = render_source_spans(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &StaticSourceStore { result: Ok(source) },
+            &read_plan,
+            true,
+            None,
+        )
+        .expect("render report");
+
+        assert!(report.policy.requested);
+        assert!(report.policy.source_snippets_included);
+        assert_eq!(report.spans.len(), 1);
+        assert!(report.omissions.is_empty());
+        assert_eq!(report.spans[0].start_line, 2);
+        assert_eq!(report.spans[0].end_line, 2);
+        assert_eq!(report.spans[0].text, "2\tsecond");
+        let hydrated = read_plan_with_rendered_spans(&read_plan, &report);
+        assert!(hydrated.source_snippets_included);
+        assert_eq!(hydrated.items[0].start_line, Some(2));
+        assert_eq!(hydrated.items[0].end_line, Some(2));
+        assert!(hydrated.items[0].source_snippets_included);
+    }
+
+    #[test]
+    fn source_span_rendering_omits_invalid_ranges_without_panicking() {
+        let source = SourceText {
+            path: "src/a.ts".to_string(),
+            content_hash: semantic_fact().content_hash,
+            text: "first\nsecond\nthird\n".to_string(),
+        };
+        let read_plan = read_plan_for_source_span(12, 6);
+
+        let report = render_source_spans(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &StaticSourceStore { result: Ok(source) },
+            &read_plan,
+            true,
+            None,
+        )
+        .expect("render report");
+
+        assert!(report.spans.is_empty());
+        assert_eq!(report.omissions.len(), 1);
+        assert_eq!(report.omissions[0].reason, "invalid_source_range");
+        assert!(report.omissions[0].guidance.contains("Read/Grep"));
+    }
+
+    #[test]
+    fn source_span_rendering_omits_stale_or_hash_mismatched_source() {
+        let read_plan = read_plan_for_source_span(6, 12);
+
+        let report = render_source_spans(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &hash_mismatch_source_store("hash mismatch"),
+            &read_plan,
+            true,
+            None,
+        )
+        .expect("render report");
+
+        assert!(report.spans.is_empty());
+        assert_eq!(report.omissions.len(), 1);
+        assert_eq!(report.omissions[0].reason, "stale_evidence");
+        assert!(report.policy.fallback_guidance.contains("omitted"));
+        assert!(!read_plan_with_rendered_spans(&read_plan, &report).source_snippets_included);
     }
 
     #[test]

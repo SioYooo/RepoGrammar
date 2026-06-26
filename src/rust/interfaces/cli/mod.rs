@@ -8,12 +8,17 @@ use crate::application::install::{
 };
 use crate::application::progress::{ProgressEvent, WorkUnits};
 use crate::application::query::{
-    build_read_plan, query_preflight, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget, DiagnosticSignal,
-    FamilyDetailReport, FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    RepoShapeDiagnosticsReport,
+    build_read_plan, query_preflight, read_plan_with_rendered_spans,
+    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
+    validate_query_token_budget, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    RepoShapeDiagnosticsReport, SourceSpanRenderReport,
+};
+#[cfg(test)]
+use crate::application::query::{
+    ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
 };
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -99,6 +104,16 @@ pub trait CliRuntime {
         _mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
+    }
+
+    fn render_source_spans(
+        &self,
+        _request: RepositoryStatusRequest,
+        _read_plan: &ReadPlan,
+        _include_source_spans: bool,
+        _token_budget: Option<usize>,
+    ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("source spans"))
     }
 
     fn repo_shape_diagnostics(
@@ -520,24 +535,70 @@ where
         },
         "family" | "member" | "find" | "explain" | "check" => {
             match runtime.family_lookup(
-                request,
+                request.clone(),
                 options.target.as_deref(),
                 lookup_mode_for_command(command),
             ) {
-                Ok(report) if options.json => CliOutput::success(family_lookup_json(
-                    command,
-                    &report,
-                    options.target.as_deref(),
-                    lookup_mode_for_command(command),
-                    options.output_options(),
-                )),
-                Ok(report) => CliOutput::success(family_lookup_human(
-                    command,
-                    &report,
-                    options.target.as_deref(),
-                    lookup_mode_for_command(command),
-                    options.output_options(),
-                )),
+                Ok(report) if options.json => {
+                    let source_spans = match maybe_render_source_spans(
+                        runtime,
+                        request,
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        options.include_source_spans,
+                    ) {
+                        Ok(source_spans) => source_spans,
+                        Err(_) => {
+                            return query_fallback(
+                                command,
+                                options.json,
+                                "repository status is unavailable",
+                                "run repogrammar doctor",
+                                false,
+                            );
+                        }
+                    };
+                    CliOutput::success(family_lookup_json(
+                        command,
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        source_spans.as_ref(),
+                    ))
+                }
+                Ok(report) => {
+                    let source_spans = match maybe_render_source_spans(
+                        runtime,
+                        request,
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        options.include_source_spans,
+                    ) {
+                        Ok(source_spans) => source_spans,
+                        Err(_) => {
+                            return query_fallback(
+                                command,
+                                options.json,
+                                "repository status is unavailable",
+                                "run repogrammar doctor",
+                                false,
+                            );
+                        }
+                    };
+                    CliOutput::success(family_lookup_human(
+                        command,
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        source_spans.as_ref(),
+                    ))
+                }
                 Err(_) => query_fallback(
                     command,
                     options.json,
@@ -564,6 +625,32 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
         "find" | "explain" | "check" => FamilyLookupMode::FuzzyQuery,
         _ => FamilyLookupMode::FuzzyQuery,
     }
+}
+
+fn maybe_render_source_spans(
+    runtime: &impl CliRuntime,
+    request: RepositoryStatusRequest,
+    report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+    include_source_spans: bool,
+) -> Result<Option<SourceSpanRenderReport>, RepoGrammarError> {
+    if !include_source_spans {
+        return Ok(None);
+    }
+    let FamilyLookupReport::Found(family) = report else {
+        return Ok(None);
+    };
+    let read_plan = build_read_plan(family, target, mode, options);
+    runtime
+        .render_source_spans(
+            request,
+            &read_plan,
+            include_source_spans,
+            options.token_budget,
+        )
+        .map(Some)
 }
 
 fn query_fallback(
@@ -750,12 +837,16 @@ fn family_lookup_human(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
             let selected_evidence = select_family_evidence(family, options);
-            let read_plan = build_read_plan(family, target, mode, options);
-            let snippets = if selected_evidence.source_snippets_included {
+            let base_read_plan = build_read_plan(family, target, mode, options);
+            let read_plan = source_spans
+                .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
+                .unwrap_or(base_read_plan);
+            let snippets = if read_plan.source_snippets_included {
                 "included"
             } else {
                 "not_included"
@@ -812,6 +903,9 @@ fn family_lookup_human(
                 ));
             }
             push_read_plan_human(&mut output, &read_plan, selected_evidence.mode);
+            if let Some(source_spans) = source_spans {
+                push_source_spans_human(&mut output, source_spans);
+            }
             if command == "check" {
                 output.push_str("advisory_status: UNKNOWN\n");
                 output.push_str("reason: runtime equivalence remains unproven\n");
@@ -881,10 +975,11 @@ fn family_lookup_json(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
-            family_detail_json(command, family, target, mode, options)
+            family_detail_json(command, family, target, mode, options, source_spans)
         }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
@@ -902,9 +997,13 @@ fn family_detail_json(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
 ) -> String {
     let selected_evidence = select_family_evidence(family, options);
-    let read_plan = build_read_plan(family, target, mode, options);
+    let base_read_plan = build_read_plan(family, target, mode, options);
+    let read_plan = source_spans
+        .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
+        .unwrap_or(base_read_plan);
     let check = if command == "check" {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -933,7 +1032,7 @@ fn family_detail_json(
             "budget_satisfied": selected_evidence.budget_satisfied,
             "covered_claims": selected_evidence.covered_claims,
             "missing_claims": selected_evidence.missing_claims,
-            "source_snippets_included": selected_evidence.source_snippets_included,
+            "source_snippets_included": read_plan.source_snippets_included,
         },
         "members": family.members.iter().map(|member| {
             json!({
@@ -965,6 +1064,7 @@ fn family_detail_json(
             })
         }).collect::<Vec<_>>(),
         "read_plan": read_plan_json(&read_plan),
+        "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
         "check": check,
     }))
@@ -973,9 +1073,14 @@ fn family_detail_json(
 fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyEvidenceMode) {
     output.push_str("Suggested source spans to read\n");
     output.push_str(&format!(
-        "read_plan: items: {}\testimated_tokens: {}\tsource_snippets: not_included\n",
+        "read_plan: items: {}\testimated_tokens: {}\tsource_snippets: {}\n",
         read_plan.items.len(),
-        read_plan.estimated_tokens
+        read_plan.estimated_tokens,
+        if read_plan.source_snippets_included {
+            "included"
+        } else {
+            "not_included"
+        }
     ));
     let limit = if mode == FamilyEvidenceMode::Compact {
         1
@@ -1012,6 +1117,46 @@ fn push_read_plan_item_human(output: &mut String, item: &ReadPlanItem) {
     ));
 }
 
+fn push_source_spans_human(output: &mut String, source_spans: &SourceSpanRenderReport) {
+    output.push_str(&format!(
+        "source_span_policy: requested: {}\tincluded: {}\testimated_tokens: {}\tbudget_satisfied: {}\tstrategy: {}\n",
+        source_spans.policy.requested,
+        source_spans.policy.source_snippets_included,
+        source_spans.policy.estimated_tokens,
+        source_spans.policy.budget_satisfied,
+        source_spans.policy.selection_strategy
+    ));
+    output.push_str("source_span_guidance: ");
+    output.push_str(source_spans.policy.fallback_guidance);
+    output.push('\n');
+    for span in &source_spans.spans {
+        output.push_str(&format!(
+            "source_span: {}\tpath: {}\trange: {}-{}\tlines: {}-{}\testimated_tokens: {}\trequires_source_before_edit: {}\n",
+            span.purpose.as_str(),
+            span.path,
+            span.start_byte,
+            span.end_byte,
+            span.start_line,
+            span.end_line,
+            span.estimated_tokens,
+            span.source_required_before_edit
+        ));
+        output.push_str(&span.text);
+        output.push('\n');
+    }
+    for omission in &source_spans.omissions {
+        output.push_str(&format!(
+            "source_span_omitted: {}\tpath: {}\trange: {}-{}\treason: {}\tguidance: {}\n",
+            omission.purpose.as_str(),
+            omission.path,
+            omission.start_byte,
+            omission.end_byte,
+            omission.reason,
+            omission.guidance
+        ));
+    }
+}
+
 fn read_plan_json(read_plan: &ReadPlan) -> serde_json::Value {
     json!({
         "estimated_tokens": read_plan.estimated_tokens,
@@ -1037,6 +1182,50 @@ fn read_plan_item_json(item: &ReadPlanItem) -> serde_json::Value {
         "source_required_before_edit": item.source_required_before_edit,
         "source_snippets_included": item.source_snippets_included,
     })
+}
+
+fn source_spans_json(source_spans: Option<&SourceSpanRenderReport>) -> serde_json::Value {
+    match source_spans {
+        None => json!({
+            "requested": false,
+            "source_snippets_included": false,
+            "spans": [],
+            "omissions": [],
+        }),
+        Some(source_spans) => json!({
+            "requested": source_spans.policy.requested,
+            "source_snippets_included": source_spans.policy.source_snippets_included,
+            "estimated_tokens": source_spans.policy.estimated_tokens,
+            "budget_satisfied": source_spans.policy.budget_satisfied,
+            "selection_strategy": source_spans.policy.selection_strategy,
+            "fallback_guidance": source_spans.policy.fallback_guidance,
+            "spans": source_spans.spans.iter().map(|span| {
+                json!({
+                    "purpose": span.purpose.as_str(),
+                    "path": span.path,
+                    "content_hash": span.content_hash.as_str(),
+                    "start_byte": span.start_byte,
+                    "end_byte": span.end_byte,
+                    "start_line": span.start_line,
+                    "end_line": span.end_line,
+                    "estimated_tokens": span.estimated_tokens,
+                    "why": span.why,
+                    "source_required_before_edit": span.source_required_before_edit,
+                    "text": span.text,
+                })
+            }).collect::<Vec<_>>(),
+            "omissions": source_spans.omissions.iter().map(|omission| {
+                json!({
+                    "purpose": omission.purpose.as_str(),
+                    "path": omission.path,
+                    "start_byte": omission.start_byte,
+                    "end_byte": omission.end_byte,
+                    "reason": omission.reason,
+                    "guidance": omission.guidance,
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    }
 }
 
 fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
@@ -3097,6 +3286,7 @@ struct QueryOptions {
     token_budget: Option<usize>,
     include_variations: bool,
     include_exceptions: bool,
+    include_source_spans: bool,
 }
 
 impl QueryOptions {
@@ -3387,6 +3577,10 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
             }
             "--include-exceptions" => {
                 options.include_exceptions = true;
+                index += 1;
+            }
+            "--include-source-spans" => {
+                options.include_source_spans = true;
                 index += 1;
             }
             value if !value.starts_with('-') => {
@@ -4391,6 +4585,45 @@ mod tests {
                 }],
             }
         }
+
+        fn source_span_report() -> SourceSpanRenderReport {
+            let hash = crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid content hash");
+            SourceSpanRenderReport {
+                policy: SourceSpanPolicy {
+                    requested: true,
+                    source_snippets_included: true,
+                    estimated_tokens: 6,
+                    budget_satisfied: true,
+                    selection_strategy: "hash_checked_line_numbered_spans_v1",
+                    fallback_guidance: "use rendered source spans only for the listed byte ranges; use normal Read before editing outside them",
+                },
+                spans: vec![RenderedSourceSpan {
+                    purpose: ReadPlanPurpose::TargetBodyRequiredForEdit,
+                    path: "src/routes/a.ts".to_string(),
+                    content_hash: hash,
+                    start_byte: 0,
+                    end_byte: 20,
+                    start_line: 1,
+                    end_line: 2,
+                    estimated_tokens: 6,
+                    why: "read this target body before editing; family metadata is context only"
+                        .to_string(),
+                    source_required_before_edit: true,
+                    text: "1\texport const handler = () => {\n2\t  return ok\n".to_string(),
+                }],
+                omissions: vec![SourceSpanOmission {
+                    purpose: ReadPlanPurpose::SupportEvidence,
+                    path: "src/routes/stale.ts".to_string(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    reason: "stale_evidence",
+                    guidance: "source changed or disappeared; use normal Read/Grep for this span",
+                }],
+            }
+        }
     }
 
     impl CliRuntime for FamilyQueryRuntime {
@@ -4461,6 +4694,22 @@ mod tests {
                         ),
                     }],
                 }))
+            }
+        }
+
+        fn render_source_spans(
+            &self,
+            _request: RepositoryStatusRequest,
+            _read_plan: &ReadPlan,
+            include_source_spans: bool,
+            _token_budget: Option<usize>,
+        ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+            if include_source_spans {
+                Ok(Self::source_span_report())
+            } else {
+                Err(RepoGrammarError::InvalidInput(
+                    "source spans were not requested".to_string(),
+                ))
             }
         }
 
@@ -4963,6 +5212,7 @@ mod tests {
                 "--json",
                 "--include-variations",
                 "--include-exceptions",
+                "--include-source-spans",
                 "src/user.ts",
             ],
             workspace.path(),
@@ -5303,6 +5553,61 @@ mod tests {
             value["read_plan"]["items"][0]["purpose"],
             "target_body_required_for_edit"
         );
+    }
+
+    #[test]
+    fn family_query_source_spans_require_explicit_flag() {
+        let workspace = TempWorkspace::new("cli-family-query-source-spans");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--json",
+                "--include-source-spans",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+        assert_eq!(value["output"]["source_snippets_included"], true);
+        assert_eq!(value["read_plan"]["source_snippets_included"], true);
+        assert_eq!(value["read_plan"]["items"][0]["start_line"], 1);
+        assert_eq!(value["read_plan"]["items"][0]["end_line"], 2);
+        assert_eq!(
+            value["read_plan"]["items"][0]["source_snippets_included"],
+            true
+        );
+        assert_eq!(value["source_spans"]["requested"], true);
+        assert_eq!(value["source_spans"]["source_snippets_included"], true);
+        assert_eq!(
+            value["source_spans"]["spans"][0]["text"],
+            "1\texport const handler = () => {\n2\t  return ok\n"
+        );
+        assert_eq!(
+            value["source_spans"]["omissions"][0]["reason"],
+            "stale_evidence"
+        );
+
+        let human = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--include-source-spans"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(human.status, 0);
+        assert!(human.stdout.contains("source_snippets: included"));
+        assert!(human.stdout.contains("source_span_policy: requested: true"));
+        assert!(human.stdout.contains("1\texport const handler = () => {"));
+        assert!(human
+            .stdout
+            .contains("source_span_omitted: support_evidence"));
     }
 
     #[test]

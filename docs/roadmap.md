@@ -40,6 +40,11 @@
   FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
   enabling family claims by themselves.
+- v0.2 agent-adoption read displacement: MCP initialize/tool guidance now
+  steers agents to `repogrammar_context` before broad grep/read loops for
+  pattern-family questions, and CLI/MCP expose explicit bounded source-span
+  opt-in over hash-checked read-plan spans while keeping metadata-only output as
+  the default.
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.

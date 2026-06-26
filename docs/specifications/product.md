@@ -147,20 +147,22 @@ Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default
 compact mode returns family summary, members, variation slots, and unknowns
-without evidence records or source snippets. All matched family modes now
-return a metadata-only read plan that tells an agent which target, canonical,
-support, and variation/exception spans to inspect by repo-relative path,
-strict content hash, and byte range. The read plan reduces blind line-range
-expansion when graph/navigation tools omit key function bodies, but it does not
-eliminate the requirement to read target source before editing. Explicit
-evidence/deep modes may return selected repo-relative evidence metadata under a
-token budget. The current selector uses greedy marginal coverage over
-conservative metadata labels and reports missing requested coverage instead of
-inventing unsupported variation or exception evidence. The only current
-variation evidence link is
+without evidence records or source snippets. All matched family modes return a
+read plan that tells an agent which target, canonical, support, and
+variation/exception spans to inspect by repo-relative path, strict content
+hash, and byte range. The read plan reduces blind line-range expansion when
+graph/navigation tools omit key function bodies, but it does not eliminate the
+requirement to read target source before editing outside rendered ranges.
+Explicit evidence/deep modes may return selected repo-relative evidence
+metadata under a token budget. Explicit source-span opt-in may return bounded,
+line-numbered, hash-checked spans selected from the read plan; stale or
+unsupported spans are omitted with fallback guidance. The current selector uses
+greedy marginal coverage over conservative metadata labels and reports missing
+requested coverage instead of inventing unsupported variation or exception
+evidence. The only current variation evidence link is
 Python exact-compatible framework-anchor target diversity inside an already
-ready family; exception evidence remains deferred. Deep mode is still
-metadata-only until a safe source-span rendering contract exists.
+ready family; exception evidence remains deferred. Deep mode remains
+metadata-first unless source spans are explicitly requested.
 
 `repogrammar stats --json` reports repo-shape diagnostics for local pattern
 density, family support coverage, abstention rate, and thin-wrapper/token-saving

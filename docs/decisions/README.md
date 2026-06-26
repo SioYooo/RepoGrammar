@@ -22,3 +22,4 @@ Current accepted ADRs:
 - ADR-0010: Optional CodeGraph provider.
 - ADR-0011: Python-first v0.1.
 - ADR-0012: Python selective analysis cascade.
+- ADR-0013: Agent adoption and read displacement.

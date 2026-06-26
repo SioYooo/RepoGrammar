@@ -37,6 +37,10 @@ context lives under `.agents/memories/`.
   `decisions/ADR-0012-python-selective-analysis-cascade.md`,
   `specifications/python-analysis.md`, and
   `plans/python-v0.1-implementation-plan.md`.
+- v0.2 agent adoption and read displacement:
+  `decisions/ADR-0013-agent-adoption-read-displacement.md`,
+  `plans/v0.2-agent-adoption-read-displacement-plan.md`,
+  `specifications/mcp-api.md`, and `specifications/cli.md`.
 - Historical Python dogfooding boundary:
   `decisions/ADR-0009-experimental-python-dogfooding.md` and
   `plans/python-dogfooding-plan.md`.

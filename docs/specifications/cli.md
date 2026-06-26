@@ -69,6 +69,7 @@ All query commands must support:
 - `--json`
 - `--include-variations`
 - `--include-exceptions`
+- `--include-source-spans`
 
 ## Long-running commands
 
@@ -461,21 +462,26 @@ framework name, classification label, or directory fragment as a successful
 family match. Query targets must be non-empty, at most 8192 bytes, and free of
 control characters. Matched family output defaults to `--mode compact`: family
 id, classification, support, members, variation slots, typed unknowns, selected
-output metadata, a metadata-only `read_plan`, and no evidence records or source
-snippets. `--mode evidence` adds budgeted repo-relative evidence metadata:
+output metadata, a `read_plan`, and no evidence records or source snippets.
+`--mode evidence` adds budgeted repo-relative evidence metadata:
 evidence id, family id, code-unit id, path, content hash, byte range, note,
 estimated token cost, and covered claim labels. The shared read plan is present
 in compact, evidence, and deep outputs and contains suggested source spans to
 inspect before acting on the family result. Each read-plan item includes
 purpose, repo-relative path, strict content hash, byte range, optional line
 range, estimated token cost, a short reason, whether source is required before
-editing, and `source_snippets_included: false`. The current implementation does
-not derive line ranges because safe source-span rendering remains deferred, so
-line fields are `null` and byte ranges are authoritative metadata. The read
-plan must never include source text, absolute paths, or a claim that editing is
-safe without reading the target body. `--token-budget <n>` validates a positive
-bounded integer and implies `--mode evidence` unless an explicit mode is
-provided. Evidence mode
+editing, and whether a source snippet was included for that item.
+`--include-source-spans` is the only CLI source-output opt-in. When absent,
+line fields may remain `null` and `source_snippets_included` is false. When
+present, RepoGrammar renders only selected read-plan spans through the
+hash-checked source-store boundary, fills line ranges for rendered spans, and
+places line-numbered text under a separate `source_spans` block. Stale,
+missing, hash-mismatched, too-large, unsupported, dynamic, insufficient, or
+conflicting cases must omit rendered spans and tell the user to use normal
+Read/Grep for the affected file or claim. The read plan must never include
+absolute paths or a claim that editing is safe outside listed ranges.
+`--token-budget <n>` validates a positive bounded integer and implies
+`--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
 family evidence carries schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the selector
@@ -488,10 +494,9 @@ already-supported Python family, but those slots do not imply variation
 evidence coverage. `--include-exceptions` and broader variation requests must
 still report missing coverage until later builders explicitly link evidence to
 variation slots or exceptions.
-`--mode deep` is accepted as an
-explicit detail request, but until a safe source-span rendering contract exists
-it remains metadata-only and must report `source_snippets_included: false`.
-None of these modes may include absolute paths or source snippets. `check` is
+`--mode deep` is accepted as an explicit detail request, but it remains
+metadata-first and does not imply source output without `--include-source-spans`.
+None of these modes may include absolute paths. `check` is
 advisory in this slice: it may return matched family context as
 `CONTEXT_ONLY`, but the check-specific conformance status remains `UNKNOWN`
 with reason `runtime equivalence remains unproven`. Matched family detail
@@ -547,9 +552,9 @@ return missing-index fallback before an active generation exists, typed
 `UNKNOWN` when active family evidence is insufficient, and stored family detail
 when EC-MVFI-lite has written supported family rows. Stored family detail now
 uses compact/evidence/deep output modes. Compact is the default and omits
-evidence records; all modes include a metadata-only read plan; evidence and
-deep currently return selected metadata only and do not include source
-snippets. `stats` reads the active index/family substrate to report local
+evidence records; all modes include a read plan; evidence and deep remain
+metadata-first and include source snippets only when `--include-source-spans`
+is explicitly requested. `stats` reads the active index/family substrate to report local
 pattern density, family support coverage, abstention rate, and
 thin-wrapper/token-saving risk without reporting measured token savings.
 `serve` runs the read-only MCP

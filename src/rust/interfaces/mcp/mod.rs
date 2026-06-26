@@ -1,11 +1,16 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
 use crate::application::query::{
-    build_read_plan, query_preflight, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget, FamilyDetailReport,
-    FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
+    build_read_plan, query_preflight, read_plan_with_rendered_spans,
+    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
+    validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
+    FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown, QueryPreflightOperation,
+    QueryPreflightReport, ReadPlan, ReadPlanItem, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
+    MAX_QUERY_TOKEN_BUDGET,
+};
+#[cfg(test)]
+use crate::application::query::{
+    ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::error::RepoGrammarError;
@@ -80,6 +85,16 @@ pub trait McpReadOnlyRuntime {
         target: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError>;
+
+    fn render_source_spans(
+        &self,
+        _request: RepositoryStatusRequest,
+        _read_plan: &ReadPlan,
+        _include_source_spans: bool,
+        _token_budget: Option<usize>,
+    ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("source spans"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,12 +158,13 @@ struct ContextArguments {
     operation: McpOperation,
     target: Option<String>,
     output_options: FamilyOutputOptions,
+    include_source_spans: bool,
 }
 
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context",
+        "description": "Read-only RepoGrammar pattern-family context. In initialized repositories, call this before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Source spans are metadata-only by default and require include_source_spans=true.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -183,6 +199,10 @@ pub fn tool_schema() -> Value {
                 "include_exceptions": {
                     "type": "boolean",
                 },
+                "include_source_spans": {
+                    "type": "boolean",
+                    "description": "Explicit opt-in for bounded, line-numbered, hash-checked source spans selected from the read_plan. Defaults to false.",
+                },
             },
         },
     })
@@ -213,17 +233,45 @@ pub fn handle_context_call(
             Ok(fallback_value(arguments.operation, fallback))
         }
         QueryPreflightReport::Ready => match runtime.family_lookup(
-            request,
+            request.clone(),
             arguments.target.as_deref(),
             lookup_mode_for_operation(arguments.operation),
         ) {
-            Ok(FamilyLookupReport::Found(family)) => Ok(family_detail_value(
-                arguments.operation,
-                &family,
-                arguments.target.as_deref(),
-                lookup_mode_for_operation(arguments.operation),
-                arguments.output_options,
-            )),
+            Ok(FamilyLookupReport::Found(family)) => {
+                let read_plan = build_read_plan(
+                    &family,
+                    arguments.target.as_deref(),
+                    lookup_mode_for_operation(arguments.operation),
+                    arguments.output_options,
+                );
+                let source_spans = if arguments.include_source_spans {
+                    match runtime.render_source_spans(
+                        request,
+                        &read_plan,
+                        arguments.include_source_spans,
+                        arguments.output_options.token_budget,
+                    ) {
+                        Ok(source_spans) => Some(source_spans),
+                        Err(_) => {
+                            return Ok(fallback_value(
+                                arguments.operation,
+                                repository_status_unavailable_fallback(
+                                    QueryPreflightOperation::PatternFamilyQuery,
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(family_detail_value(
+                    arguments.operation,
+                    &family,
+                    &read_plan,
+                    arguments.output_options,
+                    source_spans.as_ref(),
+                ))
+            }
             Ok(FamilyLookupReport::Unknown(report)) => Ok(json!({
                 "operation": arguments.operation.as_str(),
                 "command": arguments.operation.cli_command(),
@@ -347,7 +395,7 @@ fn handle_json_rpc_value_result(
                             "name": "repogrammar",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": "RepoGrammar MCP is read-only; call repogrammar_context for evidence-backed pattern-family context or typed UNKNOWN.",
+                        "instructions": "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Default output is metadata-only with token-budgeted read_plan items. Request include_source_spans=true only when bounded line-numbered source spans are needed. If output is UNKNOWN, stale, omitted, or insufficient, fall back to normal Read/Grep for the affected files.",
                     }),
                 )),
                 should_shutdown: false,
@@ -417,6 +465,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
                 | "mode"
                 | "include_variations"
                 | "include_exceptions"
+                | "include_source_spans"
         ) {
             return Err(McpProtocolError::invalid_params(
                 "repogrammar_context arguments contain an unsupported field",
@@ -481,7 +530,11 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
     if token_budget.is_some() && !mode_explicit && evidence_mode == FamilyEvidenceMode::Compact {
         evidence_mode = FamilyEvidenceMode::Evidence;
     }
-    for field in ["include_variations", "include_exceptions"] {
+    for field in [
+        "include_variations",
+        "include_exceptions",
+        "include_source_spans",
+    ] {
         if object.get(field).is_some_and(|value| !value.is_boolean()) {
             return Err(McpProtocolError::invalid_params(
                 "repogrammar_context include flags must be boolean",
@@ -496,6 +549,10 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
         .get("include_exceptions")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let include_source_spans = object
+        .get("include_source_spans")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(ContextArguments {
         operation,
         target,
@@ -505,6 +562,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             include_variations,
             include_exceptions,
         },
+        include_source_spans,
     })
 }
 
@@ -525,12 +583,14 @@ fn fallback_value(
 fn family_detail_value(
     operation: McpOperation,
     family: &FamilyDetailReport,
-    target: Option<&str>,
-    mode: FamilyLookupMode,
+    base_read_plan: &ReadPlan,
     options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
     let selected_evidence = select_family_evidence(family, options);
-    let read_plan = build_read_plan(family, target, mode, options);
+    let read_plan = source_spans
+        .map(|rendered| read_plan_with_rendered_spans(base_read_plan, rendered))
+        .unwrap_or_else(|| base_read_plan.clone());
     let check = if operation == McpOperation::CheckConformance {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -560,7 +620,7 @@ fn family_detail_value(
             "budget_satisfied": selected_evidence.budget_satisfied,
             "covered_claims": selected_evidence.covered_claims,
             "missing_claims": selected_evidence.missing_claims,
-            "source_snippets_included": selected_evidence.source_snippets_included,
+            "source_snippets_included": read_plan.source_snippets_included,
         },
         "members": family.members.iter().map(|member| {
             json!({
@@ -592,6 +652,7 @@ fn family_detail_value(
             })
         }).collect::<Vec<_>>(),
         "read_plan": read_plan_value(&read_plan),
+        "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
         "check": check,
     })
@@ -622,6 +683,50 @@ fn read_plan_item_value(item: &ReadPlanItem) -> Value {
         "source_required_before_edit": item.source_required_before_edit,
         "source_snippets_included": item.source_snippets_included,
     })
+}
+
+fn source_spans_value(source_spans: Option<&SourceSpanRenderReport>) -> Value {
+    match source_spans {
+        None => json!({
+            "requested": false,
+            "source_snippets_included": false,
+            "spans": [],
+            "omissions": [],
+        }),
+        Some(source_spans) => json!({
+            "requested": source_spans.policy.requested,
+            "source_snippets_included": source_spans.policy.source_snippets_included,
+            "estimated_tokens": source_spans.policy.estimated_tokens,
+            "budget_satisfied": source_spans.policy.budget_satisfied,
+            "selection_strategy": source_spans.policy.selection_strategy,
+            "fallback_guidance": source_spans.policy.fallback_guidance,
+            "spans": source_spans.spans.iter().map(|span| {
+                json!({
+                    "purpose": span.purpose.as_str(),
+                    "path": span.path,
+                    "content_hash": span.content_hash.as_str(),
+                    "start_byte": span.start_byte,
+                    "end_byte": span.end_byte,
+                    "start_line": span.start_line,
+                    "end_line": span.end_line,
+                    "estimated_tokens": span.estimated_tokens,
+                    "why": span.why,
+                    "source_required_before_edit": span.source_required_before_edit,
+                    "text": span.text,
+                })
+            }).collect::<Vec<_>>(),
+            "omissions": source_spans.omissions.iter().map(|omission| {
+                json!({
+                    "purpose": omission.purpose.as_str(),
+                    "path": omission.path,
+                    "start_byte": omission.start_byte,
+                    "end_byte": omission.end_byte,
+                    "reason": omission.reason,
+                    "guidance": omission.guidance,
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    }
 }
 
 fn unknowns_value(unknowns: &[FamilyQueryUnknown]) -> Vec<Value> {
@@ -717,6 +822,10 @@ mod tests {
             schema["inputSchema"]["properties"]["mode"]["enum"],
             json!(["compact", "evidence", "deep"])
         );
+        assert_eq!(
+            schema["inputSchema"]["properties"]["include_source_spans"]["type"],
+            "boolean"
+        );
     }
 
     #[test]
@@ -727,6 +836,7 @@ mod tests {
             json!({"operation": "find_analogues", "target": oversized_target}),
             json!({"operation": "find_analogues", "target": "contains\nnewline"}),
             json!({"operation": "find_analogues", "token_budget": MAX_MCP_TOKEN_BUDGET + 1}),
+            json!({"operation": "find_analogues", "include_source_spans": "yes"}),
         ] {
             let error = handle_context_call(&runtime, &context(), &arguments)
                 .expect_err("invalid query input must be rejected");
@@ -811,6 +921,8 @@ mod tests {
                 > 0
         );
         assert_eq!(response["output"]["source_snippets_included"], false);
+        assert_eq!(response["source_spans"]["requested"], false);
+        assert_eq!(runtime.source_span_calls(), 0);
         assert!(response["evidence"]
             .as_array()
             .expect("evidence")
@@ -836,6 +948,42 @@ mod tests {
         );
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn active_family_source_spans_require_explicit_opt_in() {
+        let runtime = FakeMcpRuntime::ready_found_with_source_spans();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({
+                "operation": "check_conformance",
+                "target": "src/routes/a.ts",
+                "include_source_spans": true
+            }),
+        )
+        .expect("family response");
+
+        assert_eq!(runtime.source_span_calls(), 1);
+        assert_eq!(response["output"]["source_snippets_included"], true);
+        assert_eq!(response["read_plan"]["source_snippets_included"], true);
+        assert_eq!(
+            response["read_plan"]["items"][0]["source_snippets_included"],
+            true
+        );
+        assert_eq!(response["read_plan"]["items"][0]["start_line"], 1);
+        assert_eq!(response["read_plan"]["items"][0]["end_line"], 2);
+        assert_eq!(response["source_spans"]["requested"], true);
+        assert_eq!(response["source_spans"]["source_snippets_included"], true);
+        assert_eq!(
+            response["source_spans"]["spans"][0]["text"],
+            "1\texport const handler = () => {\n2\t  return ok\n"
+        );
+        assert_eq!(
+            response["source_spans"]["omissions"][0]["reason"],
+            "stale_evidence"
+        );
     }
 
     #[test]
@@ -1158,6 +1306,8 @@ mod tests {
         status: RepositoryStatusReport,
         lookup: FamilyLookupReport,
         lookup_calls: std::cell::Cell<usize>,
+        source_spans: Option<SourceSpanRenderReport>,
+        source_span_calls: std::cell::Cell<usize>,
     }
 
     impl FakeMcpRuntime {
@@ -1192,6 +1342,12 @@ mod tests {
             )
         }
 
+        fn ready_found_with_source_spans() -> Self {
+            let mut runtime = Self::ready_found();
+            runtime.source_spans = Some(source_span_report());
+            runtime
+        }
+
         fn new(status: RepositoryStatus, lookup: FamilyLookupReport) -> Self {
             Self {
                 status: RepositoryStatusReport {
@@ -1207,11 +1363,17 @@ mod tests {
                 },
                 lookup,
                 lookup_calls: std::cell::Cell::new(0),
+                source_spans: None,
+                source_span_calls: std::cell::Cell::new(0),
             }
         }
 
         fn lookup_calls(&self) -> usize {
             self.lookup_calls.get()
+        }
+
+        fn source_span_calls(&self) -> usize {
+            self.source_span_calls.get()
         }
     }
 
@@ -1236,6 +1398,24 @@ mod tests {
                 return Ok(unknown_report());
             }
             Ok(self.lookup.clone())
+        }
+
+        fn render_source_spans(
+            &self,
+            _request: RepositoryStatusRequest,
+            _read_plan: &ReadPlan,
+            include_source_spans: bool,
+            _token_budget: Option<usize>,
+        ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
+            self.source_span_calls.set(self.source_span_calls.get() + 1);
+            if !include_source_spans {
+                return Err(RepoGrammarError::InvalidInput(
+                    "source spans were not requested".to_string(),
+                ));
+            }
+            self.source_spans
+                .clone()
+                .ok_or(RepoGrammarError::NotImplemented("source spans"))
         }
     }
 
@@ -1289,6 +1469,45 @@ mod tests {
                 reason: UnknownReasonCode::FrameworkMagic,
                 affected_claim: "runtime_equivalence".to_string(),
                 recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+            }],
+        }
+    }
+
+    fn source_span_report() -> SourceSpanRenderReport {
+        let hash = ContentHash::new(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("valid hash");
+        SourceSpanRenderReport {
+            policy: SourceSpanPolicy {
+                requested: true,
+                source_snippets_included: true,
+                estimated_tokens: 6,
+                budget_satisfied: true,
+                selection_strategy: "hash_checked_line_numbered_spans_v1",
+                fallback_guidance: "use rendered source spans only for the listed byte ranges; use normal Read before editing outside them",
+            },
+            spans: vec![RenderedSourceSpan {
+                purpose: ReadPlanPurpose::TargetBodyRequiredForEdit,
+                path: "src/routes/a.ts".to_string(),
+                content_hash: hash,
+                start_byte: 0,
+                end_byte: 20,
+                start_line: 1,
+                end_line: 2,
+                estimated_tokens: 6,
+                why: "read this target body before editing; family metadata is context only"
+                    .to_string(),
+                source_required_before_edit: true,
+                text: "1\texport const handler = () => {\n2\t  return ok\n".to_string(),
+            }],
+            omissions: vec![SourceSpanOmission {
+                purpose: ReadPlanPurpose::SupportEvidence,
+                path: "src/routes/stale.ts".to_string(),
+                start_byte: 0,
+                end_byte: 10,
+                reason: "stale_evidence",
+                guidance: "source changed or disappeared; use normal Read/Grep for this span",
             }],
         }
     }

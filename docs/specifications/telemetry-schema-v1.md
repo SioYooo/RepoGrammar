@@ -12,6 +12,10 @@ When experiment recording has a comparable local pair, uploads may also include
 only bucketed/category experiment aggregate fields: experiment mode,
 measurement-source category, token-savings-ratio bucket, correctness category,
 whether a read plan was used, and read-plan item-count bucket.
+Future source-span adoption fields may include only aggregate/bucketed counts,
+for example source-span opt-in used, returned-span count bucket, or
+omitted-span count bucket. They must not include source text, paths, hashes, or
+byte ranges.
 
 The payload intentionally has no repository instance id, repository root hash,
 file path, symbol name, content hash, byte range, raw target, prompt, source

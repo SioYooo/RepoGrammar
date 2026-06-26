@@ -68,9 +68,10 @@ token-saving-risk values.
 
 Stats output is allowed to include aggregate counts and diagnostic ratios, but
 it must not include source snippets, query text, repository names, absolute
-paths, or causal token-savings claims. Missing repository state or a missing
-active index should use the standard parseable fallback rather than inventing
-repository metrics.
+paths, content hashes, byte ranges, or causal token-savings claims. Source-span
+usage may be counted only as aggregate/bucketed values. Missing repository
+state or a missing active index should use the standard parseable fallback
+rather than inventing repository metrics.
 `stats --json` never opens a telemetry network connection. When anonymous
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics

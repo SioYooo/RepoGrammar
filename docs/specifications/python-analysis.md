@@ -708,9 +708,8 @@ Default query output has three levels:
 - `evidence`: compact output plus one canonical medoid, one representative
   variation, and one exception when present, using repo-relative path, byte
   range, and hash. No source snippets by default.
-- `deep`: minimum source spans only when explicitly requested. The current
-  implementation accepts the mode but remains metadata-only until a safe
-  source-span rendering contract exists.
+- `deep`: minimum source spans only when explicitly requested through the
+  source-span opt-in flag/input. `deep` alone remains metadata-first.
 
 Evidence selection should be budgeted. Each evidence item records the claims it
 covers, such as route decorator invariant, dependency variation, response model
@@ -725,13 +724,15 @@ per estimated token cost, with these constraints:
 
 Current selector status: CLI and MCP share a deterministic metadata selector
 over stored `IndexedFamilyEvidenceRecord`s. `compact` returns no evidence
-records but still returns a metadata-only read plan. `evidence` and `deep` run
-a greedy marginal-coverage selector over conservative metadata candidates and
-keep source snippets disabled. The read plan recommends target, canonical,
-support, and variation/exception spans by repo-relative path, strict content
-hash, and byte range, with `source_snippets_included: false`. Line ranges are
-currently `null` because safe source-span rendering remains deferred; agents
-must read the target source body before editing. Evidence records carry
+records but still returns a read plan. `evidence` and `deep` run a greedy
+marginal-coverage selector over conservative metadata candidates and keep
+source snippets disabled unless source spans are explicitly requested. The read
+plan recommends target, canonical, support, and variation/exception spans by
+repo-relative path, strict content hash, and byte range. When explicit source
+spans are requested, RepoGrammar renders only selected hash-checked spans with
+line numbers and omits stale, missing, unsupported, dynamic, insufficient, or
+conflicting spans with recovery guidance. Agents must read the target source
+body before editing outside rendered ranges. Evidence records carry
 schema-backed `covered_claims` labels from the allowlist
 `canonical`, `support`, `variation`, and `exception`; the selector consumes
 those labels and never infers coverage from free-text notes. The current builder

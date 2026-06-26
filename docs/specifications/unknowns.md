@@ -133,9 +133,11 @@ Human and JSON CLI output must distinguish:
 When public family output is blocked by `StaleEvidence`,
 `InsufficientSupport`, or another claim-relevant `UNKNOWN`, CLI and MCP output
 must not present stale or unsupported read-plan spans as authoritative. Matched
-fresh families may include metadata-only read plans, but an `UNKNOWN` result
-should keep the recovery guidance explicit instead of implying that source
-ranges are safe to trust.
+fresh families may include read plans and, under explicit opt-in, bounded
+source spans. Stale, missing, hash-mismatched, unsupported, dynamic,
+insufficient, or conflicting evidence must omit source spans and keep the
+recovery guidance explicit instead of implying that source ranges are safe to
+trust.
 
 MCP serialization must preserve unknown class, reason code, affected claim,
 evidence attempted, freshness status, and suggested recovery action.
