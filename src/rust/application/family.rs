@@ -12,6 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
 const PYTHON_MIN_FAMILY_SUPPORT: usize = 3;
+const PYTHON_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-python-derived";
+const PYTHON_DERIVED_SUPPORT_METHOD: &str = "bounded_ast_anchor_v1";
+const PYTHON_FIXTURE_PROVIDER_ENGINE: &str = "python-fixture-provider";
+const PYTHON_FIXTURE_PROVIDER_METHOD: &str = "release_fixture_semantic_support";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyCandidate {
@@ -1078,7 +1082,57 @@ fn python_support_fact_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     let target = fact.target.as_ref().map(|target| target.as_str())?;
-    python_support_target_is_role_compatible(target, framework_role)
+    let target_is_compatible = python_support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && python_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn python_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    match fact.certainty {
+        FactCertainty::DataflowDerived => {
+            fact.origin.engine == PYTHON_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == PYTHON_DERIVED_SUPPORT_METHOD
+                && fact_has_assumption(fact, "provider_resolved=false")
+                && fact_has_assumption(fact, "derived_from=cpython_ast_structural_anchors")
+                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
+        }
+        FactCertainty::Semantic => {
+            python_fixture_provider_support_fact(fact)
+                || python_provider_resolved_support_fact(fact)
+        }
+        _ => false,
+    }
+}
+
+fn python_fixture_provider_support_fact(fact: &SemanticFact) -> bool {
+    fact.origin.engine == PYTHON_FIXTURE_PROVIDER_ENGINE
+        && fact.origin.method == PYTHON_FIXTURE_PROVIDER_METHOD
+}
+
+fn python_provider_resolved_support_fact(fact: &SemanticFact) -> bool {
+    let Some(provider) = fact_assumption_value(fact, "provider=") else {
+        return false;
+    };
+    matches!(provider, "pyrefly" | "pyright")
+        && fact.origin.engine == provider
+        && fact_has_assumption(fact, "provider_resolved=true")
+        && fact_assumption_value(fact, "query_operation=").is_some_and(|operation| {
+            matches!(
+                operation,
+                "resolve_framework_identity" | "cross_check_claim"
+            )
+        })
+}
+
+fn fact_has_assumption(fact: &SemanticFact, expected: &str) -> bool {
+    fact.assumptions
+        .iter()
+        .any(|assumption| assumption == expected)
+}
+
+fn fact_assumption_value<'a>(fact: &'a SemanticFact, prefix: &str) -> Option<&'a str> {
+    fact.assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix(prefix))
 }
 
 pub(crate) fn python_support_target_is_role_compatible(
@@ -1236,6 +1290,11 @@ mod tests {
             .expect("valid hash")
     }
 
+    fn other_hash() -> ContentHash {
+        ContentHash::new("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            .expect("valid hash")
+    }
+
     fn unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
         unit_with_language(path, "typescript", kind, index)
     }
@@ -1296,7 +1355,7 @@ mod tests {
         unit: &IndexedCodeUnitRecord,
         target: &str,
     ) -> SemanticFact {
-        SemanticFact {
+        let mut fact = SemanticFact {
             kind: SemanticFactKind::ResolvedImport,
             subject: format!("{}#import", unit.id),
             target: Some(SymbolId::new(target).expect("valid target")),
@@ -1319,6 +1378,33 @@ mod tests {
             )
             .expect("valid evidence"),
             assumptions: Vec::new(),
+        };
+        if unit.language == "python" {
+            fact.origin.engine = PYTHON_DERIVED_SUPPORT_ENGINE.to_string();
+            fact.origin.engine_version = "0.1.0".to_string();
+            fact.origin.method = PYTHON_DERIVED_SUPPORT_METHOD.to_string();
+            fact.certainty = FactCertainty::DataflowDerived;
+            fact.assumptions = vec![
+                "provider_resolved=false".to_string(),
+                "derived_from=cpython_ast_structural_anchors".to_string(),
+            ];
+            if let Some(framework_role) = python_framework_role_for_kind(&unit.kind) {
+                fact.assumptions
+                    .push(format!("framework_role={framework_role}"));
+            }
+        }
+        fact
+    }
+
+    fn python_framework_role_for_kind(kind: &str) -> Option<&'static str> {
+        match kind {
+            "fastapi_route" => Some("framework:fastapi.route"),
+            "pytest_test" => Some("framework:pytest.test"),
+            "pytest_fixture" => Some("framework:pytest.fixture"),
+            "pydantic_model" => Some("framework:pydantic.model"),
+            "sqlalchemy_model" => Some("framework:sqlalchemy.model"),
+            "sqlalchemy_repository_method" => Some("framework:sqlalchemy.repository_method"),
+            _ => None,
         }
     }
 
@@ -1347,6 +1433,27 @@ mod tests {
             Provenance::new(
                 &unit.path,
                 unit.content_hash.clone(),
+                RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            )
+            .expect("valid provenance"),
+            "semantic support evidence",
+        )
+        .expect("valid evidence");
+        fact
+    }
+
+    fn semantic_support_fact_with_hash(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        content_hash: ContentHash,
+    ) -> SemanticFact {
+        let mut fact = semantic_support_fact_with_target(unit, target);
+        fact.evidence = Evidence::new(
+            CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+            SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+            Provenance::new(
+                &unit.path,
+                content_hash,
                 RepositoryRevision::new("UNKNOWN").expect("valid revision"),
             )
             .expect("valid provenance"),
@@ -1391,6 +1498,53 @@ mod tests {
             .expect("valid evidence"),
             assumptions: vec![format!("python_anchor_kind={anchor_kind}")],
         }
+    }
+
+    fn parser_origin_strong_python_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        kind: SemanticFactKind,
+        anchor_kind: &str,
+        target: &str,
+        extra_assumption: &str,
+    ) -> SemanticFact {
+        let mut fact = python_context_fact(unit, anchor_kind, Some(target));
+        fact.kind = kind;
+        fact.certainty = FactCertainty::DataflowDerived;
+        fact.assumptions.push(extra_assumption.to_string());
+        fact
+    }
+
+    fn assert_insufficient_support(report: &FamilyBuildReport) {
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    fn assert_python_three_member_family(kind: &str, role: &str, targets: [&str; 3]) {
+        let first = python_unit(&format!("app/{kind}_a.py"), kind, 0);
+        let second = python_unit(&format!("app/{kind}_b.py"), kind, 1);
+        let third = python_unit(&format!("app/{kind}_c.py"), kind, 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                semantic_support_fact_with_target(&first, targets[0]),
+                semantic_support_fact_with_target(&second, targets[1]),
+                semantic_support_fact_with_target(&third, targets[2]),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1, "{kind} should form one family");
+        let claim = &report.claims[0];
+        assert_eq!(claim.language, "python");
+        assert_eq!(claim.code_unit_kind, kind);
+        assert_eq!(claim.framework_role, role);
+        assert_eq!(claim.support, 3);
+        assert_eq!(claim.readiness, ClaimReadiness::Ready);
     }
 
     fn python_unknown_fact(
@@ -1525,6 +1679,217 @@ mod tests {
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].language, "python");
         assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn exact_three_member_python_framework_positives_form_families() {
+        assert_python_three_member_family(
+            "fastapi_route",
+            "framework:fastapi.route",
+            [
+                "fastapi.APIRouter.get",
+                "fastapi.FastAPI.post",
+                "fastapi.APIRouter.delete",
+            ],
+        );
+        assert_python_three_member_family(
+            "pytest_test",
+            "framework:pytest.test",
+            ["pytest.test", "pytest.test", "pytest.test"],
+        );
+        assert_python_three_member_family(
+            "pytest_fixture",
+            "framework:pytest.fixture",
+            ["pytest.fixture", "pytest.fixture", "pytest.fixture"],
+        );
+        assert_python_three_member_family(
+            "pydantic_model",
+            "framework:pydantic.model",
+            [
+                "pydantic.BaseModel",
+                "pydantic.BaseModel",
+                "pydantic.BaseModel",
+            ],
+        );
+        assert_python_three_member_family(
+            "sqlalchemy_model",
+            "framework:sqlalchemy.model",
+            [
+                "sqlalchemy.orm.DeclarativeBase",
+                "sqlalchemy.orm.Mapped",
+                "sqlalchemy.orm.mapped_column",
+            ],
+        );
+        assert_python_three_member_family(
+            "sqlalchemy_repository_method",
+            "framework:sqlalchemy.repository_method",
+            [
+                "sqlalchemy.orm.Session.execute",
+                "sqlalchemy.orm.Session.scalar",
+                "sqlalchemy.ext.asyncio.AsyncSession.scalars",
+            ],
+        );
+    }
+
+    #[test]
+    fn python_structural_framework_anchors_cannot_directly_support_membership() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                python_context_fact(
+                    &first,
+                    "fastapi_route_decorator",
+                    Some("fastapi.APIRouter.get"),
+                ),
+                python_context_fact(
+                    &second,
+                    "fastapi_route_decorator",
+                    Some("fastapi.APIRouter.get"),
+                ),
+                python_context_fact(
+                    &third,
+                    "fastapi_route_decorator",
+                    Some("fastapi.APIRouter.get"),
+                ),
+            ],
+        );
+
+        assert_insufficient_support(&report);
+    }
+
+    #[test]
+    fn local_client_get_anchor_does_not_support_fastapi_family() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                parser_origin_strong_python_anchor_fact(
+                    &first,
+                    SemanticFactKind::Symbol,
+                    "fastapi_route_decorator",
+                    "fastapi.APIRouter.get",
+                    "local_receiver=client",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &second,
+                    SemanticFactKind::Symbol,
+                    "fastapi_route_decorator",
+                    "fastapi.APIRouter.get",
+                    "local_receiver=client",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &third,
+                    SemanticFactKind::Symbol,
+                    "fastapi_route_decorator",
+                    "fastapi.APIRouter.get",
+                    "local_receiver=client",
+                ),
+            ],
+        );
+
+        assert_insufficient_support(&report);
+    }
+
+    #[test]
+    fn shadowed_pydantic_and_user_sqlalchemy_bases_do_not_support_families() {
+        let first = python_unit("schemas.py", "pydantic_model", 0);
+        let second = python_unit("schemas.py", "pydantic_model", 1);
+        let third = python_unit("schemas.py", "pydantic_model", 2);
+        let pydantic_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:pydantic.model"),
+                role_fact(&second, "framework:pydantic.model"),
+                role_fact(&third, "framework:pydantic.model"),
+                parser_origin_strong_python_anchor_fact(
+                    &first,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "pydantic.BaseModel",
+                    "shadowed_symbol=BaseModel",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &second,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "pydantic.BaseModel",
+                    "shadowed_symbol=BaseModel",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &third,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "pydantic.BaseModel",
+                    "shadowed_symbol=BaseModel",
+                ),
+            ],
+        );
+        assert_insufficient_support(&pydantic_report);
+
+        let first = python_unit("models.py", "sqlalchemy_model", 0);
+        let second = python_unit("models.py", "sqlalchemy_model", 1);
+        let third = python_unit("models.py", "sqlalchemy_model", 2);
+        let sqlalchemy_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:sqlalchemy.model"),
+                role_fact(&second, "framework:sqlalchemy.model"),
+                role_fact(&third, "framework:sqlalchemy.model"),
+                parser_origin_strong_python_anchor_fact(
+                    &first,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "sqlalchemy.orm.DeclarativeBase",
+                    "user_defined_base=Base",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &second,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "sqlalchemy.orm.DeclarativeBase",
+                    "user_defined_base=Base",
+                ),
+                parser_origin_strong_python_anchor_fact(
+                    &third,
+                    SemanticFactKind::Type,
+                    "class_base",
+                    "sqlalchemy.orm.DeclarativeBase",
+                    "user_defined_base=Base",
+                ),
+            ],
+        );
+        assert_insufficient_support(&sqlalchemy_report);
+    }
+
+    #[test]
+    fn python_support_requires_fresh_exact_content_hash() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_hash(&third, "fastapi.APIRouter.get", other_hash()),
+            ],
+        );
+
+        assert_insufficient_support(&report);
     }
 
     #[test]
