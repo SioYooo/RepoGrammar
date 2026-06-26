@@ -210,7 +210,10 @@ The current implementation covers the first structural slice only:
   `fastapi_dependency_target`. When parser-context profiles differ inside an
   already-supported Python family, the builder records metadata-only variation
   slots for those context categories instead of silently collapsing the
-  difference into an unqualified runtime-equivalence claim;
+  difference into an unqualified runtime-equivalence claim. pytest
+  non-builtin fixture dependency profiles remain compatibility constraints;
+  only known builtin fixture-context differences may stay in the same ready
+  family as metadata variation/context;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
@@ -474,6 +477,8 @@ freshness/readiness gates pass. Canonical `pytest.mark.parametrize` decorator
 anchors may support `framework:pytest.test` families under the same gates.
 `pytest.fixture.<name>` fixture-edge anchors and `pytest.parametrize.<name>`
 argument anchors are context only and must not derive family support.
+Non-builtin fixture-edge profiles are family compatibility constraints; known
+pytest built-in fixture context may differ only as metadata variation/context.
 
 Pydantic roles:
 

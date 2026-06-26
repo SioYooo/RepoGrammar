@@ -139,6 +139,9 @@
   parser-context profiles such as FastAPI effect markers or service-call shapes
   differ inside an already-supported family. These slots do not expose source
   snippets or promote parser context into support evidence.
+- pytest family compatibility now requires non-builtin fixture dependency
+  profiles to match; known builtin fixture-context differences can remain as
+  metadata-only variation/context.
 - The CPython AST worker now resolves import aliases and module-level dynamic
   UNKNOWN propagation by source position. A route or model before a top-level
   shadowing assignment can still use exact framework imports, later units

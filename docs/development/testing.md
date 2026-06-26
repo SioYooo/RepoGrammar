@@ -232,6 +232,8 @@ allowed.
   compact/evidence/deep query paths,
   explicit metadata-only variation slots when parser-context profiles differ
   inside an already-supported Python family,
+  pytest non-builtin fixture-context differences remaining incompatible while
+  known builtin fixture-context differences are metadata-only variation/context,
   default-index parser context receiving discovered `.py` inventory, sanitized
   root `pyproject.toml` source roots from parser/tomllib project-config facts,
   and bounded discovered `conftest.py` contents,

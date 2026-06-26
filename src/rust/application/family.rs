@@ -829,7 +829,8 @@ fn python_evidence_pair_is_compatible(
             equal_feature_profiles(left, right, features_by_unit, &["decorator_shape:"])
         }
         "framework_pytest_test" | "framework_pytest_fixture" => {
-            equal_feature_profiles(left, right, features_by_unit, &["fixture_shape:"])
+            non_builtin_pytest_fixture_context(left, features_by_unit)
+                == non_builtin_pytest_fixture_context(right, features_by_unit)
         }
         "framework_pydantic_model" => {
             equal_feature_profiles(left, right, features_by_unit, &["class_base:"])
@@ -874,6 +875,16 @@ fn prefixed_feature_profile(
     prefixes
         .iter()
         .flat_map(|prefix| prefixed_features(evidence, features_by_unit, prefix))
+        .collect()
+}
+
+fn non_builtin_pytest_fixture_context(
+    evidence: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    prefixed_features(evidence, features_by_unit, "fixture_context:")
+        .into_iter()
+        .filter(|value| !value.starts_with("pytest_builtin_fixture_"))
         .collect()
 }
 
@@ -1761,6 +1772,74 @@ mod tests {
         assert!(!serialized.contains("api.UserOut"));
         assert!(!serialized.contains("app.services"));
         assert!(!serialized.contains("@"));
+    }
+
+    #[test]
+    fn python_pytest_non_builtin_fixture_context_must_match() {
+        let first = python_unit("tests/a.py", "pytest_test", 0);
+        let second = python_unit("tests/b.py", "pytest_test", 1);
+        let third = python_unit("tests/c.py", "pytest_test", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:pytest.test"),
+                role_fact(&second, "framework:pytest.test"),
+                role_fact(&third, "framework:pytest.test"),
+                semantic_support_fact_with_target(&first, "pytest.test"),
+                semantic_support_fact_with_target(&second, "pytest.test"),
+                semantic_support_fact_with_target(&third, "pytest.test"),
+                python_context_fact(&first, "pytest_fixture_edge", Some("pytest.fixture.client")),
+                python_context_fact(
+                    &second,
+                    "pytest_fixture_edge",
+                    Some("pytest.fixture.client"),
+                ),
+                python_context_fact(&third, "pytest_fixture_edge", Some("pytest.fixture.db")),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_pytest_builtin_fixture_context_variation_is_metadata_only() {
+        let first = python_unit("tests/a.py", "pytest_test", 0);
+        let second = python_unit("tests/b.py", "pytest_test", 1);
+        let third = python_unit("tests/c.py", "pytest_test", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:pytest.test"),
+                role_fact(&second, "framework:pytest.test"),
+                role_fact(&third, "framework:pytest.test"),
+                semantic_support_fact_with_target(&first, "pytest.test"),
+                semantic_support_fact_with_target(&second, "pytest.test"),
+                semantic_support_fact_with_target(&third, "pytest.test"),
+                python_context_fact(
+                    &first,
+                    "pytest_builtin_fixture_context",
+                    Some("pytest.builtin_fixture.tmp_path"),
+                ),
+                python_context_fact(
+                    &second,
+                    "pytest_builtin_fixture_context",
+                    Some("pytest.builtin_fixture.capsys"),
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert_eq!(claim.support, 3);
+        assert!(claim.variation_slots.iter().any(|slot| {
+            slot.slot_id == "slot:python_pytest_fixture_context"
+                && slot.description
+                    == "variation:python_pytest_fixture_context:context metadata differs across supported members"
+        }));
     }
 
     #[test]

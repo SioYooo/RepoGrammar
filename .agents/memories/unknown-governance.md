@@ -49,7 +49,8 @@
   derivation. Parser-origin context facts can split complete-link Python
   clusters or create metadata-only variation slots, but parser-origin blocking
   `UNKNOWN`s remove the affected unit from confident family support unless the
-  UNKNOWN is scoped to a non-membership subclaim.
+  UNKNOWN is scoped to a non-membership subclaim. pytest non-builtin fixture
+  context remains a compatibility constraint rather than a free variation.
 - Python provider agreement, provider disagreement, and runtime observation are
   not current certainty tokens. Until the Rust domain, protocol, storage, CLI,
   MCP, and schemas change together, cross-check and observed-runtime details
