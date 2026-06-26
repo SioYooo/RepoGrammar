@@ -132,6 +132,10 @@ Before a repository is initialized or before enough evidence exists, query
 commands return explicit fallback or `UNKNOWN` results rather than pretending an
 index or family claim exists.
 
+`repogrammar index` shows progress automatically in an interactive terminal.
+Use `repogrammar index --progress always` to force progress output, or
+`repogrammar index --progress never` for quiet scripts.
+
 ## Agent Integration
 
 RepoGrammar exposes a read-only MCP tool named `repogrammar_context`.

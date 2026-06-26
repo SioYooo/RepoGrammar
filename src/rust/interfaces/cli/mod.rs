@@ -6,6 +6,7 @@ use crate::application::install::{
     supported_concrete_targets, AgentTarget, InstallExecutionContext, InstallExecutionOutcome,
     InstallRequest, InstallScope,
 };
+use crate::application::progress::{ProgressEvent, WorkUnits};
 use crate::application::query::{
     build_read_plan, query_preflight, repository_status_unavailable_fallback,
     select_family_evidence, validate_query_target, validate_query_token_budget, DiagnosticSignal,
@@ -36,6 +37,7 @@ use crate::application::telemetry::{
 };
 use crate::error::RepoGrammarError;
 use serde_json::json;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +48,10 @@ pub struct CliIndexRequest {
     pub strict_gitignore: bool,
     pub semantic_worker_executable: Option<String>,
     pub semantic_worker_args: Vec<String>,
+    pub progress: ProgressMode,
+    pub json: bool,
+    pub quiet: bool,
+    pub stderr_is_terminal: bool,
 }
 
 pub trait CliRuntime {
@@ -2937,6 +2943,10 @@ where
         strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
         semantic_worker_executable,
         semantic_worker_args,
+        progress: options.progress,
+        json: options.json,
+        quiet: options.quiet,
+        stderr_is_terminal: std::io::stderr().is_terminal(),
     };
 
     match runtime.index_repository(command, request) {
@@ -3074,7 +3084,7 @@ impl QueryOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProgressMode {
+pub enum ProgressMode {
     Auto,
     Always,
     Never,
@@ -3090,7 +3100,7 @@ impl ProgressMode {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Always => "always",
@@ -3918,6 +3928,58 @@ fn json_line(value: serde_json::Value) -> String {
     output
 }
 
+pub fn should_emit_progress(
+    mode: ProgressMode,
+    json_output: bool,
+    quiet: bool,
+    stderr_is_terminal: bool,
+) -> bool {
+    if quiet {
+        return false;
+    }
+    match mode {
+        ProgressMode::Never => false,
+        ProgressMode::Always => true,
+        ProgressMode::Auto => !json_output && stderr_is_terminal,
+    }
+}
+
+pub fn render_index_progress_event(
+    command: &str,
+    event: &ProgressEvent,
+    json_output: bool,
+) -> String {
+    if json_output {
+        return event.render_ndjson();
+    }
+
+    let bar = progress_bar(event.work);
+    format!(
+        "{command}: {bar} {}: {}\n",
+        event.stage.as_str(),
+        event.message
+    )
+}
+
+fn progress_bar(work: WorkUnits) -> String {
+    match work {
+        WorkUnits::Unknown => "[working]".to_string(),
+        WorkUnits::Known(work) if work.total() == 0 => "[done] 0/0".to_string(),
+        WorkUnits::Known(work) => {
+            let width = 20u64;
+            let filled = (work.completed().saturating_mul(width) / work.total()).min(width);
+            let empty = width.saturating_sub(filled);
+            format!(
+                "[{}{}] {}/{}",
+                "#".repeat(filled as usize),
+                "-".repeat(empty as usize),
+                work.completed(),
+                work.total()
+            )
+        }
+    }
+}
+
 fn optional_human_number(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
@@ -3963,6 +4025,51 @@ mod tests {
             });
         host.map(|value| json!(value).to_string())
             .unwrap_or_else(|| "null".to_string())
+    }
+
+    #[test]
+    fn progress_policy_keeps_machine_output_clean_by_default() {
+        assert!(should_emit_progress(ProgressMode::Auto, false, false, true));
+        assert!(!should_emit_progress(ProgressMode::Auto, true, false, true));
+        assert!(should_emit_progress(
+            ProgressMode::Always,
+            true,
+            false,
+            false
+        ));
+        assert!(!should_emit_progress(
+            ProgressMode::Always,
+            false,
+            true,
+            true
+        ));
+        assert!(!should_emit_progress(
+            ProgressMode::Never,
+            false,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn index_progress_renderer_uses_bar_counts_and_ndjson() {
+        let event = ProgressEvent::new(
+            crate::application::progress::ProgressStage::FileScanning,
+            "stored files",
+            WorkUnits::known(2, 4).expect("valid work units"),
+        );
+
+        let human = render_index_progress_event("index", &event, false);
+        assert!(human.contains("index: [##########----------] 2/4 file_scanning"));
+        assert!(!human.contains('%'));
+        assert!(!human.to_ascii_lowercase().contains("eta"));
+
+        let machine = render_index_progress_event("index", &event, true);
+        let value: Value = serde_json::from_str(machine.trim()).expect("progress NDJSON");
+        assert_eq!(value["stage"], "file_scanning");
+        assert_eq!(value["message"], "stored files");
+        assert_eq!(value["work"]["completed"], 2);
+        assert_eq!(value["work"]["total"], 4);
     }
 
     fn stale_index_lock_json(token: &str) -> String {
@@ -4089,6 +4196,43 @@ mod tests {
             request: CliIndexRequest,
         ) -> Result<IndexingOutcome, RepoGrammarError> {
             assert!(request.strict_gitignore);
+            Ok(IndexingOutcome {
+                indexed_units: 0,
+                semantic_facts: 0,
+                discovered_files: 0,
+                skipped_paths: 0,
+                active_generation: Some("gen-000001".to_string()),
+                semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("index command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("index command should not request doctor through CLI test runtime")
+        }
+    }
+
+    struct ProgressRequestRuntime;
+
+    impl CliRuntime for ProgressRequestRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            assert_eq!(request.progress, ProgressMode::Always);
+            assert!(request.json);
+            assert!(!request.quiet);
             Ok(IndexingOutcome {
                 indexed_units: 0,
                 semantic_facts: 0,
@@ -4591,6 +4735,23 @@ mod tests {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
         assert_eq!(value["command"], "index");
+    }
+
+    #[test]
+    fn index_progress_options_are_passed_to_runtime() {
+        let workspace = TempWorkspace::new("cli-index-progress-request");
+        let env = |_: &str| None;
+        let output = run_with_context_and_runtime(
+            ["index", "--json", "--progress", "always"],
+            workspace.path(),
+            &env,
+            &ProgressRequestRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
+        assert_eq!(value["progress"], "always");
     }
 
     #[test]
@@ -7356,14 +7517,32 @@ mod tests {
 
     #[test]
     fn status_doctor_stats_and_telemetry_status_are_safe() {
-        assert_eq!(run(["status"]).status, 0);
-        assert_eq!(run(["doctor"]).status, 0);
-        let stats = run(["stats"]);
+        let workspace = TempWorkspace::new("cli-safe-status");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            run_with_context(["status"], workspace.path(), &env).status,
+            0
+        );
+        assert_eq!(
+            run_with_context(["doctor"], workspace.path(), &env).status,
+            0
+        );
+        let stats = run_with_context(["stats"], workspace.path(), &env);
         assert_eq!(stats.status, 2);
         assert!(stats.stdout.is_empty());
         assert!(stats.stderr.contains("FALLBACK_TO_CODE_SEARCH"));
         assert!(stats.stderr.contains("repository is not initialized"));
-        assert_eq!(run(["telemetry", "status"]).status, 0);
+        assert_eq!(
+            run_with_context(["telemetry", "status"], workspace.path(), &env).status,
+            0
+        );
     }
 
     #[test]
@@ -8214,7 +8393,9 @@ mod tests {
 
     #[test]
     fn stats_json_is_parseable_missing_index_fallback() {
-        let output = run(["stats", "--json"]);
+        let workspace = TempWorkspace::new("cli-stats-json-missing-index");
+        let env = |_: &str| None;
+        let output = run_with_context(["stats", "--json"], workspace.path(), &env);
 
         assert_eq!(output.status, 2);
         assert!(output.stdout.is_empty());

@@ -4,6 +4,10 @@
 
 ### Added
 
+- `repogrammar index` and `repogrammar sync` now emit progress while they run.
+  Human progress uses stderr and exact completed/total counts when known;
+  `--json --progress always` emits progress NDJSON on stderr while preserving
+  the final JSON result on stdout.
 - Interactive `repogrammar install` now provides a dependency-light text wizard
   for machine-level Codex and Claude Code MCP wiring. The wizard supports
   multi-select in one run, skips already managed RepoGrammar receipts by

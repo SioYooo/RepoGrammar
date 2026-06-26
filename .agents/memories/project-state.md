@@ -45,7 +45,9 @@
   repo-shape diagnostics for local pattern density, family support coverage,
   abstention rate, external dependency signal, and thin-wrapper/token-saving
   risk, and reports measured token savings only when local paired
-  baseline/treatment experiment records are comparable. Anonymous telemetry
+  baseline/treatment experiment records are comparable. `index` and `sync` emit
+  typed stage progress to stderr while running, with exact counts when known
+  and NDJSON progress available through `--json --progress always`. Anonymous telemetry
   upload is explicit opt-in, enabled `stats --json` writes only an allowlisted
   local rollup without queue creation or network upload, does not include a
   repository instance id, reports rollup counts / upload-open-network status,

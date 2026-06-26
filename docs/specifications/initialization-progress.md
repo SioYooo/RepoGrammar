@@ -34,8 +34,16 @@ state directory described in `docs/specifications/storage.md`.
 ## Current implementation status
 
 The bootstrap defines typed progress stages, known and unknown work units,
-plain rendering, and NDJSON rendering. `index` and `sync` now run TS/JS file
-discovery, syntax-only code-unit extraction, and generation validation while
-rendering the accepted `--progress` mode in their output, but they do not emit
-typed per-stage parser, semantic-worker, code-unit, or mining progress events
-yet.
+plain rendering, and NDJSON rendering. `index` and `sync` now emit typed
+per-stage progress events while they run discovery, file metadata storage,
+syntax parsing, code-unit normalization, local support-fact recording,
+semantic-worker deferred/running status, candidate/family construction, and
+persistence validation. Human progress is rendered to stderr with an ASCII bar
+when exact work counts are known and `[working]` when a denominator is not
+known. `--json --progress always` emits progress NDJSON on stderr while keeping
+the final JSON result on stdout.
+
+Deferred work: repository initialization does not yet emit per-step progress,
+semantic workers do not yet provide fine-grained internal progress through the
+product CLI, and future mining/provider phases will need more detailed
+candidate, provider, and evidence-selection progress events.

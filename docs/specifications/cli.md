@@ -82,6 +82,13 @@ All long-running commands must support:
 Long-running commands include repository initialization, indexing, sync, and MCP
 serving.
 
+For `index` and `sync`, human progress is emitted to stderr when
+`--progress always` is set, or when `--progress auto` detects an interactive
+stderr. `--quiet` and `--progress never` suppress progress. Final human or JSON
+results remain on stdout. When `--json --progress always` is used, progress
+events are emitted as NDJSON on stderr and the final command result remains a
+single JSON object on stdout.
+
 ## Repository state commands
 
 `repogrammar init` creates repository-local state under `.repogrammar/` by
@@ -151,6 +158,13 @@ Python parser-origin structural/`UNKNOWN` facts, or root `pyproject.toml`
 also add separate `DATAFLOW_DERIVED` support facts without running a semantic
 worker. These are bounded RepoGrammar support facts, not compiler/provider-backed
 facts.
+During a non-quiet run, `index` and `sync` emit progress for project discovery,
+file scanning, syntax parsing, local support-fact recording, semantic-worker
+deferred/running state, candidate/family construction, and persistence
+validation. Known work uses exact completed/total counts. Unknown work must
+remain explicit and must not display fabricated percentages or ETAs. Progress
+events must not include source snippets, source paths, content hashes, symbols,
+raw targets, or repository-identifying absolute paths.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
 `index` and `sync` may run that worker after syntax-only code units are stored
 for the building generation.
