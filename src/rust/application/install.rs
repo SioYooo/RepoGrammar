@@ -406,6 +406,8 @@ struct CommandInstallRecord {
     command_on_path: bool,
     created_command: bool,
     created_executable: bool,
+    previous_executable: Option<Vec<u8>>,
+    previous_command_copy: Option<Vec<u8>>,
 }
 
 fn install_cli_command(
@@ -423,6 +425,8 @@ fn install_cli_command(
         command_on_path: context.command_dir_on_path,
         created_command: false,
         created_executable: false,
+        previous_executable: None,
+        previous_command_copy: None,
     };
 
     fs::create_dir_all(&data_bin_dir).map_err(|error| {
@@ -443,7 +447,25 @@ fn install_cli_command(
     let executable_existed = installed_executable.exists();
     let command_path_was_managed_copy =
         command_path_is_managed_copy(&command_path, &installed_executable);
+    if command_path.exists()
+        && !same_path(&command_path, &installed_executable)
+        && !command_path_was_managed_copy
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "repogrammar command path already exists and is not managed by RepoGrammar".to_string(),
+        ));
+    }
     if !same_path(source, &installed_executable) {
+        if executable_existed {
+            record.previous_executable = Some(read_file_bytes(
+                &installed_executable,
+                "installed RepoGrammar CLI",
+            )?);
+        }
+        if command_path_was_managed_copy {
+            record.previous_command_copy =
+                Some(read_file_bytes(&command_path, "repogrammar command")?);
+        }
         fs::copy(source, &installed_executable).map_err(|error| {
             RepoGrammarError::InvalidInput(format!("failed to install RepoGrammar CLI: {error}"))
         })?;
@@ -451,33 +473,25 @@ fn install_cli_command(
     }
 
     if command_path.exists() {
-        if !same_path(&command_path, &installed_executable) {
-            if command_path_was_managed_copy {
-                refresh_command_copy(&installed_executable, &command_path).inspect_err(|_| {
-                    if record.created_executable {
-                        let _ = fs::remove_file(&installed_executable);
-                    }
-                })?;
-            } else {
-                if record.created_executable {
-                    let _ = fs::remove_file(&installed_executable);
-                }
-                return Err(RepoGrammarError::InvalidInput(
-                    "repogrammar command path already exists and is not managed by RepoGrammar"
-                        .to_string(),
-                ));
-            }
+        if !same_path(&command_path, &installed_executable) && command_path_was_managed_copy {
+            refresh_command_copy(&installed_executable, &command_path).inspect_err(|_| {
+                let _ = rollback_command_install(&record);
+            })?;
         }
     } else {
         create_command_link_or_copy(&installed_executable, &command_path).inspect_err(|_| {
-            if record.created_executable {
-                let _ = fs::remove_file(&installed_executable);
-            }
+            let _ = rollback_command_install(&record);
         })?;
         record.created_command = true;
     }
 
     Ok(record)
+}
+
+fn read_file_bytes(path: &Path, label: &str) -> Result<Vec<u8>, RepoGrammarError> {
+    fs::read(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to back up {label}: {error}"))
+    })
 }
 
 fn command_path_is_managed_copy(command_path: &Path, installed_executable: &Path) -> bool {
@@ -530,10 +544,18 @@ fn rollback_command_install(command_record: &CommandInstallRecord) -> Vec<String
         if let Err(error) = fs::remove_file(&command_record.command_path) {
             failures.push(format!("command cleanup failed: {error}"));
         }
+    } else if let Some(previous) = &command_record.previous_command_copy {
+        if let Err(error) = fs::write(&command_record.command_path, previous) {
+            failures.push(format!("command restore failed: {error}"));
+        }
     }
     if command_record.created_executable {
         if let Err(error) = fs::remove_file(&command_record.executable_path) {
             failures.push(format!("installed executable cleanup failed: {error}"));
+        }
+    } else if let Some(previous) = &command_record.previous_executable {
+        if let Err(error) = fs::write(&command_record.executable_path, previous) {
+            failures.push(format!("installed executable restore failed: {error}"));
         }
     }
     failures
@@ -998,6 +1020,94 @@ mod tests {
     }
 
     #[test]
+    fn failed_refresh_self_test_restores_existing_managed_binary_and_command_copy() {
+        let workspace = TempInstallWorkspace::new("refresh-self-test-rollback");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("initial install");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::remove_file(workspace.command_path()).expect("remove command symlink");
+        fs::copy(&installed, workspace.command_path()).expect("managed command copy");
+        fs::write(&workspace.context.executable_path, "updated broken stub\n")
+            .expect("update source");
+        configurator.actions.borrow_mut().clear();
+        self_test.calls.borrow_mut().clear();
+        let failing_self_test = FakeSelfTest {
+            fail: true,
+            ..FakeSelfTest::default()
+        };
+
+        let error = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &failing_self_test,
+        )
+        .expect_err("failed self-test must roll back refresh");
+
+        assert!(error.to_string().contains("rolled back"));
+        assert_eq!(configurator.actions.borrow().len(), 0);
+        assert_eq!(failing_self_test.calls.borrow().len(), 1);
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable restored"),
+            "stub\n"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.command_path()).expect("command copy restored"),
+            "stub\n"
+        );
+    }
+
+    #[test]
+    fn failed_refresh_native_add_restores_existing_managed_binary_and_command_copy() {
+        let workspace = TempInstallWorkspace::new("refresh-native-rollback");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::write(&installed, "old managed stub\n").expect("old installed executable");
+        fs::copy(&installed, workspace.command_path()).expect("old managed command copy");
+        fs::write(&workspace.context.executable_path, "new broken stub\n").expect("new source");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator {
+            fail_add_target: Some(AgentTarget::ClaudeCode),
+            ..FakeConfigurator::default()
+        };
+        let self_test = FakeSelfTest::default();
+
+        let error = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect_err("failed native add must roll back refresh");
+
+        assert!(error.to_string().contains("rolled back"));
+        assert_eq!(self_test.calls.borrow().len(), 1);
+        let actions = configurator.actions.borrow();
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].target, AgentTarget::Codex);
+        assert_eq!(actions[1].target, AgentTarget::ClaudeCode);
+        assert_eq!(actions[2].target, AgentTarget::Codex);
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable restored"),
+            "old managed stub\n"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.command_path()).expect("command copy restored"),
+            "old managed stub\n"
+        );
+    }
+
+    #[test]
     fn foreign_existing_command_path_is_refused_before_self_test_or_native_writes() {
         let workspace = TempInstallWorkspace::new("foreign-command-refused");
         fs::write(workspace.command_path(), "foreign command\n").expect("foreign command");
@@ -1018,6 +1128,36 @@ mod tests {
         assert_eq!(configurator.actions.borrow().len(), 0);
         assert_eq!(self_test.calls.borrow().len(), 0);
         assert!(!workspace.data_dir.join("bin").join(binary_name()).exists());
+    }
+
+    #[test]
+    fn foreign_existing_command_path_does_not_overwrite_existing_managed_binary() {
+        let workspace = TempInstallWorkspace::new("foreign-command-preserves-managed-binary");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::write(&installed, "old managed stub\n").expect("old installed executable");
+        fs::write(workspace.command_path(), "foreign command\n").expect("foreign command");
+        fs::write(&workspace.context.executable_path, "new source stub\n").expect("new source");
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let error = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect_err("foreign command must be refused");
+
+        assert!(error.to_string().contains("not managed by RepoGrammar"));
+        assert_eq!(configurator.actions.borrow().len(), 0);
+        assert_eq!(self_test.calls.borrow().len(), 0);
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable preserved"),
+            "old managed stub\n"
+        );
     }
 
     #[test]

@@ -259,15 +259,11 @@ default_worker_root() {
     printf "%s" "$WORKER_ROOT"
     return
   fi
-  local command_parent
-  local command_base
-  command_parent="$(dirname -- "$COMMAND_DIR")"
-  command_base="$(basename -- "$COMMAND_DIR")"
-  if [[ "$command_base" == "bin" ]]; then
-    printf "%s/share/repogrammar/workers" "$command_parent"
-  else
-    printf "%s/repogrammar-workers" "$COMMAND_DIR"
-  fi
+  printf "%s/workers" "$DATA_DIR"
+}
+
+command_worker_root() {
+  printf "%s/repogrammar-workers" "$COMMAND_DIR"
 }
 
 install_worker_asset() {
@@ -279,6 +275,14 @@ install_worker_asset() {
   worker_dest_root="$(default_worker_root)"
   mkdir -p "${worker_dest_root}/python"
   cp "$worker_source" "${worker_dest_root}/python/worker.py"
+  if [[ -z "$WORKER_ROOT" ]]; then
+    local command_dest_root
+    command_dest_root="$(command_worker_root)"
+    if [[ "$command_dest_root" != "$worker_dest_root" ]]; then
+      mkdir -p "${command_dest_root}/python"
+      cp "$worker_source" "${command_dest_root}/python/worker.py"
+    fi
+  fi
 }
 
 has_source_checkout() {

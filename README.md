@@ -45,7 +45,8 @@ TypeScript and JavaScript are not official v0.1 support targets.
 
 ## Install
 
-For public-preview releases, install the prebuilt CLI binary first:
+Once a public-preview prerelease has been published, install the prebuilt CLI
+binary first:
 
 ```text
 curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh
@@ -95,8 +96,9 @@ bash src/install/repogrammar-install.sh
 
 That script can install or repair the `repogrammar` command from a release,
 configure Codex and Claude Code, uninstall connected agent integrations, remove
-the local `repogrammar` command, or, for contributors, build from source.
-Before a prerelease artifact exists, source-checkout dogfood is explicit:
+the local `repogrammar` command, or, for contributors, build from source. Until
+the first prerelease artifact exists, source-checkout dogfood is the supported
+path:
 
 ```text
 cargo build --release

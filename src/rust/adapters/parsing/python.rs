@@ -14,6 +14,7 @@ use crate::ports::parser::{
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -120,15 +121,38 @@ fn source_checkout_python_worker_script() -> PathBuf {
 }
 
 fn python_worker_script_candidates(executable: &Path) -> Vec<PathBuf> {
-    let Some(executable_dir) = executable.parent() else {
-        return Vec::new();
-    };
-    let mut candidates = vec![executable_dir.join("repogrammar-workers/python/worker.py")];
-    if let Some(prefix) = executable_dir.parent() {
-        candidates.push(prefix.join("share/repogrammar/workers/python/worker.py"));
+    let mut candidates = Vec::new();
+    if let Ok(canonical) = fs::canonicalize(executable) {
+        if canonical != executable {
+            push_python_worker_script_candidates(&canonical, &mut candidates);
+        }
     }
-    candidates.push(executable_dir.join("workers/python/worker.py"));
+    push_python_worker_script_candidates(executable, &mut candidates);
     candidates
+}
+
+fn push_python_worker_script_candidates(executable: &Path, candidates: &mut Vec<PathBuf>) {
+    let Some(executable_dir) = executable.parent() else {
+        return;
+    };
+    push_unique_candidate(
+        candidates,
+        executable_dir.join("repogrammar-workers/python/worker.py"),
+    );
+    if let Some(prefix) = executable_dir.parent() {
+        push_unique_candidate(
+            candidates,
+            prefix.join("share/repogrammar/workers/python/worker.py"),
+        );
+        push_unique_candidate(candidates, prefix.join("workers/python/worker.py"));
+    }
+    push_unique_candidate(candidates, executable_dir.join("workers/python/worker.py"));
+}
+
+fn push_unique_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
 }
 
 impl PythonAstParser {
@@ -1402,9 +1426,36 @@ mod tests {
             vec![
                 PathBuf::from("/opt/repogrammar/bin/repogrammar-workers/python/worker.py"),
                 PathBuf::from("/opt/repogrammar/share/repogrammar/workers/python/worker.py"),
+                PathBuf::from("/opt/repogrammar/workers/python/worker.py"),
                 PathBuf::from("/opt/repogrammar/bin/workers/python/worker.py"),
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn python_worker_candidates_follow_command_symlink_to_managed_install() {
+        let root = std::env::temp_dir().join(format!(
+            "repogrammar-python-worker-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let installed = root.join("data/bin/repogrammar");
+        let command = root.join("commands/repogrammar");
+        fs::create_dir_all(installed.parent().expect("installed parent"))
+            .expect("installed parent");
+        fs::create_dir_all(command.parent().expect("command parent")).expect("command parent");
+        fs::write(&installed, "stub").expect("installed executable");
+        std::os::unix::fs::symlink(&installed, &command).expect("command symlink");
+
+        let candidates = python_worker_script_candidates(&command);
+
+        let expected_data_dir = fs::canonicalize(root.join("data")).expect("canonical data dir");
+        assert!(candidates.contains(&expected_data_dir.join("workers/python/worker.py")));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn document(text: &str) -> SourceDocument<'_> {

@@ -3,7 +3,7 @@ param(
     [string]$Repo = $(if ($env:REPOGRAMMAR_REPO) { $env:REPOGRAMMAR_REPO } else { "SioYooo/RepoGrammar" }),
     [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\RepoGrammar\bin" }),
     [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "RepoGrammar" }),
-    [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path (Split-Path -Parent $CommandDir) "share\repogrammar\workers" }),
+    [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path $InstallDir "workers" }),
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
     [switch]$UninstallCommand,
@@ -86,9 +86,15 @@ function Install-Cli {
         Copy-Item $installedBinary $commandPath -Force
         $worker = Join-Path $temp.FullName "workers\python\worker.py"
         if (Test-Path $worker) {
-            $workerDest = Join-Path $WorkerRoot "python"
-            New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
-            Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
+            $workerRoots = @($WorkerRoot)
+            if (!$env:REPOGRAMMAR_WORKER_ROOT) {
+                $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
+            }
+            foreach ($root in ($workerRoots | Select-Object -Unique)) {
+                $workerDest = Join-Path $root "python"
+                New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
+                Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
+            }
         }
         Write-Output "Installed $commandPath"
     } finally {

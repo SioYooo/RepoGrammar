@@ -1245,13 +1245,17 @@ fn prompt_agent_selection_until_valid(
     statuses: &[InstallAgentStatus],
     install_prompt: &impl InstallTelemetryPrompt,
 ) -> Result<Option<Vec<AgentTarget>>, String> {
-    let prompt = install_agent_selection_prompt(statuses);
+    let base_prompt = install_agent_selection_prompt(statuses);
+    let mut prompt = base_prompt.clone();
     let mut last_error = None;
     for _ in 0..3 {
         let response = install_prompt.prompt_agent_selection(&prompt)?;
         match parse_interactive_agent_selection(&response, statuses) {
             Ok(selection) => return Ok(selection),
-            Err(error) => last_error = Some(error),
+            Err(error) => {
+                prompt = format!("Invalid selection: {error}\n\n{base_prompt}");
+                last_error = Some(error);
+            }
         }
     }
     Err(last_error.unwrap_or_else(|| "invalid agent selection".to_string()))
@@ -6840,6 +6844,11 @@ mod tests {
         assert_eq!(prompt.selection_calls.get(), 2);
         assert_eq!(prompt.telemetry_calls.get(), 1);
         assert_eq!(prompt.confirmation_calls.get(), 1);
+        let prompts = prompt.selection_prompts.borrow();
+        assert_eq!(prompts.len(), 2);
+        assert!(!prompts[0].contains("Invalid selection"));
+        assert!(prompts[1].contains("Invalid selection:"));
+        assert!(prompts[1].contains("unknown agent selection"));
     }
 
     #[test]
@@ -7546,6 +7555,7 @@ mod tests {
 
     struct WizardPrompt {
         selections: RefCell<VecDeque<String>>,
+        selection_prompts: RefCell<Vec<String>>,
         telemetry: RefCell<VecDeque<String>>,
         confirmations: RefCell<VecDeque<String>>,
         selection_calls: Cell<usize>,
@@ -7561,6 +7571,7 @@ mod tests {
         ) -> Self {
             Self {
                 selections: RefCell::new(selections.into_iter().map(str::to_string).collect()),
+                selection_prompts: RefCell::new(Vec::new()),
                 telemetry: RefCell::new(telemetry.into_iter().map(str::to_string).collect()),
                 confirmations: RefCell::new(
                     confirmations.into_iter().map(str::to_string).collect(),
@@ -7577,8 +7588,9 @@ mod tests {
             true
         }
 
-        fn prompt_agent_selection(&self, _prompt: &str) -> Result<String, String> {
+        fn prompt_agent_selection(&self, prompt: &str) -> Result<String, String> {
             self.selection_calls.set(self.selection_calls.get() + 1);
+            self.selection_prompts.borrow_mut().push(prompt.to_string());
             self.selections
                 .borrow_mut()
                 .pop_front()

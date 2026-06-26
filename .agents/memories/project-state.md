@@ -69,8 +69,11 @@
   wrapper can also dogfood before release assets exist by explicitly installing
   from `target/release/repogrammar` into the same RepoGrammar-managed command
   layout used by the Rust installer, then delegating agent wiring to
-  `repogrammar install`. It refuses foreign command paths rather than adopting
-  arbitrary existing binaries. The optional npm package
+  `repogrammar install`. The managed layout places bundled Python workers under
+  install state discoverable from the managed executable, and refresh rollback
+  restores the previous managed executable/command copy if self-test or native
+  agent configuration fails. It refuses foreign command paths rather than
+  adopting arbitrary existing binaries. The optional npm package
   `@sioyooo/repogrammar` is a thin npx launcher over those same release
   artifacts, not a JavaScript implementation; local npm dogfood can use
   `REPOGRAMMAR_BINARY` to execute an already built binary without release

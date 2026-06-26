@@ -55,6 +55,7 @@ REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
 
 "${COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
 test -f "${TMP_ROOT}/share/repogrammar/workers/python/worker.py"
+test -f "${COMMAND_DIR}/repogrammar-workers/python/worker.py"
 test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
 
 REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
@@ -91,6 +92,8 @@ REPOGRAMMAR_INSTALL_DIR="$SOURCE_INSTALL_DIR" \
 
 "${SOURCE_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
 test -x "${SOURCE_INSTALL_DIR}/bin/repogrammar"
+test -f "${SOURCE_INSTALL_DIR}/workers/python/worker.py"
+test -f "${SOURCE_COMMAND_DIR}/repogrammar-workers/python/worker.py"
 
 REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$SOURCE_COMMAND_DIR" \
@@ -99,6 +102,27 @@ REPOGRAMMAR_FAKE_LOG="$SOURCE_LOG" \
 "$INSTALLER" --install-and-configure --from-source --yes --target all >/dev/null
 
 grep -q "install --target all --scope global --yes --no-telemetry" "$SOURCE_LOG"
+
+cargo build --quiet --bin repogrammar
+PRODUCT_COMMAND_DIR="${TMP_ROOT}/product-bin"
+PRODUCT_INSTALL_DIR="${TMP_ROOT}/product-data"
+PRODUCT_REPO="${TMP_ROOT}/product-repo"
+mkdir -p "$PRODUCT_REPO"
+cat > "${PRODUCT_REPO}/app.py" <<'PY_FIXTURE'
+def hello():
+    return "ok"
+PY_FIXTURE
+REPOGRAMMAR_SOURCE_BINARY="${SCRIPT_DIR}/../../target/debug/repogrammar" \
+REPOGRAMMAR_COMMAND_DIR="$PRODUCT_COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
+"$INSTALLER" --install-cli-only --from-source --yes >/dev/null
+
+test -x "${PRODUCT_INSTALL_DIR}/bin/repogrammar"
+test -f "${PRODUCT_INSTALL_DIR}/workers/python/worker.py"
+test -f "${PRODUCT_COMMAND_DIR}/repogrammar-workers/python/worker.py"
+(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" init >/dev/null)
+(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
+(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
 
 FOREIGN_COMMAND_DIR="${TMP_ROOT}/foreign-bin"
 FOREIGN_INSTALL_DIR="${TMP_ROOT}/foreign-data"

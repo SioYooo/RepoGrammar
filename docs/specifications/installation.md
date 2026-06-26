@@ -193,9 +193,11 @@ Consuming repositories must not be forced to mirror RepoGrammar's own
 The current implementation supports deterministic dry-run planning,
 noninteractive live writes, and a dependency-light text wizard:
 
-- public-preview release packaging builds prebuilt `repogrammar` artifacts for
+- public-preview release packaging is defined by the release workflow for
   macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64 preview, each with
-  a bundled Python worker asset and `.sha256` checksum;
+  a bundled Python worker asset and `.sha256` checksum. Real GitHub
+  prerelease artifacts are not available until a preview tag is published, so
+  source-checkout dogfood remains the supported pre-release path;
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, installs the CLI and bundled worker asset, and can then

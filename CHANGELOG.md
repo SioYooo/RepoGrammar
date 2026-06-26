@@ -25,6 +25,10 @@
   removes only RepoGrammar-owned first-class agent receipts.
 - Re-running `repogrammar install` now still installs or repairs the
   user-writable `repogrammar` command when selected agents are already managed.
+- Managed installs now place bundled Python worker assets under install state
+  that the managed executable can discover, and refresh rollback restores the
+  previous managed executable and command copy if self-test or native agent
+  configuration fails.
 - Source checkouts now include `src/install/repogrammar-install.sh`, a
   dependency-light TUI wrapper for downloading and verifying a prebuilt release
   binary, installing or repairing the command, configuring or uninstalling
@@ -33,7 +37,9 @@
 - Release automation now builds prebuilt `repogrammar` artifacts with checksum
   assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
   preview, bundles the current Python worker asset, and publishes `install.sh`
-  / `install.ps1` installer assets for tagged preview releases.
+  / `install.ps1` installer assets for tagged preview releases. Real
+  downloadable prerelease artifacts are available only after a preview tag is
+  published.
 - Added the `@sioyooo/repogrammar` npm package manifest and thin `npx`
   launcher. The launcher downloads and verifies the same prebuilt release
   artifacts, caches the binary and bundled worker asset, and delegates all
