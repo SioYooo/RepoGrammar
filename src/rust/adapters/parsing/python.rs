@@ -1262,6 +1262,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "pytest_parametrize"
             | "pytest_parametrize_arg"
             | "pytest_test_function"
+            | "pytest_builtin_fixture_context"
             | "pytest_fixture_edge"
             | "pytest_conftest_fixture_edge"
             | "sqlalchemy_select"
@@ -2796,7 +2797,9 @@ from acme.missing import value\n";
                         assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
                     })
             }),
-            "{:?}",
+            "units={:?} diagnostics={:?} facts={:?}",
+            report.units,
+            report.diagnostics,
             report.semantic_facts
         );
         assert!(report.semantic_facts.iter().any(|fact| {
@@ -2811,6 +2814,89 @@ from acme.missing import value\n";
         assert!(!debug.contains("tests/conftest.py"));
         assert!(!debug.contains("return object"));
         assert!(!debug.contains("missing_fixture"));
+    }
+
+    #[test]
+    fn parse_with_context_marks_duplicate_conftest_and_builtin_fixture_boundaries() {
+        let source = r#"
+def test_users(client, tmp_path, capsys, django_db):
+    assert tmp_path
+"#;
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "conftest.py".to_string(),
+                "tests/conftest.py".to_string(),
+                "tests/sub/test_api.py".to_string(),
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: vec![ParserProjectFileContext {
+                path: "tests/conftest.py".to_string(),
+                text: r#"
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+
+@pytest.fixture
+def client():
+    return object()
+"#
+                .to_string(),
+            }],
+        };
+        let report = PythonAstParser::default()
+            .parse_with_context(document_at("tests/sub/test_api.py", source), &context)
+            .expect("parse with fixture boundary context");
+
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.client")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                })
+        }));
+        assert!(
+            report.semantic_facts.iter().any(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("ConflictingFacts")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+            }),
+            "units={:?} diagnostics={:?} facts={:?}",
+            report.units,
+            report.diagnostics,
+            report.semantic_facts
+        );
+        for builtin_target in [
+            "pytest.builtin_fixture.tmp_path",
+            "pytest.builtin_fixture.capsys",
+        ] {
+            assert!(
+                report.semantic_facts.iter().any(|fact| {
+                    fact.kind == SemanticFactKind::Symbol
+                        && fact.target.as_ref().map(SymbolId::as_str) == Some(builtin_target)
+                        && fact.assumptions.iter().any(|assumption| {
+                            assumption == "python_anchor_kind=pytest_builtin_fixture_context"
+                        })
+                }),
+                "missing builtin fixture context {builtin_target}"
+            );
+        }
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("PytestFixtureInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=pytest_fixture_binding")
+        }));
+        let debug = format!("{:?}", report);
+        assert!(!debug.contains("tests/conftest.py"));
+        assert!(!debug.contains("return object"));
+        assert!(!debug.contains("django_db"));
     }
 
     #[test]

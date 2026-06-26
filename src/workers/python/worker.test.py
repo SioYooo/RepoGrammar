@@ -1210,6 +1210,83 @@ assert "tests/conftest.py" not in serialized_conftest_parse
 assert "return object" not in serialized_conftest_parse
 assert "missing_fixture" not in serialized_conftest_parse
 
+fixture_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "tests/sub/test_fixture_boundaries.py",
+        "content_hash": "sha256:" + "b" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": [
+            "conftest.py",
+            "tests/conftest.py",
+            "tests/sub/test_fixture_boundaries.py",
+        ],
+        "source_roots": [],
+        "conftest_files": [
+            {
+                "path": "conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+            },
+            {
+                "path": "tests/conftest.py",
+                "text": """
+import pytest
+
+@pytest.fixture
+def client():
+    return object()
+""",
+            },
+        ],
+        "text": """
+def test_fixture_boundaries(client, tmp_path, capsys, django_db):
+    assert tmp_path
+""",
+    }
+)
+fixture_boundary_facts = fixture_boundary_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture.client"
+    and "python_anchor_kind=pytest_conftest_fixture_edge" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "ConflictingFacts"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.tmp_path"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.builtin_fixture.capsys"
+    and "python_anchor_kind=pytest_builtin_fixture_context" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "PytestFixtureInjection"
+    and "affected_claim=pytest_fixture_binding" in fact["assumptions"]
+    for fact in fixture_boundary_facts
+)
+serialized_fixture_boundaries = json.dumps(fixture_boundary_messages)
+assert "tests/conftest.py" not in serialized_fixture_boundaries
+assert "return object" not in serialized_fixture_boundaries
+assert "django_db" not in serialized_fixture_boundaries
+
 ambiguous_context_messages = run_worker(
     {
         "protocol_version": 1,

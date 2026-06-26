@@ -154,7 +154,11 @@ allowed.
   request body/path/query/header/cookie marker anchors, pytest fixture
   decorator aliases, pytest parametrize decorator and literal argument anchors,
   direct-parametrize-over-fixture precedence, indirect parametrize remaining
-  typed `PytestFixtureInjection` `UNKNOWN`, Pydantic field, field-type,
+  typed `PytestFixtureInjection` `UNKNOWN`, duplicate applicable conftest
+  fixtures becoming fixture-binding `ConflictingFacts`, known pytest built-in
+  fixtures becoming external context rather than missing-fixture UNKNOWNs,
+  plugin-style fixture names remaining typed `PytestFixtureInjection`
+  `UNKNOWN`, Pydantic field, field-type,
   model-config, nested Config, computed-field, validator, and model-validator
   anchors,
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
@@ -223,7 +227,7 @@ allowed.
   FastAPI response-model/static dependency-target/dependency-call/error/status-code
   context anchors and static request body/parameter anchors staying out of
   support derivation, claim-input readiness, and support-target variation metadata,
-  pytest fixture-edge and parametrize-argument anchors
+  pytest fixture-edge, builtin-fixture context, and parametrize-argument anchors
   staying out of family support, SQLAlchemy relationship and Session.add
   structural anchors staying out of family support and claim-input readiness, SQLAlchemy
   `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and

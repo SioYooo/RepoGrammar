@@ -84,6 +84,9 @@ Some unknowns block only specific claims:
   source-range evidence from the current file hash;
 - Python fixture injection may block test-behavior equivalence
   while still allowing structural pytest test discovery;
+- duplicate applicable Python `conftest.py` fixture names may block fixture
+  binding with `ConflictingFacts`, while known pytest built-in fixtures may
+  remain non-supporting external context;
 - dynamic FastAPI dependency target expressions may block the dependency-target
   sub-claim while still allowing a route family when route membership has enough
   independent exact-anchor support.

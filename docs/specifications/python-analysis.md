@@ -96,17 +96,21 @@ The current implementation covers the first structural slice only:
   safe `.py` paths plus sanitized `pyproject.toml` source roots when `tomllib`
   is available, emits `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
   repo-local module matches, resolves requested-project `conftest.py` fixture
-  names through pytest's directory hierarchy as structural fixture-edge facts,
-  and emits typed `UNKNOWN` for ambiguous/missing repo-local imports or
-  `sys.path` mutation;
+  names through pytest's directory hierarchy as structural fixture-edge facts
+  only when the applicable name is unique, emits `ConflictingFacts` `UNKNOWN`
+  for duplicate applicable conftest fixture names, emits metadata-only external
+  context for known pytest built-in fixtures such as `tmp_path` and `capsys`,
+  and emits typed `UNKNOWN` for ambiguous/missing repo-local imports,
+  plugin-style fixture names without an allowlist or provider, or `sys.path`
+  mutation;
 - default parser-mode indexing now passes the discovered repo-relative `.py`
   inventory, sanitized root `pyproject.toml` source roots from the existing
   `tomllib` project-config parser output, and bounded, hash-checked discovered
   `conftest.py` file contents into the private CPython parse-document request
   so the same source-tied parse pass can emit unique repo-local import facts,
   `pytest.test` anchors, pytest parent-directory `conftest.py` fixture-edge
-  facts, and typed unresolved/ambiguous import or fixture `UNKNOWN`s without
-  launching a separate Python semantic worker;
+  facts, known builtin-fixture context, and typed unresolved/ambiguous import
+  or fixture `UNKNOWN`s without launching a separate Python semantic worker;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a
@@ -134,9 +138,13 @@ The current implementation covers the first structural slice only:
   structural facts; they do not become provider-backed semantic facts. Direct
   pytest parametrize arguments take precedence over same-name fixture bindings,
   indirect parametrize arguments remain typed `PytestFixtureInjection`
-  `UNKNOWN`, fixture-edge and parametrize-argument anchors stay out of family
-  membership support, and Pydantic member/config metadata likewise does not
-  become support;
+  `UNKNOWN`, duplicate applicable conftest fixture names become
+  `ConflictingFacts` for `pytest_fixture_binding`, known pytest built-in
+  fixtures become `pytest.builtin_fixture.*` context anchors, plugin-style
+  fixtures remain `PytestFixtureInjection` `UNKNOWN` until an allowlist or
+  provider resolves them, fixture-edge, builtin-fixture, and
+  parametrize-argument anchors stay out of family membership support, and
+  Pydantic member/config metadata likewise does not become support;
 - bounded same-function application call recovery for import-resolved static forms such as
   `service = UserService(); service.list_users()` and
   `runner = run_query; runner()` inside FastAPI route units. These produce
@@ -523,10 +531,14 @@ Algorithm:
 4. Classify direct `pytest.mark.parametrize` arguments before fixture lookup.
 5. Preserve indirect parametrize arguments as typed `PytestFixtureInjection`
    `UNKNOWN`.
-6. Map each remaining parameter to the nearest unique fixture definition.
-7. Mark built-in or plugin fixtures as external fixture context when known.
+6. Map each remaining parameter to a unique applicable fixture definition.
+   Duplicate applicable `conftest.py` definitions remain ambiguous until a
+   provider proves pytest's exact runtime resolution.
+7. Mark known pytest built-in fixtures as external fixture context. Plugin
+   fixtures are external context only when a declared allowlist or provider
+   proves the binding.
 8. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
-   dynamic, or plugin-defined bindings.
+   dynamic, duplicate, or unresolved plugin-defined bindings.
 
 ### Layer 8: Python EC-MVFI-lite
 
@@ -687,6 +699,8 @@ The following conditions must produce typed `UNKNOWN` for affected claims:
 - unresolved decorators;
 - runtime dependency injection;
 - ambiguous pytest fixture injection;
+- duplicate applicable `conftest.py` fixture names without provider resolution;
+- plugin-style pytest fixture names without an allowlist or provider;
 - missing project configuration;
 - missing dependencies;
 - framework magic not covered by the adapter;

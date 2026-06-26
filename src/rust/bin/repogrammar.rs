@@ -803,6 +803,8 @@ mod tests {
             "setattr(target",
             "Depends(make_dependency",
             "return getattr",
+            "django_db",
+            "return object",
         ] {
             assert!(
                 !debug.contains(forbidden),
@@ -1556,17 +1558,40 @@ mod tests {
             ("DynamicImport", "python_import_resolution"),
             ("RuntimeDependencyInjection", "python_import_resolution"),
             ("RuntimeDependencyInjection", "fastapi_dependency_target"),
+            ("ConflictingFacts", "pytest_fixture_binding"),
+            ("PytestFixtureInjection", "pytest_fixture_binding"),
             ("FrameworkMagic", "python_call_target"),
             ("FrameworkMagic", "python_framework_identity"),
             ("MonkeyPatch", "python_call_target"),
         ] {
-            assert_stored_python_unknown_fact(
+            let path = match reason_code {
+                "ConflictingFacts" | "PytestFixtureInjection" => {
+                    "tests/sub/test_fixture_boundaries.py"
+                }
+                _ => "dynamic.py",
+            };
+            assert_stored_python_unknown_fact(&facts.facts, path, reason_code, affected_claim);
+        }
+        for target in [
+            "pytest.builtin_fixture.tmp_path",
+            "pytest.builtin_fixture.capsys",
+        ] {
+            assert_stored_python_structural_fact(
                 &facts.facts,
-                "dynamic.py",
-                reason_code,
-                affected_claim,
+                "tests/sub/test_fixture_boundaries.py",
+                "SYMBOL",
+                target,
+                "pytest_builtin_fixture_context",
             );
         }
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.path == "tests/sub/test_fixture_boundaries.py"
+                && fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pytest.fixture.client")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                }))
+        }));
         assert_targets_blocked_from_claim_input(
             &workspace,
             &store,
@@ -1574,6 +1599,8 @@ mod tests {
             &[
                 "DynamicImport",
                 "RuntimeDependencyInjection",
+                "ConflictingFacts",
+                "PytestFixtureInjection",
                 "FrameworkMagic",
                 "MonkeyPatch",
             ],
@@ -1583,6 +1610,11 @@ mod tests {
             &[
                 "DynamicImport",
                 "RuntimeDependencyInjection",
+                "ConflictingFacts",
+                "PytestFixtureInjection",
+                "pytest.builtin_fixture.tmp_path",
+                "pytest.builtin_fixture.capsys",
+                "pytest.fixture.client",
                 "FrameworkMagic",
                 "MonkeyPatch",
             ],

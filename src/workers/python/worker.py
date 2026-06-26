@@ -49,6 +49,23 @@ SQLALCHEMY_SESSION_METHODS = {
     "scalar",
     "scalars",
 }
+PYTEST_BUILTIN_FIXTURES = {
+    "cache",
+    "capfd",
+    "capfdbinary",
+    "caplog",
+    "capsys",
+    "capsysbinary",
+    "doctest_namespace",
+    "monkeypatch",
+    "pytestconfig",
+    "record_property",
+    "record_testsuite_property",
+    "recwarn",
+    "request",
+    "tmp_path",
+    "tmp_path_factory",
+}
 SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.orm.Session",
     "sqlalchemy.ext.asyncio.AsyncSession",
@@ -331,12 +348,20 @@ def pytest_fixture_names_from_tree(
     tree: ast.Module,
     aliases: dict[str, str] | None = None,
 ) -> set[str]:
-    return {
-        item.name
-        for item in tree.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and has_pytest_fixture_decorator(item, aliases)
-    }
+    return set(pytest_fixture_name_counts_from_tree(tree, aliases))
+
+
+def pytest_fixture_name_counts_from_tree(
+    tree: ast.Module,
+    aliases: dict[str, str] | None = None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and has_pytest_fixture_decorator(
+            item, aliases
+        ):
+            counts[item.name] = counts.get(item.name, 0) + 1
+    return counts
 
 
 def base_names(node: ast.ClassDef) -> list[str]:
@@ -1869,6 +1894,58 @@ def call_anchor_kind(target: str, unit_kind: str) -> str:
     return "call_target"
 
 
+def add_pytest_fixture_unknown(
+    facts: list[dict[str, Any]],
+    subject_unit_id: str,
+    reason_code: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> None:
+    add_fact(
+        facts,
+        unknown_fact(
+            subject_unit_id=subject_unit_id,
+            reason_code=reason_code,
+            affected_claim="pytest_fixture_binding",
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+        ),
+    )
+
+
+def add_pytest_fixture_context_fact(
+    facts: list[dict[str, Any]],
+    subject_unit_id: str,
+    target: str,
+    anchor_kind: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> None:
+    add_fact(
+        facts,
+        structural_fact(
+            kind="SYMBOL",
+            subject_unit_id=subject_unit_id,
+            target=target,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind=anchor_kind,
+        ),
+    )
+
+
 def collect_fixture_facts(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     starts: list[int],
@@ -1876,8 +1953,8 @@ def collect_fixture_facts(
     content_hash_value: str,
     repository_revision: str,
     subject_unit_id: str,
-    fixture_names: set[str],
-    conftest_fixture_names: set[str] | None,
+    fixture_name_counts: dict[str, int],
+    conftest_fixture_name_counts: dict[str, int] | None,
     parametrize_names: set[str] | None,
     indirect_parametrize_names: set[str] | None,
     facts: list[dict[str, Any]],
@@ -1899,7 +1976,7 @@ def collect_fixture_facts(
             anchor_kind="pytest_test_function",
         ),
     )
-    conftest_fixture_names = conftest_fixture_names or set()
+    conftest_fixture_name_counts = conftest_fixture_name_counts or {}
     parametrize_names = parametrize_names or set()
     indirect_parametrize_names = indirect_parametrize_names or set()
     for arg in node.args.args:
@@ -1922,62 +1999,84 @@ def collect_fixture_facts(
                 ),
             )
         elif arg.arg in indirect_parametrize_names:
-            add_fact(
+            add_pytest_fixture_unknown(
                 facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="PytestFixtureInjection",
-                    affected_claim="pytest_fixture_binding",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
+                subject_unit_id,
+                "PytestFixtureInjection",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
             )
-        elif arg.arg in fixture_names:
-            add_fact(
+        elif fixture_name_counts.get(arg.arg, 0) == 1:
+            add_pytest_fixture_context_fact(
                 facts,
-                structural_fact(
-                    kind="SYMBOL",
-                    subject_unit_id=subject_unit_id,
-                    target=f"pytest.fixture.{arg.arg}",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                    anchor_kind="pytest_fixture_edge",
-                ),
+                subject_unit_id,
+                f"pytest.fixture.{arg.arg}",
+                "pytest_fixture_edge",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
             )
-        elif arg.arg in conftest_fixture_names:
-            add_fact(
+        elif fixture_name_counts.get(arg.arg, 0) > 1:
+            add_pytest_fixture_unknown(
                 facts,
-                structural_fact(
-                    kind="SYMBOL",
-                    subject_unit_id=subject_unit_id,
-                    target=f"pytest.fixture.{arg.arg}",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                    anchor_kind="pytest_conftest_fixture_edge",
-                ),
+                subject_unit_id,
+                "ConflictingFacts",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
+            )
+        elif conftest_fixture_name_counts.get(arg.arg, 0) == 1:
+            add_pytest_fixture_context_fact(
+                facts,
+                subject_unit_id,
+                f"pytest.fixture.{arg.arg}",
+                "pytest_conftest_fixture_edge",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
+            )
+        elif conftest_fixture_name_counts.get(arg.arg, 0) > 1:
+            add_pytest_fixture_unknown(
+                facts,
+                subject_unit_id,
+                "ConflictingFacts",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
+            )
+        elif arg.arg in PYTEST_BUILTIN_FIXTURES:
+            add_pytest_fixture_context_fact(
+                facts,
+                subject_unit_id,
+                f"pytest.builtin_fixture.{arg.arg}",
+                "pytest_builtin_fixture_context",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
             )
         else:
-            add_fact(
+            add_pytest_fixture_unknown(
                 facts,
-                unknown_fact(
-                    subject_unit_id=subject_unit_id,
-                    reason_code="PytestFixtureInjection",
-                    affected_claim="pytest_fixture_binding",
-                    path=path,
-                    content_hash_value=content_hash_value,
-                    repository_revision=repository_revision,
-                    start=start,
-                    end=end,
-                ),
+                subject_unit_id,
+                "PytestFixtureInjection",
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
             )
 
 
@@ -1988,7 +2087,7 @@ def analyze_source(
     repository_revision: str,
     module_index: dict[str, list[str]] | None = None,
     source_roots: list[str] | None = None,
-    conftest_fixture_names: set[str] | None = None,
+    conftest_fixture_name_counts: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     starts = byte_line_starts(source)
     units: list[dict[str, Any]] = []
@@ -2036,7 +2135,7 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
-    fixture_names = pytest_fixture_names_from_tree(tree, aliases)
+    fixture_name_counts = pytest_fixture_name_counts_from_tree(tree, aliases)
 
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -2108,8 +2207,8 @@ def analyze_source(
                 content_hash_value,
                 repository_revision,
                 subject_unit_id,
-                fixture_names,
-                conftest_fixture_names,
+                fixture_name_counts,
+                conftest_fixture_name_counts,
                 parametrize_names,
                 indirect_parametrize_names,
                 facts,
@@ -2255,7 +2354,7 @@ def parse_document(payload: dict[str, Any]) -> int:
         payload["repository_revision"],
         module_index if module_paths else None,
         source_roots,
-        applicable_conftest_fixture_names(payload["path"], fixture_index),
+        applicable_conftest_fixture_name_counts(payload["path"], fixture_index),
     )
     message(
         {
@@ -2436,11 +2535,11 @@ def project_source_roots(project_root: Path) -> list[str]:
     return sorted(root for root in roots if isinstance(root, str) and is_safe_repo_relative_path(root))
 
 
-def pytest_fixture_names(source: str) -> set[str]:
+def pytest_fixture_name_counts(source: str) -> dict[str, int]:
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return set()
+        return {}
     starts = byte_line_starts(source)
     aliases, _facts = collect_import_aliases(
         tree,
@@ -2450,29 +2549,36 @@ def pytest_fixture_names(source: str) -> set[str]:
         "UNKNOWN",
         "unit:conftest.py#module:module:0-0:0",
     )
-    return pytest_fixture_names_from_tree(tree, aliases)
+    return pytest_fixture_name_counts_from_tree(tree, aliases)
 
 
-def conftest_fixture_index(file_records: list[tuple[str, str, str]]) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
+def pytest_fixture_names(source: str) -> set[str]:
+    return set(pytest_fixture_name_counts(source))
+
+
+def conftest_fixture_index(file_records: list[tuple[str, str, str]]) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
     for relative_path, source, _file_hash in file_records:
         if relative_path == "conftest.py" or relative_path.endswith("/conftest.py"):
-            names = pytest_fixture_names(source)
-            if names:
-                result[relative_path] = names
+            counts = pytest_fixture_name_counts(source)
+            if counts:
+                result[relative_path] = counts
     return result
 
 
-def applicable_conftest_fixture_names(path: str, fixture_index: dict[str, set[str]]) -> set[str]:
-    names: set[str] = set()
+def applicable_conftest_fixture_name_counts(
+    path: str, fixture_index: dict[str, dict[str, int]]
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
     current_dir = parent_path(path)
     while True:
         conftest_path = f"{current_dir}/conftest.py" if current_dir else "conftest.py"
-        names.update(fixture_index.get(conftest_path, set()))
+        for name, count in fixture_index.get(conftest_path, {}).items():
+            counts[name] = counts.get(name, 0) + count
         if not current_dir:
             break
         current_dir = parent_path(current_dir)
-    return names
+    return counts
 
 
 def safe_conftest_file_records(value: Any) -> list[tuple[str, str, str]] | None:
@@ -2581,7 +2687,7 @@ def analyze_project(payload: dict[str, Any]) -> int:
             "UNKNOWN",
             module_index,
             source_roots,
-            applicable_conftest_fixture_names(relative_path, fixture_index),
+            applicable_conftest_fixture_name_counts(relative_path, fixture_index),
         )
         for fact_payload in facts:
             emit_fact_message(request_id, fact_payload)
