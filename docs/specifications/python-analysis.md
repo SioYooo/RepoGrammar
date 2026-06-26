@@ -207,7 +207,10 @@ The current implementation covers the first structural slice only:
   context facts participate in compatibility, while parser-origin blocking
   `UNKNOWN` facts remove the affected unit from confident support unless the
   UNKNOWN is scoped to a non-membership subclaim such as
-  `fastapi_dependency_target`;
+  `fastapi_dependency_target`. When parser-context profiles differ inside an
+  already-supported Python family, the builder records metadata-only variation
+  slots for those context categories instead of silently collapsing the
+  difference into an unqualified runtime-equivalence claim;
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
@@ -713,9 +716,10 @@ records carry schema-backed `covered_claims` labels from the allowlist
 those labels and never infers coverage from free-text notes. The current builder
 emits `canonical` and `support`, plus one narrow Python `variation` evidence
 label when a ready family has multiple exact-compatible framework-anchor
-support targets. Requested exception coverage and broader variation coverage
-remain in `missing_claims` until explicit medoid, variation-slot, and exception
-evidence links exist.
+support targets. It may also emit metadata-only variation slots when parser
+context profiles differ inside an already-ready family. Requested exception
+coverage and broader variation evidence coverage remain in `missing_claims`
+until explicit medoid, variation-slot, and exception evidence links exist.
 
 ## Rejected v0.1 Routes
 

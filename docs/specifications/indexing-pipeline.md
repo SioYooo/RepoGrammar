@@ -237,10 +237,11 @@ project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as structural fixture-edge facts. The Rust
 parser adapter validates and persists parse-document payloads as internal
 `STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same code-unit
-evidence. They are not passed to the family builder and remain blocked from
-claim-input readiness as insufficient support. Pydantic member/config/computed
-anchors are schema/config/member context only, and FastAPI service-call anchors
-are handler/service context only. FastAPI request body and request-parameter
+evidence. They may enter the family builder only as context features or
+claim-scoped blocking `UNKNOWN`s; they remain blocked from support readiness as
+insufficient support. Pydantic member/config/computed anchors are
+schema/config/member context only, and FastAPI service-call anchors are
+handler/service context only. FastAPI request body and request-parameter
 anchors are route-shape context only; none of these categories synthesizes
 family support facts.
 Its private `parse_project_config` mode can sanitize `pyproject.toml` summaries
@@ -248,8 +249,9 @@ with `tomllib` when available. Default indexing now discovers root
 `pyproject.toml` as `python-config`, reads it through the Rust source-store
 path/hash boundary, and persists a `project_config` code unit plus sanitized
 `PROJECT_CONFIG`/`STRUCTURAL` records or typed config `UNKNOWN`s. Those records
-are structural context only, are not provider facts, are not passed to family
-construction, and stay blocked from claim-input readiness. The worker's
+are structural context only, are not provider facts, do not participate in
+family membership support, and stay blocked from claim-input readiness. The
+worker's
 semantic-worker-compatible NDJSON mode can emit those structural facts plus
 project-scope module-level repo-local import facts for unique safe `.py` module
 matches, typed `UNKNOWN` for ambiguous/missing repo-local imports and `sys.path`
@@ -330,9 +332,12 @@ Family evidence records carry schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the current
 builder emits `canonical` and `support`, plus a narrow Python `variation`
 label when a ready family's exact-compatible framework-anchor support targets
-differ. Requested exception coverage and broader variation coverage are
-reported as missing until family evidence is explicitly linked to variation
-slots or counterexamples. This selector does not replace future medoid
+differ. The builder may also emit metadata-only variation slots when
+parser-context profiles differ inside an already-supported Python family, but
+those slots do not imply variation evidence coverage. Requested exception
+coverage and broader variation coverage are reported as missing until family
+evidence is explicitly linked to variation slots or counterexamples. This
+selector does not replace future medoid
 selection, template induction, or exception mining.
 
 ## Framework adapters

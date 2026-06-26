@@ -121,10 +121,13 @@ schema-backed `covered_claims` labels from the allowlist `canonical`,
 rather than infer coverage from notes or record order. The current family
 builder emits `canonical` and `support`, plus a narrow Python `variation` label
 when an already-ready family has multiple exact-compatible framework-anchor
-support targets. Requested exception coverage and broader variation coverage
-must be reported as missing until later builders explicitly link evidence to
-those claims. Family detail unknowns identify runtime-equivalence gaps with
-the concrete `<family_id>:runtime_equivalence` affected claim. MCP responses
+support targets. It may also emit metadata-only variation slots when
+parser-context profiles differ inside an already-supported Python family, but
+those slots do not imply variation evidence coverage. Requested exception
+coverage and broader variation coverage must be reported as missing until later
+builders explicitly link evidence to those claims. Family detail unknowns
+identify runtime-equivalence gaps with the concrete
+`<family_id>:runtime_equivalence` affected claim. MCP responses
 must report whether source snippets were included;
 the current implementation always reports
 `source_snippets_included: false`.

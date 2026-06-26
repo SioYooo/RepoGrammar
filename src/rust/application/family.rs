@@ -261,6 +261,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
                 suffix,
                 normalized_shape,
                 cluster,
+                &features_by_unit,
             ));
             emitted_ready_clusters += 1;
         }
@@ -288,6 +289,7 @@ fn family_claim_from_supported_evidence(
     cluster_suffix: Option<&str>,
     normalized_shape: String,
     supported_evidence: Vec<FamilyEvidence>,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
 ) -> FamilyClaim {
     let family_id = family_id(key, cluster_suffix);
     let runtime_unknown = ClaimUnknown {
@@ -313,6 +315,11 @@ fn family_claim_from_supported_evidence(
                     .to_string(),
         });
     }
+    variation_slots.extend(python_context_variation_slots(
+        key,
+        &supported_evidence,
+        features_by_unit,
+    ));
     FamilyClaim {
         family_id,
         classification: "DOMINANT_PATTERN".to_string(),
@@ -326,6 +333,61 @@ fn family_claim_from_supported_evidence(
         exceptions: Vec::new(),
         unknowns: vec![runtime_unknown],
         readiness: ClaimReadiness::Ready,
+    }
+}
+
+fn python_context_variation_slots(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationSlot> {
+    if key.language != "python" {
+        return Vec::new();
+    }
+    python_variation_feature_prefixes(key.framework_role.as_str())
+        .iter()
+        .filter_map(|(slot_name, prefixes)| {
+            let profiles = evidence
+                .iter()
+                .map(|item| prefixed_feature_profile(item, features_by_unit, prefixes))
+                .collect::<BTreeSet<_>>();
+            let has_context = profiles.iter().any(|profile| !profile.is_empty());
+            (has_context && profiles.len() > 1).then(|| VariationSlot {
+                slot_id: format!("slot:{slot_name}"),
+                description: format!(
+                    "variation:{slot_name}:context metadata differs across supported members"
+                ),
+            })
+        })
+        .collect()
+}
+
+fn python_variation_feature_prefixes(
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match framework_role {
+        "framework:fastapi.route" => &[
+            ("python_fastapi_effect_marker", &["effect_marker:"]),
+            ("python_fastapi_service_call_shape", &["call_shape:"]),
+            ("python_fastapi_fixture_context", &["fixture_context:"]),
+            ("python_import_context", &["import_context:"]),
+        ],
+        "framework:pytest.test" | "framework:pytest.fixture" => &[
+            ("python_pytest_fixture_context", &["fixture_context:"]),
+            ("python_pytest_effect_marker", &["effect_marker:"]),
+            ("python_import_context", &["import_context:"]),
+        ],
+        "framework:pydantic.model" => &[
+            ("python_pydantic_model_context", &["model_context:"]),
+            ("python_import_context", &["import_context:"]),
+        ],
+        "framework:sqlalchemy.model" | "framework:sqlalchemy.repository_method" => &[
+            ("python_sqlalchemy_model_context", &["model_context:"]),
+            ("python_sqlalchemy_effect_marker", &["effect_marker:"]),
+            ("python_sqlalchemy_call_shape", &["call_shape:"]),
+            ("python_import_context", &["import_context:"]),
+        ],
+        _ => &[],
     }
 }
 
@@ -801,6 +863,17 @@ fn prefixed_features(
         .into_iter()
         .flat_map(|features| features.iter())
         .filter_map(|feature| feature.strip_prefix(prefix).map(str::to_string))
+        .collect()
+}
+
+fn prefixed_feature_profile(
+    evidence: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    prefixes: &[&str],
+) -> BTreeSet<String> {
+    prefixes
+        .iter()
+        .flat_map(|prefix| prefixed_features(evidence, features_by_unit, prefix))
         .collect()
 }
 
@@ -1640,6 +1713,54 @@ mod tests {
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].support, 3);
         assert_eq!(report.claims[0].readiness, ClaimReadiness::Ready);
+    }
+
+    #[test]
+    fn python_fastapi_context_differences_are_explicit_variation_metadata() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_context_fact(&first, "fastapi_response_model", Some("api.UserOut")),
+                python_context_fact(
+                    &second,
+                    "fastapi_http_exception_status",
+                    Some("fastapi.http_exception.status_code.404"),
+                ),
+                python_context_fact(
+                    &third,
+                    "fastapi_service_call",
+                    Some("app.services.UserService.list_users"),
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert_eq!(claim.support, 3);
+        assert!(claim.variation_slots.iter().any(|slot| {
+            slot.slot_id == "slot:python_fastapi_effect_marker"
+                && slot.description
+                    == "variation:python_fastapi_effect_marker:context metadata differs across supported members"
+        }));
+        assert!(claim.variation_slots.iter().any(|slot| {
+            slot.slot_id == "slot:python_fastapi_service_call_shape"
+                && slot.description
+                    == "variation:python_fastapi_service_call_shape:context metadata differs across supported members"
+        }));
+        let records = family_storage_records(claim);
+        let serialized = format!("{records:?}");
+        assert!(!serialized.contains("api.UserOut"));
+        assert!(!serialized.contains("app.services"));
+        assert!(!serialized.contains("@"));
     }
 
     #[test]

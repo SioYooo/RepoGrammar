@@ -218,7 +218,9 @@ allowed.
   typed `UNKNOWN`,
   persisted project-config facts staying out of claim-input readiness,
   heuristic framework-role facts staying out of family claims, raw parser-origin
-  facts staying out of family construction,
+  facts staying out of support derivation while parser-origin context and
+  `UNKNOWN` facts reach the family builder only for compatibility, variation,
+  and abstention,
   exact-anchor derived support facts producing no-worker direct FastAPI,
   the complete FastAPI/APIRouter `delete`, `get`, `head`, `options`, `patch`,
   `post`, and `put` route-method matrix, FastAPI alias, pytest test,
@@ -228,6 +230,8 @@ allowed.
   single-link bridge members and splitting distinct ready support-family
   clusters with stable sanitized ids, their CLI/MCP metadata-only
   compact/evidence/deep query paths,
+  explicit metadata-only variation slots when parser-context profiles differ
+  inside an already-supported Python family,
   default-index parser context receiving discovered `.py` inventory, sanitized
   root `pyproject.toml` source roots from parser/tomllib project-config facts,
   and bounded discovered `conftest.py` contents,

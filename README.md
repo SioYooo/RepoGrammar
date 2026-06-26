@@ -46,7 +46,9 @@ typed `UNKNOWN`. Ready Python exact-anchor families pass bounded complete-link
 clustering over support-family features before being stored, so bridge examples
 cannot single-link incompatible Python support into one confident claim. They
 may record metadata-only variation evidence when exact-compatible
-framework-anchor support targets differ. Exact-anchor derivation now uses only
+framework-anchor support targets differ, and metadata-only variation slots when
+parser-context profiles differ inside an already-supported family. Exact-anchor
+derivation now uses only
 top-level framework bindings that have not been shadowed, and module-scope
 dynamic import/path mutation becomes unit-scoped blocking `UNKNOWN` evidence
 instead of being guessed away. The Python plan still uses a

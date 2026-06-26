@@ -208,7 +208,9 @@ stored family evidence metadata. `deep` is still metadata-only and reports no
 source snippets until a safe source-span reader is implemented. The current
 builder can link one narrow Python variation evidence record when an
 already-ready family has multiple exact-compatible framework-anchor support
-targets; broader variation, medoid, and exception evidence remain deferred.
+targets. It can also emit metadata-only variation slots when parser-context
+profiles differ inside an already-supported Python family; broader variation
+evidence, medoid, and exception evidence remain deferred.
 
 ### Phase P8: Optional Observed Runtime Evidence
 

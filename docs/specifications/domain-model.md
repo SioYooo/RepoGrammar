@@ -72,8 +72,8 @@ field, field-type, `model_config`, nested `Config`, computed-field, validator,
 and model-validator anchors, bounded same-function FastAPI service-call anchors,
 and typed
 dynamic/unresolved `UNKNOWN` cases. These facts remain `STRUCTURAL` or
-`UNKNOWN`, are blocked from family-claim input, and are not fed to the current
-family builder as raw facts. A separate
+`UNKNOWN`, are blocked from support input, and may be fed to the current family
+builder only as context features or claim-scoped blocking `UNKNOWN`s. A separate
 application-layer derivation step may synthesize `DATAFLOW_DERIVED` support
 facts from those validated structural anchors only when the unit has exactly
 one Python framework role, evidence stays in the same code-unit path/hash/range,

@@ -136,8 +136,10 @@ by themselves. Default Python indexing may also populate internal semantic
 fact/evidence rows from CPython `ast` parse-document structural anchors and
 typed `UNKNOWN` facts after Rust-side validation; those rows use `STRUCTURAL`
 or `UNKNOWN` certainty, remain unavailable through CLI/MCP query output, are
-not passed to the current family builder, and do not create family rows by
-themselves. Root `pyproject.toml` may be indexed as a `python-config` file and
+passed to the current family builder only as context or claim-scoped abstention
+inputs, and do not create family rows by themselves. They cannot be support
+facts and cannot prove membership. Root `pyproject.toml` may be indexed as a
+`python-config` file and
 `project_config` code unit; only sanitized `PROJECT_CONFIG`/`STRUCTURAL`
 metadata or typed project-config `UNKNOWN` records may be stored, and they are
 blocked from family-claim input. The CLI can

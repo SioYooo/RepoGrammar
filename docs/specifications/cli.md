@@ -355,9 +355,12 @@ allowlist `canonical`, `support`, `variation`, and `exception`; the selector
 must consume those labels rather than inferring coverage from note text or
 storage order. The current family builder emits `canonical` and `support`
 labels, plus a narrow Python `variation` label when an already-ready family has
-multiple exact-compatible framework-anchor support targets. `--include-exceptions`
-and broader variation requests must still report missing coverage until later
-builders explicitly link evidence to variation slots or exceptions.
+multiple exact-compatible framework-anchor support targets. It may also emit
+metadata-only variation slots when parser-context profiles differ inside an
+already-supported Python family, but those slots do not imply variation
+evidence coverage. `--include-exceptions` and broader variation requests must
+still report missing coverage until later builders explicitly link evidence to
+variation slots or exceptions.
 `--mode deep` is accepted as an
 explicit detail request, but until a safe source-span rendering contract exists
 it remains metadata-only and must report `source_snippets_included: false`.

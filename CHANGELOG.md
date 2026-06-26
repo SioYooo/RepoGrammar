@@ -104,13 +104,14 @@
   anchors.
   Default indexing validates and persists
   parser-origin
-  `STRUCTURAL`/`UNKNOWN` facts while keeping them out of family construction
-  and CLI/MCP family evidence.
+  `STRUCTURAL`/`UNKNOWN` facts while keeping them out of support derivation
+  and CLI/MCP family evidence. The family builder may consume them only as
+  context features or claim-scoped abstention inputs.
 - Default Python indexing discovers root `pyproject.toml` as `python-config`,
   reads it through the Rust source-store path/hash boundary, and persists a
   `project_config` unit with sanitized `PROJECT_CONFIG`/`STRUCTURAL` metadata
-  or typed config `UNKNOWN` facts; these records stay out of family construction
-  and claim-input readiness.
+  or typed config `UNKNOWN` facts; these records stay out of family support and
+  claim-input readiness.
 - Default Python parser context now reuses sanitized root `pyproject.toml`
   source roots from the existing parser/tomllib project-config facts, alongside
   discovered `.py` inventory and bounded `conftest.py` context, so repo-local
@@ -134,6 +135,10 @@
   resolution UNKNOWNs block affected family membership, pytest fixture-binding
   UNKNOWNs block pytest family support, and FastAPI dependency-target UNKNOWNs
   remain scoped to the dependency subclaim rather than route-family membership.
+- Ready Python families now record metadata-only variation slots when
+  parser-context profiles such as FastAPI effect markers or service-call shapes
+  differ inside an already-supported family. These slots do not expose source
+  snippets or promote parser context into support evidence.
 - The CPython AST worker now resolves import aliases and module-level dynamic
   UNKNOWN propagation by source position. A route or model before a top-level
   shadowing assignment can still use exact framework imports, later units
