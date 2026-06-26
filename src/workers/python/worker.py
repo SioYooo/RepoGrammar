@@ -340,7 +340,7 @@ def has_pytest_fixture_decorator(
     assignments: dict[str, str] | None = None,
 ) -> bool:
     return any(
-        name in {"fixture", "pytest.fixture"}
+        name == "pytest.fixture"
         for name in canonical_decorator_names(node, aliases, assignments)
     )
 
@@ -356,10 +356,7 @@ def pytest_fixture_binding_names(
     has_unknown_name = False
     for decorator in getattr(node, "decorator_list", []):
         raw_name = dotted_name(decorator)
-        if raw_name is None or canonical_name(raw_name, aliases, assignments) not in {
-            "fixture",
-            "pytest.fixture",
-        }:
+        if raw_name is None or canonical_name(raw_name, aliases, assignments) != "pytest.fixture":
             continue
         explicit_name = False
         if isinstance(decorator, ast.Call):
@@ -725,7 +722,7 @@ def collect_import_aliases(
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     aliases: dict[str, str] = {}
     facts: list[dict[str, Any]] = []
-    imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    imports = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
     imports.sort(key=lambda node: node_range(starts, node))
     for node in imports:
         start, end = node_range(starts, node)
@@ -940,6 +937,53 @@ def assignment_target_names(node: ast.AST) -> list[str]:
     else:
         return []
     return [target.id for target in targets if isinstance(target, ast.Name)]
+
+
+def import_local_names(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [alias.asname or alias.name.split(".")[0] for alias in node.names]
+    if isinstance(node, ast.ImportFrom):
+        return [alias.asname or alias.name for alias in node.names if alias.name != "*"]
+    return []
+
+
+def top_level_rebound_names(node: ast.AST) -> list[str]:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    return assignment_target_names(node)
+
+
+def shadowed_import_alias_names(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+) -> set[str]:
+    import_offsets: dict[str, int] = {}
+    rebound_offsets: dict[str, int] = {}
+    for node in tree.body:
+        start, _end = node_range(starts, node)
+        for name in import_local_names(node):
+            if name in aliases:
+                import_offsets[name] = start
+        for name in top_level_rebound_names(node):
+            if name in aliases:
+                rebound_offsets[name] = start
+    return {
+        name
+        for name, rebound_offset in rebound_offsets.items()
+        if name in import_offsets and rebound_offset > import_offsets[name]
+    }
+
+
+def drop_shadowed_import_aliases(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+) -> dict[str, str]:
+    shadowed = shadowed_import_alias_names(tree, starts, aliases)
+    if not shadowed:
+        return aliases
+    return {name: target for name, target in aliases.items() if name not in shadowed}
 
 
 def collect_parameter_roles(
@@ -1334,7 +1378,7 @@ def collect_fastapi_parameter_facts(
 
 def decorator_anchor_kind(target: str) -> str:
     parts = target.split(".")
-    if target in {"pytest.fixture", "fixture"}:
+    if target == "pytest.fixture":
         return "pytest_fixture_decorator"
     if target == "pytest.mark.parametrize":
         return "pytest_parametrize"
@@ -1642,8 +1686,10 @@ def collect_sqlalchemy_model_field_facts(
 def is_dynamic_call(node: ast.Call) -> bool:
     if isinstance(node.func, ast.Call) and dotted_name(node.func) == "getattr":
         return True
-    if isinstance(node.func, ast.Subscript) and dotted_name(node.func) in {"globals", "locals"}:
-        return True
+    if isinstance(node.func, ast.Subscript):
+        value = node.func.value
+        if isinstance(value, ast.Call) and dotted_name(value.func) in {"globals", "locals"}:
+            return True
     return False
 
 
@@ -1658,6 +1704,117 @@ def is_monkey_patch_call(node: ast.Call, canonical: str | None) -> bool:
         return True
     target = dotted_name(node.args[0])
     return target not in {"self", "cls"}
+
+
+def resolved_dynamic_import_literal_target(
+    call: ast.Call,
+    module_index: dict[str, list[str]] | None,
+) -> str | None:
+    first_arg = call.args[0] if call.args else None
+    if (
+        isinstance(first_arg, ast.Constant)
+        and isinstance(first_arg.value, str)
+        and is_safe_fact_target(first_arg.value)
+        and repo_local_module_resolution(first_arg.value, module_index) == "resolved"
+    ):
+        return first_arg.value
+    return None
+
+
+def dynamic_unknown_for_call(
+    call: ast.Call,
+    canonical: str | None,
+    module_index: dict[str, list[str]] | None,
+) -> tuple[str, str] | None:
+    if is_monkey_patch_call(call, canonical):
+        return "MonkeyPatch", "python_call_target"
+    if canonical in {"sys.path.append", "sys.path.insert"}:
+        return "RuntimeDependencyInjection", "python_import_resolution"
+    if canonical == "__import__":
+        return "DynamicImport", "python_import_resolution"
+    if canonical == "importlib.import_module" and resolved_dynamic_import_literal_target(call, module_index) is None:
+        return "DynamicImport", "python_import_resolution"
+    if is_dynamic_execution_call(canonical):
+        return "FrameworkMagic", "python_call_target"
+    if is_dynamic_call(call):
+        return "FrameworkMagic", "python_call_target"
+    return None
+
+
+def add_unknown_fact(
+    facts: list[dict[str, Any]],
+    subject_unit_id: str,
+    reason_code: str,
+    affected_claim: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> None:
+    add_fact(
+        facts,
+        unknown_fact(
+            subject_unit_id=subject_unit_id,
+            reason_code=reason_code,
+            affected_claim=affected_claim,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+        ),
+    )
+
+
+def module_level_dynamic_unknown_specs(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    module_index: dict[str, list[str]] | None,
+) -> list[tuple[str, str, int, int]]:
+    specs: list[tuple[str, str, int, int]] = []
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for call in sorted(
+            [child for child in ast.walk(item) if isinstance(child, ast.Call)],
+            key=lambda child: node_range(starts, child),
+        ):
+            name = dotted_name(call.func)
+            canonical = canonical_name(name, aliases, assignments) if name else None
+            unknown = dynamic_unknown_for_call(call, canonical, module_index)
+            if unknown is None:
+                continue
+            reason_code, affected_claim = unknown
+            start, end = node_range(starts, call)
+            specs.append((reason_code, affected_claim, start, end))
+    return specs
+
+
+def add_unknown_specs_for_unit(
+    facts: list[dict[str, Any]],
+    subject_unit_id: str,
+    specs: list[tuple[str, str, int, int]],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    evidence_range: tuple[int, int] | None = None,
+) -> None:
+    for reason_code, affected_claim, start, end in specs:
+        fact_start, fact_end = evidence_range or (start, end)
+        add_unknown_fact(
+            facts,
+            subject_unit_id,
+            reason_code,
+            affected_claim,
+            path,
+            content_hash_value,
+            repository_revision,
+            fact_start,
+            fact_end,
+        )
 
 
 def collect_call_facts(
@@ -2284,6 +2441,7 @@ def analyze_source(
     )
     for item in import_facts:
         add_fact(facts, item)
+    aliases = drop_shadowed_import_aliases(tree, starts, aliases)
     defined_names = top_level_defined_names(tree)
     collect_module_identity_and_scope_facts(
         tree,
@@ -2295,6 +2453,21 @@ def analyze_source(
         facts,
     )
     assignments = collect_assignment_roles(tree, aliases)
+    module_dynamic_unknowns = module_level_dynamic_unknown_specs(
+        tree,
+        starts,
+        aliases,
+        assignments,
+        module_index,
+    )
+    add_unknown_specs_for_unit(
+        facts,
+        module_unit_id,
+        module_dynamic_unknowns,
+        path,
+        content_hash_value,
+        repository_revision,
+    )
     collect_module_dynamic_pydantic_model_facts(
         tree,
         starts,
@@ -2345,6 +2518,16 @@ def analyze_source(
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
+            item_unit = unit_by_node[id(item)]
+            add_unknown_specs_for_unit(
+                facts,
+                subject_unit_id,
+                module_dynamic_unknowns,
+                path,
+                content_hash_value,
+                repository_revision,
+                (item_unit["start_byte"], item_unit["end_byte"]),
+            )
             collect_decorator_facts(
                 item,
                 starts,
@@ -2418,6 +2601,16 @@ def analyze_source(
             )
         elif isinstance(item, ast.ClassDef):
             subject_unit_id = unit_id(path, unit_by_node[id(item)])
+            item_unit = unit_by_node[id(item)]
+            add_unknown_specs_for_unit(
+                facts,
+                subject_unit_id,
+                module_dynamic_unknowns,
+                path,
+                content_hash_value,
+                repository_revision,
+                (item_unit["start_byte"], item_unit["end_byte"]),
+            )
             collect_class_base_facts(
                 item,
                 starts,
@@ -2465,6 +2658,16 @@ def analyze_source(
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 child_unit_id = unit_id(path, unit_by_node[id(child)])
+                child_unit = unit_by_node[id(child)]
+                add_unknown_specs_for_unit(
+                    facts,
+                    child_unit_id,
+                    module_dynamic_unknowns,
+                    path,
+                    content_hash_value,
+                    repository_revision,
+                    (child_unit["start_byte"], child_unit["end_byte"]),
+                )
                 parameter_roles = {
                     **collect_parameter_roles(child, aliases),
                     **instance_attribute_roles,

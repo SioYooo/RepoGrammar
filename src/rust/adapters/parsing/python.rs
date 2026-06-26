@@ -2444,6 +2444,138 @@ def list_users():
     }
 
     #[test]
+    fn cpython_frontend_drops_shadowed_framework_import_exact_anchors() {
+        let source = r#"
+from fastapi import APIRouter
+from pydantic import BaseModel
+from pytest import fixture
+from sqlalchemy.orm import Mapped, mapped_column
+
+APIRouter = object
+BaseModel = object
+fixture = object
+Mapped = list
+mapped_column = object
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+
+class UserOut(BaseModel):
+    id: int
+
+@fixture
+def client():
+    return object()
+
+class User:
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column()
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter.get")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.BaseModel")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_decorator")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.Mapped")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_mapped_field")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.mapped_column")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_mapped_column")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_framework_identity")
+        }));
+    }
+
+    #[test]
+    fn cpython_frontend_copies_module_dynamic_unknowns_to_family_units() {
+        let source = r#"
+import importlib
+import sys
+from fastapi import APIRouter
+
+sys.path.insert(0, "/tmp/secret")
+importlib.import_module("plugins.dynamic")
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+        let route_unit = report
+            .units
+            .iter()
+            .find(|unit| unit.kind.as_str() == "fastapi_route")
+            .expect("route unit");
+        let route_unit_id = route_unit.id.as_str();
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.evidence.code_unit_id.as_str() == route_unit_id
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.APIRouter.get")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.evidence.code_unit_id.as_str() == route_unit_id
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("RuntimeDependencyInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.evidence.code_unit_id.as_str() == route_unit_id
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("DynamicImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("/tmp/secret"));
+        assert!(!debug.contains("plugins.dynamic"));
+    }
+
+    #[test]
     fn cpython_frontend_extracts_pydantic_settings_bases() {
         let source = r#"
 from pydantic import BaseSettings as LegacyBaseSettings

@@ -918,6 +918,129 @@ assert not any(
 )
 assert "@api.get" not in json.dumps(shadowed_alias_messages)
 
+shadowed_framework_import_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "shadowed_framework_imports.py",
+        "content_hash": "sha256:" + "f" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter
+from pydantic import BaseModel
+from pytest import fixture
+from sqlalchemy.orm import Mapped, mapped_column
+
+APIRouter = object
+BaseModel = object
+fixture = object
+Mapped = list
+mapped_column = object
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+
+class UserOut(BaseModel):
+    id: int
+
+@fixture
+def client():
+    return object()
+
+class User:
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column()
+""",
+    }
+)
+shadowed_framework_import_facts = shadowed_framework_import_messages[0]["facts"]
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "python_anchor_kind=fastapi_route_decorator" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "TYPE" and fact["target"] == "pydantic.BaseModel"
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pytest.fixture"
+    and "python_anchor_kind=pytest_fixture_decorator" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+assert not any(
+    (
+        fact["fact_kind"] == "TYPE"
+        and fact["target"] == "sqlalchemy.orm.Mapped"
+        and "python_anchor_kind=sqlalchemy_mapped_field" in fact["assumptions"]
+    )
+    or (
+        fact["fact_kind"] == "RESOLVED_CALL"
+        and fact["target"] == "sqlalchemy.orm.mapped_column"
+        and "python_anchor_kind=sqlalchemy_mapped_column" in fact["assumptions"]
+    )
+    for fact in shadowed_framework_import_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=python_framework_identity" in fact["assumptions"]
+    for fact in shadowed_framework_import_facts
+)
+
+module_dynamic_boundary_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "module_dynamic_boundary.py",
+        "content_hash": "sha256:" + "a" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+import importlib
+import sys
+from fastapi import APIRouter
+
+sys.path.insert(0, "/tmp/secret")
+importlib.import_module("plugins.dynamic")
+
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+""",
+    }
+)
+module_dynamic_boundary_facts = module_dynamic_boundary_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "fastapi.APIRouter.get"
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "DynamicImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    and "list_users" in fact["subject"]
+    for fact in module_dynamic_boundary_facts
+)
+serialized_module_dynamic_boundary = json.dumps(module_dynamic_boundary_messages)
+assert "/tmp/secret" not in serialized_module_dynamic_boundary
+assert "plugins.dynamic" not in serialized_module_dynamic_boundary
+
 bad_parse = run_worker(
     {
         "protocol_version": 1,

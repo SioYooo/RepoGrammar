@@ -46,7 +46,10 @@ typed `UNKNOWN`. Ready Python exact-anchor families pass bounded complete-link
 clustering over support-family features before being stored, so bridge examples
 cannot single-link incompatible Python support into one confident claim. They
 may record metadata-only variation evidence when exact-compatible
-framework-anchor support targets differ. The Python plan still uses a
+framework-anchor support targets differ. Exact-anchor derivation now uses only
+top-level framework bindings that have not been shadowed, and module-scope
+dynamic import/path mutation becomes unit-scoped blocking `UNKNOWN` evidence
+instead of being guessed away. The Python plan still uses a
 claim-driven selective
 cascade: cheap CPython syntax/scope/config facts first, Pyrefly only for
 plausible family candidates, Pyright only for claim-upgrading cross-checks, and

@@ -2491,6 +2491,49 @@ mod tests {
     }
 
     #[test]
+    fn python_import_resolution_unknown_blocks_fastapi_family_support() {
+        let first = indexed_python_unit("app/a.py", "fastapi_route", 0);
+        let second = indexed_python_unit("app/b.py", "fastapi_route", 1);
+        let third = indexed_python_unit("app/c.py", "fastapi_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let mut parser_facts = units
+            .iter()
+            .map(|unit| {
+                parser_structural_anchor_fact(
+                    unit,
+                    SemanticFactKind::Symbol,
+                    "fastapi.APIRouter.get",
+                )
+            })
+            .collect::<Vec<_>>();
+        parser_facts.push(parser_unknown_fact_for_unit(
+            &second,
+            "RuntimeDependencyInjection",
+            "python_import_resolution",
+        ));
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:fastapi.route"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_python_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact Python support");
+
+        assert_eq!(derived.len(), 2);
+        assert!(derived
+            .iter()
+            .all(|fact| fact.evidence.code_unit_id.as_str() != second.id));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
     fn pytest_fixture_binding_unknown_blocks_pytest_family_support() {
         let first = indexed_python_unit("tests/test_a.py", "pytest_test", 0);
         let second = indexed_python_unit("tests/test_b.py", "pytest_test", 1);

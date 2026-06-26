@@ -87,7 +87,11 @@ parser-origin facts. Default indexing also discovers root
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
 input. The worker performs file-local simple FastAPI router/app alias
-propagation with same-name top-level reassignment invalidation, emits typed
+propagation with same-name top-level reassignment invalidation, now treats only
+top-level imports as file-level exact-anchor aliases, drops shadowed framework
+import aliases before support-worthy anchor derivation, copies module-level
+dynamic import or `sys.path` mutation into unit-scoped blocking `UNKNOWN`s for
+later family-shaped units in the file, emits typed
 `UNKNOWN` for dynamic decorators, unresolved bare decorators, monkey-patching,
 dynamic calls including `locals()[...]`, `eval`, `exec`, and `compile`,
 dynamic Pydantic model factories, dynamic imports including `__import__` and

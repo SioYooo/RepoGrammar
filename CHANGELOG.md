@@ -186,6 +186,11 @@
   framework-family claims: a parser-origin blocking `UNKNOWN` prevents the
   affected unit from contributing `DATAFLOW_DERIVED` family support, while
   FastAPI dependency-target UNKNOWNs stay scoped to dependency-target subclaims.
+- CPython exact-anchor derivation now ignores framework imports shadowed by
+  later same-name top-level definitions or assignments, treats only top-level
+  imports as file-level framework aliases, and copies module-level dynamic
+  import or `sys.path` mutation into unit-scoped blocking `UNKNOWN`s for later
+  family-shaped units instead of letting those units contribute support.
 - Compact/evidence/deep family output modes for CLI and MCP family detail.
   Compact is now the default and omits evidence records; evidence/deep return
   selected repo-relative evidence metadata under an optional token budget and

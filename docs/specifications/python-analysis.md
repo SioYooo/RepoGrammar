@@ -87,7 +87,10 @@ The current implementation covers the first structural slice only:
   dependency edges, literal pytest parametrize argument anchors, typed dynamic
   import, `sys.path` mutation, dynamic call, dynamic decorator, unresolved bare
   decorator, monkey-patch, dynamic pytest fixture-name, and unresolved import
-  `UNKNOWN` facts;
+  `UNKNOWN` facts. Top-level import bindings are the only file-level alias
+  source for exact framework anchors; function-local imports are not promoted to
+  file-global aliases, and top-level framework imports shadowed by later
+  same-name definitions or assignments cannot produce exact family support;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -123,7 +126,10 @@ The current implementation covers the first structural slice only:
 - file-local simple alias propagation for FastAPI router/app objects, such as
   `router = APIRouter(); api = router`, with same-name top-level reassignment
   removing that name's role so stale aliases do not produce exact canonical
-  anchors;
+  anchors. Module-level dynamic import or `sys.path` mutation is also copied as
+  unit-scoped typed `UNKNOWN` evidence for later family-shaped units in the same
+  file, using the unit's own range so storage invariants and freshness checks
+  remain local to that unit;
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
   static `Depends(get_db)` dependency target slots;

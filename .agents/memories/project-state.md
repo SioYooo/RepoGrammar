@@ -76,6 +76,11 @@
   dynamic/unresolved decorator, and monkey-patch boundaries through product indexing/query paths;
   each boundary is persisted as typed parser-origin `UNKNOWN`, blocked from
   claim-input readiness, and kept out of derived support.
+  Exact-anchor derivation now treats only top-level imports as file-level
+  framework aliases, drops framework imports shadowed by later same-name
+  definitions or assignments before support-worthy anchor derivation, and copies
+  module-level dynamic import or `sys.path` mutation into unit-scoped blocking
+  `UNKNOWN`s for later family-shaped units in the same file.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
