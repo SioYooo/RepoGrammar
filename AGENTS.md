@@ -21,6 +21,7 @@
 - Make the smallest coherent change. Do not perform unrelated refactors, broad formatting, dependency upgrades, or speculative rewrites.
 - For nontrivial implementation work, use parallel agent teams where independent slices exist. Assign disjoint ownership, preserve other agents' and users' edits, and integrate results only through the main session after review.
 - After implementation, inspect the changed code logic before accepting or merging agent-team output into the main session. Verify behavior with the required checks and resolve conflicts semantically, not by blindly choosing one side.
+- During active implementation, batch validation at coherent feature or workstream checkpoints instead of running tests after every small helper or subchange. Run early targeted tests only when they materially unblock diagnosis or protect high-risk behavior; final required checks still gate completion, commit, and merge.
 - Every code change must include corresponding tests and documentation changes in the same atomic commit.
 - Current v0.1 implementation planning is tracked in `docs/plans/v0.1-parallel-development-plan.md`, `docs/plans/python-v0.1-implementation-plan.md`, and durable memories under `.agents/memories/`. Update those plan/memory files whenever phase scope, Python v0.1 analysis, CodeGraph provider integration, or UNKNOWN policy changes.
 - Update normative requirements in `docs/`, reusable workflows in `.agents/skills/`, durable learned context in `.agents/memories/`, and only cross-cutting mandatory rules in this mirrored contract.
