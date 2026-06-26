@@ -1599,8 +1599,8 @@ mod tests {
             })
             .count();
         assert!(
-            framework_identity_unknowns >= 2,
-            "dynamic decorator and dynamic pydantic model factory must both remain UNKNOWN"
+            framework_identity_unknowns >= 3,
+            "dynamic decorator, dynamic pydantic model factory, and unresolved decorator must remain UNKNOWN"
         );
         assert!(facts.facts.iter().all(|fact| {
             !(fact.path == "tests/sub/test_fixture_boundaries.py"
@@ -1637,6 +1637,7 @@ mod tests {
                 "MonkeyPatch",
                 "pydantic.create_model",
                 "pydantic.BaseModel",
+                "unknown_policy",
             ],
         );
 

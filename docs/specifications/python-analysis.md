@@ -85,8 +85,9 @@ The current implementation covers the first structural slice only:
   targets, pytest test-function anchors, alias-aware pytest fixture decorators,
   literal pytest fixture `name=` aliases, same-file pytest fixture edges,
   literal pytest parametrize argument anchors, typed dynamic import, `sys.path`
-  mutation, dynamic call, dynamic decorator, monkey-patch, dynamic pytest
-  fixture-name, and unresolved import `UNKNOWN` facts;
+  mutation, dynamic call, dynamic decorator, unresolved bare decorator,
+  monkey-patch, dynamic pytest fixture-name, and unresolved import `UNKNOWN`
+  facts;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -159,8 +160,10 @@ The current implementation covers the first structural slice only:
   the local role, dynamic forms such as `getattr(service, name)()` remain typed
   `UNKNOWN`, `setattr(...)` monkey-patching remains typed `UNKNOWN`, and
   service-call anchors do not derive route-family membership support. Dynamic
-  decorators such as decorator factories produce typed `UNKNOWN` for framework
-  identity instead of being guessed into a framework role;
+  decorators such as decorator factories and bare unresolved decorators produce
+  typed `UNKNOWN` for framework identity instead of being guessed into a
+  framework role; local decorators and native `property`, `classmethod`, and
+  `staticmethod` stay structural metadata;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed

@@ -29,6 +29,11 @@ def install_patch(target, method):
     return target
 
 
+@unknown_policy
+def guarded_handler():
+    return {}
+
+
 def make_dependency():
     return object()
 

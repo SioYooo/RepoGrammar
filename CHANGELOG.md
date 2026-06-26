@@ -71,6 +71,9 @@
   UNKNOWNs instead of falling back to the implementation function name.
   Dynamic Pydantic `create_model(...)` factories now remain typed
   `FrameworkMagic` UNKNOWNs instead of becoming static model-family support.
+  Bare unresolved decorators now also produce framework-identity
+  `FrameworkMagic` UNKNOWNs while local decorators and native `property`,
+  `classmethod`, and `staticmethod` remain structural metadata.
   Duplicate applicable pytest `conftest.py` fixture names now produce typed
   `ConflictingFacts` UNKNOWNs for fixture binding, known pytest built-in
   fixtures such as `tmp_path` and `capsys` become metadata-only

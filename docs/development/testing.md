@@ -167,8 +167,9 @@ allowed.
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
   same-function FastAPI service-call context anchors with reassignment
-  invalidation, typed `UNKNOWN` output for dynamic decorators, monkey patches,
-  dynamic calls, unsafe or nonliteral `importlib.import_module(...)` calls,
+  invalidation, typed `UNKNOWN` output for dynamic decorators, unresolved bare
+  decorators, monkey patches, dynamic calls, unsafe or nonliteral
+  `importlib.import_module(...)` calls,
   `sys.path.append`/`sys.path.insert` import-environment mutation, and
   unresolved cases, plus safe literal dynamic-import anchors and plain
   `getattr(...)` assignments that do not become dynamic call-target UNKNOWNs,
@@ -206,7 +207,7 @@ allowed.
   repo-local import `UNKNOWN`, `sys.path` mutation
   `RuntimeDependencyInjection` `UNKNOWN`, dynamic FastAPI dependency-target
   `RuntimeDependencyInjection` `UNKNOWN`, dynamic import, dynamic call-target,
-  dynamic decorator, and monkey-patch `UNKNOWN` facts through product indexing,
+  dynamic/unresolved decorator, and monkey-patch `UNKNOWN` facts through product indexing,
   persisted parser-origin structural
   facts including FastAPI response-model/static dependency-target/
   dependency-call/error/status-code anchors, static FastAPI request

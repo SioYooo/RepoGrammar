@@ -70,6 +70,7 @@ SQLALCHEMY_SESSION_TYPES = {
     "sqlalchemy.orm.Session",
     "sqlalchemy.ext.asyncio.AsyncSession",
 }
+SAFE_NATIVE_DECORATORS = {"classmethod", "property", "staticmethod"}
 PYDANTIC_VALIDATOR_TARGETS = {
     "pydantic.computed_field",
     "pydantic.field_validator",
@@ -1134,7 +1135,9 @@ def collect_decorator_facts(
                 anchor_kind=anchor_kind,
             ),
         )
-        if isinstance(decorator, ast.Call) and anchor_kind == "decorator_binding":
+        if decorator_binding_needs_unknown(
+            decorator, name, target, anchor_kind, aliases, assignments, defined_names
+        ):
             add_fact(
                 facts,
                 unknown_fact(
@@ -1159,6 +1162,27 @@ def collect_decorator_facts(
                 aliases,
                 facts,
             )
+
+
+def decorator_binding_needs_unknown(
+    decorator: ast.AST,
+    name: str,
+    target: str,
+    anchor_kind: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    defined_names: set[str],
+) -> bool:
+    if anchor_kind != "decorator_binding":
+        return False
+    if isinstance(decorator, ast.Call):
+        return True
+    root = name.split(".", 1)[0]
+    if target in SAFE_NATIVE_DECORATORS:
+        return False
+    if root in defined_names or root in aliases or root in assignments:
+        return False
+    return True
 
 
 def collect_fastapi_response_model_facts(

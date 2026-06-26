@@ -1911,6 +1911,55 @@ def decorated(target, method):
     }
 
     #[test]
+    fn cpython_frontend_marks_unresolved_bare_decorators_unknown() {
+        let source = r#"
+def local_decorator(function):
+    return function
+
+@local_decorator
+def local_view():
+    return {}
+
+@unknown_policy
+def protected_view():
+    return {}
+
+class Resource:
+    @property
+    def label(self):
+        return "resource"
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse unresolved decorator");
+
+        let framework_identity_unknowns = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "affected_claim=python_framework_identity")
+            })
+            .count();
+        assert_eq!(framework_identity_unknowns, 1);
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("unknown_policy")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=decorator_binding")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("return function"));
+        assert!(!debug.contains("return \"resource\""));
+    }
+
+    #[test]
     fn cpython_frontend_marks_dynamic_pydantic_models_unknown() {
         let source = r#"
 from pydantic import create_model

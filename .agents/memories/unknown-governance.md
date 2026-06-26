@@ -34,6 +34,9 @@
 - Python dynamic Pydantic model factories such as `pydantic.create_model(...)`
   remain typed `FrameworkMagic` `UNKNOWN` for framework identity unless a later
   provider-backed design proves a narrower claim.
+- Python unresolved bare decorators remain typed `FrameworkMagic` `UNKNOWN` for
+  framework identity. Locally defined decorators and native `property`,
+  `classmethod`, and `staticmethod` remain structural metadata.
 - Python provider agreement, provider disagreement, and runtime observation are
   not current certainty tokens. Until the Rust domain, protocol, storage, CLI,
   MCP, and schemas change together, cross-check and observed-runtime details

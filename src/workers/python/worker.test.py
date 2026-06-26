@@ -997,6 +997,53 @@ assert "decorator_factory(\"secret\")" not in json.dumps(dynamic_messages)
 assert "setattr(obj" not in json.dumps(dynamic_messages)
 assert "/tmp/secret" not in json.dumps(dynamic_messages)
 
+unresolved_decorator_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "decorators.py",
+        "content_hash": "sha256:" + "e" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+def local_decorator(function):
+    return function
+
+@local_decorator
+def local_view():
+    return {}
+
+@unknown_policy
+def protected_view():
+    return {}
+
+class Resource:
+    @property
+    def label(self):
+        return "resource"
+""",
+    }
+)
+unresolved_decorator_facts = unresolved_decorator_messages[0]["facts"]
+assert (
+    sum(
+        1
+        for fact in unresolved_decorator_facts
+        if fact["fact_kind"] == "UNKNOWN"
+        and fact["target"] == "FrameworkMagic"
+        and "affected_claim=python_framework_identity" in fact["assumptions"]
+    )
+    == 1
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "unknown_policy"
+    and "python_anchor_kind=decorator_binding" in fact["assumptions"]
+    for fact in unresolved_decorator_facts
+)
+serialized_unresolved_decorator = json.dumps(unresolved_decorator_messages)
+assert "return function" not in serialized_unresolved_decorator
+assert "return \"resource\"" not in serialized_unresolved_decorator
+
 unsafe_literal_import = run_worker(
     {
         "protocol_version": 1,
