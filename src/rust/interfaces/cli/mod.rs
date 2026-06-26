@@ -4181,8 +4181,13 @@ mod tests {
         ]);
 
         assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
         assert!(output.stdout.contains("target=codex"));
+        assert!(output.stdout.contains("scope=project-local"));
         assert!(output.stdout.contains("telemetry=off"));
+        assert!(output.stdout.contains("config preview:"));
+        assert!(output.stdout.contains("MCP self-test"));
+        assert!(output.stdout.contains("reversible receipt"));
     }
 
     #[test]

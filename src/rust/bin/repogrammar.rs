@@ -914,6 +914,13 @@ mod tests {
             member_role: "framework:fastapi.route",
         },
         PythonExactAnchorSmokeCase {
+            fixture: "stale-evidence",
+            family_id: "family:python:fastapi_route:framework_fastapi_route",
+            support_target: "fastapi.APIRouter.get",
+            evidence_path: "routes.py",
+            member_role: "framework:fastapi.route",
+        },
+        PythonExactAnchorSmokeCase {
             fixture: "pytest-strong-evidence",
             family_id: "family:python:pytest_test:framework_pytest_test",
             support_target: "pytest.test",
@@ -2068,6 +2075,28 @@ mod tests {
         assert_eq!(index_json["status"], "complete");
         assert_eq!(index_json["semantic_worker"], "deferred");
 
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let route_units = units_json["units"]
+            .as_array()
+            .expect("units array")
+            .iter()
+            .filter(|unit| {
+                unit["language"] == "python"
+                    && unit["kind"] == "fastapi_route"
+                    && unit["path"] == "routes.py"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(route_units.len(), 14);
+        for unit in route_units {
+            assert_repo_relative_json_path(&unit["path"]);
+            assert_content_hash_json(&unit["content_hash"]);
+            assert!(
+                unit["start_byte"].as_u64().expect("unit start")
+                    < unit["end_byte"].as_u64().expect("unit end")
+            );
+        }
+
         let status_request = RepositoryStatusRequest {
             path: workspace.path().display().to_string(),
             state_dir_override: None,
@@ -2092,11 +2121,38 @@ mod tests {
             vec![
                 "fastapi.APIRouter.delete".to_string(),
                 "fastapi.APIRouter.get".to_string(),
+                "fastapi.APIRouter.head".to_string(),
+                "fastapi.APIRouter.options".to_string(),
+                "fastapi.APIRouter.patch".to_string(),
+                "fastapi.APIRouter.post".to_string(),
+                "fastapi.APIRouter.put".to_string(),
+                "fastapi.FastAPI.delete".to_string(),
+                "fastapi.FastAPI.get".to_string(),
+                "fastapi.FastAPI.head".to_string(),
+                "fastapi.FastAPI.options".to_string(),
+                "fastapi.FastAPI.patch".to_string(),
                 "fastapi.FastAPI.post".to_string(),
+                "fastapi.FastAPI.put".to_string(),
             ]
         );
 
         let family_id = "family:python:fastapi_route:framework_fastapi_route";
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert_eq!(
+            families_json["families"]
+                .as_array()
+                .expect("families array")
+                .len(),
+            1
+        );
+        assert_eq!(families_json["families"][0]["family_id"], family_id);
+        assert_eq!(families_json["families"][0]["support"], 14);
+
         let family = run_with_runtime(
             cli_args(
                 "family",
@@ -2114,7 +2170,12 @@ mod tests {
         let family_json = parse_machine_output("family", &family, &workspace);
         assert_eq!(family_json["status"], "ok");
         assert_eq!(family_json["family"]["family_id"], family_id);
-        assert_eq!(family_json["family"]["support"], 3);
+        assert_eq!(family_json["family"]["support"], 14);
+        let members = family_json["members"].as_array().expect("members");
+        assert_eq!(members.len(), 14);
+        assert!(members.iter().all(|member| {
+            member["family_id"] == family_id && member["role"] == "framework:fastapi.route"
+        }));
         assert_eq!(
             family_json["output"]["covered_claims"],
             serde_json::json!(["canonical", "support", "variation"])
@@ -2184,8 +2245,8 @@ mod tests {
 
         let case = *PYTHON_EXACT_ANCHOR_SMOKE_CASES
             .iter()
-            .find(|case| case.fixture == "sqlalchemy-model-strong-evidence")
-            .expect("SQLAlchemy model exact-anchor case");
+            .find(|case| case.fixture == "stale-evidence")
+            .expect("stale-evidence exact-anchor case");
 
         for mode in ["mutated", "deleted"] {
             let workspace =

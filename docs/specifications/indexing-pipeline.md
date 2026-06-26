@@ -111,10 +111,11 @@ Malformed configuration must warn and fall back to safe defaults rather than
 failing indexing.
 
 Python discovery currently discovers `.py` files and skips common Python
-virtual-environment, cache, and dependency directories such as `venv`,
-`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
-`site-packages` without executing repository code. Package-root discovery and
-provider-backed project-configuration semantics remain deferred. The
+virtual-environment, cache, build, and dependency directories such as `.venv`,
+`venv`, `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`,
+`.mypy_cache`, `.ruff_cache`, `build`, `dist`, and `site-packages` without
+executing repository code. Package-root discovery and provider-backed
+project-configuration semantics remain deferred. The
 implemented Python frontend uses CPython `ast` for code-unit extraction,
 CPython `symtable` for structural scope anchors, and a private standard-library
 `tomllib` parser mode for sanitized `pyproject.toml` summaries that default

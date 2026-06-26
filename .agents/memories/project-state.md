@@ -81,6 +81,11 @@
   definitions or assignments before support-worthy anchor derivation, and copies
   module-level dynamic import or `sys.path` mutation into unit-scoped blocking
   `UNKNOWN`s for later family-shaped units in the same file.
+  Release smoke coverage now exercises the committed `stale-evidence` fixture
+  for mutation/deletion freshness failures and the FastAPI/APIRouter route
+  method variation fixture across the full `delete`/`get`/`head`/`options`/
+  `patch`/`post`/`put` matrix. Discovery regression coverage explicitly covers
+  the Python v0.1 virtualenv/cache/build/dependency skip directory matrix.
 - Last updated: 2026-06-26
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and

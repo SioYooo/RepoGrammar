@@ -46,9 +46,10 @@ allowed.
   generation, bounded max-plus-one content reads for hashing,
   deterministic ordering, symlink escape skips, invalid roots, and absence of
   source snippets or absolute paths in reports. Python discovery coverage must
-  include common virtualenv/cache/dependency directories such as `venv`,
-  `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and
-  `site-packages`.
+  include common virtualenv/cache/dependency/build directories such as
+  `.venv`, `venv`, `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`,
+  `.mypy_cache`, `.ruff_cache`, `build`, `dist`, and `site-packages`,
+  including nested path segments where applicable.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, activation pointer validation, preservation of the

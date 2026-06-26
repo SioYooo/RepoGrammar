@@ -441,12 +441,20 @@ mod tests {
         for directory in [
             "app",
             "tests",
+            ".venv",
             "venv",
+            "env",
+            ".tox",
+            ".nox",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",
             ".ruff_cache",
+            "build",
+            "dist",
             "site-packages",
+            "nested/__pycache__",
+            "nested/site-packages",
         ] {
             fs::create_dir_all(workspace.path().join(directory)).expect("create directory");
         }
@@ -466,12 +474,20 @@ mod tests {
         )
         .expect("write pyproject");
         for directory in [
+            ".venv",
             "venv",
+            "env",
+            ".tox",
+            ".nox",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",
             ".ruff_cache",
+            "build",
+            "dist",
             "site-packages",
+            "nested/__pycache__",
+            "nested/site-packages",
         ] {
             fs::write(
                 workspace.path().join(directory).join("ignored.py"),
@@ -499,12 +515,20 @@ mod tests {
             ]
         );
         for directory in [
+            ".venv",
             "venv",
+            "env",
+            ".tox",
+            ".nox",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",
             ".ruff_cache",
+            "build",
+            "dist",
             "site-packages",
+            "nested/__pycache__",
+            "nested/site-packages",
         ] {
             assert!(
                 report.skipped.iter().any(|skip| {

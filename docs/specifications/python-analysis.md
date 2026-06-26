@@ -205,9 +205,11 @@ The current implementation covers the first structural slice only:
 - committed Python release fixtures under `src/fixtures/python/release/v0_1/`
   for FastAPI, pytest, alias-aware pytest fixtures, Pydantic, SQLAlchemy, mixed,
   dynamic-unknown, dynamic pytest fixture names, low-support, strong-evidence,
-  and stale-evidence smoke coverage. The dynamic-unknown fixture covers dynamic
-  import, `sys.path` mutation, dynamic call target, dynamic decorator, and
-  monkey-patch boundaries;
+  full FastAPI/APIRouter route-method variation, and stale-evidence smoke
+  coverage. The route variation fixture covers `delete`, `get`, `head`,
+  `options`, `patch`, `post`, and `put` for both `FastAPI` and `APIRouter`.
+  The dynamic-unknown fixture covers dynamic import, `sys.path` mutation,
+  dynamic call target, dynamic decorator, and monkey-patch boundaries;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,
@@ -224,8 +226,8 @@ The current implementation covers the first structural slice only:
   dependency-target expressions that affect only the dependency-target
   sub-claim rather than route-family membership,
   prove supported MCP operations return the same family context,
-  prove stale source mutation or deletion returns blocking `StaleEvidence`
-  `UNKNOWN`, and keep the test-injected
+  prove the committed stale-evidence fixture returns blocking `StaleEvidence`
+  `UNKNOWN` after source mutation or deletion, and keep the test-injected
   `SEMANTIC` worker fixture as coverage for the explicit worker boundary;
 - compact/evidence/deep family output modes shared by CLI and MCP. Compact is
   the default and omits evidence records; evidence/deep select only stored

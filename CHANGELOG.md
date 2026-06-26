@@ -208,6 +208,14 @@
   strong FastAPI semantic-support fixture that validates family reads, stale
   evidence fallback, leakage guards, and a no-worker exact-anchor FastAPI
   positive path without claiming production Python semantic-provider support.
+  The no-worker release path now also exercises the committed `stale-evidence`
+  fixture for source mutation/deletion and the FastAPI/APIRouter route-method
+  variation fixture across `delete`, `get`, `head`, `options`, `patch`, `post`,
+  and `put`.
+- Python discovery regression coverage now explicitly covers `.venv`, `venv`,
+  `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`, `.mypy_cache`,
+  `.ruff_cache`, `build`, `dist`, `site-packages`, and nested Python runtime
+  cache/dependency directory segments as default exclusions.
   Dynamic release smoke now asserts each dynamic boundary is persisted as typed
   `UNKNOWN`, blocked from claim-input readiness, and absent from derived
   support. Worker and parser regression tests now also distinguish safe literal
