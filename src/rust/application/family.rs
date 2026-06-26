@@ -754,6 +754,7 @@ fn python_unknown_reason_blocks_family_membership(
         UnknownReasonCode::DynamicImport
         | UnknownReasonCode::RuntimeDependencyInjection
         | UnknownReasonCode::FrameworkMagic
+        | UnknownReasonCode::MonkeyPatch
         | UnknownReasonCode::ConflictingFacts
         | UnknownReasonCode::StaleEvidence
         | UnknownReasonCode::UnresolvedImport
@@ -762,8 +763,7 @@ fn python_unknown_reason_blocks_family_membership(
             python_unknown_affected_claim_blocks_family(affected_claim, framework_role)
         }
         UnknownReasonCode::PytestFixtureInjection => framework_role.starts_with("framework:pytest"),
-        UnknownReasonCode::MonkeyPatch
-        | UnknownReasonCode::MacroOrPreprocessor
+        UnknownReasonCode::MacroOrPreprocessor
         | UnknownReasonCode::BuildVariantAmbiguity
         | UnknownReasonCode::InsufficientSupport => false,
     }
@@ -773,7 +773,10 @@ fn python_unknown_affected_claim_blocks_family(affected_claim: &str, framework_r
     match affected_claim {
         "fastapi_dependency_target" => false,
         "pytest_fixture_binding" => framework_role.starts_with("framework:pytest"),
-        "python_family_membership" | "python_import_resolution" | "python_call_target" => true,
+        "python_family_membership"
+        | "python_import_resolution"
+        | "python_call_target"
+        | "python_framework_identity" => true,
         claim if claim.starts_with("family:") => true,
         _ => framework_role.starts_with("framework:pytest") && affected_claim.contains("fixture"),
     }
@@ -2225,6 +2228,60 @@ mod tests {
                     &third,
                     UnknownReasonCode::DynamicImport,
                     "python_import_resolution",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_monkey_patch_unknown_blocks_claim_relevant_support() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_unknown_fact(&third, UnknownReasonCode::MonkeyPatch, "python_call_target"),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn python_framework_identity_unknown_blocks_claim_relevant_support() {
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                python_unknown_fact(
+                    &third,
+                    UnknownReasonCode::FrameworkMagic,
+                    "python_framework_identity",
                 ),
             ],
         );
