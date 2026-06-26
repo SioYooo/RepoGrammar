@@ -58,8 +58,10 @@
   disabled, env/CI opt-outs force disabled, and dry-run output names the planned
   native Codex/Claude Code MCP command shape. Interactive `repogrammar install`
   can select Codex, Claude Code, or both in one run, skips already managed
-  RepoGrammar receipts, installs a stable `repogrammar` command when possible,
-  and does not touch `.repogrammar/` or instruction files. Uninstall refuses
+  RepoGrammar receipts, installs or repairs a stable `repogrammar` command when
+  possible, and does not touch `.repogrammar/` or instruction files. Source
+  checkouts also include `src/install/repogrammar-install.sh` as the
+  public-facing TUI wrapper for install/repair/uninstall choices. Uninstall refuses
   missing or foreign managed receipts, while `uninstall --target all` removes
   owned first-class agent receipts it finds. Ready Python exact-anchor families
   can also record metadata-only variation evidence when exact-compatible

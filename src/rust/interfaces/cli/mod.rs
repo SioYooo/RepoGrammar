@@ -1171,12 +1171,6 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let statuses = install_agent_statuses(context, request.scope, env_lookup)?;
-    if statuses.iter().all(|status| status.installed) {
-        return Ok(InteractiveInstallDecision::Exit(
-            all_agents_installed_guidance(&statuses),
-        ));
-    }
-
     let selection = prompt_agent_selection_until_valid(&statuses, install_prompt)?;
     let Some(selected_targets) = selection else {
         return Ok(InteractiveInstallDecision::Exit(
@@ -1331,11 +1325,16 @@ fn default_interactive_targets(statuses: &[InstallAgentStatus]) -> Vec<AgentTarg
     if !detected_missing.is_empty() {
         return detected_missing;
     }
-    statuses
+    let missing = statuses
         .iter()
         .filter(|status| !status.installed)
         .map(|status| status.target)
-        .collect()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        statuses.iter().map(|status| status.target).collect()
+    } else {
+        missing
+    }
 }
 
 fn interactive_install_plan(request: &InstallRequest, statuses: &[InstallAgentStatus]) -> String {
@@ -1368,18 +1367,6 @@ fn interactive_install_plan(request: &InstallRequest, statuses: &[InstallAgentSt
         "  - Install the repogrammar command in a user-writable command directory\n  - Write RepoGrammar-owned receipts\n  - Roll back all changes from this run if any step fails\n",
     );
     output
-}
-
-fn all_agents_installed_guidance(statuses: &[InstallAgentStatus]) -> String {
-    let installed = statuses
-        .iter()
-        .filter(|status| status.installed)
-        .map(|status| install_target_label(status.target))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "install: all supported agents are already managed by RepoGrammar\ninstalled_agents={installed}\nuninstall: repogrammar uninstall --target all --scope global --yes\nreinstall: reinstall/refresh is deferred; uninstall a target first, then run repogrammar install again\n"
-    )
 }
 
 fn install_target_label(target: AgentTarget) -> &'static str {
@@ -6609,6 +6596,102 @@ mod tests {
         );
         assert_eq!(prompt.selection_calls.get(), 1);
         assert_eq!(prompt.telemetry_calls.get(), 1);
+        assert_eq!(prompt.confirmation_calls.get(), 1);
+    }
+
+    #[test]
+    fn interactive_install_with_existing_receipts_still_repairs_command_path() {
+        #[derive(Default)]
+        struct InstallRuntime {
+            requests: RefCell<Vec<InstallRequest>>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer existing receipt test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer existing receipt test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer existing receipt test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                command: &str,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                assert_eq!(command, "install");
+                self.requests.borrow_mut().push(request.clone());
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: Vec::new(),
+                    skipped_targets: request.selected_targets.clone(),
+                    receipt_paths: Vec::new(),
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
+                    message: "selected agent MCP integrations are already managed by RepoGrammar"
+                        .to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-existing-receipts-repair-command");
+        let command_dir = workspace.path().join("commands");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        let data_home = workspace.path().join("data-home");
+        let receipt_dir = data_home
+            .join("repogrammar")
+            .join("install")
+            .join("receipts");
+        fs::create_dir_all(&receipt_dir).expect("receipt dir");
+        for target in ["codex", "claude-code"] {
+            fs::write(
+                receipt_dir.join(format!("{target}-global.json")),
+                format!(
+                    r#"{{"schema_version":1,"managed_by":"repogrammar","mcp_server":"repogrammar","target":"{target}","scope":"global"}}"#
+                ),
+            )
+            .expect("receipt");
+        }
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime::default();
+        let prompt = WizardPrompt::new([""], [""], ["y"]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stdout.contains("skipped_targets=codex,claude-code"));
+        let requests = runtime.requests.borrow();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].selected_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert!(requests[0].assume_yes);
+        assert_eq!(prompt.selection_calls.get(), 1);
         assert_eq!(prompt.confirmation_calls.get(), 1);
     }
 

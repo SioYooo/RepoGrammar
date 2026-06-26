@@ -11,6 +11,12 @@
   repositories. Noninteractive `--target all --scope global --yes` uses the
   same all-or-rollback multi-agent transaction, and `uninstall --target all`
   removes only RepoGrammar-owned first-class agent receipts.
+- Re-running `repogrammar install` now still installs or repairs the
+  user-writable `repogrammar` command when selected agents are already managed.
+- Source checkouts now include `src/install/repogrammar-install.sh`, a
+  dependency-light TUI wrapper for building the release binary, installing or
+  repairing the command, configuring or uninstalling Codex/Claude Code
+  integrations, and removing the local command path after confirmation.
 - Repository bootstrap for the RepoGrammar Rust-core package layout.
 - Layered architecture skeleton for core, ports, application, interfaces, and
   adapters.

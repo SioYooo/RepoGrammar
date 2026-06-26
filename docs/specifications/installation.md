@@ -11,6 +11,14 @@ Installation is three separate steps:
 3. run `repogrammar init` and `repogrammar index` inside each repository that
    should have a local RepoGrammar index.
 
+Source checkouts may provide a dependency-light wrapper script at
+`src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
+around the product binary: it may build `cargo build --release`, call
+`repogrammar install`, call `repogrammar uninstall`, remove the local
+user-writable `repogrammar` command path after confirmation, and display PATH
+guidance. It must not duplicate native agent configuration logic outside the
+Rust installer, and it must not create or modify `.repogrammar/`.
+
 ## Commands
 
 - `repogrammar install`
@@ -113,7 +121,9 @@ noninteractive live writes, and a dependency-light text wizard:
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
-- re-running the wizard can add missing supported agents later;
+- re-running the wizard can add missing supported agents later or repair the
+  user-writable `repogrammar` command path even when all selected agents are
+  already managed;
 - noninteractive live writes still require `--yes`;
 - `install --yes`, `install --dry-run`, and explicit `--target ... --yes`
   never prompt;

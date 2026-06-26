@@ -54,7 +54,17 @@ cargo build --release
 ./target/release/repogrammar version
 ```
 
-The first install can be run through the built binary:
+From a source checkout, the recommended interactive setup entrypoint is:
+
+```text
+bash src/install/repogrammar-install.sh
+```
+
+The setup script can build the release binary, install or repair the
+`repogrammar` command, configure Codex and Claude Code, uninstall connected
+agent integrations, or remove the local `repogrammar` command.
+
+The lower-level installer can also be run through the built binary:
 
 ```text
 ./target/release/repogrammar install
@@ -104,7 +114,8 @@ RepoGrammar exposes a read-only MCP tool named `repogrammar_context`.
 Global MCP integration is supported for Codex and Claude Code. Running
 `repogrammar install` with no flags opens a simple text wizard that lets you
 select Codex, Claude Code, or both in one run. Re-running the wizard later lets
-you add a missing supported agent without reinstalling already managed agents.
+you add a missing supported agent or repair the `repogrammar` command without
+reinstalling already managed agents.
 
 Noninteractive dry-runs remain available:
 

@@ -213,7 +213,14 @@ pub fn execute_install(
             targets_to_configure.push(target);
         }
     }
+    let command_record = install_cli_command(context)?;
     if targets_to_configure.is_empty() {
+        if let Err(error) =
+            self_tester.self_test(&command_record.executable_path, &context.current_dir)
+        {
+            let rollback = rollback_command_install(&command_record);
+            return Err(install_rollback_error(error, rollback));
+        }
         return Ok(InstallExecutionOutcome {
             command: "install",
             target: request.target,
@@ -221,15 +228,14 @@ pub fn execute_install(
             configured_targets: Vec::new(),
             skipped_targets,
             receipt_paths: Vec::new(),
-            installed_executable_path: None,
-            command_path: None,
+            installed_executable_path: Some(command_record.executable_path),
+            command_path: Some(command_record.command_path),
             command_on_path: context.command_dir_on_path,
             message: "selected agent MCP integrations are already managed by RepoGrammar"
                 .to_string(),
         });
     }
 
-    let command_record = install_cli_command(context)?;
     if let Err(error) = self_tester.self_test(&command_record.executable_path, &context.current_dir)
     {
         let rollback = rollback_command_install(&command_record);
@@ -434,11 +440,12 @@ fn install_cli_command(
         ));
     }
 
+    let executable_existed = installed_executable.exists();
     if !same_path(source, &installed_executable) {
         fs::copy(source, &installed_executable).map_err(|error| {
             RepoGrammarError::InvalidInput(format!("failed to install RepoGrammar CLI: {error}"))
         })?;
-        record.created_executable = true;
+        record.created_executable = !executable_existed;
     }
 
     if command_path.exists() {
@@ -892,6 +899,39 @@ mod tests {
     }
 
     #[test]
+    fn already_managed_install_still_repairs_missing_command_without_native_writes() {
+        let workspace = TempInstallWorkspace::new("already-managed-command-repair");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("initial install");
+        fs::remove_file(workspace.command_path()).expect("remove command path");
+        configurator.actions.borrow_mut().clear();
+        self_test.calls.borrow_mut().clear();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("repair command");
+
+        assert!(outcome.configured_targets.is_empty());
+        assert_eq!(
+            outcome.skipped_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        let command_path = workspace.command_path_str();
+        assert_eq!(outcome.command_path.as_deref(), Some(command_path.as_str()));
+        assert!(workspace.command_path().exists());
+        assert_eq!(configurator.actions.borrow().len(), 0);
+        assert_eq!(self_test.calls.borrow().len(), 1);
+    }
+
+    #[test]
     fn failed_self_test_prevents_config_write_and_receipt() {
         let workspace = TempInstallWorkspace::new("self-test-failure");
         let request = InstallRequest {
@@ -1107,6 +1147,10 @@ mod tests {
 
         fn command_path(&self) -> PathBuf {
             Path::new(&self.context.command_dir).join(binary_name())
+        }
+
+        fn command_path_str(&self) -> String {
+            self.command_path().display().to_string()
         }
     }
 
