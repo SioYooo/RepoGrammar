@@ -478,6 +478,8 @@ detection. Bare canonical fixture decorators may become exact-anchor support for
 pytest fixture families when the compatibility table, support count, and
 freshness/readiness gates pass. Canonical `pytest.mark.parametrize` decorator
 anchors may support `framework:pytest.test` families under the same gates.
+`pytest.fixture` decorators must not support `framework:pytest.test`
+membership; they belong to pytest fixture families or fixture-binding context.
 `pytest.fixture.<name>` fixture-edge anchors and `pytest.parametrize.<name>`
 argument anchors are context only and must not derive family support.
 Non-builtin fixture-edge profiles are family compatibility constraints; known
@@ -773,6 +775,10 @@ The following conditions must produce typed `UNKNOWN` for affected claims:
 Unknowns should block only the claim they affect. For example, an unknown
 fixture binding may block test-behavior equivalence while still allowing a
 structural pytest-test family candidate.
+When a claim-relevant `UNKNOWN` removes a unit from confident family support,
+family output must preserve that original reason code and affected claim in
+addition to any aggregate `InsufficientSupport` result caused by the remaining
+support count.
 
 ## References
 

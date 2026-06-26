@@ -1910,6 +1910,19 @@ mod tests {
         }
     }
 
+    fn family_claim_facts(
+        parser_facts: &[SemanticFact],
+        role_facts: Vec<SemanticFact>,
+        derived_facts: Vec<SemanticFact>,
+    ) -> Vec<SemanticFact> {
+        let mut facts =
+            Vec::with_capacity(parser_facts.len() + role_facts.len() + derived_facts.len());
+        facts.extend(parser_facts.iter().cloned());
+        facts.extend(role_facts);
+        facts.extend(derived_facts);
+        facts
+    }
+
     fn parser_unknown_fact_for_unit(
         unit: &IndexedCodeUnitRecord,
         reason_code: &str,
@@ -2413,10 +2426,13 @@ mod tests {
         assert!(derived
             .iter()
             .all(|fact| { fact.evidence.code_unit_id.as_str() != second.id }));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::DynamicImport));
         assert!(report
             .unknowns
             .iter()
@@ -2460,8 +2476,7 @@ mod tests {
             .expect("derive exact Python support");
 
         assert_eq!(derived.len(), 3);
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].framework_role, "framework:fastapi.route");
@@ -2500,10 +2515,13 @@ mod tests {
         assert!(derived
             .iter()
             .all(|fact| fact.evidence.code_unit_id.as_str() != second.id));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::RuntimeDependencyInjection));
         assert!(report
             .unknowns
             .iter()
@@ -2543,10 +2561,13 @@ mod tests {
         assert!(derived
             .iter()
             .all(|fact| fact.evidence.code_unit_id.as_str() != second.id));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::MonkeyPatch));
         assert!(report
             .unknowns
             .iter()
@@ -2586,10 +2607,13 @@ mod tests {
         assert!(derived
             .iter()
             .all(|fact| fact.evidence.code_unit_id.as_str() != second.id));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::FrameworkMagic));
         assert!(report
             .unknowns
             .iter()
@@ -2625,10 +2649,13 @@ mod tests {
         assert!(derived
             .iter()
             .all(|fact| fact.evidence.code_unit_id.as_str() != third.id));
-        let mut family_facts = role_facts;
-        family_facts.extend(derived);
+        let family_facts = family_claim_facts(&parser_facts, role_facts, derived);
         let report = build_family_claims(&units, &family_facts);
         assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::ConflictingFacts));
         assert!(report
             .unknowns
             .iter()

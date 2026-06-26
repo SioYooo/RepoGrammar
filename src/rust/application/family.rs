@@ -172,7 +172,10 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         &support_targets_by_unit,
     );
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
-    let mut unknowns = Vec::new();
+    let mut unknowns = blocking_unknowns
+        .values()
+        .flat_map(|unknowns| unknowns.iter().cloned())
+        .collect::<Vec<_>>();
 
     for unit in input.units {
         if !family_eligible_kind(&unit.kind) {
@@ -680,12 +683,12 @@ fn python_family_blocking_unknowns_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
     role_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> BTreeMap<String, ClaimUnknown> {
+) -> BTreeMap<String, Vec<ClaimUnknown>> {
     let unit_by_id = units
         .iter()
         .map(|unit| (unit.id.as_str(), unit))
         .collect::<BTreeMap<_, _>>();
-    let mut blocking = BTreeMap::new();
+    let mut blocking: BTreeMap<String, Vec<ClaimUnknown>> = BTreeMap::new();
 
     for fact in facts {
         let code_unit_id = fact.evidence.code_unit_id.as_str();
@@ -702,7 +705,10 @@ fn python_family_blocking_unknowns_by_unit(
             continue;
         };
         if let Some(unknown) = python_family_blocking_unknown(fact, framework_role) {
-            blocking.entry(code_unit_id.to_string()).or_insert(unknown);
+            blocking
+                .entry(code_unit_id.to_string())
+                .or_default()
+                .push(unknown);
         }
     }
 
@@ -1160,10 +1166,9 @@ pub(crate) fn python_support_target_is_role_compatible(
                 | "fastapi.APIRouter.post"
                 | "fastapi.APIRouter.put"
         )),
-        "framework:pytest.test" => Some(matches!(
-            target,
-            "pytest.test" | "pytest.mark.parametrize" | "pytest.fixture"
-        )),
+        "framework:pytest.test" => {
+            Some(matches!(target, "pytest.test" | "pytest.mark.parametrize"))
+        }
         "framework:pytest.fixture" => Some(matches!(target, "pytest.fixture")),
         "framework:pydantic.model" => Some(matches!(
             target,
@@ -1525,6 +1530,16 @@ mod tests {
             .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
     }
 
+    fn assert_unknown_reason(report: &FamilyBuildReport, reason: UnknownReasonCode) {
+        assert!(
+            report
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.reason == reason),
+            "expected {reason:?} in {report:?}"
+        );
+    }
+
     fn assert_python_three_member_family(kind: &str, role: &str, targets: [&str; 3]) {
         let first = python_unit(&format!("app/{kind}_a.py"), kind, 0);
         let second = python_unit(&format!("app/{kind}_b.py"), kind, 1);
@@ -1732,6 +1747,26 @@ mod tests {
                 "sqlalchemy.ext.asyncio.AsyncSession.scalars",
             ],
         );
+    }
+
+    #[test]
+    fn pytest_fixture_support_does_not_prove_pytest_test_family() {
+        let first = python_unit("tests/test_a.py", "pytest_test", 0);
+        let second = python_unit("tests/test_b.py", "pytest_test", 1);
+        let third = python_unit("tests/test_c.py", "pytest_test", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:pytest.test"),
+                role_fact(&second, "framework:pytest.test"),
+                role_fact(&third, "framework:pytest.test"),
+                semantic_support_fact_with_target(&first, "pytest.fixture"),
+                semantic_support_fact_with_target(&second, "pytest.fixture"),
+                semantic_support_fact_with_target(&third, "pytest.fixture"),
+            ],
+        );
+
+        assert_insufficient_support(&report);
     }
 
     #[test]
@@ -2167,10 +2202,7 @@ mod tests {
         );
 
         assert!(report.claims.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
     }
 
     #[test]
@@ -2233,10 +2265,8 @@ mod tests {
         );
 
         assert!(report.claims.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        assert_unknown_reason(&report, UnknownReasonCode::DynamicImport);
+        assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
     }
 
     #[test]
@@ -2258,10 +2288,8 @@ mod tests {
         );
 
         assert!(report.claims.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        assert_unknown_reason(&report, UnknownReasonCode::MonkeyPatch);
+        assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
     }
 
     #[test]
@@ -2287,10 +2315,8 @@ mod tests {
         );
 
         assert!(report.claims.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        assert_unknown_reason(&report, UnknownReasonCode::FrameworkMagic);
+        assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
     }
 
     #[test]
@@ -2342,10 +2368,8 @@ mod tests {
         );
 
         assert!(report.claims.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+        assert_unknown_reason(&report, UnknownReasonCode::PytestFixtureInjection);
+        assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
     }
 
     #[test]
