@@ -21,6 +21,7 @@ WORKER_ROOT="${REPOGRAMMAR_WORKER_ROOT:-}"
 ACTION="menu"
 ASSUME_YES=0
 TARGET_SELECTION="all"
+INSTALL_SCOPE="global"
 USE_SOURCE_BUILD="${REPOGRAMMAR_USE_SOURCE_BUILD:-0}"
 TMP_DIRS=()
 
@@ -52,7 +53,9 @@ Usage:
 
 Options:
   --yes                  Do not prompt for installer confirmations
-  --target <agent>       codex, claude-code, or all for noninteractive agent actions
+  --target <agents>      auto, all, none, or comma-separated agent ids
+  --scope <scope>        global or local/project for delegated agent actions
+  --location <scope>     Alias for --scope
   --version <tag>        Release tag to install; default: latest
   --command-dir <dir>    Directory for the repogrammar command
   --install-dir <dir>    Directory for RepoGrammar-managed install state
@@ -85,6 +88,11 @@ parse_args() {
       --target)
         [[ $# -ge 2 ]] || die "--target requires a value"
         TARGET_SELECTION="$2"
+        shift 2
+        ;;
+      --scope|--location)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        INSTALL_SCOPE="$2"
         shift 2
         ;;
       --version)
@@ -359,7 +367,7 @@ run_agent_install() {
     REPOGRAMMAR_EXECUTABLE="$executable_path" \
     "$command_path" install \
       --target "$TARGET_SELECTION" \
-      --scope global \
+      --scope "$INSTALL_SCOPE" \
       --yes \
       --no-telemetry
   else
@@ -381,6 +389,7 @@ select_agent_target() {
   printf "  1 = Codex\n" >&2
   printf "  2 = Claude Code\n" >&2
   printf "  3 = both\n" >&2
+  printf "  a = all first-class RepoGrammar agents\n" >&2
   printf "  q = cancel\n\n" >&2
   printf "Selection [3]: " >&2
   local reply
@@ -388,7 +397,7 @@ select_agent_target() {
   case "${reply:-3}" in
     1) printf "codex" ;;
     2) printf "claude-code" ;;
-    3) printf "all" ;;
+    3|a|A|all) printf "all" ;;
     q|Q) return 1 ;;
     *) printf "Invalid selection.\n" >&2; return 2 ;;
   esac
@@ -413,7 +422,7 @@ uninstall_connected_agents() {
   REPOGRAMMAR_EXECUTABLE="$command_path" \
   "$command_path" uninstall \
     --target "$target" \
-    --scope global \
+    --scope "$INSTALL_SCOPE" \
     --yes
 }
 

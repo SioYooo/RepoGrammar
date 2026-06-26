@@ -8,23 +8,49 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MCP_SERVER_NAME: &str = "repogrammar";
 pub const CLI_BINARY_NAME: &str = "repogrammar";
-pub const SUPPORTED_AGENT_TARGETS: [AgentTarget; 2] = [AgentTarget::Codex, AgentTarget::ClaudeCode];
+pub const LIVE_AGENT_TARGETS: [AgentTarget; 2] = [AgentTarget::Codex, AgentTarget::ClaudeCode];
+pub const KNOWN_AGENT_TARGETS: [AgentTarget; 8] = [
+    AgentTarget::Codex,
+    AgentTarget::ClaudeCode,
+    AgentTarget::Cursor,
+    AgentTarget::Opencode,
+    AgentTarget::Hermes,
+    AgentTarget::Gemini,
+    AgentTarget::Antigravity,
+    AgentTarget::Kiro,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentTarget {
     AllSupported,
+    None,
     Codex,
     ClaudeCode,
+    Cursor,
+    Opencode,
+    Hermes,
+    Gemini,
+    Antigravity,
+    Kiro,
 }
 
 impl AgentTarget {
     pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
             "all" => Ok(Self::AllSupported),
+            "auto" => Ok(Self::AllSupported),
+            "none" => Ok(Self::None),
             "codex" => Ok(Self::Codex),
             "claude-code" | "claude" => Ok(Self::ClaudeCode),
+            "cursor" => Ok(Self::Cursor),
+            "opencode" | "open-code" => Ok(Self::Opencode),
+            "hermes" | "hermes-agent" => Ok(Self::Hermes),
+            "gemini" | "gemini-cli" => Ok(Self::Gemini),
+            "antigravity" | "antigravity-ide" => Ok(Self::Antigravity),
+            "kiro" => Ok(Self::Kiro),
             _ => Err(format!(
-                "unsupported target {value}; expected all, codex, or claude-code"
+                "unsupported target {value}; expected auto, all, none, codex, claude-code, cursor, opencode, hermes, gemini, antigravity, or kiro"
             )),
         }
     }
@@ -32,9 +58,60 @@ impl AgentTarget {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AllSupported => "all",
+            Self::None => "none",
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::Cursor => "cursor",
+            Self::Opencode => "opencode",
+            Self::Hermes => "hermes",
+            Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
+            Self::Kiro => "kiro",
         }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::AllSupported => "All supported agents",
+            Self::None => "No agents",
+            Self::Codex => "Codex CLI",
+            Self::ClaudeCode => "Claude Code",
+            Self::Cursor => "Cursor",
+            Self::Opencode => "opencode",
+            Self::Hermes => "Hermes Agent",
+            Self::Gemini => "Gemini CLI",
+            Self::Antigravity => "Antigravity IDE",
+            Self::Kiro => "Kiro",
+        }
+    }
+
+    pub fn detection_binary(self) -> Option<&'static str> {
+        match self {
+            Self::Codex => Some("codex"),
+            Self::ClaudeCode => Some("claude"),
+            Self::Cursor => Some("cursor"),
+            Self::Opencode => Some("opencode"),
+            Self::Hermes => Some("hermes"),
+            Self::Gemini => Some("gemini"),
+            Self::Antigravity => Some("antigravity"),
+            Self::Kiro => Some("kiro"),
+            Self::AllSupported | Self::None => None,
+        }
+    }
+
+    pub fn supports_scope(self, scope: InstallScope) -> bool {
+        match self {
+            Self::Codex | Self::Hermes | Self::Antigravity => scope == InstallScope::Global,
+            Self::ClaudeCode | Self::Cursor | Self::Opencode | Self::Gemini | Self::Kiro => true,
+            Self::AllSupported | Self::None => false,
+        }
+    }
+
+    pub fn has_live_writer(self, scope: InstallScope) -> bool {
+        matches!(
+            (self, scope),
+            (Self::Codex, InstallScope::Global) | (Self::ClaudeCode, InstallScope::Global)
+        )
     }
 }
 
@@ -70,6 +147,7 @@ pub struct InstallRequest {
     pub scope: InstallScope,
     pub dry_run: bool,
     pub print_config: bool,
+    pub print_config_target: Option<AgentTarget>,
     pub assume_yes: bool,
     pub no_permissions: bool,
     pub telemetry_enabled: bool,
@@ -84,6 +162,7 @@ impl Default for InstallRequest {
             scope: InstallScope::Global,
             dry_run: false,
             print_config: false,
+            print_config_target: None,
             assume_yes: false,
             no_permissions: false,
             telemetry_enabled: false,
@@ -201,6 +280,7 @@ pub fn execute_install(
     require_global_live_scope(request.scope)?;
     validate_execution_context(context)?;
     let selected_targets = selected_concrete_targets(request)?;
+    require_live_writer_support(&selected_targets, request.scope)?;
 
     let mut targets_to_configure = Vec::new();
     let mut skipped_targets = Vec::new();
@@ -308,6 +388,7 @@ pub fn execute_uninstall(
     require_global_live_scope(request.scope)?;
     validate_execution_context(context)?;
     let selected_targets = selected_concrete_targets(request)?;
+    require_live_writer_support(&selected_targets, request.scope)?;
 
     let mut configured_targets = Vec::new();
     let mut receipt_paths = Vec::new();
@@ -363,7 +444,11 @@ pub fn owned_install_receipt_exists(
 }
 
 pub fn supported_concrete_targets() -> Vec<AgentTarget> {
-    SUPPORTED_AGENT_TARGETS.to_vec()
+    LIVE_AGENT_TARGETS.to_vec()
+}
+
+pub fn known_agent_targets() -> Vec<AgentTarget> {
+    KNOWN_AGENT_TARGETS.to_vec()
 }
 
 fn selected_concrete_targets(
@@ -381,7 +466,7 @@ pub fn normalize_concrete_targets(
     targets: &[AgentTarget],
 ) -> Result<Vec<AgentTarget>, RepoGrammarError> {
     let mut normalized = Vec::new();
-    for supported in SUPPORTED_AGENT_TARGETS {
+    for supported in KNOWN_AGENT_TARGETS {
         if targets.contains(&supported) && !normalized.contains(&supported) {
             normalized.push(supported);
         }
@@ -397,6 +482,214 @@ pub fn normalize_concrete_targets(
         ));
     }
     Ok(normalized)
+}
+
+pub fn targets_for_display(request: &InstallRequest) -> Vec<AgentTarget> {
+    if !request.selected_targets.is_empty() {
+        return normalize_targets_for_display(&request.selected_targets);
+    }
+    match request.target {
+        AgentTarget::AllSupported => supported_concrete_targets(),
+        AgentTarget::None => Vec::new(),
+        target => vec![target],
+    }
+}
+
+pub fn target_config_snippet(target: AgentTarget, scope: InstallScope) -> Result<String, String> {
+    if target == AgentTarget::AllSupported || target == AgentTarget::None {
+        return Err("print-config requires a concrete agent target".to_string());
+    }
+    if !target.supports_scope(scope) {
+        return Ok(format!(
+            "{} does not support {} scope in the RepoGrammar installer\n",
+            target.display_name(),
+            scope.as_str()
+        ));
+    }
+    let command = "<repogrammar-executable>";
+    let args = r#"["serve"]"#;
+    let json_stdio = format!(
+        r#"{{
+  "type": "stdio",
+  "command": "{command}",
+  "args": {args}
+}}"#
+    );
+    let snippet = match target {
+        AgentTarget::Codex => format!(
+            r#"# ~/.codex/config.toml
+[mcp_servers.{MCP_SERVER_NAME}]
+command = "{command}"
+args = ["serve"]
+"#
+        ),
+        AgentTarget::ClaudeCode => match scope {
+            InstallScope::Global => format!(
+                r#"# claude mcp add --scope user {MCP_SERVER_NAME} -- {command} serve
+{json_stdio}
+"#
+            ),
+            InstallScope::ProjectLocal => format!(
+                r#"# ./.mcp.json
+{{
+  "mcpServers": {{
+    "{MCP_SERVER_NAME}": {json_stdio}
+  }}
+}}
+"#
+            ),
+        },
+        AgentTarget::Cursor => format!(
+            r#"# {}
+{{
+  "mcpServers": {{
+    "{MCP_SERVER_NAME}": {{
+      "type": "stdio",
+      "command": "{command}",
+      "args": ["serve", "--path", "{}"]
+    }}
+  }}
+}}
+"#,
+            if scope == InstallScope::Global {
+                "~/.cursor/mcp.json"
+            } else {
+                "./.cursor/mcp.json"
+            },
+            if scope == InstallScope::Global {
+                "${workspaceFolder}"
+            } else {
+                "<absolute-project-path>"
+            }
+        ),
+        AgentTarget::Opencode => format!(
+            r#"# {}
+{{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {{
+    "{MCP_SERVER_NAME}": {{
+      "type": "local",
+      "command": ["{command}", "serve"],
+      "enabled": true
+    }}
+  }}
+}}
+"#,
+            if scope == InstallScope::Global {
+                "$XDG_CONFIG_HOME/opencode/opencode.jsonc"
+            } else {
+                "./opencode.jsonc"
+            }
+        ),
+        AgentTarget::Hermes => format!(
+            r#"# $HERMES_HOME/config.yaml
+mcp_servers:
+  {MCP_SERVER_NAME}:
+    command: "{command}"
+    args: ["serve"]
+platform_toolsets:
+  cli:
+    - "mcp-{MCP_SERVER_NAME}"
+"#
+        ),
+        AgentTarget::Gemini => format!(
+            r#"# {}
+{{
+  "mcpServers": {{
+    "{MCP_SERVER_NAME}": {json_stdio}
+  }}
+}}
+"#,
+            if scope == InstallScope::Global {
+                "~/.gemini/settings.json"
+            } else {
+                "./.gemini/settings.json"
+            }
+        ),
+        AgentTarget::Antigravity => format!(
+            r#"# ~/.gemini/config/mcp_config.json or ~/.gemini/antigravity/mcp_config.json
+{{
+  "mcpServers": {{
+    "{MCP_SERVER_NAME}": {{
+      "command": "{command}",
+      "args": ["serve"]
+    }}
+  }}
+}}
+"#
+        ),
+        AgentTarget::Kiro => format!(
+            r#"# {}
+{{
+  "mcpServers": {{
+    "{MCP_SERVER_NAME}": {json_stdio}
+  }}
+}}
+"#,
+            if scope == InstallScope::Global {
+                "~/.kiro/settings/mcp.json"
+            } else {
+                "./.kiro/settings/mcp.json"
+            }
+        ),
+        AgentTarget::AllSupported | AgentTarget::None => unreachable!("checked above"),
+    };
+    Ok(snippet)
+}
+
+pub fn target_plan_line(target: AgentTarget, scope: InstallScope) -> String {
+    if !target.supports_scope(scope) {
+        return format!(
+            "native_mcp: deferred {} {} install is unsupported",
+            target.as_str(),
+            scope.as_str()
+        );
+    }
+    match (target, scope) {
+        (AgentTarget::Codex, InstallScope::Global) => {
+            "native_mcp: codex mcp add repogrammar -- <repogrammar-executable> serve".to_string()
+        }
+        (AgentTarget::ClaudeCode, InstallScope::Global) => {
+            "native_mcp: claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
+                .to_string()
+        }
+        (target, scope) if target.has_live_writer(scope) => {
+            format!("native_mcp: {} live writer available", target.as_str())
+        }
+        (target, scope) => format!(
+            "native_mcp: deferred {} {} live writes; use --print-config {} to inspect the MCP snippet",
+            target.as_str(),
+            scope.as_str(),
+            target.as_str()
+        ),
+    }
+}
+
+fn normalize_targets_for_display(targets: &[AgentTarget]) -> Vec<AgentTarget> {
+    let mut normalized = Vec::new();
+    for known in KNOWN_AGENT_TARGETS {
+        if targets.contains(&known) && !normalized.contains(&known) {
+            normalized.push(known);
+        }
+    }
+    normalized
+}
+
+fn require_live_writer_support(
+    targets: &[AgentTarget],
+    scope: InstallScope,
+) -> Result<(), RepoGrammarError> {
+    for target in targets {
+        if !target.has_live_writer(scope) {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "{} {} live install/uninstall is deferred; use --dry-run or --print-config {}",
+                target.as_str(),
+                scope.as_str(),
+                target.as_str()
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -665,8 +958,16 @@ fn validate_execution_context(context: &InstallExecutionContext) -> Result<(), R
 
 fn concrete_targets(target: AgentTarget) -> Vec<AgentTarget> {
     match target {
-        AgentTarget::AllSupported => SUPPORTED_AGENT_TARGETS.to_vec(),
-        AgentTarget::Codex | AgentTarget::ClaudeCode => vec![target],
+        AgentTarget::AllSupported => LIVE_AGENT_TARGETS.to_vec(),
+        AgentTarget::None => Vec::new(),
+        AgentTarget::Codex
+        | AgentTarget::ClaudeCode
+        | AgentTarget::Cursor
+        | AgentTarget::Opencode
+        | AgentTarget::Hermes
+        | AgentTarget::Gemini
+        | AgentTarget::Antigravity
+        | AgentTarget::Kiro => vec![target],
     }
 }
 
@@ -783,11 +1084,57 @@ mod tests {
     #[test]
     fn target_and_scope_parsing_is_explicit() {
         assert_eq!(AgentTarget::parse("codex"), Ok(AgentTarget::Codex));
+        assert_eq!(AgentTarget::parse("auto"), Ok(AgentTarget::AllSupported));
+        assert_eq!(AgentTarget::parse("all"), Ok(AgentTarget::AllSupported));
+        assert_eq!(AgentTarget::parse("none"), Ok(AgentTarget::None));
+        assert_eq!(AgentTarget::parse("claude"), Ok(AgentTarget::ClaudeCode));
+        assert_eq!(
+            AgentTarget::parse("claude-code"),
+            Ok(AgentTarget::ClaudeCode)
+        );
+        assert_eq!(AgentTarget::parse("cursor"), Ok(AgentTarget::Cursor));
+        assert_eq!(AgentTarget::parse("opencode"), Ok(AgentTarget::Opencode));
+        assert_eq!(AgentTarget::parse("hermes"), Ok(AgentTarget::Hermes));
+        assert_eq!(AgentTarget::parse("gemini"), Ok(AgentTarget::Gemini));
+        assert_eq!(
+            AgentTarget::parse("antigravity"),
+            Ok(AgentTarget::Antigravity)
+        );
+        assert_eq!(AgentTarget::parse("kiro"), Ok(AgentTarget::Kiro));
         assert_eq!(
             InstallScope::parse("project"),
             Ok(InstallScope::ProjectLocal)
         );
         assert!(AgentTarget::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn target_registry_marks_live_writers_explicitly() {
+        assert_eq!(
+            supported_concrete_targets(),
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert_eq!(known_agent_targets().len(), 8);
+        assert!(AgentTarget::Codex.has_live_writer(InstallScope::Global));
+        assert!(AgentTarget::ClaudeCode.has_live_writer(InstallScope::Global));
+        assert!(!AgentTarget::Cursor.has_live_writer(InstallScope::Global));
+        assert!(!AgentTarget::Codex.has_live_writer(InstallScope::ProjectLocal));
+        assert!(!AgentTarget::Hermes.supports_scope(InstallScope::ProjectLocal));
+        assert!(AgentTarget::Gemini.supports_scope(InstallScope::ProjectLocal));
+    }
+
+    #[test]
+    fn config_snippets_cover_known_targets_without_writes() {
+        for target in known_agent_targets() {
+            let snippet =
+                target_config_snippet(target, InstallScope::Global).expect("config snippet");
+            assert!(snippet.contains("repogrammar"));
+            assert!(snippet.contains("serve"));
+            assert!(!snippet.contains(".repogrammar/"));
+        }
+        let unsupported =
+            target_config_snippet(AgentTarget::Codex, InstallScope::ProjectLocal).expect("snippet");
+        assert!(unsupported.contains("does not support project-local scope"));
     }
 
     #[test]

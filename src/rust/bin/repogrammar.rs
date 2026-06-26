@@ -591,9 +591,15 @@ fn native_add_command(
                 ],
             ))
         }
-        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+        AgentTarget::AllSupported | AgentTarget::None => Err(RepoGrammarError::InvalidInput(
             "native command requires a concrete agent target".to_string(),
         )),
+        target => Err(RepoGrammarError::InvalidInput(format!(
+            "{} {} live install is deferred; use --dry-run or --print-config {}",
+            target.as_str(),
+            scope.as_str(),
+            target.as_str()
+        ))),
     }
 }
 
@@ -635,9 +641,15 @@ fn native_remove_command(
                 ],
             ))
         }
-        AgentTarget::AllSupported => Err(RepoGrammarError::InvalidInput(
+        AgentTarget::AllSupported | AgentTarget::None => Err(RepoGrammarError::InvalidInput(
             "native command requires a concrete agent target".to_string(),
         )),
+        target => Err(RepoGrammarError::InvalidInput(format!(
+            "{} {} live uninstall is deferred; use --dry-run or --print-config {}",
+            target.as_str(),
+            scope.as_str(),
+            target.as_str()
+        ))),
     }
 }
 

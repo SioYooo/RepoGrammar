@@ -4,6 +4,8 @@ param(
     [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\RepoGrammar\bin" }),
     [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "RepoGrammar" }),
     [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path $InstallDir "workers" }),
+    [string]$Target = "all",
+    [string]$Scope = "global",
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
     [switch]$UninstallCommand,
@@ -21,6 +23,7 @@ Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure
+  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -Target "codex,claude-code" -Scope global
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
 
 The script downloads a prebuilt Windows x64 release artifact, verifies its
@@ -137,7 +140,7 @@ function Run-AgentInstall {
     }
     Invoke-WithInstallEnv {
         if ($Yes) {
-            & $command install --target all --scope global --yes --no-telemetry
+            & $command install --target $Target --scope $Scope --yes --no-telemetry
         } else {
             & $command install
         }

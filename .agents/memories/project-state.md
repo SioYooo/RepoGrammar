@@ -61,7 +61,12 @@
   native Codex/Claude Code MCP command shape. Interactive `repogrammar install`
   can select Codex, Claude Code, or both in one run, skips already managed
   RepoGrammar receipts, installs or repairs a stable `repogrammar` command when
-  possible, and does not touch `.repogrammar/` or instruction files. Source
+  possible, and does not touch `.repogrammar/` or instruction files. The
+  installer target registry also recognizes CodeGraph-style target ids for
+  Cursor, opencode, Hermes, Gemini, Antigravity, and Kiro in dry-run and
+  `--print-config` planning modes; live writes remain implemented only for
+  global Codex and Claude Code until each additional adapter has an ownership
+  receipt, uninstall inverse, and tests. Source
   checkouts also include `src/install/repogrammar-install.sh` as the
   public-facing TUI wrapper for release-binary install/repair/uninstall choices,
   with Cargo kept as an explicit contributor source-build path only and release

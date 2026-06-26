@@ -29,6 +29,12 @@
   that the managed executable can discover, and refresh rollback restores the
   previous managed executable and command copy if self-test or native agent
   configuration fails.
+- The installer now has a CodeGraph-style target registry for planning and
+  configuration previews. `--target` accepts `auto`, `all`, `none`, aliases,
+  and comma-separated concrete target lists; `--location` aliases `--scope`;
+  and `--print-config <target>` prints no-write MCP snippets for known targets
+  such as Cursor, opencode, Hermes, Gemini, Antigravity, and Kiro while live
+  writes remain gated to global Codex and Claude Code.
 - Source checkouts now include `src/install/repogrammar-install.sh`, a
   dependency-light TUI wrapper for downloading and verifying a prebuilt release
   binary, installing or repairing the command, configuring or uninstalling

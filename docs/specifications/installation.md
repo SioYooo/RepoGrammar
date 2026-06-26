@@ -27,6 +27,13 @@ Agent integration may require the selected native agent CLI:
 Missing agent CLIs must be non-fatal in interactive flows when other supported
 choices remain available.
 
+RepoGrammar follows a CodeGraph-style installation architecture: CLI
+acquisition, machine-level agent wiring, and repository-level `init`/`index`
+remain separate lifecycle layers. `repogrammar install` is the agent-wiring
+orchestrator. It resolves targets through a registry, plans global versus
+project-local scope, prints target MCP snippets on request, and delegates live
+writes only to adapters with an implemented reversible ownership contract.
+
 Public-preview release artifacts use these platform targets:
 
 - `repogrammar-aarch64-apple-darwin.tar.gz`;
@@ -101,9 +108,28 @@ published npm use.
 
 ## Scope
 
-Installer commands support global and project-local scopes. Project-local
-installation must not impose RepoGrammar's own mirrored `AGENTS.md` and
-`CLAUDE.md` policy on consuming repositories.
+Installer commands support global and project-local scopes. `--location` is
+accepted as an alias for `--scope` in the CLI. Project-local installation must
+not impose RepoGrammar's own mirrored `AGENTS.md` and `CLAUDE.md` policy on
+consuming repositories.
+
+The target registry recognizes these CodeGraph-style target ids for planning
+and `--print-config` output:
+
+- `codex`;
+- `claude-code` / `claude`;
+- `cursor`;
+- `opencode`;
+- `hermes`;
+- `gemini`;
+- `antigravity`;
+- `kiro`.
+
+It also accepts `auto`, `all`, `none`, and comma-separated concrete target
+lists such as `codex,claude-code`. In the current public preview, live writes
+are implemented only for global Codex and global Claude Code. Other registry
+targets are configuration-preview/deferred targets until their idempotent
+writer, ownership receipt, uninstall inverse, and tests are implemented.
 
 `repogrammar install` and `repogrammar uninstall` configure agent integration
 only. They must not create, update, or delete `.repogrammar/`, and they must not
@@ -130,6 +156,11 @@ The installer must:
 - avoid sudo or administrator privileges;
 - support `--dry-run`, `--print-config`, `--target`, `--scope`, `--yes`,
   `--no-permissions`, `--telemetry`, and `--no-telemetry`;
+- accept `--location` as a `--scope` alias and accept `auto`, `all`, `none`,
+  and comma-separated target lists;
+- make `--print-config <target>` a no-write path that prints the selected
+  target's MCP snippet and exits without requiring HOME, installing the command,
+  running the MCP self-test, or delegating native writes;
 - validate every configured MCP integration by launching a self-test;
 - store an installation receipt sufficient for precise, reversible uninstall;
 - never remove configuration that was not created by RepoGrammar;
@@ -213,6 +244,10 @@ noninteractive live writes, and a dependency-light text wizard:
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
+- the installer has a target registry for Codex, Claude Code, Cursor,
+  opencode, Hermes, Gemini, Antigravity, and Kiro. The current registry exposes
+  deferred targets through dry-run and `--print-config` snippets only; live
+  writes remain implemented for global Codex and global Claude Code;
 - re-running the wizard can add missing supported agents later or refresh the
   RepoGrammar-managed command path even when all selected agents are already
   managed, without re-running native agent add commands for already managed
@@ -250,8 +285,9 @@ noninteractive live writes, and a dependency-light text wizard:
   disabled telemetry, interactive install without telemetry flags prompts
   default-no, and environment/CI disablement overrides `--telemetry`.
 - dry-run output names the native MCP command shape for Codex and Claude Code
-  global installs, while project-local live writes remain deferred unless
-  separately specified and tested.
+  global installs and clearly marks deferred registry targets/scopes, while
+  project-local live writes remain deferred unless separately specified and
+  tested.
 - default tests must not invoke real `codex` or `claude` binaries. Native agent
   integration coverage uses dry-run output, command-vector construction, fake
   configurators, and receipt behavior; any real native-CLI integration test must

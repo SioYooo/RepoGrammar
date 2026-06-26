@@ -88,6 +88,10 @@ Codex integration and `claude` for Claude Code integration. Missing agent CLIs
 are non-fatal; you can configure the agents that are available and rerun
 `repogrammar install` later.
 
+The installer separates three steps: get the CLI, wire coding agents, then run
+`repogrammar init` / `repogrammar index` inside each repository. Agent wiring
+does not index code and does not create `.repogrammar/`.
+
 From a source checkout, the same installer lives at:
 
 ```text
@@ -187,6 +191,17 @@ repogrammar install --target all --scope global --yes --no-telemetry
 
 Multi-agent install is all-or-rollback: if one selected agent fails, changes
 from the same run are rolled back. Project-local live writes are deferred.
+
+For planning and manual configuration, the CLI also understands CodeGraph-style
+target ids such as `cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and
+`kiro` in dry-run and `--print-config` modes:
+
+```text
+repogrammar install --print-config cursor --location local
+repogrammar install --target cursor,gemini --location local --dry-run --no-telemetry
+```
+
+Those preview targets are not live-written by the public preview installer yet.
 
 ## Privacy And Telemetry
 

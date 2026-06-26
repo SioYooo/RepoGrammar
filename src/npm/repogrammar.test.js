@@ -157,7 +157,15 @@ function testForwardsArgumentsThroughNpxLauncher() {
     const log = path.join(root, "fake.log");
     const result = childProcess.spawnSync(
       process.execPath,
-      [path.join(__dirname, "repogrammar.js"), "install", "--target", "codex"],
+      [
+        path.join(__dirname, "repogrammar.js"),
+        "install",
+        "--target",
+        "codex,claude-code",
+        "--scope",
+        "local",
+        "--print-config",
+      ],
       {
         env: {
           ...process.env,
@@ -171,7 +179,10 @@ function testForwardsArgumentsThroughNpxLauncher() {
       }
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.match(fs.readFileSync(log, "utf8"), /install --target codex/);
+    assert.match(
+      fs.readFileSync(log, "utf8"),
+      /install --target codex,claude-code --scope local --print-config/
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

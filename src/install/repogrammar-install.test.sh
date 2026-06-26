@@ -66,6 +66,22 @@ REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
 
 grep -q "install --target codex --scope global --yes --no-telemetry" "$LOG_FILE"
 
+REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
+"$INSTALLER" --configure-agents --yes --target "codex,claude-code" --scope local >/dev/null
+
+grep -q "install --target codex,claude-code --scope local --yes --no-telemetry" "$LOG_FILE"
+
+REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
+"$INSTALLER" --configure-agents --yes --target none >/dev/null
+
+grep -q "install --target none --scope global --yes --no-telemetry" "$LOG_FILE"
+
 REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
 REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \

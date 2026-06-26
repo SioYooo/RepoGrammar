@@ -3,8 +3,8 @@
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
     normalize_concrete_targets, owned_install_receipt_exists, plan_install,
-    supported_concrete_targets, AgentTarget, InstallExecutionContext, InstallExecutionOutcome,
-    InstallRequest, InstallScope,
+    supported_concrete_targets, target_config_snippet, target_plan_line, targets_for_display,
+    AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
 };
 use crate::application::progress::{ProgressEvent, WorkUnits};
 use crate::application::query::{
@@ -1084,6 +1084,13 @@ where
     }
     let plan = plan_install(&request);
 
+    if request.print_config && !request.dry_run {
+        return match install_print_config_output(&request) {
+            Ok(output) => CliOutput::success(output),
+            Err(error) => CliOutput::failure(2, format!("{error}\n")),
+        };
+    }
+
     if request.dry_run {
         let mut output = format!(
             "{command} dry-run: target={}, scope={}, telemetry={}\n",
@@ -1093,8 +1100,12 @@ where
         );
         if request.print_config {
             output.push_str("config preview: absolute executable path, MCP self-test, reversible receipt, and marker-fenced instruction edits are required\n");
+            match install_print_config_output(&request) {
+                Ok(config) => output.push_str(&config),
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            }
         }
-        for line in install_dry_run_native_plan(plan.target, plan.scope) {
+        for line in install_dry_run_native_plan(&request) {
             output.push_str(&line);
             output.push('\n');
         }
@@ -1385,11 +1396,7 @@ fn interactive_install_plan(request: &InstallRequest, statuses: &[InstallAgentSt
 }
 
 fn install_target_label(target: AgentTarget) -> &'static str {
-    match target {
-        AgentTarget::AllSupported => "All supported agents",
-        AgentTarget::Codex => "Codex CLI",
-        AgentTarget::ClaudeCode => "Claude Code",
-    }
+    target.display_name()
 }
 
 fn native_command_shape(target: AgentTarget) -> &'static str {
@@ -1398,7 +1405,14 @@ fn native_command_shape(target: AgentTarget) -> &'static str {
         AgentTarget::ClaudeCode => {
             "claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
         }
+        AgentTarget::Cursor => "Cursor MCP JSON config preview",
+        AgentTarget::Opencode => "opencode MCP JSONC config preview",
+        AgentTarget::Hermes => "Hermes YAML config preview",
+        AgentTarget::Gemini => "Gemini MCP JSON config preview",
+        AgentTarget::Antigravity => "Antigravity MCP JSON config preview",
+        AgentTarget::Kiro => "Kiro MCP JSON config preview",
         AgentTarget::AllSupported => "all supported agent MCP command shapes",
+        AgentTarget::None => "no agent MCP command shape",
     }
 }
 
@@ -1406,10 +1420,8 @@ fn agent_cli_detected<F>(target: AgentTarget, env_lookup: &F) -> bool
 where
     F: Fn(&str) -> Option<String>,
 {
-    let binary = match target {
-        AgentTarget::Codex => "codex",
-        AgentTarget::ClaudeCode => "claude",
-        AgentTarget::AllSupported => return false,
+    let Some(binary) = target.detection_binary() else {
+        return false;
     };
     path_entries(env_lookup)
         .into_iter()
@@ -1417,33 +1429,39 @@ where
         .any(|candidate| candidate.is_file())
 }
 
-fn install_dry_run_native_plan(target: AgentTarget, scope: InstallScope) -> Vec<String> {
-    let targets = match target {
-        AgentTarget::AllSupported => vec![AgentTarget::Codex, AgentTarget::ClaudeCode],
-        AgentTarget::Codex | AgentTarget::ClaudeCode => vec![target],
-    };
+fn install_dry_run_native_plan(request: &InstallRequest) -> Vec<String> {
+    let targets = targets_for_display(request);
+    if targets.is_empty() {
+        return vec!["native_mcp: no agent targets selected".to_string()];
+    }
     targets
         .into_iter()
-        .map(|target| match (target, scope) {
-            (AgentTarget::Codex, InstallScope::Global) => {
-                "native_mcp: codex mcp add repogrammar -- <repogrammar-executable> serve"
-                    .to_string()
-            }
-            (AgentTarget::ClaudeCode, InstallScope::Global) => {
-                "native_mcp: claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
-                    .to_string()
-            }
-            (AgentTarget::Codex, InstallScope::ProjectLocal) => {
-                "native_mcp: deferred codex project-local install is unsupported by the native codex mcp CLI"
-                    .to_string()
-            }
-            (AgentTarget::ClaudeCode, InstallScope::ProjectLocal) => {
-                "native_mcp: deferred claude-code project-local install is deferred".to_string()
-            }
-            (AgentTarget::AllSupported, _) => "native_mcp: deferred unsupported aggregate target"
-                .to_string(),
-        })
+        .map(|target| target_plan_line(target, request.scope))
         .collect()
+}
+
+fn install_print_config_output(request: &InstallRequest) -> Result<String, String> {
+    let targets = if let Some(target) = request.print_config_target {
+        vec![target]
+    } else {
+        targets_for_display(request)
+    };
+    if targets.is_empty() {
+        return Ok("config preview: no agent targets selected\n".to_string());
+    }
+    let mut output = String::new();
+    for target in targets {
+        output.push_str(&format!(
+            "config preview: target={} scope={}\n",
+            target.as_str(),
+            request.scope.as_str()
+        ));
+        output.push_str(&target_config_snippet(target, request.scope)?);
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    Ok(output)
 }
 
 fn parse_default_no_prompt_response(response: &str) -> Result<bool, String> {
@@ -3395,12 +3413,12 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
                 let Some(value) = rest.get(index + 1) else {
                     return Err("--target requires a value".to_string());
                 };
-                request.target = AgentTarget::parse(value)?;
+                apply_install_target_value(&mut request, value)?;
                 index += 2;
             }
-            "--scope" => {
+            "--scope" | "--location" => {
                 let Some(value) = rest.get(index + 1) else {
-                    return Err("--scope requires global or project".to_string());
+                    return Err(format!("{} requires global or project", rest[index]));
                 };
                 request.scope = InstallScope::parse(value)?;
                 index += 2;
@@ -3415,7 +3433,19 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
             }
             "--print-config" => {
                 request.print_config = true;
-                index += 1;
+                if let Some(value) = rest.get(index + 1).filter(|value| !value.starts_with("--")) {
+                    let target = AgentTarget::parse(value)?;
+                    if matches!(target, AgentTarget::AllSupported | AgentTarget::None) {
+                        return Err(
+                            "--print-config requires a concrete target when a value is supplied"
+                                .to_string(),
+                        );
+                    }
+                    request.print_config_target = Some(target);
+                    index += 2;
+                } else {
+                    index += 1;
+                }
             }
             "--no-telemetry" => {
                 request.telemetry_enabled = false;
@@ -3435,6 +3465,39 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
         }
     }
     Ok(request)
+}
+
+fn apply_install_target_value(request: &mut InstallRequest, value: &str) -> Result<(), String> {
+    let tokens = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if tokens.iter().any(|token| token.is_empty()) {
+        return Err(
+            "unsupported target list; use comma-separated target ids without empty entries"
+                .to_string(),
+        );
+    }
+    if tokens.len() == 1 {
+        request.target = AgentTarget::parse(tokens[0])?;
+        request.selected_targets.clear();
+        return Ok(());
+    }
+    let mut targets = Vec::new();
+    for token in tokens {
+        let target = AgentTarget::parse(token)?;
+        if matches!(target, AgentTarget::AllSupported | AgentTarget::None) {
+            return Err("target lists must contain concrete agent ids only".to_string());
+        }
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    let normalized = normalize_concrete_targets(&targets).map_err(|error| error.to_string())?;
+    request.target = if normalized == supported_concrete_targets() {
+        AgentTarget::AllSupported
+    } else {
+        normalized[0]
+    };
+    request.selected_targets = normalized;
+    Ok(())
 }
 
 fn option_value<'a>(
@@ -6673,6 +6736,78 @@ mod tests {
     }
 
     #[test]
+    fn install_print_config_is_no_write_even_without_dry_run_or_home() {
+        struct PrintConfigRuntime {
+            delegated: std::cell::Cell<bool>,
+        }
+
+        impl CliRuntime for PrintConfigRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer print-config test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer print-config test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer print-config test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                _command: &str,
+                _request: InstallRequest,
+                _context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.delegated.set(true);
+                unreachable!("print-config must not delegate native writes")
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-print-config-no-write");
+        let install_dir = workspace.path().join("install-data");
+        let runtime = PrintConfigRuntime {
+            delegated: std::cell::Cell::new(false),
+        };
+        let env = |key: &str| {
+            if key == "REPOGRAMMAR_INSTALL_DIR" {
+                Some(install_dir.display().to_string())
+            } else {
+                None
+            }
+        };
+
+        let output = run_with_context_and_runtime(
+            ["install", "--print-config", "cursor", "--location", "local"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stdout.contains("target=cursor"));
+        assert!(output.stdout.contains("./.cursor/mcp.json"));
+        assert!(output.stdout.contains("--path"));
+        assert!(!runtime.delegated.get());
+        assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
+        assert!(!install_dir.exists());
+        for instruction_file in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
+            assert!(!workspace.path().join(instruction_file).exists());
+        }
+    }
+
+    #[test]
     fn install_live_writes_require_yes_before_runtime_delegation() {
         let output = run(["install", "--target", "codex"]);
 
@@ -7054,6 +7189,56 @@ mod tests {
         assert!(parse_interactive_agent_selection("unknown", &statuses).is_err());
         assert!(parse_interactive_agent_selection("1a", &statuses).is_err());
         assert!(parse_interactive_agent_selection("1,,2", &statuses).is_err());
+    }
+
+    #[test]
+    fn install_target_option_accepts_codegraph_style_values() {
+        let auto = parse_install_options(&["--target".to_string(), "auto".to_string()])
+            .expect("auto target");
+        assert_eq!(auto.target, AgentTarget::AllSupported);
+        assert!(auto.selected_targets.is_empty());
+
+        let none = parse_install_options(&[
+            "--target".to_string(),
+            "none".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .expect("none target");
+        assert_eq!(none.target, AgentTarget::None);
+        assert!(none.selected_targets.is_empty());
+
+        let csv = parse_install_options(&[
+            "--target".to_string(),
+            "claude-code,codex,codex".to_string(),
+        ])
+        .expect("csv target");
+        assert_eq!(csv.target, AgentTarget::AllSupported);
+        assert_eq!(
+            csv.selected_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+
+        let deferred = parse_install_options(&[
+            "--target".to_string(),
+            "cursor,gemini".to_string(),
+            "--location".to_string(),
+            "local".to_string(),
+        ])
+        .expect("deferred csv target");
+        assert_eq!(deferred.target, AgentTarget::Cursor);
+        assert_eq!(
+            deferred.selected_targets,
+            vec![AgentTarget::Cursor, AgentTarget::Gemini]
+        );
+        assert_eq!(deferred.scope, InstallScope::ProjectLocal);
+
+        assert!(parse_install_options(
+            &["--target".to_string(), "codex,,claude-code".to_string(),]
+        )
+        .is_err());
+        assert!(
+            parse_install_options(&["--target".to_string(), "codex,none".to_string(),]).is_err()
+        );
     }
 
     #[test]

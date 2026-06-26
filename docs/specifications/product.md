@@ -227,4 +227,8 @@ transaction. The installer may place the `repogrammar` command in a
 user-writable command directory, but it must not index code, mutate
 `.repogrammar/`, edit instruction files, upload telemetry, or run paired
 experiments. Project-local live writes and instruction-file edits remain
-deferred unless separately specified and tested.
+deferred unless separately specified and tested. The install target registry may
+recognize additional CodeGraph-style agents for dry-run and `--print-config`
+planning, but recognized target ids are not live support claims until the
+adapter has a reversible writer, ownership receipt, uninstall inverse, and
+default tests.
