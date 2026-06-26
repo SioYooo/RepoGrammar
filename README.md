@@ -14,17 +14,21 @@ claim.
 
 ## Status
 
-This repository is in bootstrap state. It currently contains governance,
-documentation, CI, a Rust core skeleton, semantic-worker boundaries, a
-pattern-family-first CLI boundary, repo-local lifecycle commands, TS/JS file
-discovery, Python `.py` discovery, syntax-only code-unit extraction,
+This repository has reached the scoped v0.1 release surface for Python-first,
+sound-by-abstention implementation/integration-family evidence and read
+planning, while remaining pre-alpha outside that narrow contract. It currently
+contains governance, documentation, CI, a Rust core skeleton, semantic-worker
+boundaries, a pattern-family-first CLI boundary, repo-local lifecycle commands,
+TS/JS file discovery, Python `.py` discovery, syntax-only code-unit extraction,
 syntax-origin framework-role fact storage, CodeUnit-derived structural IR
 storage, SQLite generation-storage wiring, a dependency-free TypeScript worker
 unavailable stub, a CPython AST-backed Python worker for structural code units,
 stored internal structural anchors, and typed dynamic/unresolved `UNKNOWN`
 output,
 repository guard checks, and a read-only MCP `repogrammar_context` stdio
-boundary.
+boundary. Matched Python family reads now include metadata-only read plans that
+identify target, canonical, support, and variation spans by repo-relative path,
+strict content hash, and byte range without returning source text.
 
 The official v0.1 implementation target has pivoted to Python-first analysis
 for FastAPI, pytest, SQLAlchemy, and Pydantic. The current TS/JS code remains
@@ -130,6 +134,7 @@ cargo run --quiet --bin repogrammar -- files --json
 cargo run --quiet --bin repogrammar -- units --json
 cargo run --quiet --bin repogrammar -- status
 cargo run --quiet --bin repogrammar -- doctor --json
+cargo run --quiet --bin repogrammar -- stats --json
 ```
 
 Try the current pattern-family CLI boundary:
@@ -151,8 +156,15 @@ With `--json`, both states are parseable. Matched family detail defaults to
 compact output without evidence records; explicit `--mode evidence` or
 `--mode deep` returns selected repo-relative evidence metadata only, with
 coverage labels and missing requested variation/exception coverage reported
-without source snippets. `files` and `units` are limited to active
-file-manifest-only or syntax-only index metadata.
+without source snippets. Matched family output also includes a metadata-only
+`read_plan` with suggested source spans to inspect; target spans are marked as
+required before editing, and line ranges remain unavailable until a safe
+source-span renderer exists. `stats --json` reports repo-shape diagnostics such
+as local pattern density, family support coverage, abstention rate, and
+thin-wrapper/token-saving risk. These diagnostics are not measured token
+savings; token-saving potential depends on repeated repo-local patterns and is
+lower in third-party-heavy or thin-wrapper repositories. `files` and `units`
+are limited to active file-manifest-only or syntax-only index metadata.
 
 ## Product Shape
 

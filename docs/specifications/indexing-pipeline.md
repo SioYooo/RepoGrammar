@@ -328,6 +328,11 @@ families. These algorithms are deliberately deferred.
 Representative selection is implemented only for query rendering over already
 stored family evidence metadata. The selector uses deterministic greedy
 marginal coverage per estimated token cost and never reads source snippets.
+Matched family queries also build a metadata-only read plan from stored family
+evidence. Read-plan items carry repo-relative paths, strict content hashes, byte
+ranges, purpose labels, and estimated token cost; they do not contain source
+text or absolute paths. Line ranges remain unavailable until a safe
+source-span renderer is implemented.
 Family evidence records carry schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the current
 builder emits `canonical` and `support`, plus a narrow Python `variation`

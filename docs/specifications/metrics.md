@@ -29,9 +29,16 @@ be used alone to make causal claims about token savings.
 
 ## CLI status
 
-During bootstrap, `repogrammar stats --json` returns a deferred metrics contract
-instead of measured repository metrics. The JSON output must keep
-`implemented: false`, report an empty `metrics` array, list the allowed metric
-kinds, and use `null` for `token_savings` and `context_compression_ratio`.
-Deferred stats output must not include source snippets, paths, repository names,
-query text, or token-savings claims.
+`repogrammar stats --json` reports v0.1 repo-shape diagnostics when repository
+state is initialized and an active generation is readable. The output must keep
+measured `token_savings` and `context_compression_ratio` as `null` unless a
+paired baseline/treatment measurement exists. Current diagnostics may report
+derived or estimated local-pattern-density, family-support-coverage,
+abstention-rate, external-dependency-signal, thin-wrapper-risk, and
+token-saving-risk values.
+
+Stats output is allowed to include aggregate counts and diagnostic ratios, but
+it must not include source snippets, query text, repository names, absolute
+paths, or causal token-savings claims. Missing repository state or a missing
+active index should use the standard parseable fallback rather than inventing
+repository metrics.

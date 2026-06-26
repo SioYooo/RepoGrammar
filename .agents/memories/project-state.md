@@ -32,10 +32,17 @@
   modes, supported MCP operations, and stale source mutation/deletion returning
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
   compact/evidence/deep metadata modes shared by CLI and MCP; compact is the
-  default, evidence/deep use greedy metadata coverage selection, and deep does
-  not yet include source snippets. Ready Python exact-anchor families can also
-  record metadata-only variation evidence when exact-compatible framework-anchor
-  support targets differ. FastAPI static `response_model=...`, static
+  default, evidence/deep use greedy metadata coverage selection, all matched
+  modes include metadata-only read plans, and deep does not yet include source
+  snippets. Read plans use repo-relative paths, strict content hashes, byte
+  ranges, purpose labels, estimated token costs, and no source text; target
+  source remains required before edits and line ranges are `null` until safe
+  source-span rendering exists. `repogrammar stats --json` now reports
+  repo-shape diagnostics for local pattern density, family support coverage,
+  abstention rate, and thin-wrapper/token-saving risk without measured token
+  savings. Ready Python exact-anchor families can also record metadata-only
+  variation evidence when exact-compatible framework-anchor support targets
+  differ. FastAPI static `response_model=...`, static
   `Depends(get_db)` dependency-target, `Depends`, `HTTPException`, and literal
   HTTPException status-code structural anchors, plus static FastAPI
   body/path/query/header/cookie request-shape anchors, remain auxiliary

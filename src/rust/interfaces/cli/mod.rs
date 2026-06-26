@@ -6,11 +6,12 @@ use crate::application::install::{
     InstallScope,
 };
 use crate::application::query::{
-    query_preflight, repository_status_unavailable_fallback, select_family_evidence,
-    validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
-    QueryPreflightOperation, QueryPreflightReport,
+    build_read_plan, query_preflight, repository_status_unavailable_fallback,
+    select_family_evidence, validate_query_target, validate_query_token_budget, DiagnosticSignal,
+    FamilyDetailReport, FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    RepoShapeDiagnosticsReport,
 };
 use crate::application::repository::{
     init_repository, repository_doctor, repository_logs, repository_status, uninit_repository,
@@ -80,6 +81,13 @@ pub trait CliRuntime {
         _mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
+    }
+
+    fn repo_shape_diagnostics(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("stats"))
     }
 
     fn install_agent_integration(
@@ -211,7 +219,9 @@ where
         [command, rest @ ..] if is_installer_command(command) => {
             handle_installer(command, rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if command == "stats" => handle_stats(rest),
+        [command, rest @ ..] if command == "stats" => {
+            handle_stats(rest, current_dir, env_lookup, runtime)
+        }
         [command, rest @ ..] if command == "telemetry" => handle_telemetry(rest),
         [command] if is_forbidden_graph_command(command) => CliOutput::failure(
             2,
@@ -394,11 +404,15 @@ where
                 Ok(report) if options.json => CliOutput::success(family_lookup_json(
                     command,
                     &report,
+                    options.target.as_deref(),
+                    lookup_mode_for_command(command),
                     options.output_options(),
                 )),
                 Ok(report) => CliOutput::success(family_lookup_human(
                     command,
                     &report,
+                    options.target.as_deref(),
+                    lookup_mode_for_command(command),
                     options.output_options(),
                 )),
                 Err(_) => query_fallback(
@@ -610,11 +624,14 @@ fn families_json(command: &str, report: &FamilyListReport) -> String {
 fn family_lookup_human(
     command: &str,
     report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
     options: FamilyOutputOptions,
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
             let selected_evidence = select_family_evidence(family, options);
+            let read_plan = build_read_plan(family, target, mode, options);
             let snippets = if selected_evidence.source_snippets_included {
                 "included"
             } else {
@@ -651,6 +668,14 @@ fn family_lookup_human(
                 "budget_satisfied: {}\n",
                 selected_evidence.budget_satisfied
             ));
+            output.push_str(&format!(
+                "estimated_read_plan_tokens: {}\n",
+                read_plan.estimated_tokens
+            ));
+            output.push_str(&format!(
+                "read_plan_requires_source_before_edit: {}\n",
+                read_plan.requires_source_before_edit
+            ));
             if !selected_evidence.covered_claims.is_empty() {
                 output.push_str(&format!(
                     "covered_claims: {}\n",
@@ -663,6 +688,7 @@ fn family_lookup_human(
                     selected_evidence.missing_claims.join(",")
                 ));
             }
+            push_read_plan_human(&mut output, &read_plan, selected_evidence.mode);
             if command == "check" {
                 output.push_str("advisory_status: UNKNOWN\n");
                 output.push_str("reason: runtime equivalence remains unproven\n");
@@ -729,10 +755,14 @@ fn push_unknown_human(output: &mut String, unknown: &FamilyQueryUnknown) {
 fn family_lookup_json(
     command: &str,
     report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
     options: FamilyOutputOptions,
 ) -> String {
     match report {
-        FamilyLookupReport::Found(family) => family_detail_json(command, family, options),
+        FamilyLookupReport::Found(family) => {
+            family_detail_json(command, family, target, mode, options)
+        }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
             "status": "UNKNOWN",
@@ -746,9 +776,12 @@ fn family_lookup_json(
 fn family_detail_json(
     command: &str,
     family: &FamilyDetailReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
     options: FamilyOutputOptions,
 ) -> String {
     let selected_evidence = select_family_evidence(family, options);
+    let read_plan = build_read_plan(family, target, mode, options);
     let check = if command == "check" {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -772,6 +805,7 @@ fn family_detail_json(
             "mode": selected_evidence.mode.as_str(),
             "token_budget": selected_evidence.token_budget,
             "estimated_evidence_tokens": selected_evidence.estimated_tokens,
+            "estimated_read_plan_tokens": read_plan.estimated_tokens,
             "selection_strategy": selected_evidence.selection_strategy,
             "budget_satisfied": selected_evidence.budget_satisfied,
             "covered_claims": selected_evidence.covered_claims,
@@ -807,9 +841,79 @@ fn family_detail_json(
                 "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
+        "read_plan": read_plan_json(&read_plan),
         "unknowns": unknowns_json(&family.unknowns),
         "check": check,
     }))
+}
+
+fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyEvidenceMode) {
+    output.push_str("Suggested source spans to read\n");
+    output.push_str(&format!(
+        "read_plan: items: {}\testimated_tokens: {}\tsource_snippets: not_included\n",
+        read_plan.items.len(),
+        read_plan.estimated_tokens
+    ));
+    let limit = if mode == FamilyEvidenceMode::Compact {
+        1
+    } else {
+        read_plan.items.len()
+    };
+    for item in read_plan.items.iter().take(limit) {
+        push_read_plan_item_human(output, item);
+    }
+    if read_plan.items.len() > limit {
+        output.push_str(&format!(
+            "read_plan_additional_items: {}\n",
+            read_plan.items.len() - limit
+        ));
+    }
+}
+
+fn push_read_plan_item_human(output: &mut String, item: &ReadPlanItem) {
+    let line_range = match (item.start_line, item.end_line) {
+        (Some(start), Some(end)) => format!("lines: {start}-{end}"),
+        _ => "lines: unavailable".to_string(),
+    };
+    output.push_str(&format!(
+        "read: {}\tpath: {}\trange: {}-{}\t{}\tcontent_hash: {}\testimated_tokens: {}\trequires_source_before_edit: {}\twhy: {}\n",
+        item.purpose.as_str(),
+        item.path,
+        item.start_byte,
+        item.end_byte,
+        line_range,
+        item.content_hash.as_str(),
+        item.estimated_tokens,
+        item.source_required_before_edit,
+        item.why
+    ));
+}
+
+fn read_plan_json(read_plan: &ReadPlan) -> serde_json::Value {
+    json!({
+        "estimated_tokens": read_plan.estimated_tokens,
+        "source_snippets_included": read_plan.source_snippets_included,
+        "requires_source_before_edit": read_plan.requires_source_before_edit,
+        "selection_strategy": read_plan.selection_strategy,
+        "budget_satisfied": read_plan.budget_satisfied,
+        "items": read_plan.items.iter().map(read_plan_item_json).collect::<Vec<_>>(),
+    })
+}
+
+fn read_plan_item_json(item: &ReadPlanItem) -> serde_json::Value {
+    json!({
+        "purpose": item.purpose.as_str(),
+        "path": item.path,
+        "content_hash": item.content_hash.as_str(),
+        "start_byte": item.start_byte,
+        "end_byte": item.end_byte,
+        "start_line": item.start_line,
+        "end_line": item.end_line,
+        "estimated_tokens": item.estimated_tokens,
+        "why": item.why,
+        "source_required_before_edit": item.source_required_before_edit,
+        "source_snippets_included": item.source_snippets_included,
+    })
 }
 
 fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
@@ -942,49 +1046,166 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
     )
 }
 
-fn handle_stats(rest: &[String]) -> CliOutput {
+fn handle_stats<F>(
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
     let options = match parse_stats_options(rest) {
         Ok(options) => options,
         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
     };
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    let status_report = match runtime.repository_status(request.clone()) {
+        Ok(report) => report,
+        Err(_) => {
+            let fallback = repository_status_unavailable_fallback(
+                QueryPreflightOperation::ActiveIndexInventory,
+            );
+            return query_fallback(
+                "stats",
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
+            );
+        }
+    };
 
-    if options.json {
-        return CliOutput::success(stats_json());
+    match query_preflight(
+        QueryPreflightOperation::ActiveIndexInventory,
+        &status_report,
+    ) {
+        QueryPreflightReport::Fallback(fallback) => {
+            return query_fallback(
+                "stats",
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
+            );
+        }
+        QueryPreflightReport::Ready => {}
     }
 
-    CliOutput::success(
-        "stats: metrics unavailable; token metrics must be classified as MEASURED, DERIVED, ESTIMATED, or CAUSAL_EXPERIMENT, and derived context compression is not actual token savings\n",
-    )
+    if options.json {
+        return match runtime.repo_shape_diagnostics(request) {
+            Ok(report) => CliOutput::success(stats_json(&report)),
+            Err(_) => query_fallback(
+                "stats",
+                true,
+                "repository status is unavailable",
+                "run repogrammar doctor",
+                true,
+            ),
+        };
+    }
+
+    match runtime.repo_shape_diagnostics(request) {
+        Ok(report) => CliOutput::success(stats_human(&report)),
+        Err(_) => query_fallback(
+            "stats",
+            false,
+            "repository status is unavailable",
+            "run repogrammar doctor",
+            true,
+        ),
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct StatsOptions {
     json: bool,
+    project_path: Option<String>,
 }
 
 fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
     let mut options = StatsOptions::default();
-    for option in rest {
-        match option.as_str() {
-            "--json" => options.json = true,
-            "--quiet" | "--verbose" => {}
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--project" => {
+                let value = option_value(rest, index, "--project", "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" | "--verbose" => {
+                index += 1;
+            }
             other => return Err(format!("unknown stats option: {other}")),
         }
     }
     Ok(options)
 }
 
-fn stats_json() -> String {
+fn stats_human(report: &RepoShapeDiagnosticsReport) -> String {
+    format!(
+        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ninterpretation: {}\n",
+        report.active_generation,
+        report.eligible_code_units,
+        report.family_count,
+        report.family_member_count,
+        report.covered_code_units,
+        optional_ratio_human(report.local_pattern_density),
+        optional_ratio_human(report.family_support_coverage),
+        optional_ratio_human(report.abstention_rate),
+        report.external_dependency_signal.as_str(),
+        report.thin_wrapper_risk.as_str(),
+        report.token_saving_risk.as_str(),
+        report.interpretation
+    )
+}
+
+fn stats_json(report: &RepoShapeDiagnosticsReport) -> String {
     json_line(json!({
         "command": "stats",
-        "status": "deferred",
-        "implemented": false,
-        "metrics": [],
+        "status": "ok",
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "metrics": {
+            "local_pattern_density": report.local_pattern_density,
+            "family_support_coverage": report.family_support_coverage,
+            "abstention_rate": report.abstention_rate,
+            "external_dependency_signal": diagnostic_signal_json(report.external_dependency_signal),
+            "thin_wrapper_risk": diagnostic_signal_json(report.thin_wrapper_risk),
+            "token_saving_risk": diagnostic_signal_json(report.token_saving_risk),
+        },
+        "counts": {
+            "eligible_code_units": report.eligible_code_units,
+            "family_count": report.family_count,
+            "family_member_count": report.family_member_count,
+            "covered_code_units": report.covered_code_units,
+        },
         "metric_kinds": ["MEASURED", "DERIVED", "ESTIMATED", "CAUSAL_EXPERIMENT"],
         "token_savings": null,
         "context_compression_ratio": null,
-        "guidance": "run repogrammar index after metrics collection is implemented",
+        "interpretation": report.interpretation,
+        "claim": "diagnostic only; token saving depends on repeated repo-local patterns and is not measured token savings",
     }))
+}
+
+fn diagnostic_signal_json(signal: DiagnosticSignal) -> serde_json::Value {
+    match signal {
+        DiagnosticSignal::Unknown => serde_json::Value::Null,
+        _ => json!(signal.as_str()),
+    }
+}
+
+fn optional_ratio_human(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.3}"))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn handle_telemetry(rest: &[String]) -> CliOutput {
@@ -1535,6 +1756,8 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 if options.target.is_none() {
                     validate_query_target(value).map_err(|error| format!("target {error}"))?;
                     options.target = Some(value.to_string());
+                } else {
+                    return Err(format!("unexpected positional argument: {value}"));
                 }
                 index += 1;
             }
@@ -2390,7 +2613,16 @@ mod tests {
             target: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
-            if mode == FamilyLookupMode::FuzzyQuery && target == Some("src/routes/a.ts") {
+            let matched = match mode {
+                FamilyLookupMode::FuzzyQuery => target == Some("src/routes/a.ts"),
+                FamilyLookupMode::ExactFamilyId => {
+                    target == Some("family:typescript:express_route:express")
+                }
+                FamilyLookupMode::ExactMemberId => {
+                    target == Some("unit:src/routes/a.ts#express_route:get:0-20:1")
+                }
+            };
+            if matched {
                 Ok(FamilyLookupReport::Found(Self::detail()))
             } else {
                 Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -2406,6 +2638,27 @@ mod tests {
                     }],
                 }))
             }
+        }
+
+        fn repo_shape_diagnostics(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
+            Ok(RepoShapeDiagnosticsReport {
+                active_generation: "gen-000001".to_string(),
+                eligible_code_units: 4,
+                family_count: 1,
+                family_member_count: 3,
+                covered_code_units: 3,
+                local_pattern_density: Some(0.75),
+                family_support_coverage: Some(0.75),
+                abstention_rate: Some(0.25),
+                external_dependency_signal: DiagnosticSignal::Unknown,
+                thin_wrapper_risk: DiagnosticSignal::Low,
+                token_saving_risk: DiagnosticSignal::Low,
+                interpretation:
+                    "RepoGrammar can provide integration-pattern context when repeated local patterns exist; third-party-heavy or thin-wrapper repositories may see lower token-saving potential.",
+            })
         }
     }
 
@@ -2889,6 +3142,7 @@ mod tests {
         let over_target = "x".repeat(crate::application::query::MAX_QUERY_TARGET_BYTES + 1);
         assert!(parse_query_options(&[over_target]).is_err());
         assert!(parse_query_options(&["contains\nnewline".to_string()]).is_err());
+        assert!(parse_query_options(&["src/a.py".to_string(), "src/b.py".to_string()]).is_err());
     }
 
     #[test]
@@ -2913,6 +3167,61 @@ mod tests {
                 matches!(command, "files" | "units")
             );
         }
+    }
+
+    #[test]
+    fn stats_json_reports_repo_shape_diagnostics_without_token_savings_claim() {
+        let workspace = TempWorkspace::new("cli-stats-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output =
+            run_with_context_and_runtime(["stats", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
+        assert_eq!(value["command"], "stats");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(
+            value["metrics"]["local_pattern_density"].as_f64(),
+            Some(0.75)
+        );
+        assert_eq!(
+            value["metrics"]["family_support_coverage"].as_f64(),
+            Some(0.75)
+        );
+        assert_eq!(value["metrics"]["abstention_rate"].as_f64(), Some(0.25));
+        assert_eq!(value["metrics"]["external_dependency_signal"], Value::Null);
+        assert_eq!(value["metrics"]["thin_wrapper_risk"], "low");
+        assert_eq!(value["metrics"]["token_saving_risk"], "low");
+        assert_eq!(value["token_savings"], Value::Null);
+        assert!(value["claim"]
+            .as_str()
+            .expect("claim")
+            .contains("not measured token savings"));
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn stats_json_uses_fallback_without_active_index() {
+        let workspace = TempWorkspace::new("cli-stats-missing-index");
+        let env = |_: &str| None;
+
+        let output = run_with_context(["stats", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("stats fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(fallback["reason"], "repository is not initialized");
+        assert_eq!(fallback["guidance"], "run repogrammar init");
+        assert_eq!(fallback["command"], "stats");
+        assert_eq!(fallback["implemented"], true);
     }
 
     #[test]
@@ -2970,8 +3279,33 @@ mod tests {
         );
         assert_eq!(value["output"]["mode"], "compact");
         assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
+        assert!(
+            value["output"]["estimated_read_plan_tokens"]
+                .as_u64()
+                .expect("read plan tokens")
+                > 0
+        );
         assert_eq!(value["output"]["source_snippets_included"], false);
         assert!(value["evidence"].as_array().expect("evidence").is_empty());
+        assert_eq!(value["read_plan"]["source_snippets_included"], false);
+        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
+        assert_eq!(
+            value["read_plan"]["items"][0]["purpose"],
+            "target_body_required_for_edit"
+        );
+        assert_eq!(value["read_plan"]["items"][0]["path"], "src/routes/a.ts");
+        assert_eq!(value["read_plan"]["items"][0]["start_byte"], 0);
+        assert_eq!(value["read_plan"]["items"][0]["end_byte"], 20);
+        assert_eq!(value["read_plan"]["items"][0]["start_line"], Value::Null);
+        assert_eq!(value["read_plan"]["items"][0]["end_line"], Value::Null);
+        assert_eq!(
+            value["read_plan"]["items"][0]["content_hash"],
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(
+            value["read_plan"]["items"][0]["source_snippets_included"],
+            false
+        );
         assert_eq!(value["unknowns"][0]["reason"], "FrameworkMagic");
 
         let human = run_with_context_and_runtime(
@@ -2984,6 +3318,10 @@ mod tests {
         assert!(!human.stdout.contains("evidence:"));
         assert!(human.stdout.contains("evidence_mode: compact"));
         assert!(human.stdout.contains("source_snippets: not_included"));
+        assert!(human.stdout.contains("Suggested source spans to read"));
+        assert!(human
+            .stdout
+            .contains("read: target_body_required_for_edit\tpath: src/routes/a.ts"));
 
         let explicit_compact = run_with_context_and_runtime(
             [
@@ -3004,6 +3342,49 @@ mod tests {
         assert_eq!(value["output"]["mode"], "compact");
         assert_eq!(value["output"]["token_budget"], 1);
         assert!(value["evidence"].as_array().expect("evidence").is_empty());
+        assert_eq!(
+            value["read_plan"]["items"][0]["purpose"],
+            "target_body_required_for_edit"
+        );
+    }
+
+    #[test]
+    fn family_explain_and_check_json_include_metadata_only_read_plan() {
+        let workspace = TempWorkspace::new("cli-family-read-plan-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        for (command, target, requires_source) in [
+            ("family", "family:typescript:express_route:express", false),
+            ("explain", "src/routes/a.ts", true),
+            ("check", "src/routes/a.ts", true),
+        ] {
+            let output = run_with_context_and_runtime(
+                [command, target, "--json"],
+                workspace.path(),
+                &env,
+                &runtime,
+            );
+
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
+            assert_eq!(value["command"], command);
+            assert_eq!(value["read_plan"]["source_snippets_included"], false);
+            assert_eq!(
+                value["read_plan"]["requires_source_before_edit"],
+                requires_source
+            );
+            assert!(!value["read_plan"]["items"]
+                .as_array()
+                .expect("read plan items")
+                .is_empty());
+            assert_eq!(value["read_plan"]["items"][0]["path"], "src/routes/a.ts");
+            assert!(!output
+                .stdout
+                .contains(workspace.path().to_string_lossy().as_ref()));
+            assert!(!output.stdout.contains("export const"));
+        }
     }
 
     #[test]
@@ -3047,7 +3428,11 @@ mod tests {
         assert_eq!(value["output"]["missing_claims"], json!([]));
         assert_eq!(value["output"]["budget_satisfied"], false);
         assert_eq!(value["output"]["source_snippets_included"], false);
+        assert_eq!(value["read_plan"]["source_snippets_included"], false);
+        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
+        assert_eq!(value["read_plan"]["budget_satisfied"], false);
         assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
+        assert_eq!(value["read_plan"]["items"][0]["path"], "src/routes/a.ts");
         assert_eq!(
             value["evidence"][0]["covered_claims"],
             json!(["canonical", "support"])
@@ -3117,6 +3502,7 @@ mod tests {
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
         assert_eq!(value["output"]["mode"], "deep");
         assert_eq!(value["output"]["source_snippets_included"], false);
+        assert_eq!(value["read_plan"]["source_snippets_included"], false);
         assert_eq!(value["evidence"][0]["path"], "src/routes/a.ts");
     }
 
@@ -3160,6 +3546,8 @@ mod tests {
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("check JSON");
         assert_eq!(value["command"], "check");
         assert_eq!(value["status"], "CONTEXT_ONLY");
+        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
+        assert_eq!(value["read_plan"]["source_snippets_included"], false);
         assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
         assert_eq!(
             value["check"]["reason"],
@@ -4442,41 +4830,26 @@ mod tests {
         assert_eq!(run(["status"]).status, 0);
         assert_eq!(run(["doctor"]).status, 0);
         let stats = run(["stats"]);
-        assert_eq!(stats.status, 0);
-        assert!(stats.stdout.contains("metrics unavailable"));
-        assert!(stats.stdout.contains("CAUSAL_EXPERIMENT"));
+        assert_eq!(stats.status, 2);
+        assert!(stats.stdout.is_empty());
+        assert!(stats.stderr.contains("FALLBACK_TO_CODE_SEARCH"));
+        assert!(stats.stderr.contains("repository is not initialized"));
         assert_eq!(run(["telemetry", "status"]).status, 0);
     }
 
     #[test]
-    fn stats_json_is_parseable_deferred_metrics_contract() {
+    fn stats_json_is_parseable_missing_index_fallback() {
         let output = run(["stats", "--json"]);
 
-        assert_eq!(output.status, 0);
-        assert!(output.stderr.is_empty());
-        let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("stats JSON");
         assert_eq!(value["command"], "stats");
-        assert_eq!(value["status"], "deferred");
-        assert_eq!(value["implemented"], false);
-        assert_eq!(value["metrics"].as_array().expect("metrics").len(), 0);
-        assert_eq!(value["token_savings"], Value::Null);
-        assert_eq!(value["context_compression_ratio"], Value::Null);
-        assert_eq!(
-            value["metric_kinds"]
-                .as_array()
-                .expect("metric kinds")
-                .iter()
-                .map(Value::as_str)
-                .collect::<Vec<_>>(),
-            vec![
-                Some("MEASURED"),
-                Some("DERIVED"),
-                Some("ESTIMATED"),
-                Some("CAUSAL_EXPERIMENT")
-            ]
-        );
-        let serialized = output.stdout;
-        assert!(!serialized.contains("token savings\":"));
+        assert_eq!(value["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["reason"], "repository is not initialized");
+        assert_eq!(value["guidance"], "run repogrammar init");
+        let serialized = output.stderr;
         assert!(!serialized.contains("/Users/"));
         assert!(!serialized.contains("src/"));
     }

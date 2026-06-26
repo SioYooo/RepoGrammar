@@ -48,13 +48,17 @@ analysis rules.
   EC-MVFI-lite support gate has enough compatible evidence.
 - CLI and MCP family detail output defaults to compact mode and must not render
   evidence records unless `evidence` or `deep` mode is explicitly selected.
-  Current `deep` mode is metadata-only and must report that source snippets are
-  not included until a safe source-span rendering contract exists.
+  All matched modes include metadata-only read plans with repo-relative paths,
+  strict content hashes, byte ranges, and no source text. Current `deep` mode is
+  metadata-only and must report that source snippets are not included until a
+  safe source-span rendering contract exists.
 - Evidence/deep output may report greedy selector coverage metadata. Stored
   family evidence must carry explicit `covered_claims` labels, and selectors
   must not infer claim coverage from free-text notes or record order. The
-  current builder emits only `canonical` and `support`; requested variation or
-  exception coverage stays missing until explicit model links exist.
+  current builder emits `canonical`, `support`, and one narrow Python
+  `variation` label when exact-compatible framework-anchor support targets
+  differ inside an already-ready family; broader variation or exception
+  coverage stays missing until explicit model links exist.
 - `index` and `sync` must acquire `.repogrammar/locks/index.lock` before
   discovery, source reads, generation preparation, validation, and activation.
   They must clean up partial lock metadata writes and only remove the lock

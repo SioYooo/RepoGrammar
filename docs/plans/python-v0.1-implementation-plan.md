@@ -204,13 +204,19 @@ Validation gate: human and JSON outputs distinguish fallback, stale evidence,
 typed `UNKNOWN`, `CONTEXT_ONLY`, and confident family classifications.
 
 Current slice: CLI and MCP now share compact/evidence/deep output selection for
-stored family evidence metadata. `deep` is still metadata-only and reports no
-source snippets until a safe source-span reader is implemented. The current
-builder can link one narrow Python variation evidence record when an
-already-ready family has multiple exact-compatible framework-anchor support
-targets. It can also emit metadata-only variation slots when parser-context
-profiles differ inside an already-supported Python family; broader variation
-evidence, medoid, and exception evidence remain deferred.
+stored family evidence metadata and include metadata-only read plans for matched
+families. Read plans identify target, canonical, support, and
+variation/exception spans by repo-relative path, strict content hash, byte
+range, and purpose without returning source snippets; line ranges remain `null`
+until a safe source-span reader is implemented. `repogrammar stats --json`
+reports repo-shape diagnostics for local pattern density, family support
+coverage, abstention rate, and thin-wrapper/token-saving risk without claiming
+measured token savings. The current builder can link one narrow Python
+variation evidence record when an already-ready family has multiple
+exact-compatible framework-anchor support targets. It can also emit
+metadata-only variation slots when parser-context profiles differ inside an
+already-supported Python family; broader variation evidence, medoid, exception
+evidence, and source-span rendering remain deferred.
 
 ### Phase P8: Optional Observed Runtime Evidence
 

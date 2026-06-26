@@ -123,7 +123,7 @@ Python `.py` discovery metadata plus syntax-only code-unit records,
 CodeUnit-derived IR nodes, and conservative IR containment edges, then activates
 `.repogrammar/current-generation` after validation. It does not yet create a
 top-level `.repogrammar/repogrammar.sqlite`, telemetry queues, freshness
-manifests, or family-evidence query execution. The current storage adapter has
+manifests, or safe source-span rendering. The current storage adapter has
 generation-scoped family tables and a FamilyStore port. The product `index` and
 `sync` path now invokes a conservative EC-MVFI-lite builder before activation,
 but that builder writes family rows only when compatible framework-role
@@ -144,8 +144,10 @@ facts and cannot prove membership. Root `pyproject.toml` may be indexed as a
 metadata or typed project-config `UNKNOWN` records may be stored, and they are
 blocked from family-claim input. The CLI can
 read the active generation for `files`, `units`, and FamilyStore-backed
-pattern-family commands. Raw structural IR and semantic-fact read paths remain
-internal. Active-generation reads
+pattern-family commands. FamilyStore-backed reads can render metadata-only
+evidence and read plans, but they still do not render source snippets or
+absolute paths. Raw structural IR and semantic-fact read paths remain internal.
+Active-generation reads
 open one generation read-only, require a regular `current-generation` pointer,
 validate the generation schema and health, and recheck stored repo-relative
 paths, strict content hashes, languages, unit ids, byte ranges, IR node/edge
@@ -357,9 +359,9 @@ file size, IR node references to same-generation code units, IR edge references
 to same-generation IR nodes, family/member/slot/evidence generation binding,
 family-evidence presence for non-`UNKNOWN` family classifications, and
 validation before activation.
-The current storage schema version is `4`. Existing pre-release schema `1`,
-`2`, and `3` generation databases are treated as stale and must be rebuilt
-rather than silently upgraded in place.
+The current storage schema version is `5`. Existing pre-release schema `1`,
+`2`, `3`, and `4` generation databases are treated as stale and must be
+rebuilt rather than silently upgraded in place.
 The database must later store repository revision, worktree hash, language
 adapter versions, freshness metadata, canonical templates, exception records,
 and richer provenance once those producers exist. Searchable source evidence

@@ -16,8 +16,9 @@ use repogrammar::application::install::{
 };
 use repogrammar::application::query::{
     list_code_units, list_families_with_freshness, list_indexed_files,
-    lookup_family_with_freshness, FamilyEvidenceFreshnessRequest, FamilyListReport,
-    FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    lookup_family_with_freshness, repo_shape_diagnostics, FamilyEvidenceFreshnessRequest,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, RepoShapeDiagnosticsReport,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -198,6 +199,14 @@ impl CliRuntime for ProductCliRuntime {
             target,
             mode,
         )
+    }
+
+    fn repo_shape_diagnostics(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        repo_shape_diagnostics(&store, &store)
     }
 
     fn install_agent_integration(
@@ -1077,6 +1086,7 @@ mod tests {
         assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
         assert_eq!(value["output"]["source_snippets_included"], false);
         assert!(value["evidence"].as_array().expect("evidence").is_empty());
+        assert_python_read_plan(command, value, case);
         assert_eq!(value["unknowns"][0]["reason"], "FrameworkMagic");
         assert_eq!(value["unknowns"][0]["class"], "non_blocking_unknown");
         let members = value["members"].as_array().expect("members");
@@ -1112,6 +1122,7 @@ mod tests {
             value["output"]["selection_strategy"],
             "greedy_marginal_coverage_v1"
         );
+        assert_python_read_plan(command, value, case);
         assert_eq!(
             value["output"]["covered_claims"],
             serde_json::json!(["canonical", "support"])
@@ -1133,6 +1144,38 @@ mod tests {
         );
     }
 
+    fn assert_python_read_plan(command: &str, value: &Value, case: PythonExactAnchorSmokeCase) {
+        let read_plan = &value["read_plan"];
+        assert_eq!(read_plan["source_snippets_included"], false);
+        assert_eq!(
+            read_plan["requires_source_before_edit"],
+            command != "family"
+        );
+        assert!(
+            read_plan["estimated_tokens"]
+                .as_u64()
+                .expect("read plan tokens")
+                > 0
+        );
+        let items = read_plan["items"].as_array().expect("read plan items");
+        assert!(!items.is_empty());
+        let first = &items[0];
+        assert_eq!(first["path"], case.evidence_path);
+        assert_repo_relative_json_path(&first["path"]);
+        assert_content_hash_json(&first["content_hash"]);
+        assert!(
+            first["start_byte"].as_u64().expect("start") < first["end_byte"].as_u64().expect("end")
+        );
+        assert!(
+            first["start_line"].is_null(),
+            "line ranges are intentionally unavailable until source-span rendering exists"
+        );
+        assert!(first["end_line"].is_null());
+        assert_eq!(first["source_snippets_included"], false);
+        assert!(!value.to_string().contains("def "));
+        assert!(!value.to_string().contains("/tmp/"));
+    }
+
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
         assert_eq!(value["command"], command);
         assert_eq!(value["status"], "UNKNOWN");
@@ -1152,6 +1195,10 @@ mod tests {
         assert!(
             value.get("check").is_none(),
             "stale output must not include check"
+        );
+        assert!(
+            value.get("read_plan").is_none(),
+            "stale output must not include read_plan"
         );
         assert_eq!(value["unknowns"][0]["class"], "blocking_unknown");
         assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
@@ -1407,6 +1454,23 @@ mod tests {
             assert_eq!(doctor_json["command"], "doctor");
             assert_eq!(doctor_json["checks"]["storage"], "available");
             assert!(doctor_json["checks"].get("schema_version").is_none());
+
+            if *fixture == "low-support" {
+                let stats =
+                    run_with_runtime(cli_args("stats", workspace.path(), &["--json"]), &runtime);
+                let stats_json = parse_machine_output("stats", &stats, &workspace);
+                assert_eq!(stats_json["status"], "ok");
+                assert_eq!(stats_json["token_savings"], Value::Null);
+                assert!(
+                    stats_json["counts"]["eligible_code_units"]
+                        .as_u64()
+                        .unwrap_or_default()
+                        > 0,
+                    "low-support fixture should still have analyzable Python units"
+                );
+                assert_eq!(stats_json["counts"]["covered_code_units"], 0);
+                assert_eq!(stats_json["metrics"]["token_saving_risk"], "high");
+            }
         }
     }
 
@@ -1929,6 +1993,28 @@ mod tests {
                 "DOMINANT_PATTERN"
             );
             assert_eq!(families_json["families"][0]["support"], 3);
+            let stats =
+                run_with_runtime(cli_args("stats", workspace.path(), &["--json"]), &runtime);
+            let stats_json = parse_machine_output("stats", &stats, &workspace);
+            assert_eq!(stats_json["status"], "ok");
+            assert!(
+                stats_json["metrics"]["local_pattern_density"]
+                    .as_f64()
+                    .expect("known local pattern density")
+                    > 0.0
+            );
+            assert!(
+                stats_json["metrics"]["family_support_coverage"]
+                    .as_f64()
+                    .expect("known family support coverage")
+                    > 0.0
+            );
+            assert!(stats_json["metrics"]["token_saving_risk"].is_string());
+            assert_eq!(
+                stats_json["metrics"]["external_dependency_signal"],
+                Value::Null
+            );
+            assert_eq!(stats_json["token_savings"], Value::Null);
 
             let family = run_with_runtime(
                 cli_args("family", workspace.path(), &[&family_id, "--json"]),

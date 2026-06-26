@@ -97,7 +97,9 @@ allowed.
   find/explain/check lookup, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
   mode behavior, target and token-budget validation, greedy evidence coverage
-  metadata, missing variation/exception coverage reporting, JSON/human CLI output,
+  metadata, metadata-only read plans with repo-relative paths, content hashes,
+  byte ranges, null line ranges until safe source-span rendering exists,
+  missing variation/exception coverage reporting, JSON/human CLI output,
   advisory `check` behavior, and absence of source snippets or absolute paths.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
@@ -106,7 +108,8 @@ allowed.
   `check_conformance` with `CONTEXT_ONLY` context success when conformance is
   unproven, exact `show_family` target handling, compact/evidence/deep output
   mode serialization, target and token-budget validation, metadata-only greedy
-  evidence selection, missing variation/exception coverage reporting, JSON-RPC
+  evidence selection, metadata-only read plans for all supported operations,
+  missing variation/exception coverage reporting, JSON-RPC
   initialize/tools/list/tools/call/shutdown handling, and absence of source
   snippets or absolute paths.
 - Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
@@ -286,9 +289,11 @@ allowed.
 - UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
   irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
   metrics code.
-- Stats CLI tests must cover the human deferred message, parseable `--json`
-  output, allowed metric-kind vocabulary, null token-savings fields, unknown
-  option rejection, and absence of source/path leakage.
+- Stats CLI tests must cover parseable `--json` output, missing-index fallback,
+  allowed metric-kind vocabulary, local-pattern-density/family-coverage/
+  abstention diagnostics, thin-wrapper/token-saving risk, null measured
+  token-savings fields, unknown option rejection, and absence of source/path
+  leakage.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
   constructor rather than constructing impossible progress states directly.
 

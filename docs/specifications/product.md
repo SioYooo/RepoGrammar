@@ -43,6 +43,13 @@ local Python analysis for recurring repository pattern families in:
 - SQLAlchemy;
 - Pydantic.
 
+The v0.1 product claim is: RepoGrammar provides sound-by-abstention,
+metadata-only, repo-local Python implementation/integration-family evidence and
+read planning for FastAPI, pytest, Pydantic, and SQLAlchemy. It can reduce
+coding-agent context acquisition cost when local repeated patterns exist, and it
+returns typed `UNKNOWN` when evidence is insufficient. This is not a claim of
+sound Python semantic analysis.
+
 The first Python implementation phase follows the claim-driven selective
 cascade in `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
 The implemented slice covers CPython `ast` structural candidates, path-derived
@@ -108,8 +115,8 @@ analysis, and default runtime tracing are deferred.
 - No automatic modification of user business code from pattern-family results.
 - No top-level v0.1 `callers`, `callees`, `impact`, `affected`, `node`, or
   `explore` commands.
-- No production-readiness or token-savings claims until measured evidence
-  exists.
+- No production-readiness claims outside the scoped v0.1 Python family/read-plan
+  contract, and no token-savings claims until measured evidence exists.
 - No mandatory CodeGraph dependency. CodeGraph may be considered only as an
   optional lower-layer provider, not as RepoGrammar's product identity.
 
@@ -140,14 +147,26 @@ Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default
 compact mode returns family summary, members, variation slots, and unknowns
-without evidence records or source snippets. Explicit evidence/deep modes may
-return selected repo-relative evidence metadata under a token budget. The
-current selector uses greedy marginal coverage over conservative metadata
-labels and reports missing requested coverage instead of inventing unsupported
-variation or exception evidence. The only current variation evidence link is
+without evidence records or source snippets. All matched family modes now
+return a metadata-only read plan that tells an agent which target, canonical,
+support, and variation/exception spans to inspect by repo-relative path,
+strict content hash, and byte range. The read plan reduces blind line-range
+expansion when graph/navigation tools omit key function bodies, but it does not
+eliminate the requirement to read target source before editing. Explicit
+evidence/deep modes may return selected repo-relative evidence metadata under a
+token budget. The current selector uses greedy marginal coverage over
+conservative metadata labels and reports missing requested coverage instead of
+inventing unsupported variation or exception evidence. The only current
+variation evidence link is
 Python exact-compatible framework-anchor target diversity inside an already
 ready family; exception evidence remains deferred. Deep mode is still
 metadata-only until a safe source-span rendering contract exists.
+
+`repogrammar stats --json` reports repo-shape diagnostics for local pattern
+density, family support coverage, abstention rate, and thin-wrapper/token-saving
+risk. These diagnostics explain when RepoGrammar can reduce context acquisition
+cost and when third-party-heavy or thin-wrapper repositories are unlikely to
+produce large savings. They are not measured token savings or causal claims.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

@@ -714,9 +714,14 @@ per estimated token cost, with these constraints:
 
 Current selector status: CLI and MCP share a deterministic metadata selector
 over stored `IndexedFamilyEvidenceRecord`s. `compact` returns no evidence
-records. `evidence` and `deep` run a greedy marginal-coverage selector over
-conservative metadata candidates and keep source snippets disabled. Evidence
-records carry schema-backed `covered_claims` labels from the allowlist
+records but still returns a metadata-only read plan. `evidence` and `deep` run
+a greedy marginal-coverage selector over conservative metadata candidates and
+keep source snippets disabled. The read plan recommends target, canonical,
+support, and variation/exception spans by repo-relative path, strict content
+hash, and byte range, with `source_snippets_included: false`. Line ranges are
+currently `null` because safe source-span rendering remains deferred; agents
+must read the target source body before editing. Evidence records carry
+schema-backed `covered_claims` labels from the allowlist
 `canonical`, `support`, `variation`, and `exception`; the selector consumes
 those labels and never infers coverage from free-text notes. The current builder
 emits `canonical` and `support`, plus one narrow Python `variation` evidence

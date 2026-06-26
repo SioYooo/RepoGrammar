@@ -213,6 +213,41 @@ pub enum FamilyLookupReport {
     Unknown(FamilyUnknownReport),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepoShapeDiagnosticsReport {
+    pub active_generation: String,
+    pub eligible_code_units: usize,
+    pub family_count: usize,
+    pub family_member_count: usize,
+    pub covered_code_units: usize,
+    pub local_pattern_density: Option<f64>,
+    pub family_support_coverage: Option<f64>,
+    pub abstention_rate: Option<f64>,
+    pub external_dependency_signal: DiagnosticSignal,
+    pub thin_wrapper_risk: DiagnosticSignal,
+    pub token_saving_risk: DiagnosticSignal,
+    pub interpretation: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSignal {
+    Low,
+    Medium,
+    High,
+    Unknown,
+}
+
+impl DiagnosticSignal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyQueryUnknown {
     pub class: UnknownClass,
@@ -287,6 +322,58 @@ pub struct SelectedFamilyEvidenceRecord {
     pub covered_claims: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReadPlanPurpose {
+    TargetBodyRequiredForEdit,
+    CanonicalEvidence,
+    SupportEvidence,
+    VariationGuard,
+    ExceptionGuard,
+    UnknownBlocker,
+    StaleEvidenceCheck,
+    OptionalContext,
+}
+
+impl ReadPlanPurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TargetBodyRequiredForEdit => "target_body_required_for_edit",
+            Self::CanonicalEvidence => "canonical_evidence",
+            Self::SupportEvidence => "support_evidence",
+            Self::VariationGuard => "variation_guard",
+            Self::ExceptionGuard => "exception_guard",
+            Self::UnknownBlocker => "unknown_blocker",
+            Self::StaleEvidenceCheck => "stale_evidence_check",
+            Self::OptionalContext => "optional_context",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadPlanItem {
+    pub purpose: ReadPlanPurpose,
+    pub path: String,
+    pub content_hash: crate::core::model::ContentHash,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_line: Option<usize>,
+    pub end_line: Option<usize>,
+    pub estimated_tokens: usize,
+    pub why: String,
+    pub source_required_before_edit: bool,
+    pub source_snippets_included: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadPlan {
+    pub items: Vec<ReadPlanItem>,
+    pub estimated_tokens: usize,
+    pub source_snippets_included: bool,
+    pub requires_source_before_edit: bool,
+    pub selection_strategy: &'static str,
+    pub budget_satisfied: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FamilyLookupMode {
     ExactFamilyId,
@@ -351,6 +438,63 @@ pub fn list_semantic_facts(
     Ok(IndexedSemanticFactsReport {
         active_generation: snapshot.generation_id,
         facts: snapshot.semantic_facts,
+    })
+}
+
+pub fn repo_shape_diagnostics(
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
+    let snapshot = index_store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    let active_families = family_store
+        .list_active_families()
+        .map_err(family_store_error)?;
+    let eligible_ids = snapshot
+        .units
+        .iter()
+        .filter(|unit| python_family_eligible_unit(unit))
+        .map(|unit| unit.id.clone())
+        .collect::<BTreeSet<_>>();
+    let eligible_code_units = eligible_ids.len();
+    let mut family_member_count = 0usize;
+    let mut covered_code_units = BTreeSet::new();
+    let mut family_count = 0usize;
+    for family in &active_families.families {
+        let Some(active_family) = family_store
+            .show_family(&family.family_id)
+            .map_err(family_store_error)?
+        else {
+            continue;
+        };
+        family_count += 1;
+        for member in active_family.members {
+            if eligible_ids.contains(&member.code_unit_id) {
+                family_member_count = family_member_count.saturating_add(1);
+                covered_code_units.insert(member.code_unit_id);
+            }
+        }
+    }
+    let local_pattern_density = ratio(family_member_count, eligible_code_units);
+    let family_support_coverage = ratio(covered_code_units.len(), eligible_code_units);
+    let abstention_rate = family_support_coverage.map(|coverage| (1.0 - coverage).max(0.0));
+    let token_saving_risk = risk_from_density(local_pattern_density);
+    let thin_wrapper_risk = risk_from_density(family_support_coverage);
+    Ok(RepoShapeDiagnosticsReport {
+        active_generation: snapshot.generation_id,
+        eligible_code_units,
+        family_count,
+        family_member_count,
+        covered_code_units: covered_code_units.len(),
+        local_pattern_density,
+        family_support_coverage,
+        abstention_rate,
+        external_dependency_signal: DiagnosticSignal::Unknown,
+        thin_wrapper_risk,
+        token_saving_risk,
+        interpretation:
+            "RepoGrammar can provide integration-pattern context when repeated local patterns exist; third-party-heavy or thin-wrapper repositories may see lower token-saving potential.",
     })
 }
 
@@ -513,6 +657,239 @@ pub fn select_family_evidence(
         source_snippets_included: false,
         evidence: selected.evidence,
     }
+}
+
+pub fn build_read_plan(
+    family: &FamilyDetailReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+) -> ReadPlan {
+    let candidates = read_plan_candidates(family, target, mode, options);
+    let selected = select_budgeted_read_plan(candidates, options.token_budget);
+    let estimated_tokens = selected.iter().map(|item| item.estimated_tokens).sum();
+    ReadPlan {
+        requires_source_before_edit: selected.iter().any(|item| item.source_required_before_edit),
+        source_snippets_included: false,
+        budget_satisfied: match options.token_budget {
+            Some(budget) => estimated_tokens <= budget,
+            None => true,
+        },
+        estimated_tokens,
+        selection_strategy: "deterministic_read_plan_v1",
+        items: selected,
+    }
+}
+
+fn read_plan_candidates(
+    family: &FamilyDetailReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+) -> Vec<ReadPlanItem> {
+    let mut candidates = Vec::new();
+    let target = target.map(str::trim).filter(|target| !target.is_empty());
+    if let Some(target_evidence) = target.and_then(|target| target_evidence(family, target, mode)) {
+        candidates.push(read_plan_item(
+            target_evidence,
+            ReadPlanPurpose::TargetBodyRequiredForEdit,
+            "read this target body before editing; family metadata is context only",
+            true,
+        ));
+    }
+
+    if let Some(canonical) = first_evidence_for_claim(family, "canonical") {
+        candidates.push(read_plan_item(
+            canonical,
+            ReadPlanPurpose::CanonicalEvidence,
+            "canonical source span supporting the family claim",
+            false,
+        ));
+    }
+    if let Some(support) = first_distinct_evidence_for_claim(family, "support", &candidates) {
+        candidates.push(read_plan_item(
+            support,
+            ReadPlanPurpose::SupportEvidence,
+            "additional supporting source span for contrast",
+            false,
+        ));
+    }
+    if options.include_variations || !family.variation_slots.is_empty() {
+        if let Some(variation) = first_distinct_evidence_for_claim(family, "variation", &candidates)
+        {
+            candidates.push(read_plan_item(
+                variation,
+                ReadPlanPurpose::VariationGuard,
+                "variation guard source span; verify before applying the family blindly",
+                false,
+            ));
+        }
+    }
+    if options.include_exceptions {
+        if let Some(exception) = first_distinct_evidence_for_claim(family, "exception", &candidates)
+        {
+            candidates.push(read_plan_item(
+                exception,
+                ReadPlanPurpose::ExceptionGuard,
+                "exception guard source span; verify before assuming conformance",
+                false,
+            ));
+        }
+    }
+    if !family.unknowns.is_empty() {
+        if let Some(unknown_guard) = first_distinct_evidence(family, &candidates) {
+            candidates.push(read_plan_item(
+                unknown_guard,
+                ReadPlanPurpose::UnknownBlocker,
+                "unknown guard source span; verify before upgrading this family context into an edit or conformance claim",
+                false,
+            ));
+        }
+    }
+    if candidates.is_empty() {
+        if let Some(first) = family.evidence.first() {
+            candidates.push(read_plan_item(
+                first,
+                ReadPlanPurpose::OptionalContext,
+                "optional family context span",
+                false,
+            ));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .fold(Vec::new(), |mut unique, candidate| {
+            if !unique
+                .iter()
+                .any(|item| same_read_plan_span(item, &candidate))
+            {
+                unique.push(candidate);
+            }
+            unique
+        })
+}
+
+fn select_budgeted_read_plan(
+    candidates: Vec<ReadPlanItem>,
+    token_budget: Option<usize>,
+) -> Vec<ReadPlanItem> {
+    let Some(budget) = token_budget else {
+        return candidates;
+    };
+    let mut selected = Vec::new();
+    let mut estimated_tokens = 0usize;
+    for candidate in candidates {
+        if selected.is_empty()
+            || estimated_tokens.saturating_add(candidate.estimated_tokens) <= budget
+        {
+            estimated_tokens = estimated_tokens.saturating_add(candidate.estimated_tokens);
+            selected.push(candidate);
+        }
+    }
+    selected
+}
+
+fn target_evidence<'a>(
+    family: &'a FamilyDetailReport,
+    target: &str,
+    mode: FamilyLookupMode,
+) -> Option<&'a IndexedFamilyEvidenceRecord> {
+    match mode {
+        FamilyLookupMode::ExactFamilyId => None,
+        FamilyLookupMode::ExactMemberId => family
+            .evidence
+            .iter()
+            .find(|evidence| evidence.code_unit_id == target),
+        FamilyLookupMode::FuzzyQuery => family.evidence.iter().find(|evidence| {
+            evidence.code_unit_id == target || path_matches_target(&evidence.path, target)
+        }),
+    }
+}
+
+fn first_evidence_for_claim<'a>(
+    family: &'a FamilyDetailReport,
+    claim: &str,
+) -> Option<&'a IndexedFamilyEvidenceRecord> {
+    family.evidence.iter().find(|evidence| {
+        evidence
+            .covered_claims
+            .iter()
+            .any(|covered| covered == claim)
+    })
+}
+
+fn first_distinct_evidence_for_claim<'a>(
+    family: &'a FamilyDetailReport,
+    claim: &str,
+    existing: &[ReadPlanItem],
+) -> Option<&'a IndexedFamilyEvidenceRecord> {
+    family.evidence.iter().find(|evidence| {
+        evidence
+            .covered_claims
+            .iter()
+            .any(|covered| covered == claim)
+            && !existing.iter().any(|item| {
+                item.path == evidence.path
+                    && item.start_byte == evidence.start_byte
+                    && item.end_byte == evidence.end_byte
+            })
+            && !existing.iter().any(|item| item.path == evidence.path)
+    })
+}
+
+fn first_distinct_evidence<'a>(
+    family: &'a FamilyDetailReport,
+    existing: &[ReadPlanItem],
+) -> Option<&'a IndexedFamilyEvidenceRecord> {
+    family.evidence.iter().find(|evidence| {
+        !existing.iter().any(|item| {
+            item.path == evidence.path
+                && item.start_byte == evidence.start_byte
+                && item.end_byte == evidence.end_byte
+        }) && !existing.iter().any(|item| item.path == evidence.path)
+    })
+}
+
+fn read_plan_item(
+    evidence: &IndexedFamilyEvidenceRecord,
+    purpose: ReadPlanPurpose,
+    why: &str,
+    source_required_before_edit: bool,
+) -> ReadPlanItem {
+    ReadPlanItem {
+        purpose,
+        path: evidence.path.clone(),
+        content_hash: evidence.content_hash.clone(),
+        start_byte: evidence.start_byte,
+        end_byte: evidence.end_byte,
+        start_line: None,
+        end_line: None,
+        estimated_tokens: estimated_read_plan_tokens(evidence, purpose, why),
+        why: why.to_string(),
+        source_required_before_edit,
+        source_snippets_included: false,
+    }
+}
+
+fn estimated_read_plan_tokens(
+    evidence: &IndexedFamilyEvidenceRecord,
+    purpose: ReadPlanPurpose,
+    why: &str,
+) -> usize {
+    let bytes = purpose.as_str().len()
+        + evidence.path.len()
+        + evidence.content_hash.as_str().len()
+        + evidence.code_unit_id.len()
+        + why.len()
+        + 48;
+    bytes.div_ceil(4).max(1)
+}
+
+fn same_read_plan_span(left: &ReadPlanItem, right: &ReadPlanItem) -> bool {
+    left.path == right.path
+        && left.start_byte == right.start_byte
+        && left.end_byte == right.end_byte
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -759,6 +1136,41 @@ fn family_matches_target(family: &ActiveFamily, target: &str, mode: FamilyLookup
 
 fn path_matches_target(path: &str, target: &str) -> bool {
     path == target || (target.contains('/') && path.ends_with(&format!("/{target}")))
+}
+
+fn python_family_eligible_unit(unit: &IndexedCodeUnitRecord) -> bool {
+    unit.language == "python"
+        && matches!(
+            unit.kind.as_str(),
+            "fastapi_route"
+                | "pytest_test"
+                | "pytest_fixture"
+                | "pydantic_model"
+                | "pydantic_settings"
+                | "sqlalchemy_model"
+                | "sqlalchemy_repository_method"
+        )
+}
+
+fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
+    if denominator == 0 {
+        None
+    } else {
+        Some(numerator as f64 / denominator as f64)
+    }
+}
+
+fn risk_from_density(density: Option<f64>) -> DiagnosticSignal {
+    let Some(density) = density else {
+        return DiagnosticSignal::Unknown;
+    };
+    if density >= 0.35 {
+        DiagnosticSignal::Low
+    } else if density >= 0.10 {
+        DiagnosticSignal::Medium
+    } else {
+        DiagnosticSignal::High
+    }
 }
 
 fn family_evidence_is_fresh(
@@ -1110,6 +1522,18 @@ mod tests {
         }
     }
 
+    fn indexed_python_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#{kind}:{index}"),
+            path: path.to_string(),
+            language: "python".to_string(),
+            kind: kind.to_string(),
+            start_byte: index * 10,
+            end_byte: index * 10 + 8,
+            content_hash: semantic_fact().content_hash,
+        }
+    }
+
     fn family_evidence(path: &str, index: usize, note: &str) -> IndexedFamilyEvidenceRecord {
         IndexedFamilyEvidenceRecord {
             evidence_id: format!("family-evidence:{index:06}"),
@@ -1140,6 +1564,26 @@ mod tests {
             variation_slots: Vec::new(),
             evidence,
             unknowns: Vec::new(),
+        }
+    }
+
+    fn family_store_with_members(members: Vec<IndexedFamilyMemberRecord>) -> FakeFamilyStore {
+        let family = ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+            },
+            members,
+            variation_slots: Vec::new(),
+            evidence: Vec::new(),
+        };
+        FakeFamilyStore {
+            active: ActiveFamilies {
+                generation_id: family.generation_id.clone(),
+                families: vec![family.family.clone()],
+            },
+            family: Some(family),
         }
     }
 
@@ -1607,6 +2051,160 @@ mod tests {
             vec!["canonical", "support"]
         );
         assert!(!selected.source_snippets_included);
+    }
+
+    #[test]
+    fn read_plan_marks_target_body_required_without_source_snippets() {
+        let detail = family_detail_with_evidence(vec![family_evidence(
+            "src/routes/a.ts",
+            0,
+            "canonical support evidence",
+        )]);
+
+        let read_plan = build_read_plan(
+            &detail,
+            Some("src/routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+            FamilyOutputOptions::default(),
+        );
+
+        assert_eq!(read_plan.items.len(), 1);
+        assert!(read_plan.requires_source_before_edit);
+        assert!(!read_plan.source_snippets_included);
+        assert!(read_plan.budget_satisfied);
+        let item = &read_plan.items[0];
+        assert_eq!(item.purpose, ReadPlanPurpose::TargetBodyRequiredForEdit);
+        assert_eq!(item.path, "src/routes/a.ts");
+        assert_eq!(item.content_hash, semantic_fact().content_hash);
+        assert_eq!(item.start_byte, 0);
+        assert_eq!(item.end_byte, 20);
+        assert_eq!(item.start_line, None);
+        assert_eq!(item.end_line, None);
+        assert!(item.source_required_before_edit);
+        assert!(!item.source_snippets_included);
+        assert!(item.estimated_tokens > 0);
+        let debug = format!("{read_plan:?}");
+        assert!(!debug.contains("function"));
+        assert!(!debug.contains("/repo"));
+    }
+
+    #[test]
+    fn read_plan_selection_is_deterministic_and_budget_bounded() {
+        let first = family_evidence("src/routes/a.ts", 0, "canonical support evidence");
+        let second = family_evidence("src/routes/b.ts", 1, "second support evidence");
+        let mut third = family_evidence("src/routes/c.ts", 2, "variation evidence");
+        third.covered_claims = vec!["variation".to_string()];
+        let mut detail = family_detail_with_evidence(vec![first, second, third]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:method".to_string(),
+            description: "method differs".to_string(),
+        }];
+        let options = FamilyOutputOptions {
+            evidence_mode: FamilyEvidenceMode::Evidence,
+            token_budget: Some(1),
+            include_variations: true,
+            include_exceptions: false,
+        };
+
+        let first_plan = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, options);
+        let second_plan = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, options);
+
+        assert_eq!(first_plan, second_plan);
+        assert_eq!(first_plan.items.len(), 1);
+        assert_eq!(
+            first_plan.items[0].purpose,
+            ReadPlanPurpose::CanonicalEvidence
+        );
+        assert_eq!(first_plan.items[0].path, "src/routes/a.ts");
+        assert!(first_plan.estimated_tokens > 1);
+        assert!(!first_plan.budget_satisfied);
+        assert!(!first_plan.source_snippets_included);
+    }
+
+    #[test]
+    fn read_plan_includes_metadata_only_unknown_guard_when_family_has_unknowns() {
+        let first = family_evidence("src/routes/a.ts", 0, "canonical support evidence");
+        let second = family_evidence("src/routes/b.ts", 1, "second support evidence");
+        let third = family_evidence("src/routes/c.ts", 2, "unknown guard evidence");
+        let mut detail = family_detail_with_evidence(vec![first, second, third]);
+        detail.unknowns = vec![FamilyQueryUnknown {
+            class: UnknownClass::NonBlocking,
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "family:typescript:express_route:express:runtime_equivalence"
+                .to_string(),
+            recovery: Some("add semantic-worker evidence".to_string()),
+        }];
+
+        let read_plan = build_read_plan(
+            &detail,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions::default(),
+        );
+
+        let unknown_item = read_plan
+            .items
+            .iter()
+            .find(|item| item.purpose == ReadPlanPurpose::UnknownBlocker)
+            .expect("family unknowns should add a source-backed read-plan guard");
+        assert_eq!(unknown_item.path, "src/routes/c.ts");
+        assert!(!unknown_item.source_required_before_edit);
+        assert!(!unknown_item.source_snippets_included);
+    }
+
+    #[test]
+    fn repo_shape_diagnostics_reports_local_pattern_density() {
+        let units = vec![
+            indexed_python_unit("app/a.py", "fastapi_route", 0),
+            indexed_python_unit("app/b.py", "fastapi_route", 1),
+            indexed_python_unit("app/c.py", "fastapi_route", 2),
+            indexed_python_unit("app/d.py", "fastapi_route", 3),
+        ];
+        let members = units
+            .iter()
+            .take(3)
+            .map(|unit| IndexedFamilyMemberRecord {
+                family_id: "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                code_unit_id: unit.id.clone(),
+                role: "framework:fastapi.route".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let index_store = FakeStore::new(Vec::new()).with_units(units);
+        let family_store = family_store_with_members(members);
+
+        let diagnostics =
+            repo_shape_diagnostics(&index_store, &family_store).expect("repo diagnostics");
+
+        assert_eq!(diagnostics.eligible_code_units, 4);
+        assert_eq!(diagnostics.family_count, 1);
+        assert_eq!(diagnostics.family_member_count, 3);
+        assert_eq!(diagnostics.covered_code_units, 3);
+        assert_eq!(diagnostics.local_pattern_density, Some(0.75));
+        assert_eq!(diagnostics.family_support_coverage, Some(0.75));
+        assert_eq!(diagnostics.abstention_rate, Some(0.25));
+        assert_eq!(diagnostics.token_saving_risk, DiagnosticSignal::Low);
+        assert_eq!(diagnostics.thin_wrapper_risk, DiagnosticSignal::Low);
+        assert_eq!(
+            diagnostics.external_dependency_signal,
+            DiagnosticSignal::Unknown
+        );
+    }
+
+    #[test]
+    fn repo_shape_diagnostics_abstains_when_no_eligible_python_units_exist() {
+        let index_store = FakeStore::new(Vec::new()).with_units(vec![indexed_unit("src/a.ts")]);
+        let family_store = FakeFamilyStore::empty();
+
+        let diagnostics =
+            repo_shape_diagnostics(&index_store, &family_store).expect("repo diagnostics");
+
+        assert_eq!(diagnostics.eligible_code_units, 0);
+        assert_eq!(diagnostics.local_pattern_density, None);
+        assert_eq!(diagnostics.family_support_coverage, None);
+        assert_eq!(diagnostics.abstention_rate, None);
+        assert_eq!(diagnostics.token_saving_risk, DiagnosticSignal::Unknown);
+        assert_eq!(diagnostics.thin_wrapper_risk, DiagnosticSignal::Unknown);
     }
 
     #[test]

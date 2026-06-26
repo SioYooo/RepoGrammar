@@ -32,7 +32,8 @@ cascade:
    needed;
 8. Python EC-MVFI-lite family induction with complete-link constrained
    clustering and Aroma-style template intersection;
-9. selective compact/evidence/deep output with token-budget evidence selection;
+9. selective compact/evidence/deep output with token-budget evidence selection
+   and metadata-only read plans;
 10. optional RightTyper-style observed evidence later, explicit opt-in only.
 
 Do not implement a hand-written Python parser, whole-program call graph, full
@@ -49,6 +50,11 @@ blocking unknown for the emitted claim.
 Future cross-checked or observed semantic certainty labels are not current Rust,
 protocol, CLI, MCP, or storage tokens. Until those layers change together,
 cross-check and observed-runtime details must remain in assumptions/provenance.
+
+Current matched family output is metadata-only. CLI and MCP may return
+repo-relative paths, strict content hashes, byte ranges, purpose labels,
+estimated token costs, and code-unit/family ids, but not source snippets or
+absolute paths. The target source body is still required reading before edits.
 
 Dynamic imports, monkey patching, unresolved decorators, ambiguous pytest
 fixtures, runtime dependency injection, missing dependencies, stale evidence,

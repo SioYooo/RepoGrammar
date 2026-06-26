@@ -217,14 +217,25 @@ configuration succeeds; `uninstall` removes only receipt-owned managed entries.
 
 ## Metrics commands
 
-`repogrammar stats` reports metric availability and measurement taxonomy. During
-bootstrap it does not read repository metrics, token counts, or family evidence.
-With `--json`, it must return a parseable deferred object with
-`implemented: false`, an empty `metrics` array, the allowed metric kinds
-`MEASURED`, `DERIVED`, `ESTIMATED`, and `CAUSAL_EXPERIMENT`, and `null` values
-for token savings and context compression ratio. It must not include paths,
-source snippets, query text, repository names, or any inferred token-savings
-claim.
+`repogrammar stats` reports repo-shape diagnostics for initialized repositories
+with an active readable generation. With `--json`, it must return a parseable
+object with `implemented: true`, the active generation, metric-kind vocabulary,
+`null` values for measured `token_savings` and
+`context_compression_ratio`, and diagnostic metrics:
+
+- `local_pattern_density`
+- `family_support_coverage`
+- `abstention_rate`
+- `external_dependency_signal`
+- `thin_wrapper_risk`
+- `token_saving_risk`
+
+These values are product diagnostics, not causal token-saving claims. If data
+is insufficient, individual values must be `null` or `unknown` rather than
+guessed. The output must not include source snippets, query text, repository
+names, or absolute paths. If repository state or the active index is missing,
+`stats --json` uses the same missing-index fallback shape as implemented
+inventory commands and keeps `implemented: true`.
 
 ## Disallowed top-level graph commands
 
@@ -342,13 +353,23 @@ and `check` may use fuzzy matching over supported query-safe path suffixes,
 exact member roles, and exact ids, but must not treat short substrings such as a
 framework name, classification label, or directory fragment as a successful
 family match. Query targets must be non-empty, at most 8192 bytes, and free of
-control characters. Matched family output defaults to `--mode compact`: family id,
-classification, support, members, variation slots, typed unknowns, selected
-output metadata, and no evidence records or source snippets. `--mode evidence`
-adds budgeted repo-relative evidence metadata: evidence id, family id,
-code-unit id, path, content hash, byte range, note, estimated token cost, and
-covered claim labels. `--token-budget <n>` validates a positive bounded integer and
-implies `--mode evidence` unless an explicit mode is provided. Evidence mode
+control characters. Matched family output defaults to `--mode compact`: family
+id, classification, support, members, variation slots, typed unknowns, selected
+output metadata, a metadata-only `read_plan`, and no evidence records or source
+snippets. `--mode evidence` adds budgeted repo-relative evidence metadata:
+evidence id, family id, code-unit id, path, content hash, byte range, note,
+estimated token cost, and covered claim labels. The shared read plan is present
+in compact, evidence, and deep outputs and contains suggested source spans to
+inspect before acting on the family result. Each read-plan item includes
+purpose, repo-relative path, strict content hash, byte range, optional line
+range, estimated token cost, a short reason, whether source is required before
+editing, and `source_snippets_included: false`. The current implementation does
+not derive line ranges because safe source-span rendering remains deferred, so
+line fields are `null` and byte ranges are authoritative metadata. The read
+plan must never include source text, absolute paths, or a claim that editing is
+safe without reading the target body. `--token-budget <n>` validates a positive
+bounded integer and implies `--mode evidence` unless an explicit mode is
+provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
 family evidence carries schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the selector
@@ -420,8 +441,12 @@ return missing-index fallback before an active generation exists, typed
 `UNKNOWN` when active family evidence is insufficient, and stored family detail
 when EC-MVFI-lite has written supported family rows. Stored family detail now
 uses compact/evidence/deep output modes. Compact is the default and omits
-evidence records; evidence and deep currently return selected metadata only and
-do not include source snippets. `serve` runs the read-only MCP
+evidence records; all modes include a metadata-only read plan; evidence and
+deep currently return selected metadata only and do not include source
+snippets. `stats` reads the active index/family substrate to report local
+pattern density, family support coverage, abstention rate, and
+thin-wrapper/token-saving risk without reporting measured token savings.
+`serve` runs the read-only MCP
 `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP

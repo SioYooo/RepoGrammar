@@ -109,13 +109,21 @@ FamilyStore-backed lookup path as the CLI rather than inventing a parallel
 contract.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
-unknowns, and output metadata without evidence records; `evidence` adds
-budgeted repo-relative evidence metadata selected by deterministic greedy
-marginal coverage per estimated token cost; `deep` is accepted only as an
-explicit detail request and remains metadata-only until a safe source-span
-rendering contract exists. Output metadata includes the selection strategy,
-estimated evidence tokens, covered claim labels, missing claim labels, and
-whether the rough budget was satisfied. Stored family evidence carries
+unknowns, output metadata, and a metadata-only `read_plan` without evidence
+records; `evidence` adds budgeted repo-relative evidence metadata selected by
+deterministic greedy marginal coverage per estimated token cost; `deep` is
+accepted only as an explicit detail request and remains metadata-only until a
+safe source-span rendering contract exists. The `read_plan` is returned for the
+existing `find_analogues`, `show_family`, `explain_deviation`, and
+`check_conformance` operations. It contains suggested target, canonical,
+support, and variation/exception spans by repo-relative path, strict content
+hash, byte range, estimated token cost, and purpose. Line ranges are currently
+`null` because safe source-span rendering is deferred. The read plan never
+includes source text or absolute paths and does not imply source edits are safe
+without reading the target body. Output metadata includes the selection
+strategy, estimated evidence tokens, estimated read-plan tokens, covered claim
+labels, missing claim labels, and whether the rough budget was satisfied.
+Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
 `support`, `variation`, and `exception`; selectors must consume those labels
 rather than infer coverage from notes or record order. The current family

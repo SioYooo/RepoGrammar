@@ -96,6 +96,16 @@
   `find`, `explain`, advisory `check`, token-budget auto evidence, explicit
   compact/evidence/deep metadata modes, MCP parity for supported operations,
   and stale source mutation/deletion returning `StaleEvidence` `UNKNOWN`.
+  Matched CLI and MCP family reads now also include metadata-only read plans
+  with repo-relative paths, strict content hashes, byte ranges, purpose labels,
+  estimated token costs, and `source_snippets_included: false`. Read plans mark
+  target source as required before edits, keep line ranges `null` until safe
+  source-span rendering exists, and are suppressed when stale or insufficient
+  evidence returns typed `UNKNOWN`.
+  `repogrammar stats --json` now reports repo-shape diagnostics for local
+  pattern density, family support coverage, abstention rate, and
+  thin-wrapper/token-saving risk without reporting measured token savings or
+  context compression ratios.
   FastAPI exact-anchor regression coverage now spans all supported
   FastAPI/APIRouter HTTP route methods (`delete`, `get`, `head`, `options`,
   `patch`, `post`, and `put`) and keeps `api_route`/WebSocket decorators
@@ -261,8 +271,9 @@
   ADR-0011's Python-first v0.1 target.
 - Pattern-family-first CLI command surface, with CodeGraph-style graph commands
   rejected as top-level v0.1 commands.
-- Stable deferred `stats --json` output that exposes metric-kind vocabulary
-  without reporting token savings or repository-derived metrics.
+- Stable `stats --json` output that exposes metric-kind vocabulary and
+  repo-shape diagnostics without reporting measured token savings or source
+  snippets.
 - Safe contracts for agent installation, initialization progress, metrics, and
   telemetry consent.
 - Repo-local lifecycle implementation for `init`, `uninit`, `status`,
