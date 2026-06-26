@@ -775,6 +775,12 @@ assert not any(
     and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
     for fact in alias_facts
 )
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=fastapi_dependency_target" in fact["assumptions"]
+    for fact in alias_facts
+)
 assert not any(
     fact["fact_kind"] == "SYMBOL"
     and "python_anchor_kind=fastapi_http_exception_status" in fact["assumptions"]
@@ -784,6 +790,71 @@ assert "@v1.get" not in json.dumps(alias_parse_messages)
 assert "response_model=" not in json.dumps(alias_parse_messages)
 assert "Depends(make_dependency" not in json.dumps(alias_parse_messages)
 assert "HTTPException(" not in json.dumps(alias_parse_messages)
+
+dependency_unknown_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dependency_unknowns.py",
+        "content_hash": "sha256:" + "c" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+def make_dependency():
+    return object()
+
+@router.get("/call")
+def call_dependency(current_user=Depends(make_dependency())):
+    return {}
+
+@router.get("/lambda")
+def lambda_dependency(current_user=Depends(lambda: object())):
+    return {}
+
+@router.get("/conditional")
+def conditional_dependency(current_user=Depends(make_dependency if True else None)):
+    return {}
+
+@router.get("/missing")
+def missing_dependency(current_user=Depends(missing_dep)):
+    return {}
+
+@router.get("/attribute")
+def attribute_dependency(current_user=Depends(plugins.current_user)):
+    return {}
+
+@router.get("/empty")
+def empty_dependency(current_user=Depends()):
+    return {}
+""",
+    }
+)
+dependency_unknown_facts = dependency_unknown_messages[0]["facts"]
+dependency_unknowns = [
+    fact
+    for fact in dependency_unknown_facts
+    if fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "RuntimeDependencyInjection"
+    and "affected_claim=fastapi_dependency_target" in fact["assumptions"]
+]
+assert len(dependency_unknowns) == 5
+assert not any(
+    fact["fact_kind"] == "SYMBOL"
+    and "python_anchor_kind=fastapi_dependency_target" in fact["assumptions"]
+    for fact in dependency_unknown_facts
+)
+assert sum(
+    1
+    for fact in dependency_unknown_facts
+    if fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "fastapi.Depends"
+) == 6
+serialized_dependency_unknowns = json.dumps(dependency_unknown_messages)
+assert "Depends(make_dependency" not in serialized_dependency_unknowns
+assert "lambda: object" not in serialized_dependency_unknowns
+assert "plugins.current_user" not in serialized_dependency_unknowns
 
 shadowed_alias_messages = run_worker(
     {

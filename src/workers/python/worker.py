@@ -854,6 +854,14 @@ def collect_assignment_roles(tree: ast.Module, aliases: dict[str, str]) -> dict[
     return assignments
 
 
+def top_level_defined_names(tree: ast.Module) -> set[str]:
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+
+
 def assignment_target_names(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Assign):
         targets = list(node.targets)
@@ -1020,6 +1028,7 @@ def collect_decorator_facts(
     subject_unit_id: str,
     aliases: dict[str, str],
     assignments: dict[str, str],
+    defined_names: set[str],
     facts: list[dict[str, Any]],
 ) -> None:
     for decorator in getattr(node, "decorator_list", []):
@@ -1565,6 +1574,7 @@ def collect_call_facts(
     aliases: dict[str, str],
     assignments: dict[str, str],
     parameter_roles: dict[str, str] | None,
+    defined_names: set[str],
     facts: list[dict[str, Any]],
 ) -> None:
     parameter_roles = parameter_roles or {}
@@ -1709,6 +1719,7 @@ def collect_call_facts(
                     subject_unit_id,
                     aliases,
                     local_assignments,
+                    defined_names,
                     facts,
                 )
             elif canonical == "fastapi.HTTPException":
@@ -1732,6 +1743,7 @@ def collect_fastapi_dependency_target_fact(
     subject_unit_id: str,
     aliases: dict[str, str],
     assignments: dict[str, str],
+    defined_names: set[str],
     facts: list[dict[str, Any]],
 ) -> None:
     dependency = call.args[0] if call.args else None
@@ -1744,6 +1756,37 @@ def collect_fastapi_dependency_target_fact(
         return
     name = static_reference_name(dependency)
     if not name:
+        start, end = node_range(starts, dependency)
+        add_fact(
+            facts,
+            unknown_fact(
+                subject_unit_id=subject_unit_id,
+                reason_code="RuntimeDependencyInjection",
+                affected_claim="fastapi_dependency_target",
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+            ),
+        )
+        return
+    root_name = name.split(".", 1)[0]
+    if root_name not in aliases and root_name not in assignments and root_name not in defined_names:
+        start, end = node_range(starts, dependency)
+        add_fact(
+            facts,
+            unknown_fact(
+                subject_unit_id=subject_unit_id,
+                reason_code="RuntimeDependencyInjection",
+                affected_claim="fastapi_dependency_target",
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+            ),
+        )
         return
     target_name = canonical_name(name, aliases, assignments)
     target = f"fastapi.dependency.{target_name}"
@@ -1982,6 +2025,7 @@ def analyze_source(
     )
     for item in import_facts:
         add_fact(facts, item)
+    defined_names = top_level_defined_names(tree)
     collect_module_identity_and_scope_facts(
         tree,
         path,
@@ -2040,6 +2084,7 @@ def analyze_source(
                 subject_unit_id,
                 aliases,
                 assignments,
+                defined_names,
                 facts,
             )
             if unit_by_node[id(item)]["kind"] == "fastapi_route":
@@ -2080,6 +2125,7 @@ def analyze_source(
                 aliases,
                 assignments,
                 collect_parameter_roles(item, aliases),
+                defined_names,
                 facts,
             )
         elif isinstance(item, ast.ClassDef):
@@ -2123,6 +2169,7 @@ def analyze_source(
                 subject_unit_id,
                 aliases,
                 assignments,
+                defined_names,
                 facts,
             )
             instance_attribute_roles = collect_instance_attribute_roles(item, aliases)
@@ -2143,6 +2190,7 @@ def analyze_source(
                     child_unit_id,
                     aliases,
                     assignments,
+                    defined_names,
                     facts,
                 )
                 collect_call_facts(
@@ -2156,6 +2204,7 @@ def analyze_source(
                     aliases,
                     assignments,
                     parameter_roles,
+                    defined_names,
                     facts,
                 )
 

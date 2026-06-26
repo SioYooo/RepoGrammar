@@ -119,9 +119,13 @@ The current implementation covers the first structural slice only:
   anchors;
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
-  static `Depends(get_db)` dependency target slots, `HTTPException(...)`, and
-  literal `HTTPException(status_code=...)` status-code effect slots, static
-  FastAPI request body and request-parameter marker slots for `Body`, `Path`,
+  static `Depends(get_db)` dependency target slots;
+- typed
+  `RuntimeDependencyInjection` `UNKNOWN` facts for dynamic dependency target
+  expressions such as `Depends(make_dependency())`;
+- FastAPI `HTTPException(...)`, literal `HTTPException(status_code=...)`
+  status-code effect slots, static FastAPI request body and request-parameter
+  marker slots for `Body`, `Path`,
   `Query`, `Header`, and `Cookie`, alias-aware
   pytest `fixture` decorators and `mark.parametrize` decorators plus literal
   parametrize arguments, and Pydantic model-member anchors for fields, field
@@ -183,7 +187,9 @@ The current implementation covers the first structural slice only:
   metadata-only, prove FastAPI request-shape and SQLAlchemy relationship/add
   auxiliary anchors remain metadata-only and blocked from claim-input readiness,
   prove dynamic-boundary facts remain typed `UNKNOWN`, blocked from claim-input
-  readiness, and absent from derived support,
+  readiness, and absent from derived support, including dynamic FastAPI
+  dependency-target expressions that affect only the dependency-target
+  sub-claim rather than route-family membership,
   prove supported MCP operations return the same family context,
   prove stale source mutation or deletion returns blocking `StaleEvidence`
   `UNKNOWN`, and keep the test-injected

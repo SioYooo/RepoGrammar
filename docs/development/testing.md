@@ -198,6 +198,7 @@ allowed.
   typed config `UNKNOWN`, semantic-worker-compatible project-mode repo-local
   import resolution for unique module-level matches, ambiguous or missing
   repo-local import `UNKNOWN`, `sys.path` mutation
+  `RuntimeDependencyInjection` `UNKNOWN`, dynamic FastAPI dependency-target
   `RuntimeDependencyInjection` `UNKNOWN`, dynamic import, dynamic call-target,
   dynamic decorator, and monkey-patch `UNKNOWN` facts through product indexing,
   persisted parser-origin structural

@@ -801,6 +801,7 @@ mod tests {
             "getattr(module",
             "decorator_factory(\"secret\")",
             "setattr(target",
+            "Depends(make_dependency",
             "return getattr",
         ] {
             assert!(
@@ -1416,7 +1417,11 @@ mod tests {
                 "api.py",
                 &["fastapi_route", "pydantic_model", "pytest_test"],
             ),
-            ("dynamic-unknown", "dynamic.py", &["function"]),
+            (
+                "dynamic-unknown",
+                "dynamic.py",
+                &["function", "fastapi_route"],
+            ),
             ("low-support", "lonely.py", &["fastapi_route"]),
         ];
         const QUERY_COMMANDS: &[&str] =
@@ -1550,6 +1555,7 @@ mod tests {
         for (reason_code, affected_claim) in [
             ("DynamicImport", "python_import_resolution"),
             ("RuntimeDependencyInjection", "python_import_resolution"),
+            ("RuntimeDependencyInjection", "fastapi_dependency_target"),
             ("FrameworkMagic", "python_call_target"),
             ("FrameworkMagic", "python_framework_identity"),
             ("MonkeyPatch", "python_call_target"),

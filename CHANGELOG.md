@@ -63,9 +63,12 @@
   Dynamic decorator factories now produce typed `FrameworkMagic` UNKNOWNs for
   `python_framework_identity`, and `setattr(...)` monkey-patching produces typed
   `MonkeyPatch` UNKNOWNs for `python_call_target`; neither path becomes family
-  evidence. The `dynamic-unknown` release fixture now covers dynamic import,
-  `sys.path` mutation, dynamic call target, dynamic decorator, and monkey-patch
-  boundaries through the product indexing/query path.
+  evidence. Dynamic FastAPI dependency target expressions such as
+  `Depends(make_dependency())` now produce typed `RuntimeDependencyInjection`
+  UNKNOWNs for the dependency-target sub-claim instead of silently disappearing.
+  The `dynamic-unknown` release fixture now covers dynamic import, `sys.path`
+  mutation, dynamic FastAPI dependency targets, dynamic call target, dynamic
+  decorator, and monkey-patch boundaries through the product indexing/query path.
   No-worker release smoke now covers direct FastAPI, FastAPI alias, pytest,
   Pydantic model/settings, SQLAlchemy model-field, and SQLAlchemy
   session/repository exact-anchor derived-support family paths without claiming

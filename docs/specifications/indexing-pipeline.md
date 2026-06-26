@@ -359,7 +359,10 @@ exact-match the canonical route-method table:
 `response_model=...`, static `Depends(get_db)` dependency-target, `Depends(...)`,
 and `HTTPException(...)` parser anchors, including literal status-code effect
 anchors, plus static FastAPI request body and request-parameter anchors, stay
-schema/context/effect metadata and do not prove membership support. Canonical
+schema/context/effect metadata and do not prove membership support. Dynamic
+FastAPI dependency target expressions become
+`RuntimeDependencyInjection` `UNKNOWN` for `fastapi_dependency_target`; they do
+not erase route-shape evidence and do not become family support. Canonical
 `pytest.mark.parametrize` decorator anchors can support pytest test families,
 but `pytest.parametrize.<name>` argument anchors remain context metadata and do
 not prove support. Pydantic field, field-type, `model_config`, nested `Config`,

@@ -2595,6 +2595,11 @@ mod tests {
             "python_call_target",
         ));
         facts.push(parser_unknown_fact_for_unit(
+            &eighth,
+            "RuntimeDependencyInjection",
+            "fastapi_dependency_target",
+        ));
+        facts.push(parser_unknown_fact_for_unit(
             &pytest_second,
             "PytestFixtureInjection",
             "pytest_fixture_binding",

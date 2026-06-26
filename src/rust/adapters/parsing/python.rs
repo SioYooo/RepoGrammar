@@ -1225,6 +1225,7 @@ fn python_affected_claim_is_supported(value: &str) -> bool {
         "python_import_resolution"
             | "python_call_target"
             | "python_framework_identity"
+            | "fastapi_dependency_target"
             | "pytest_fixture_binding"
             | "python_project_config"
     )
@@ -2142,6 +2143,144 @@ def list_users():
         }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("@v1.get"));
+    }
+
+    #[test]
+    fn cpython_frontend_marks_dynamic_fastapi_dependency_targets_unknown() {
+        let source = r#"
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+def make_dependency():
+    return object()
+
+@router.get("/dynamic")
+def dynamic_dependency(current_user=Depends(make_dependency())):
+    return {}
+
+@router.get("/lambda")
+def lambda_dependency(current_user=Depends(lambda: object())):
+    return {}
+
+@router.get("/conditional")
+def conditional_dependency(current_user=Depends(make_dependency if True else None)):
+    return {}
+
+@router.get("/missing")
+def missing_dependency(current_user=Depends(missing_dep)):
+    return {}
+
+@router.get("/attribute")
+def attribute_dependency(current_user=Depends(plugins.current_user)):
+    return {}
+
+@router.get("/empty")
+def empty_dependency(current_user=Depends()):
+    return {}
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert_eq!(
+            report
+                .semantic_facts
+                .iter()
+                .filter(|fact| {
+                    fact.kind == SemanticFactKind::ResolvedCall
+                        && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.Depends")
+                        && fact
+                            .assumptions
+                            .iter()
+                            .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency")
+                })
+                .count(),
+            6
+        );
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency_target")
+        }));
+        assert_eq!(
+            report
+                .semantic_facts
+                .iter()
+                .filter(|fact| {
+                    fact.kind == SemanticFactKind::Unknown
+                        && fact.target.as_ref().map(SymbolId::as_str)
+                            == Some("RuntimeDependencyInjection")
+                        && fact.assumptions.iter().any(|assumption| {
+                            assumption == "affected_claim=fastapi_dependency_target"
+                        })
+                })
+                .count(),
+            5
+        );
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("Depends(make_dependency"));
+        assert!(!debug.contains("lambda: object"));
+        assert!(!debug.contains("plugins.current_user"));
+    }
+
+    #[test]
+    fn cpython_frontend_preserves_static_fastapi_dependency_targets() {
+        let source = r#"
+from fastapi import APIRouter, Depends
+from app.dependencies import get_current_user
+
+router = APIRouter()
+
+def get_db():
+    return object()
+
+@router.get("/static")
+def static_dependency(db=Depends(get_db), current_user=Depends(get_current_user)):
+    return {}
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.Depends")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("RuntimeDependencyInjection")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=fastapi_dependency_target")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("fastapi.dependency.get_db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency_target")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("fastapi.dependency.app.dependencies.get_current_user")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_dependency_target")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("Depends(get_db"));
+        assert!(!debug.contains("Depends(get_current_user"));
     }
 
     #[test]

@@ -83,7 +83,10 @@ Some unknowns block only specific claims:
 - a stale dependency graph may block call-context evidence while preserving
   source-range evidence from the current file hash;
 - Python fixture injection may block test-behavior equivalence
-  while still allowing structural pytest test discovery.
+  while still allowing structural pytest test discovery;
+- dynamic FastAPI dependency target expressions may block the dependency-target
+  sub-claim while still allowing a route family when route membership has enough
+  independent exact-anchor support.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

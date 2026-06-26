@@ -1,6 +1,11 @@
 import importlib
 import sys
 
+from fastapi import APIRouter, Depends
+
+
+router = APIRouter()
+
 
 def decorator_factory(name: str):
     def inner(function):
@@ -20,3 +25,12 @@ def load_plugin(name: str, registry: dict[str, object], extra_path: str):
 def install_patch(target, method):
     setattr(target, method, object())
     return target
+
+
+def make_dependency():
+    return object()
+
+
+@router.get("/dynamic")
+def dynamic_dependency(current_user=Depends(make_dependency())):
+    return {"current_user": current_user}
