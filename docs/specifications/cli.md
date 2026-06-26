@@ -216,10 +216,12 @@ partial or unsupported agent configuration. `install` runs a read-only MCP
 self-test before native configuration and writes a managed receipt after native
 configuration succeeds; `uninstall` removes only receipt-owned managed entries.
 Dry-run install output reports the native MCP command shape for supported
-global Codex and Claude Code targets. Live `install --yes` without
-`--telemetry` or `--no-telemetry` asks for anonymous telemetry consent with a
-default-no `[y/N]` prompt in the product binary; non-interactive runners use the
-same default-no behavior. `--yes` itself never implies telemetry consent.
+global Codex and Claude Code targets. Live `install --yes` must not prompt for
+telemetry; if neither `--telemetry` nor `--no-telemetry` is provided,
+telemetry remains disabled. `--yes` itself never implies telemetry consent.
+Interactive telemetry prompts are allowed only for a future live install mode
+that runs without `--yes` and without explicit telemetry flags; current v0.1
+live writes are `--yes` gated.
 
 ## Metrics commands
 

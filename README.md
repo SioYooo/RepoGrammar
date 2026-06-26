@@ -183,8 +183,8 @@ Telemetry status reports rollup/queue/sent counts and whether an explicit
 upload would open a network connection; allowlisted uploads include only coarse
 experiment aggregate categories when paired measurements exist.
 Live install keeps telemetry independent from agent setup: `--yes` never
-implies telemetry consent, the product binary prompts with default-no `[y/N]`
-when no telemetry flag is supplied, and `--telemetry`/`--no-telemetry` remain
+implies telemetry consent, `install --yes` without telemetry flags does not
+prompt and keeps telemetry disabled, and `--telemetry`/`--no-telemetry` remain
 explicit overrides.
 `files` and `units` are limited to active file-manifest-only or syntax-only
 index metadata.

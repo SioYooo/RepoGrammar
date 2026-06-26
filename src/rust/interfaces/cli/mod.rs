@@ -151,8 +151,6 @@ impl CliRuntime for DeferredCliRuntime {
 }
 
 pub trait InstallTelemetryPrompt {
-    fn prompt_install_telemetry(&self, prompt: &str) -> Result<String, String>;
-
     fn prompt_experiment_consent(&self, _prompt: &str) -> Result<String, String> {
         Ok(String::new())
     }
@@ -161,37 +159,7 @@ pub trait InstallTelemetryPrompt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NonInteractiveInstallTelemetryPrompt;
 
-impl InstallTelemetryPrompt for NonInteractiveInstallTelemetryPrompt {
-    fn prompt_install_telemetry(&self, _prompt: &str) -> Result<String, String> {
-        Ok(String::new())
-    }
-}
-
-pub const INSTALL_TELEMETRY_PROMPT: &str = "\
-RepoGrammar can send anonymous aggregate telemetry.
-
-Default local diagnostics may be included only if telemetry is enabled.
-These diagnostics help measure pattern coverage, UNKNOWN rates, read-plan usage,
-and token-saving risk.
-
-Will send:
-- coarse usage buckets
-- repo-shape diagnostic buckets
-- read-plan count buckets
-- typed UNKNOWN/error-code buckets
-- RepoGrammar version, OS family, and anonymous install id
-
-Will never send:
-- source code or snippets
-- prompts or query text
-- file paths or repository names
-- symbol/function/class names
-- content hashes or byte ranges
-- raw targets
-- patches, diffs, or evidence text
-- credentials, environment variables, or raw error messages
-
-Enable anonymous telemetry? [y/N] ";
+impl InstallTelemetryPrompt for NonInteractiveInstallTelemetryPrompt {}
 
 pub const RECORD_EXISTING_EXPERIMENT_PROMPT: &str = "\
 This mode records token counts from sessions you already performed.
@@ -332,7 +300,7 @@ where
             handle_query(command, rest, current_dir, env_lookup, runtime)
         }
         [command, rest @ ..] if is_installer_command(command) => {
-            handle_installer(command, rest, current_dir, env_lookup, runtime, install_prompt)
+            handle_installer(command, rest, current_dir, env_lookup, runtime)
         }
         [command, rest @ ..] if command == "stats" => {
             handle_stats(rest, current_dir, env_lookup, runtime)
@@ -1057,7 +1025,6 @@ fn handle_installer<F>(
     current_dir: &Path,
     env_lookup: &F,
     runtime: &impl CliRuntime,
-    install_prompt: &impl InstallTelemetryPrompt,
 ) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
@@ -1107,18 +1074,6 @@ where
                 format!("{command} live writes require --yes; rerun with --dry-run to inspect the safe integration plan\n"),
             );
         }
-        if command == "install"
-            && !request.telemetry_explicitly_configured
-            && !telemetry_env_disabled
-        {
-            match install_prompt.prompt_install_telemetry(INSTALL_TELEMETRY_PROMPT) {
-                Ok(response) => match parse_install_telemetry_prompt_response(&response) {
-                    Ok(enabled) => request.telemetry_enabled = enabled,
-                    Err(error) => return CliOutput::failure(2, format!("{error}\n")),
-                },
-                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
-            }
-        }
         let context = match install_execution_context(current_dir, env_lookup) {
             Ok(context) => context,
             Err(error) => return CliOutput::failure(2, format!("{error}\n")),
@@ -1166,11 +1121,6 @@ fn install_dry_run_native_plan(target: AgentTarget, scope: InstallScope) -> Vec<
                 .to_string(),
         })
         .collect()
-}
-
-fn parse_install_telemetry_prompt_response(response: &str) -> Result<bool, String> {
-    parse_default_no_prompt_response(response)
-        .map_err(|_| "telemetry prompt requires y/yes or n/no".to_string())
 }
 
 fn parse_default_no_prompt_response(response: &str) -> Result<bool, String> {
@@ -6414,7 +6364,7 @@ mod tests {
     }
 
     #[test]
-    fn install_telemetry_prompt_defaults_no_and_accepts_yes_or_no() {
+    fn install_yes_without_telemetry_flags_does_not_prompt_and_persists_disabled() {
         #[derive(Default)]
         struct InstallRuntime {
             seen_telemetry: std::cell::RefCell<Vec<bool>>,
@@ -6464,60 +6414,40 @@ mod tests {
             }
         }
 
-        struct Prompt {
-            response: &'static str,
-            prompts: std::cell::Cell<usize>,
-        }
+        struct Prompt;
 
-        impl InstallTelemetryPrompt for Prompt {
-            fn prompt_install_telemetry(&self, prompt: &str) -> Result<String, String> {
-                self.prompts.set(self.prompts.get() + 1);
-                assert!(prompt.contains("Enable anonymous telemetry? [y/N]"));
-                assert!(prompt.contains("Will never send:"));
-                Ok(self.response.to_string())
-            }
-        }
+        impl InstallTelemetryPrompt for Prompt {}
 
-        for (response, expected_enabled) in [("", false), ("yes", true), ("n", false)] {
-            let workspace = TempWorkspace::new(&format!("cli-install-prompt-{response}"));
-            let data_home = workspace.path().join("data-home");
-            let env = |key: &str| {
-                if key == "XDG_DATA_HOME" {
-                    Some(data_home.display().to_string())
-                } else {
-                    None
-                }
-            };
-            let runtime = InstallRuntime::default();
-            let prompt = Prompt {
-                response,
-                prompts: std::cell::Cell::new(0),
-            };
-
-            let output = run_with_context_runtime_prompt(
-                ["install", "--target", "codex", "--yes"],
-                workspace.path(),
-                &env,
-                &runtime,
-                &prompt,
-            );
-
-            assert_eq!(output.status, 0, "{output:?}");
-            assert_eq!(prompt.prompts.get(), 1);
-            assert_eq!(
-                runtime.seen_telemetry.borrow().as_slice(),
-                &[expected_enabled]
-            );
-            assert!(output.stdout.contains(if expected_enabled {
-                "telemetry=on"
+        let workspace = TempWorkspace::new("cli-install-yes-no-prompt");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
             } else {
-                "telemetry=off"
-            }));
-        }
+                None
+            }
+        };
+        let runtime = InstallRuntime::default();
+        let output = run_with_context_runtime_prompt(
+            ["install", "--target", "codex", "--yes"],
+            workspace.path(),
+            &env,
+            &runtime,
+            &Prompt,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.seen_telemetry.borrow().as_slice(), &[false]);
+        assert!(output.stdout.contains("telemetry=off"));
+
+        let status = run_with_context(["telemetry", "status", "--json"], workspace.path(), &env);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["enabled"], false);
     }
 
     #[test]
-    fn install_telemetry_prompt_rejects_invalid_response_before_writes() {
+    fn install_without_yes_refuses_before_prompt_or_writes() {
         struct InstallRuntime {
             delegated: std::cell::Cell<bool>,
         }
@@ -6558,13 +6488,9 @@ mod tests {
 
         struct Prompt;
 
-        impl InstallTelemetryPrompt for Prompt {
-            fn prompt_install_telemetry(&self, _prompt: &str) -> Result<String, String> {
-                Ok("maybe".to_string())
-            }
-        }
+        impl InstallTelemetryPrompt for Prompt {}
 
-        let workspace = TempWorkspace::new("cli-install-prompt-invalid");
+        let workspace = TempWorkspace::new("cli-install-no-yes-no-prompt");
         let data_home = workspace.path().join("data-home");
         let env = |key: &str| {
             if key == "XDG_DATA_HOME" {
@@ -6577,7 +6503,7 @@ mod tests {
             delegated: std::cell::Cell::new(false),
         };
         let output = run_with_context_runtime_prompt(
-            ["install", "--target", "codex", "--yes"],
+            ["install", "--target", "codex"],
             workspace.path(),
             &env,
             &runtime,
@@ -6585,9 +6511,7 @@ mod tests {
         );
 
         assert_eq!(output.status, 2);
-        assert!(output
-            .stderr
-            .contains("telemetry prompt requires y/yes or n/no"));
+        assert!(output.stderr.contains("live writes require --yes"));
         assert!(!runtime.delegated.get());
     }
 
@@ -7205,10 +7129,6 @@ mod tests {
         }
 
         impl InstallTelemetryPrompt for Prompt {
-            fn prompt_install_telemetry(&self, _prompt: &str) -> Result<String, String> {
-                unreachable!("experiment prompt test")
-            }
-
             fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
                 self.seen_prompt.replace(prompt.to_string());
                 Ok(self.response.to_string())
@@ -7270,10 +7190,6 @@ mod tests {
         }
 
         impl InstallTelemetryPrompt for Prompt {
-            fn prompt_install_telemetry(&self, _prompt: &str) -> Result<String, String> {
-                unreachable!("experiment prompt test")
-            }
-
             fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
                 self.seen_prompt.replace(prompt.to_string());
                 Ok("yes".to_string())

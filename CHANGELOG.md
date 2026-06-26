@@ -122,8 +122,8 @@
   no network upload or queue creation. Telemetry status now reports rollup
   counts, CI disablement, and whether explicit upload would open a network
   connection. Live install now keeps telemetry consent independent from agent
-  configuration: `--yes` alone does not enable telemetry, the product binary
-  prompts with default-no `[y/N]` when no telemetry flag is supplied, and
+  configuration: `--yes` alone does not enable telemetry, `install --yes`
+  without telemetry flags does not prompt and keeps telemetry disabled, and
   dry-run output names the planned native Codex/Claude Code MCP command shape.
   Local paired token
   experiments can now record baseline/treatment token counts through explicit

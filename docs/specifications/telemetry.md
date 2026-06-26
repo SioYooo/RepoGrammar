@@ -73,10 +73,11 @@ anonymous machine id in global user state. `repogrammar telemetry status`,
 is inspect-only and does not create a queue or rollup. Telemetry is off by
 default, `--yes` during install does not imply telemetry consent, `--telemetry`
 during live install persists anonymous telemetry only after agent installation
-succeeds, and live install without `--telemetry` or `--no-telemetry` prompts
-with default-no `[y/N]` in the product binary. `REPOGRAMMAR_TELEMETRY=0`,
-`DO_NOT_TRACK=1`, or CI forces effective telemetry off and skips consent
-prompting.
+succeeds, and live `install --yes` without `--telemetry` or `--no-telemetry`
+does not prompt and keeps telemetry disabled. Interactive telemetry prompts are
+allowed only for a future live install mode that runs without `--yes` and
+without explicit telemetry flags. `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`,
+or CI forces effective telemetry off and skips consent prompting.
 Telemetry status reports effective environment disablement, CI disablement,
 rollup/queue/sent counts, endpoint configuration, and whether an explicit
 upload would open a network connection.
@@ -92,6 +93,11 @@ cost.
 When telemetry is disabled, upload returns without opening a network
 connection. Upload is explicit only; no MCP request path performs telemetry
 network I/O.
+Telemetry upload must not add a heavy HTTP client, async runtime, background
+worker, or production ingestion dependency solely for v0.1 telemetry. If real
+HTTPS upload would require substantial dependency changes, keep the upload
+behind `TelemetryUploadTransport` with fake/mock transport tests and preserve
+`upload --dry-run` plus parseable no-endpoint fallback behavior.
 
 Repo-local telemetry state lives under `.repogrammar/telemetry/` and may hold
 coarse aggregate rollups, queue files, and upload receipts. It must not contain

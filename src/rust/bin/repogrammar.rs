@@ -60,10 +60,6 @@ struct ProductCliRuntime;
 struct ProductInstallTelemetryPrompt;
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
-    fn prompt_install_telemetry(&self, prompt: &str) -> Result<String, String> {
-        read_prompt_response(prompt)
-    }
-
     fn prompt_experiment_consent(&self, prompt: &str) -> Result<String, String> {
         read_prompt_response(prompt)
     }

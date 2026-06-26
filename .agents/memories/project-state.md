@@ -53,10 +53,10 @@
   redacted by default.
   Experiment recording prompts default-no `[y/N]` when `--yes` is absent, with
   controlled-pair warning about token/time/provider cost. Live install keeps
-  telemetry independent from agent setup: `--yes` alone is not consent, the
-  product binary prompts default-no `[y/N]` when no telemetry flag is supplied,
-  env/CI opt-outs force disabled, and dry-run output names the planned native
-  Codex/Claude Code MCP command shape. Uninstall refuses missing or foreign
+  telemetry independent from agent setup: `--yes` alone is not consent,
+  `install --yes` without telemetry flags does not prompt and keeps telemetry
+  disabled, env/CI opt-outs force disabled, and dry-run output names the planned
+  native Codex/Claude Code MCP command shape. Uninstall refuses missing or foreign
   managed receipts. Ready Python exact-anchor families
   can also record metadata-only variation evidence when exact-compatible
   framework-anchor support targets differ. FastAPI static `response_model=...`, static

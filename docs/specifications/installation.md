@@ -52,16 +52,17 @@ Global user state may contain only installation and user-preference data:
 - global user preferences.
 
 Anonymous telemetry is off by default. Live `install --yes` must not imply
-telemetry consent. When live `install --yes` runs without `--telemetry` or
-`--no-telemetry`, the product binary asks for anonymous telemetry consent with
-default-no `[y/N]`; empty input, `n`, or `no` disables telemetry, and only `y`
-or `yes` enables it. `--telemetry` is the explicit opt-in flag for install-time
-planning, receipts, and live preference persistence after agent installation
-succeeds. `--no-telemetry` remains accepted as an explicit disable and
-backward-compatible flag. `REPOGRAMMAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, and CI
-force the effective install-time telemetry decision to disabled and skip the
-prompt. Users can also change actual telemetry preference with
-`repogrammar telemetry on` and `repogrammar telemetry off`.
+telemetry consent and must not prompt for telemetry. When live `install --yes`
+runs without `--telemetry` or `--no-telemetry`, telemetry remains disabled.
+`--telemetry` is the explicit opt-in flag for install-time planning, receipts,
+and live preference persistence after agent installation succeeds.
+`--no-telemetry` remains accepted as an explicit disable and
+backward-compatible flag. Interactive telemetry prompts are allowed only for a
+future live install mode that runs without `--yes` and without explicit
+telemetry flags; current v0.1 live writes are `--yes` gated. `REPOGRAMMAR_TELEMETRY=0`,
+`DO_NOT_TRACK=1`, and CI force the effective install-time telemetry decision to
+disabled and skip prompting. Users can also change actual telemetry preference
+with `repogrammar telemetry on` and `repogrammar telemetry off`.
 
 It must not contain source-derived family facts, evidence text, source paths,
 symbol names, query text, raw prompts, or repository-specific SQLite indexes.
@@ -121,6 +122,10 @@ Live `install` and `uninstall` writes are intentionally narrow:
 - dry-run output names the native MCP command shape for Codex and Claude Code
   global installs, while project-local and `--target all` live writes remain
   deferred unless separately specified and tested.
+- default tests must not invoke real `codex` or `claude` binaries. Native agent
+  integration coverage uses dry-run output, command-vector construction, fake
+  configurators, and receipt behavior; any real native-CLI integration test must
+  be explicitly ignored or feature-gated outside default CI.
 
 The installer still does not copy executables, edit instruction files, repair
 malformed native agent config, or touch `.repogrammar/`.
