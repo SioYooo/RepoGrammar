@@ -4,6 +4,15 @@
 
 ### Added
 
+- The installer now has a reversible, idempotent managed instruction-file
+  writer using the exact markers `<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->`
+  and `<!-- END REPOGRAMMAR MANAGED SECTION -->`. It creates, appends, replaces,
+  or leaves unchanged the managed section, refuses malformed or partial markers,
+  writes atomically with re-read verification, and removes only the managed
+  section on uninstall. Receipts now record `instruction_file_path` and
+  `instruction_action`. Live instruction writing stays deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path, because
+  real Codex/Claude instruction-file locations are not yet verified.
 - `repogrammar index` and `repogrammar sync` now emit progress while they run.
   Human progress uses stderr and exact completed/total counts when known;
   `--json --progress always` emits progress NDJSON on stderr while preserving

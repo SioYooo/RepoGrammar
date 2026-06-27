@@ -186,6 +186,10 @@ pub struct InstallExecutionContext {
     pub command_dir_on_path: bool,
     pub data_dir: String,
     pub current_dir: String,
+    /// Resolved absolute instruction-file paths per target. Populated only when a
+    /// `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override resolves to an absolute
+    /// path; otherwise instruction writing stays deferred for that target.
+    pub instruction_files: Vec<(AgentTarget, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,6 +327,7 @@ pub fn execute_install(
     }
 
     let mut configured_targets = Vec::new();
+    let mut configured_instructions: Vec<(Option<String>, InstructionAction)> = Vec::new();
     let mut receipt_paths = Vec::new();
     for target in targets_to_configure {
         let action = match configurator.add_mcp_server(
@@ -338,16 +343,16 @@ pub fn execute_install(
                     context,
                     configurator,
                     &configured_targets,
+                    &configured_instructions,
                     &receipt_paths,
                     &command_record,
                 );
                 return Err(install_rollback_error(error, rollback));
             }
         };
-        let receipt_path =
-            match write_install_receipt(request, context, &action, &command_record.executable_path)
-            {
-                Ok(receipt_path) => receipt_path,
+        let (instruction_path, instruction_action) = match instruction_file_for(context, target) {
+            Some(path) => match write_managed_instruction_section(Path::new(path)) {
+                Ok(instruction_action) => (Some(path.to_string()), instruction_action),
                 Err(error) => {
                     configured_targets.push(target);
                     let rollback = rollback_install_run(
@@ -355,13 +360,41 @@ pub fn execute_install(
                         context,
                         configurator,
                         &configured_targets,
+                        &configured_instructions,
                         &receipt_paths,
                         &command_record,
                     );
                     return Err(install_rollback_error(error, rollback));
                 }
-            };
+            },
+            None => (None, InstructionAction::Deferred),
+        };
+        let receipt_path = match write_install_receipt(
+            request,
+            context,
+            &action,
+            &command_record.executable_path,
+            instruction_path.as_deref(),
+            instruction_action,
+        ) {
+            Ok(receipt_path) => receipt_path,
+            Err(error) => {
+                configured_targets.push(target);
+                configured_instructions.push((instruction_path, instruction_action));
+                let rollback = rollback_install_run(
+                    request,
+                    context,
+                    configurator,
+                    &configured_targets,
+                    &configured_instructions,
+                    &receipt_paths,
+                    &command_record,
+                );
+                return Err(install_rollback_error(error, rollback));
+            }
+        };
         configured_targets.push(target);
+        configured_instructions.push((instruction_path, instruction_action));
         receipt_paths.push(receipt_path);
     }
 
@@ -404,7 +437,11 @@ pub fn execute_uninstall(
             ));
         }
         validate_receipt_ownership(&receipt_path, target, request.scope)?;
+        let instruction_path = receipt_instruction_file_path(&receipt_path);
         configurator.remove_mcp_server(target, request.scope, &context.current_dir)?;
+        if let Some(instruction_path) = instruction_path {
+            remove_managed_instruction_section(Path::new(&instruction_path))?;
+        }
         remove_receipt(&receipt_path)?;
         configured_targets.push(target);
         receipt_paths.push(display_path(&receipt_path));
@@ -811,6 +848,7 @@ fn rollback_install_run(
     context: &InstallExecutionContext,
     configurator: &impl NativeAgentConfigurator,
     configured_targets: &[AgentTarget],
+    configured_instructions: &[(Option<String>, InstructionAction)],
     receipt_paths: &[String],
     command_record: &CommandInstallRecord,
 ) -> Vec<String> {
@@ -818,6 +856,17 @@ fn rollback_install_run(
     for path in receipt_paths.iter().rev() {
         if let Err(error) = fs::remove_file(path) {
             failures.push(format!("receipt cleanup failed: {error}"));
+        }
+    }
+    for (path, action) in configured_instructions.iter().rev() {
+        let wrote_section = matches!(
+            action,
+            InstructionAction::Created | InstructionAction::Appended | InstructionAction::Replaced
+        );
+        if let (Some(path), true) = (path, wrote_section) {
+            if let Err(error) = remove_managed_instruction_section(Path::new(path)) {
+                failures.push(format!("instruction rollback failed: {error}"));
+            }
         }
     }
     for target in configured_targets.iter().rev() {
@@ -976,6 +1025,8 @@ fn write_install_receipt(
     context: &InstallExecutionContext,
     action: &NativeAgentAction,
     executable_path: &str,
+    instruction_file_path: Option<&str>,
+    instruction_action: InstructionAction,
 ) -> Result<String, RepoGrammarError> {
     let receipt_path = receipt_path(context, action.target, request.scope);
     if let Some(parent) = receipt_path.parent() {
@@ -1002,6 +1053,8 @@ fn write_install_receipt(
         "executable_path": executable_path,
         "native_program": action.program,
         "native_args": action.args,
+        "instruction_file_path": instruction_file_path,
+        "instruction_action": instruction_action.as_str(),
         "telemetry_enabled": request.telemetry_enabled,
         "created_unix_seconds": unix_seconds(),
     });
@@ -1053,6 +1106,15 @@ fn remove_receipt(receipt_path: &Path) -> Result<(), RepoGrammarError> {
     })
 }
 
+fn receipt_instruction_file_path(receipt_path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(receipt_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    value
+        .get("instruction_file_path")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
 fn receipt_path(
     context: &InstallExecutionContext,
     target: AgentTarget,
@@ -1073,6 +1135,287 @@ fn unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+/// Exact begin marker for the RepoGrammar managed instruction section.
+pub const MANAGED_INSTRUCTION_BEGIN: &str = "<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->";
+/// Exact end marker for the RepoGrammar managed instruction section.
+pub const MANAGED_INSTRUCTION_END: &str = "<!-- END REPOGRAMMAR MANAGED SECTION -->";
+
+/// Outcome of a managed instruction-section write or removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionAction {
+    /// No instruction file path was resolved; live writing stays deferred.
+    Deferred,
+    /// The instruction file did not exist and was created with the managed section.
+    Created,
+    /// The instruction file existed without markers; the managed section was appended.
+    Appended,
+    /// A complete managed section already existed and was replaced.
+    Replaced,
+    /// The existing managed section was already byte-equivalent; nothing was written.
+    Unchanged,
+    /// Uninstall removed an existing managed section.
+    Removed,
+    /// Uninstall found no managed section to remove.
+    NotPresent,
+}
+
+impl InstructionAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deferred => "deferred",
+            Self::Created => "created",
+            Self::Appended => "appended",
+            Self::Replaced => "replaced",
+            Self::Unchanged => "unchanged",
+            Self::Removed => "removed",
+            Self::NotPresent => "not_present",
+        }
+    }
+}
+
+/// Canonical managed instruction block, including both markers. Intentionally
+/// short and conditional, and never embeds repository-specific facts.
+pub fn managed_instruction_block() -> String {
+    format!(
+        "{MANAGED_INSTRUCTION_BEGIN}\n\
+## RepoGrammar\n\
+\n\
+In repositories initialized with RepoGrammar (`.repogrammar/` exists), call the MCP tool `repogrammar_context` before grep/find/Read when you need implementation-pattern context, analogous examples, family conformance, deviation explanation, or an edit plan. Use the returned `read_plan`; if line-numbered `source_spans` are included, treat those spans as already read. Read files directly only for spans marked missing, stale, UNKNOWN, omitted, or required before editing outside the shown range.\n\
+\n\
+If no `.repogrammar/` exists, skip RepoGrammar for that repository.\n\
+{MANAGED_INSTRUCTION_END}"
+    )
+}
+
+/// The environment-variable name that overrides a target's instruction-file path.
+pub fn instruction_env_var(target: AgentTarget) -> String {
+    format!(
+        "REPOGRAMMAR_INSTRUCTION_FILE_{}",
+        target.as_str().to_ascii_uppercase().replace('-', "_")
+    )
+}
+
+/// Resolve a target's instruction-file path from an environment override. Returns
+/// `None` (deferred) unless the override resolves to an absolute path, because
+/// RepoGrammar must not guess real Codex/Claude instruction-file locations.
+pub fn resolve_instruction_file<F>(target: AgentTarget, lookup: &F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = lookup(&instruction_env_var(target))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if Path::new(trimmed).is_absolute() {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn malformed_managed_section_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "instruction file has a malformed RepoGrammar managed section; refusing to modify"
+            .to_string(),
+    )
+}
+
+/// Locate the byte span of a complete managed section, refusing malformed or
+/// partial markers. Returns `Ok(None)` when no markers exist, `Ok(Some(span))`
+/// for a single well-ordered section, and an error for any other arrangement.
+fn managed_instruction_span(contents: &str) -> Result<Option<(usize, usize)>, RepoGrammarError> {
+    let begin_count = contents.matches(MANAGED_INSTRUCTION_BEGIN).count();
+    let end_count = contents.matches(MANAGED_INSTRUCTION_END).count();
+    match (begin_count, end_count) {
+        (0, 0) => Ok(None),
+        (1, 1) => {
+            let begin = contents
+                .find(MANAGED_INSTRUCTION_BEGIN)
+                .ok_or_else(malformed_managed_section_error)?;
+            let end_marker = contents
+                .find(MANAGED_INSTRUCTION_END)
+                .ok_or_else(malformed_managed_section_error)?;
+            if end_marker <= begin {
+                return Err(malformed_managed_section_error());
+            }
+            let line_start = contents[..begin]
+                .rfind('\n')
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let after_end = end_marker + MANAGED_INSTRUCTION_END.len();
+            let line_end = contents[after_end..]
+                .find('\n')
+                .map(|index| after_end + index + 1)
+                .unwrap_or(contents.len());
+            Ok(Some((line_start, line_end)))
+        }
+        _ => Err(malformed_managed_section_error()),
+    }
+}
+
+fn instruction_temp_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(".repogrammar-managed.tmp");
+    path.with_file_name(name)
+}
+
+fn atomic_write_instruction(path: &Path, contents: &str) -> Result<(), RepoGrammarError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| {
+                RepoGrammarError::InvalidInput(format!(
+                    "failed to create instruction file directory: {error}"
+                ))
+            })?;
+        }
+    }
+    let temporary = instruction_temp_path(path);
+    fs::write(&temporary, contents).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to write temporary instruction file: {error}"
+        ))
+    })?;
+    fs::rename(&temporary, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        RepoGrammarError::InvalidInput(format!(
+            "failed to atomically write instruction file: {error}"
+        ))
+    })
+}
+
+fn require_regular_instruction_file(path: &Path) -> Result<(), RepoGrammarError> {
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RepoGrammarError::InvalidInput(
+                "instruction file path must be a regular file".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Idempotently write the managed instruction section into `path` using atomic
+/// temp-file replacement and re-read verification. Preserves unrelated content,
+/// refuses malformed partial markers, and reports the action taken.
+pub fn write_managed_instruction_section(
+    path: &Path,
+) -> Result<InstructionAction, RepoGrammarError> {
+    require_regular_instruction_file(path)?;
+    let existed = path.is_file();
+    let existing = if existed {
+        fs::read_to_string(path).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!("failed to read instruction file: {error}"))
+        })?
+    } else {
+        String::new()
+    };
+    let block = managed_instruction_block();
+    let (next, action) = match managed_instruction_span(&existing)? {
+        Some((start, end)) => {
+            let mut next = String::with_capacity(existing.len());
+            next.push_str(&existing[..start]);
+            next.push_str(&block);
+            next.push('\n');
+            next.push_str(&existing[end..]);
+            if next == existing {
+                return Ok(InstructionAction::Unchanged);
+            }
+            (next, InstructionAction::Replaced)
+        }
+        None => {
+            if !existed {
+                (format!("{block}\n"), InstructionAction::Created)
+            } else if existing.is_empty() {
+                (format!("{block}\n"), InstructionAction::Appended)
+            } else {
+                let mut next = existing.clone();
+                if !next.ends_with('\n') {
+                    next.push('\n');
+                }
+                next.push('\n');
+                next.push_str(&block);
+                next.push('\n');
+                (next, InstructionAction::Appended)
+            }
+        }
+    };
+    atomic_write_instruction(path, &next)?;
+    verify_managed_instruction_present(path, &block)?;
+    Ok(action)
+}
+
+fn verify_managed_instruction_present(path: &Path, block: &str) -> Result<(), RepoGrammarError> {
+    let written = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to re-read instruction file for verification: {error}"
+        ))
+    })?;
+    match managed_instruction_span(&written)? {
+        Some((start, end)) if written[start..end].trim_end_matches('\n') == block => Ok(()),
+        _ => Err(RepoGrammarError::InvalidInput(
+            "instruction file managed section failed verification after write".to_string(),
+        )),
+    }
+}
+
+fn tidy_after_removal(text: &str) -> String {
+    let mut collapsed = text.to_string();
+    while collapsed.contains("\n\n\n") {
+        collapsed = collapsed.replace("\n\n\n", "\n\n");
+    }
+    let trimmed = collapsed.trim_end_matches('\n');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}\n")
+    }
+}
+
+/// Remove only the RepoGrammar managed section from `path`, preserving all other
+/// content. Refuses malformed partial markers and verifies removal by re-read.
+pub fn remove_managed_instruction_section(
+    path: &Path,
+) -> Result<InstructionAction, RepoGrammarError> {
+    if !path.exists() {
+        return Ok(InstructionAction::NotPresent);
+    }
+    require_regular_instruction_file(path)?;
+    let existing = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to read instruction file: {error}"))
+    })?;
+    let Some((start, end)) = managed_instruction_span(&existing)? else {
+        return Ok(InstructionAction::NotPresent);
+    };
+    let mut next = String::with_capacity(existing.len());
+    next.push_str(&existing[..start]);
+    next.push_str(&existing[end..]);
+    let cleaned = tidy_after_removal(&next);
+    atomic_write_instruction(path, &cleaned)?;
+    let written = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to re-read instruction file for verification: {error}"
+        ))
+    })?;
+    if managed_instruction_span(&written)?.is_some() {
+        return Err(RepoGrammarError::InvalidInput(
+            "instruction file managed section was not removed".to_string(),
+        ));
+    }
+    Ok(InstructionAction::Removed)
+}
+
+fn instruction_file_for(context: &InstallExecutionContext, target: AgentTarget) -> Option<&str> {
+    context
+        .instruction_files
+        .iter()
+        .find(|(candidate, _)| *candidate == target)
+        .map(|(_, path)| path.as_str())
 }
 
 #[cfg(test)]
@@ -1684,6 +2027,267 @@ mod tests {
         assert_eq!(configurator.actions.borrow().len(), 0);
     }
 
+    #[test]
+    fn resolve_instruction_file_requires_absolute_override() {
+        let absolute = if cfg!(windows) {
+            "C:\\repogrammar\\AGENTS.md"
+        } else {
+            "/tmp/repogrammar/AGENTS.md"
+        };
+        let key = instruction_env_var(AgentTarget::Codex);
+        assert_eq!(key, "REPOGRAMMAR_INSTRUCTION_FILE_CODEX");
+        assert_eq!(
+            instruction_env_var(AgentTarget::ClaudeCode),
+            "REPOGRAMMAR_INSTRUCTION_FILE_CLAUDE_CODE"
+        );
+
+        let lookup_absolute = |requested: &str| (requested == key).then(|| absolute.to_string());
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_absolute),
+            Some(absolute.to_string())
+        );
+
+        let lookup_relative =
+            |requested: &str| (requested == key).then(|| "relative/AGENTS.md".to_string());
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_relative),
+            None
+        );
+
+        let lookup_missing = |_: &str| None;
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_missing),
+            None
+        );
+    }
+
+    #[test]
+    fn managed_instruction_writer_creates_appends_replaces_and_is_idempotent() {
+        let dir = TempDir::new("instruction-lifecycle");
+
+        let create_path = dir.file("CREATE.md");
+        assert_eq!(
+            write_managed_instruction_section(&create_path).expect("create"),
+            InstructionAction::Created
+        );
+        let created = fs::read_to_string(&create_path).expect("created contents");
+        assert!(created.starts_with(MANAGED_INSTRUCTION_BEGIN));
+        assert!(created.ends_with(&format!("{MANAGED_INSTRUCTION_END}\n")));
+        assert!(created.contains("repogrammar_context"));
+
+        assert_eq!(
+            write_managed_instruction_section(&create_path).expect("idempotent"),
+            InstructionAction::Unchanged
+        );
+        assert_eq!(
+            fs::read_to_string(&create_path).expect("unchanged contents"),
+            created
+        );
+
+        let append_path = dir.file("APPEND.md");
+        fs::write(&append_path, "# User guide\n\nkeep this line\n").expect("seed user content");
+        assert_eq!(
+            write_managed_instruction_section(&append_path).expect("append"),
+            InstructionAction::Appended
+        );
+        let appended = fs::read_to_string(&append_path).expect("appended contents");
+        assert!(appended.starts_with("# User guide\n"));
+        assert!(appended.contains("keep this line"));
+        assert!(appended.contains(MANAGED_INSTRUCTION_BEGIN));
+
+        let replace_path = dir.file("REPLACE.md");
+        let seeded = format!(
+            "# Top\n\n{MANAGED_INSTRUCTION_BEGIN}\nstale managed body\n{MANAGED_INSTRUCTION_END}\n\n# Bottom\n"
+        );
+        fs::write(&replace_path, &seeded).expect("seed replace content");
+        assert_eq!(
+            write_managed_instruction_section(&replace_path).expect("replace"),
+            InstructionAction::Replaced
+        );
+        let replaced = fs::read_to_string(&replace_path).expect("replaced contents");
+        assert!(replaced.contains("# Top"));
+        assert!(replaced.contains("# Bottom"));
+        assert!(replaced.contains("repogrammar_context"));
+        assert!(!replaced.contains("stale managed body"));
+        assert_eq!(
+            write_managed_instruction_section(&replace_path).expect("replace idempotent"),
+            InstructionAction::Unchanged
+        );
+    }
+
+    #[test]
+    fn managed_instruction_writer_refuses_partial_or_duplicate_markers() {
+        let dir = TempDir::new("instruction-malformed");
+
+        let only_begin = dir.file("ONLY_BEGIN.md");
+        fs::write(
+            &only_begin,
+            format!("# Guide\n{MANAGED_INSTRUCTION_BEGIN}\nbody without end\n"),
+        )
+        .expect("seed partial begin");
+        let error = write_managed_instruction_section(&only_begin).expect_err("partial begin");
+        assert!(error.to_string().contains("malformed"));
+        assert!(fs::read_to_string(&only_begin)
+            .expect("unchanged")
+            .contains("body without end"));
+
+        let only_end = dir.file("ONLY_END.md");
+        fs::write(&only_end, format!("# Guide\n{MANAGED_INSTRUCTION_END}\n")).expect("seed end");
+        assert!(write_managed_instruction_section(&only_end)
+            .expect_err("partial end")
+            .to_string()
+            .contains("malformed"));
+
+        let duplicate = dir.file("DUPLICATE.md");
+        fs::write(
+            &duplicate,
+            format!(
+                "{MANAGED_INSTRUCTION_BEGIN}\nfirst\n{MANAGED_INSTRUCTION_BEGIN}\nsecond\n{MANAGED_INSTRUCTION_END}\n"
+            ),
+        )
+        .expect("seed duplicate begin");
+        assert!(write_managed_instruction_section(&duplicate)
+            .expect_err("duplicate begin")
+            .to_string()
+            .contains("malformed"));
+    }
+
+    #[test]
+    fn remove_managed_instruction_section_preserves_user_content() {
+        let dir = TempDir::new("instruction-remove");
+        let path = dir.file("AGENTS.md");
+        fs::write(&path, "# Keep top\n").expect("seed");
+        write_managed_instruction_section(&path).expect("append section");
+        assert!(fs::read_to_string(&path)
+            .expect("with section")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+
+        assert_eq!(
+            remove_managed_instruction_section(&path).expect("remove"),
+            InstructionAction::Removed
+        );
+        let after = fs::read_to_string(&path).expect("after removal");
+        assert!(after.contains("# Keep top"));
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(!after.contains(MANAGED_INSTRUCTION_END));
+
+        assert_eq!(
+            remove_managed_instruction_section(&path).expect("remove twice"),
+            InstructionAction::NotPresent
+        );
+    }
+
+    #[test]
+    fn install_writes_managed_instruction_when_resolved_and_records_receipt() {
+        let workspace = TempInstallWorkspace::new("instruction-install");
+        let instructions = TempDir::new("instruction-install-target");
+        let instruction_path = instructions.file("AGENTS.md");
+        let mut context = workspace.context.clone();
+        context.instruction_files =
+            vec![(AgentTarget::Codex, instruction_path.display().to_string())];
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let outcome =
+            execute_install(&request, &context, &configurator, &self_test).expect("install");
+
+        let written = fs::read_to_string(&instruction_path).expect("instruction file");
+        assert!(written.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(written.contains(MANAGED_INSTRUCTION_END));
+        assert!(written.contains("repogrammar_context"));
+        let receipt = fs::read_to_string(&outcome.receipt_paths[0]).expect("receipt");
+        let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+        assert_eq!(value["instruction_action"], "created");
+        assert_eq!(
+            value["instruction_file_path"],
+            instruction_path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn install_defers_instruction_without_override_and_records_deferred() {
+        let workspace = TempInstallWorkspace::new("instruction-deferred");
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("install");
+
+        let receipt = fs::read_to_string(&outcome.receipt_paths[0]).expect("receipt");
+        let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+        assert_eq!(value["instruction_action"], "deferred");
+        assert!(value["instruction_file_path"].is_null());
+    }
+
+    #[test]
+    fn uninstall_removes_managed_instruction_section_recorded_in_receipt() {
+        let workspace = TempInstallWorkspace::new("instruction-uninstall");
+        let instructions = TempDir::new("instruction-uninstall-target");
+        let instruction_path = instructions.file("AGENTS.md");
+        fs::write(&instruction_path, "# Existing user guide\n\nkeep me\n").expect("seed");
+        let mut context = workspace.context.clone();
+        context.instruction_files =
+            vec![(AgentTarget::Codex, instruction_path.display().to_string())];
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &context, &configurator, &self_test).expect("install");
+        assert!(fs::read_to_string(&instruction_path)
+            .expect("after install")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+        configurator.actions.borrow_mut().clear();
+
+        execute_uninstall(&request, &context, &configurator).expect("uninstall");
+
+        let after = fs::read_to_string(&instruction_path).expect("after uninstall");
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(!after.contains(MANAGED_INSTRUCTION_END));
+        assert!(after.contains("keep me"));
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "repogrammar-{prefix}-{}-{}",
+                std::process::id(),
+                unique_suffix()
+            ));
+            fs::create_dir_all(&path).expect("temp dir");
+            Self { path }
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
     struct TempInstallWorkspace {
         root: PathBuf,
         data_dir: PathBuf,
@@ -1713,6 +2317,7 @@ mod tests {
                 command_dir_on_path: true,
                 data_dir: data_dir.display().to_string(),
                 current_dir: current_dir.display().to_string(),
+                instruction_files: Vec::new(),
             };
             Self {
                 root,

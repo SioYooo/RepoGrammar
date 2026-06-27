@@ -64,7 +64,14 @@
   native Codex/Claude Code MCP command shape. Interactive `repogrammar install`
   can select Codex, Claude Code, or both in one run, skips already managed
   RepoGrammar receipts, installs or repairs a stable `repogrammar` command when
-  possible, and does not touch `.repogrammar/` or instruction files. The
+  possible, and does not touch `.repogrammar/`. A reversible, idempotent managed
+  instruction-file writer (exact `<!-- BEGIN/END REPOGRAMMAR MANAGED SECTION -->`
+  markers, create/append/replace/idempotent/remove, atomic temp+rename with
+  re-read verification, malformed-marker refusal) is implemented and tested, and
+  receipts now record `instruction_file_path` and `instruction_action`; live
+  instruction writing stays deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path, so the
+  installer never guesses real Codex/Claude instruction-file locations. The
   installer target registry also recognizes CodeGraph-style target ids for
   Cursor, opencode, Hermes, Gemini, Antigravity, and Kiro in dry-run and
   `--print-config` planning modes; live writes remain implemented only for
@@ -348,9 +355,11 @@ provider-backed Python project-configuration semantics, Pyrefly/Pyright
 provider execution, provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
 beyond the structural bootstrap graph, resolved framework semantics, full
-family mining, project-local installer writes, instruction-file integration,
-additional coding-agent integrations, and telemetry network transport are not
-implemented.
+family mining, project-local installer writes, live instruction-file writes by
+default (the managed marker-fenced writer is implemented and tested, but live
+writing stays deferred unless `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to
+an absolute path), additional coding-agent integrations, and telemetry network
+transport are not implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
 behavior before an active index and typed `UNKNOWN` when active evidence is

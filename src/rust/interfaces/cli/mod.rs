@@ -2,9 +2,10 @@
 
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    normalize_concrete_targets, owned_install_receipt_exists, plan_install,
-    supported_concrete_targets, target_config_snippet, target_plan_line, targets_for_display,
-    AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
+    known_agent_targets, normalize_concrete_targets, owned_install_receipt_exists, plan_install,
+    resolve_instruction_file, supported_concrete_targets, target_config_snippet, target_plan_line,
+    targets_for_display, AgentTarget, InstallExecutionContext, InstallExecutionOutcome,
+    InstallRequest, InstallScope,
 };
 use crate::application::progress::{ProgressEvent, WorkUnits};
 use crate::application::query::{
@@ -1680,12 +1681,19 @@ where
         None => default_install_data_dir(env_lookup)?,
     };
     let (command_dir, command_dir_on_path) = default_install_command_dir(&data_dir, env_lookup)?;
+    let mut instruction_files = Vec::new();
+    for target in known_agent_targets() {
+        if let Some(path) = resolve_instruction_file(target, env_lookup) {
+            instruction_files.push((target, path));
+        }
+    }
     Ok(InstallExecutionContext {
         executable_path,
         command_dir,
         command_dir_on_path,
         data_dir,
         current_dir: current_dir.display().to_string(),
+        instruction_files,
     })
 }
 
