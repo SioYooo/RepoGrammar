@@ -89,7 +89,8 @@
   or npm publication exist. The Bash wrapper can install the built contributor
   binary through explicit `--from-source` flows, writes the command through the
   same managed install layout used by the Rust installer, delegates agent
-  wiring to `repogrammar install`, refuses foreign command paths, and reports
+  wiring to `repogrammar install`, backs up and replaces older unmanaged
+  `repogrammar` command files during explicit CLI installation, and reports
   actionable missing-release guidance. The npm launcher now has a tested
   `REPOGRAMMAR_BINARY` local dogfood bypass while keeping release artifacts as
   the published default.

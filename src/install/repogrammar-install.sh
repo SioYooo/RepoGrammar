@@ -241,15 +241,24 @@ command_path_is_managed() {
   [[ -f "$COMMAND_PATH" && -f "$INSTALLED_EXECUTABLE" ]] && cmp -s "$COMMAND_PATH" "$INSTALLED_EXECUTABLE"
 }
 
-ensure_command_path_is_managed() {
-  if ! command_path_is_managed; then
-    die "repogrammar command path already exists and is not managed by RepoGrammar; move it aside or choose --command-dir"
+prepare_command_path_for_install() {
+  if command_path_is_managed; then
+    return 0
   fi
+  if [[ -d "$COMMAND_PATH" && ! -L "$COMMAND_PATH" ]]; then
+    die "repogrammar command path is a directory and cannot be replaced automatically; choose --command-dir"
+  fi
+  local backup="${COMMAND_PATH}.unmanaged-backup"
+  if [[ -e "$backup" || -L "$backup" ]]; then
+    backup="${backup}.$(date +%Y%m%d%H%M%S).$$"
+  fi
+  mv "$COMMAND_PATH" "$backup"
+  printf "Backed up existing unmanaged repogrammar command to %s\n" "$backup"
 }
 
 install_managed_cli_binary() {
   local source="$1"
-  ensure_command_path_is_managed
+  prepare_command_path_for_install
   mkdir -p "$DATA_BIN_DIR"
   local tmp_executable="${INSTALLED_EXECUTABLE}.tmp.$$"
   cp "$source" "$tmp_executable"
@@ -367,7 +376,6 @@ install_cli_from_release() {
   tar -xzf "${tmpdir}/${artifact}" -C "$tmpdir"
   [[ -x "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
   [[ -f "${tmpdir}/workers/python/worker.py" ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
-  ensure_command_path_is_managed
   install_worker_asset "${tmpdir}/workers/python/worker.py"
   install_managed_cli_binary "${tmpdir}/repogrammar"
   printf "Installed %s\n" "$COMMAND_PATH"
@@ -385,7 +393,6 @@ install_cli_from_source() {
     fi
     (cd "$REPO_ROOT" && cargo build --release)
   fi
-  ensure_command_path_is_managed
   install_worker_asset "${REPO_ROOT}/src/workers/python/worker.py"
   install_managed_cli_binary "$REPOGRAMMAR_BIN"
   printf "Installed %s from source build\n" "$COMMAND_PATH"

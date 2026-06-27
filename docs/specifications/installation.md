@@ -80,11 +80,15 @@ but it must install the built binary into RepoGrammar-managed user state before
 refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
-It must not directly create a foreign unmanaged command path that later causes
-the Rust installer to refuse ownership. If no release artifact is available and
-the script is not running from a source checkout with `--from-source`, it must
-fail with actionable guidance, including `REPOGRAMMAR_RELEASE_DIR` for local
-artifact tests.
+If the user-writable command path already contains an unmanaged
+`repogrammar`, the wrapper may back it up and replace it with the managed
+command because the user explicitly invoked CLI installation. It must not
+silently delete the old file, and it must still refuse unsafe paths such as
+directories. It must not directly create a foreign unmanaged command path that
+later causes the Rust installer to refuse ownership. If no release artifact is
+available and the script is not running from a source checkout with
+`--from-source`, it must fail with actionable guidance, including
+`REPOGRAMMAR_RELEASE_DIR` for local artifact tests.
 
 Windows public-preview source checkouts may provide `src/install/install.ps1`
 with the same binary-download and checksum-verification boundary. Windows

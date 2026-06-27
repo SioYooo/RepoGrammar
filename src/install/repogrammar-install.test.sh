@@ -159,20 +159,19 @@ FOREIGN_INSTALL_DIR="${TMP_ROOT}/foreign-data"
 mkdir -p "$FOREIGN_COMMAND_DIR"
 printf 'foreign\n' > "${FOREIGN_COMMAND_DIR}/repogrammar"
 chmod +x "${FOREIGN_COMMAND_DIR}/repogrammar"
-FOREIGN_ERR="${TMP_ROOT}/foreign.err"
-set +e
 REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$FOREIGN_COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$FOREIGN_INSTALL_DIR" \
-"$INSTALLER" --install-cli-only --from-source --yes >"${TMP_ROOT}/foreign.out" 2>"$FOREIGN_ERR"
-FOREIGN_STATUS=$?
-set -e
-if [[ "$FOREIGN_STATUS" -eq 0 ]]; then
-  echo "foreign command path unexpectedly succeeded" >&2
+"$INSTALLER" --install-cli-only --from-source --yes >"${TMP_ROOT}/foreign.out"
+"${FOREIGN_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
+shopt -s nullglob
+FOREIGN_BACKUPS=("${FOREIGN_COMMAND_DIR}"/repogrammar.unmanaged-backup*)
+shopt -u nullglob
+if [[ "${#FOREIGN_BACKUPS[@]}" -ne 1 ]]; then
+  echo "expected one unmanaged command backup" >&2
   exit 1
 fi
-grep -q "not managed by RepoGrammar" "$FOREIGN_ERR"
-grep -q "foreign" "${FOREIGN_COMMAND_DIR}/repogrammar"
+grep -q "foreign" "${FOREIGN_BACKUPS[0]}"
 
 FAKE_PATH="${TMP_ROOT}/fake-path"
 mkdir -p "$FAKE_PATH"

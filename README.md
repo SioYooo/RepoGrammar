@@ -147,7 +147,9 @@ bash src/install/repogrammar-install.sh --install-and-configure --from-source --
 
 The source path installs the built binary into RepoGrammar-managed user state
 and refreshes the user-writable `repogrammar` command without requiring a
-GitHub Release asset or published npm package.
+GitHub Release asset or published npm package. If that command path already
+contains an older unmanaged `repogrammar`, the installer backs it up before
+replacing it with the managed command.
 
 Before the npm package is published, local npm dogfood can bypass release
 downloads with an already built binary:
