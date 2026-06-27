@@ -64,7 +64,14 @@
   native Codex/Claude Code MCP command shape. Interactive `repogrammar install`
   can select Codex, Claude Code, or both in one run, skips already managed
   RepoGrammar receipts, installs or repairs a stable `repogrammar` command when
-  possible, and does not touch `.repogrammar/` or instruction files. The
+  possible, and does not touch `.repogrammar/`. A reversible, idempotent managed
+  instruction-file writer (exact `<!-- BEGIN/END REPOGRAMMAR MANAGED SECTION -->`
+  markers, create/append/replace/idempotent/remove, atomic temp+rename with
+  re-read verification, malformed-marker refusal) is implemented and tested, and
+  receipts now record `instruction_file_path` and `instruction_action`; live
+  instruction writing stays deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path, so the
+  installer never guesses real Codex/Claude instruction-file locations. The
   installer target registry also recognizes CodeGraph-style target ids for
   Cursor, opencode, Hermes, Gemini, Antigravity, and Kiro in dry-run and
   `--print-config` planning modes; live writes remain implemented only for
@@ -341,16 +348,33 @@ queries, gate rendered family evidence against current source hashes, and
 report stale evidence as typed `StaleEvidence` `UNKNOWN`. Syntax-origin
 framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
-evidence.
+evidence. A conservative TS/JS exact-anchor path now exists alongside the Python
+one: the syntax parser emits `STRUCTURAL` anchors (engine
+`repogrammar-tsjs-syntax`, method `exact_anchor_v1`) only for exact Express
+import/app/router/literal-method shapes and imported or ambient-in-test-file
+Jest/Vitest runners, and the application layer promotes them to
+`DATAFLOW_DERIVED` support (engine `repogrammar-tsjs-derived`, method
+`bounded_exact_anchor_v1`, assumptions `provider_resolved=false`,
+`derived_from=tsjs_structural_anchors`, `framework_role=<role>`,
+`tsjs_anchor_kind=<kind>`). The family gate now matches exact TS/JS targets plus
+a safe origin instead of substring text. Reassigned/shadowed/dynamic/lookalike
+Express receivers, custom Jest/Vitest wrappers, ambiguous non-test-file globals,
+and all React components/hooks stay `UNKNOWN`. `src/fixtures/typescript/release/
+v0_2/express_exact_routes` and `jest_vitest_exact_tests` exercise the positive
+and negative product paths, and the v0.1 `jest-vitest-basic` fixture now forms
+ambient suite/test families. TS/JS remains a transitional substrate, not the
+official Python-first v0.1 target, and this is not full TS/JS semantic analysis.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright
 provider execution, provider-backed canonical framework evidence,
 command-level full repository/worktree freshness metadata, typed IR attributes
 beyond the structural bootstrap graph, resolved framework semantics, full
-family mining, project-local installer writes, instruction-file integration,
-additional coding-agent integrations, and telemetry network transport are not
-implemented.
+family mining, project-local installer writes, live instruction-file writes by
+default (the managed marker-fenced writer is implemented and tested, but live
+writing stays deferred unless `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to
+an absolute path), additional coding-agent integrations, and telemetry network
+transport are not implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
 behavior before an active index and typed `UNKNOWN` when active evidence is

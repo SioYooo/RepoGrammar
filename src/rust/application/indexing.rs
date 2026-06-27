@@ -1,8 +1,11 @@
 //! Indexing use-case boundary.
 
+use crate::adapters::parsing::tsjs_anchors::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
     python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
+    tsjs_support_target_is_role_compatible, TSJS_DERIVED_SUPPORT_ENGINE,
+    TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::core::model::{
@@ -508,14 +511,27 @@ fn index_repository_with_optional_semantic_worker(
         parser_fact_count + framework_fact_count,
         &derived_python_support_facts,
     )?;
+    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_tsjs_support_facts);
+    let derived_tsjs_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        parser_fact_count + framework_fact_count + derived_python_support_fact_count,
+        &derived_tsjs_support_facts,
+    )?;
+    let local_support_fact_count = parser_fact_count
+        + framework_fact_count
+        + derived_python_support_fact_count
+        + derived_tsjs_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
         "recorded local support facts",
-        known_work_units(
-            parser_fact_count + framework_fact_count + derived_python_support_fact_count,
-            parser_fact_count + framework_fact_count + derived_python_support_fact_count,
-        ),
+        known_work_units(local_support_fact_count, local_support_fact_count),
     );
 
     if options.semantic_worker.is_some() {
@@ -540,7 +556,7 @@ fn index_repository_with_optional_semantic_worker(
         options.semantic_worker,
         store,
         &mut warnings,
-        parser_fact_count + framework_fact_count + derived_python_support_fact_count,
+        local_support_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
     if worker_semantic_facts > 0 {
@@ -563,11 +579,13 @@ fn index_repository_with_optional_semantic_worker(
             parser_semantic_facts.len()
                 + framework_role_facts.len()
                 + derived_python_support_facts.len()
+                + derived_tsjs_support_facts.len()
                 + worker_facts.len(),
         );
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
         family_facts.extend(derived_python_support_facts);
+        family_facts.extend(derived_tsjs_support_facts);
         family_facts.extend(worker_facts);
         record_family_claims(
             family_store,
@@ -600,10 +618,10 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        semantic_facts: parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + worker_semantic_facts,
+        // `local_support_fact_count` already sums every locally recorded support
+        // fact (parser, framework role, Python-derived, and TS/JS-derived). Reuse
+        // it so the reported total cannot silently drop a support family again.
+        semantic_facts: local_support_fact_count + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -1292,6 +1310,113 @@ fn derived_python_framework_support_fact(
             "provider_resolved=false".to_string(),
             "derived_from=cpython_ast_structural_anchors".to_string(),
             format!("framework_role={framework_role}"),
+        ],
+    })
+}
+
+fn derive_tsjs_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_tsjs_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if !is_tsjs_language(&unit.language) || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if tsjs_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_tsjs_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_tsjs_language(language: &str) -> bool {
+    language == "typescript" || language == "javascript"
+}
+
+fn is_tsjs_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall
+            | SemanticFactKind::ResolvedImport
+            | SemanticFactKind::Symbol
+            | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == TSJS_ANCHOR_ENGINE
+        && fact.origin.method == TSJS_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_tsjs_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    Ok(SemanticFact {
+        kind,
+        subject: unit.id.clone(),
+        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
+        origin: FactOrigin {
+            engine: TSJS_DERIVED_SUPPORT_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: TSJS_DERIVED_SUPPORT_METHOD.to_string(),
+        },
+        certainty: FactCertainty::DataflowDerived,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(unit.start_byte, unit.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &unit.path,
+                unit.content_hash.clone(),
+                repository_revision.clone(),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            "bounded TS/JS framework anchor support",
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions: vec![
+            "provider_resolved=false".to_string(),
+            "derived_from=tsjs_structural_anchors".to_string(),
+            format!("framework_role={framework_role}"),
+            format!("tsjs_anchor_kind={}", unit.kind),
         ],
     })
 }
@@ -2090,6 +2215,124 @@ mod tests {
             .expect("valid evidence"),
             assumptions: vec!["binding unresolved without provider".to_string()],
         }
+    }
+
+    fn indexed_tsjs_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#{kind}:{index}:0-20:{index}"),
+            path: path.to_string(),
+            language: "typescript".to_string(),
+            kind: kind.to_string(),
+            start_byte: 0,
+            end_byte: 20,
+            content_hash: strict_hash(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+        }
+    }
+
+    fn tsjs_structural_anchor_fact(unit: &IndexedCodeUnitRecord, target: &str) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::ResolvedCall,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: TSJS_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: TSJS_ANCHOR_METHOD.to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded TS/JS exact framework anchor",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("tsjs_anchor_kind={}", unit.kind)],
+        }
+    }
+
+    #[test]
+    fn exact_express_route_anchors_derive_family_support() {
+        let first = indexed_tsjs_unit("src/a.ts", "express_route", 0);
+        let second = indexed_tsjs_unit("src/b.ts", "express_route", 1);
+        let units = vec![first.clone(), second.clone()];
+        let parser_facts = vec![
+            tsjs_structural_anchor_fact(&first, "express.route.get"),
+            tsjs_structural_anchor_fact(&second, "express.route.post"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:express.route_handler"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact express support");
+
+        assert_eq!(derived.len(), 2);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=tsjs_structural_anchors")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "typescript");
+        assert_eq!(
+            report.claims[0].framework_role,
+            "framework:express.route_handler"
+        );
+        assert_eq!(report.claims[0].support, 2);
+    }
+
+    #[test]
+    fn frameworkheuristic_only_tsjs_facts_do_not_derive_support() {
+        let first = indexed_tsjs_unit("src/a.ts", "express_route", 0);
+        let second = indexed_tsjs_unit("src/b.ts", "express_route", 1);
+        let units = vec![first.clone(), second.clone()];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:express.route_handler"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_framework_support_facts(&units, &role_facts, &role_facts)
+            .expect("derive from heuristic-only facts");
+
+        assert!(derived.is_empty());
+        let report = build_family_claims(&units, &role_facts);
+        assert!(report.claims.is_empty());
+    }
+
+    #[test]
+    fn tsjs_lookalike_anchor_target_does_not_derive_support() {
+        let first = indexed_tsjs_unit("src/a.ts", "express_route", 0);
+        let second = indexed_tsjs_unit("src/b.ts", "express_route", 1);
+        let units = vec![first.clone(), second.clone()];
+        let parser_facts = vec![
+            tsjs_structural_anchor_fact(&first, "express.lookalike.get"),
+            tsjs_structural_anchor_fact(&second, "express.lookalike.post"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:express.route_handler"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive from lookalike target");
+
+        assert!(derived.is_empty());
     }
 
     fn family_claim_facts(
@@ -4303,6 +4546,49 @@ mod tests {
         let debug = format!("{family:?}");
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("res.json"));
+    }
+
+    #[test]
+    fn reported_semantic_facts_count_includes_derived_tsjs_support_facts() {
+        // A resolved Express server produces exact TS/JS anchors that are promoted
+        // to bounded TS/JS-derived support facts and recorded in the generation.
+        // Regression guard: `IndexingOutcome::semantic_facts` must count those
+        // derived facts, so the reported total equals what was actually stored.
+        let workspace = TempWorkspace::new("indexing-derived-tsjs-count");
+        fs::write(
+            workspace.path().join("server.ts"),
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/users', (req, res) => { res.json([]); });\n\
+             app.post('/users', (req, res) => { res.json({}); });\n",
+        )
+        .expect("write resolved express server");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index resolved express server");
+
+        // No semantic worker ran, so a family here can only come from the
+        // TS/JS-derived support facts the count must include.
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.families.len(), 1);
+        assert_eq!(families.families[0].classification, "DOMINANT_PATTERN");
+
+        let stored = semantic_fact_count(&state, "gen-000001");
+        assert!(stored >= 2, "derived TS/JS support facts must be recorded");
+        assert_eq!(
+            outcome.semantic_facts as u32, stored,
+            "reported semantic_facts must include TS/JS-derived support facts, not drop them"
+        );
     }
 
     #[test]

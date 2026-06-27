@@ -16,6 +16,11 @@ const PYTHON_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-python-derived";
 const PYTHON_DERIVED_SUPPORT_METHOD: &str = "bounded_ast_anchor_v1";
 const PYTHON_FIXTURE_PROVIDER_ENGINE: &str = "python-fixture-provider";
 const PYTHON_FIXTURE_PROVIDER_METHOD: &str = "release_fixture_semantic_support";
+/// Engine/method that mint conservative TS/JS exact-anchor support facts.
+pub(crate) const TSJS_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-tsjs-derived";
+pub(crate) const TSJS_DERIVED_SUPPORT_METHOD: &str = "bounded_exact_anchor_v1";
+/// Pinned TS/JS semantic worker engine identity accepted as a safe support origin.
+const TSJS_WORKER_ENGINE: &str = "typescript";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyCandidate {
@@ -1223,32 +1228,69 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if python_framework_role_is_known(framework_role) {
         return python_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if tsjs_framework_role_is_known(framework_role) {
+        return tsjs_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    false
+}
 
-    let mut evidence_text = format!(
-        "{} {} {}",
-        fact.kind.as_protocol_str(),
-        fact.origin.engine,
-        fact.origin.method
-    )
-    .to_ascii_lowercase();
-    if let Some(target) = &fact.target {
-        evidence_text.push(' ');
-        evidence_text.push_str(&target.as_str().to_ascii_lowercase());
-    }
-    for assumption in &fact.assumptions {
-        evidence_text.push(' ');
-        evidence_text.push_str(&assumption.to_ascii_lowercase());
-    }
+fn tsjs_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = tsjs_support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && tsjs_support_fact_has_safe_origin(fact, framework_role))
+}
 
-    if framework_role.contains("express") {
-        evidence_text.contains("express")
-    } else if framework_role.contains("react") {
-        evidence_text.contains("react")
-    } else if framework_role.contains("jest_vitest") {
-        evidence_text.contains("jest") || evidence_text.contains("vitest")
-    } else {
-        false
+fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    match fact.certainty {
+        FactCertainty::DataflowDerived => {
+            fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
+                && fact_has_assumption(fact, "provider_resolved=false")
+                && fact_has_assumption(fact, "derived_from=tsjs_structural_anchors")
+                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
+        }
+        FactCertainty::Semantic => fact.origin.engine == TSJS_WORKER_ENGINE,
+        _ => false,
     }
+}
+
+/// Exact target whitelist per TS/JS framework role. Mirrors the Python whitelist:
+/// support must point at an exact recognized target, never at fact text that merely
+/// contains a framework name.
+pub(crate) fn tsjs_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    match framework_role {
+        "framework:express.route_handler" => Some(matches!(
+            target,
+            "package:express"
+                | "express.route.get"
+                | "express.route.post"
+                | "express.route.put"
+                | "express.route.patch"
+                | "express.route.delete"
+                | "express.route.use"
+        )),
+        "framework:jest_vitest.suite" => Some(matches!(
+            target,
+            "package:vitest" | "package:@jest/globals" | "jest_vitest.describe"
+        )),
+        "framework:jest_vitest.test" => Some(matches!(
+            target,
+            "package:vitest" | "package:@jest/globals" | "jest_vitest.it" | "jest_vitest.test"
+        )),
+        "framework:react.component" => Some(matches!(target, "package:react" | "react.component")),
+        "framework:react.hook" => Some(matches!(target, "package:react" | "react.hook")),
+        _ if tsjs_framework_role_is_known(framework_role) => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn tsjs_framework_role_is_known(framework_role: &str) -> bool {
+    framework_role.starts_with("framework:express")
+        || framework_role.starts_with("framework:react")
+        || framework_role.starts_with("framework:jest_vitest")
 }
 
 fn python_support_fact_is_role_compatible(
@@ -1824,6 +1866,135 @@ mod tests {
             .unknowns
             .iter()
             .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    fn tsjs_derived_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::ResolvedCall,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: TSJS_DERIVED_SUPPORT_ENGINE.to_string(),
+                engine_version: "0.1.0".to_string(),
+                method: TSJS_DERIVED_SUPPORT_METHOD.to_string(),
+            },
+            certainty: FactCertainty::DataflowDerived,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded TS/JS framework anchor support",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "provider_resolved=false".to_string(),
+                "derived_from=tsjs_structural_anchors".to_string(),
+                format!("framework_role={framework_role}"),
+                format!("tsjs_anchor_kind={}", unit.kind),
+            ],
+        }
+    }
+
+    #[test]
+    fn tsjs_derived_exact_anchor_support_forms_family_but_role_alone_does_not() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let role_only = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+            ],
+        );
+        assert!(role_only.claims.is_empty());
+        assert!(role_only
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                tsjs_derived_fact(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                ),
+            ],
+        );
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].classification, "DOMINANT_PATTERN");
+        assert_eq!(report.claims[0].support, 2);
+        assert_eq!(
+            report.claims[0].framework_role,
+            "framework:express.route_handler"
+        );
+    }
+
+    #[test]
+    fn tsjs_support_requires_safe_origin_and_exact_target() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+
+        // Wrong engine: a fact whose text merely contains "express" is not derived support.
+        let mut wrong_engine_first = tsjs_derived_fact(
+            &first,
+            "express.route.get",
+            "framework:express.route_handler",
+        );
+        wrong_engine_first.origin.engine = "repogrammar-frameworks".to_string();
+        let mut wrong_engine_second = tsjs_derived_fact(
+            &second,
+            "express.route.post",
+            "framework:express.route_handler",
+        );
+        wrong_engine_second.origin.engine = "repogrammar-frameworks".to_string();
+        let wrong_engine = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                wrong_engine_first,
+                wrong_engine_second,
+            ],
+        );
+        assert!(wrong_engine.claims.is_empty());
+
+        // Wrong target: a non-whitelisted target is not compatible even with a safe origin.
+        let unrelated = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                tsjs_derived_fact(
+                    &first,
+                    "express.lookalike.get",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &second,
+                    "express.lookalike.post",
+                    "framework:express.route_handler",
+                ),
+            ],
+        );
+        assert!(unrelated.claims.is_empty());
     }
 
     #[test]

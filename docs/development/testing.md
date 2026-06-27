@@ -258,6 +258,20 @@ allowed.
   exact-anchor variation smoke must prove that `--include-variations` selects
   explicit `variation` evidence metadata only after the family is already
   ready, while exception coverage remains missing.
+- Conservative TS/JS exact-anchor tests live alongside the parser
+  (`src/rust/adapters/parsing/tsjs_anchors.rs`), the family gate
+  (`src/rust/application/family.rs`), the derivation pass
+  (`src/rust/application/indexing.rs`), and the product smoke
+  (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
+  object-literal/dynamic/reassigned/shadowed negatives, Jest/Vitest imported and
+  ambient-in-test-file positives, custom-wrapper and foreign-import negatives,
+  that `FRAMEWORK_HEURISTIC` facts never derive support, that only
+  `repogrammar-tsjs-derived` `DATAFLOW_DERIVED` facts with exact whitelisted
+  targets form families, and that default JS/TS query output stays source-free
+  while `--include-source-spans` / `include_source_spans=true` returns bounded
+  hash-checked line-numbered spans. Positive TS/JS family fixtures live under
+  `src/fixtures/typescript/release/v0_2/express_exact_routes` and
+  `jest_vitest_exact_tests`.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,

@@ -2,8 +2,8 @@
 
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    normalize_concrete_targets, owned_install_receipt_exists, plan_install,
-    supported_concrete_targets, target_config_snippet, target_plan_line, targets_for_display,
+    known_agent_targets, normalize_concrete_targets, owned_install_receipt_exists, plan_install,
+    resolve_instruction_file, supported_concrete_targets, target_adapter, targets_for_display,
     AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
 };
 use crate::application::progress::{ProgressEvent, WorkUnits};
@@ -1294,7 +1294,7 @@ where
                 Err(error) => return CliOutput::failure(2, format!("{error}\n")),
             }
         }
-        for line in install_dry_run_native_plan(&request) {
+        for line in install_dry_run_native_plan(&request, env_lookup) {
             output.push_str(&line);
             output.push('\n');
         }
@@ -1618,14 +1618,17 @@ where
         .any(|candidate| candidate.is_file())
 }
 
-fn install_dry_run_native_plan(request: &InstallRequest) -> Vec<String> {
+fn install_dry_run_native_plan<F>(request: &InstallRequest, env_lookup: &F) -> Vec<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
     let targets = targets_for_display(request);
     if targets.is_empty() {
         return vec!["native_mcp: no agent targets selected".to_string()];
     }
     targets
         .into_iter()
-        .map(|target| target_plan_line(target, request.scope))
+        .flat_map(|target| target_adapter(target).describe_paths(request.scope, env_lookup))
         .collect()
 }
 
@@ -1640,12 +1643,13 @@ fn install_print_config_output(request: &InstallRequest) -> Result<String, Strin
     }
     let mut output = String::new();
     for target in targets {
+        let adapter = target_adapter(target);
         output.push_str(&format!(
             "config preview: target={} scope={}\n",
-            target.as_str(),
+            adapter.target_id(),
             request.scope.as_str()
         ));
-        output.push_str(&target_config_snippet(target, request.scope)?);
+        output.push_str(&adapter.print_config(request.scope)?);
         if !output.ends_with('\n') {
             output.push('\n');
         }
@@ -1680,12 +1684,19 @@ where
         None => default_install_data_dir(env_lookup)?,
     };
     let (command_dir, command_dir_on_path) = default_install_command_dir(&data_dir, env_lookup)?;
+    let mut instruction_files = Vec::new();
+    for target in known_agent_targets() {
+        if let Some(path) = resolve_instruction_file(target, env_lookup) {
+            instruction_files.push((target, path));
+        }
+    }
     Ok(InstallExecutionContext {
         executable_path,
         command_dir,
         command_dir_on_path,
         data_dir,
         current_dir: current_dir.display().to_string(),
+        instruction_files,
     })
 }
 
@@ -6956,6 +6967,30 @@ mod tests {
         assert!(claude.stdout.contains(
             "native_mcp: claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
         ));
+    }
+
+    #[test]
+    fn install_dry_run_reports_deferred_instruction_plan() {
+        let workspace = TempWorkspace::new("install-dry-run-instruction");
+        let env = |_: &str| None;
+        let output = run_with_context(
+            [
+                "install",
+                "--target",
+                "codex",
+                "--scope",
+                "global",
+                "--dry-run",
+                "--no-telemetry",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("native_mcp: codex mcp add"));
+        assert!(output.stdout.contains("instruction: deferred"));
+        assert!(output.stdout.contains("REPOGRAMMAR_INSTRUCTION_FILE_CODEX"));
     }
 
     #[test]

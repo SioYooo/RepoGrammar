@@ -41,7 +41,13 @@ semantic analysis. RepoGrammar requires compatible repeated evidence before it
 emits a confident family claim. Low-support, dynamic, stale, or unresolved cases
 remain `UNKNOWN`.
 
-TypeScript and JavaScript are not official v0.1 support targets.
+TypeScript and JavaScript are not official v0.1 support targets. A conservative
+v0.2 token-saving foundation adds exact-anchor family support for Express route
+handlers and Jest/Vitest suites/tests only: a family is claimed solely when an
+exact import/require binding and literal call shape resolve, while lookalikes,
+reassigned or shadowed bindings, dynamic receivers, custom test wrappers, and
+React components/hooks stay `UNKNOWN`. This is not full TypeScript/JavaScript
+semantic analysis.
 
 ## Install
 

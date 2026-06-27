@@ -192,9 +192,13 @@ with `repogrammar telemetry on` and `repogrammar telemetry off`.
 It must not contain source-derived family facts, evidence text, source paths,
 symbol names, query text, raw prompts, or repository-specific SQLite indexes.
 Machine-level integration receipts may contain the configured RepoGrammar
-executable path and native agent command arguments because they are required
-for precise uninstall; they must not contain paths discovered from an indexed
-repository, source evidence paths, prompts, or query targets.
+executable path, native agent command arguments, and the resolved
+instruction-file path plus the instruction action taken, because they are
+required for precise uninstall; they must not contain paths discovered from an
+indexed repository, source evidence paths, prompts, or query targets. Each
+receipt records `target`, `scope`, `mcp_server`, `executable_path`,
+`native_program`, `native_args`, `instruction_file_path` (null when deferred),
+`instruction_action`, `telemetry_enabled`, and `created_unix_seconds` only.
 
 ## Instruction-file integration
 
@@ -211,10 +215,37 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
-The installer must not overwrite unrelated user instructions. `uninstall` may
-remove only the managed section. If a file has a malformed or incomplete managed
-section, the installer must stop and direct the user to a repair workflow such
-as `repogrammar doctor --repair-instructions`.
+The installer must not overwrite unrelated user instructions. `uninstall`
+reverses only RepoGrammar's own managed write. If a file has a malformed or
+incomplete managed section, the installer must stop and direct the user to a
+repair workflow such as `repogrammar doctor --repair-instructions`.
+
+The managed instruction writer is implemented as a reversible, idempotent
+operation:
+
+- it creates the file with the managed section when the file is absent;
+- it appends the managed section, preserving prior content, when the file exists
+  without markers;
+- it replaces the section in place when a single complete managed section exists;
+- it reports an unchanged result when the section is already byte-equivalent;
+- it refuses to modify a file with malformed, partial, or duplicated markers;
+- it writes atomically through a sibling temp file plus rename and re-reads the
+  file to verify the managed section before reporting success;
+- `uninstall` and rollback reverse exactly the recorded `instruction_action`:
+  they remove the managed section and preserve unrelated user content; when
+  RepoGrammar created the file (`instruction_action: "created"`) and stripping
+  the section leaves it empty, they also delete the file so no empty artifact is
+  left behind, but a file that pre-existed the install or gained user content
+  after creation keeps its remaining content and is never deleted.
+
+Because real Codex/Claude global instruction-file locations are not yet verified,
+live instruction writing is deferred by default. The installer resolves a
+target's instruction-file path only from the explicit environment override
+`REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` (for example
+`REPOGRAMMAR_INSTRUCTION_FILE_CODEX`) and only when it resolves to an absolute
+path. When no path is resolved, the receipt records `instruction_action:
+"deferred"` and no file is written. RepoGrammar never guesses an instruction-file
+path.
 
 Consuming repositories must not be forced to mirror RepoGrammar's own
 `AGENTS.md` and `CLAUDE.md` policy.
@@ -245,9 +276,12 @@ noninteractive live writes, and a dependency-light text wizard:
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
 - the installer has a target registry for Codex, Claude Code, Cursor,
-  opencode, Hermes, Gemini, Antigravity, and Kiro. The current registry exposes
-  deferred targets through dry-run and `--print-config` snippets only; live
-  writes remain implemented for global Codex and global Claude Code;
+  opencode, Hermes, Gemini, Antigravity, and Kiro, exposed through a per-target
+  adapter contract (`TargetAdapter`) that consolidates scope support, live-writer
+  status, the no-write config preview, and the native MCP plus instruction-file
+  plan lines (`describe_paths`). The current registry exposes deferred targets
+  through dry-run and `--print-config` snippets only; live writes remain
+  implemented for global Codex and global Claude Code;
 - re-running the wizard can add missing supported agents later or refresh the
   RepoGrammar-managed command path even when all selected agents are already
   managed, without re-running native agent add commands for already managed
@@ -271,7 +305,12 @@ noninteractive live writes, and a dependency-light text wizard:
 - install runs a read-only MCP self-test before native agent configuration, with
   a bounded timeout that kills and reaps a hanging self-test process;
 - install writes one RepoGrammar-owned receipt per configured target under the
-  user install data directory after native configuration succeeds;
+  user install data directory after native configuration succeeds, recording the
+  resolved instruction-file path and instruction action;
+- the managed instruction-file writer (create/append/replace/idempotent/remove,
+  atomic temp+rename with re-read verification, malformed-marker refusal) is
+  implemented and tested, but live instruction writes stay deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path;
 - if any selected agent install or receipt write fails, receipts created during
   that run are removed and native entries configured during that run are
   removed in reverse order;
@@ -293,6 +332,8 @@ noninteractive live writes, and a dependency-light text wizard:
   configurators, and receipt behavior; any real native-CLI integration test must
   be explicitly ignored or feature-gated outside default CI.
 
-The installer still does not edit instruction files, repair malformed native
-agent config, upload telemetry, run paired experiments, or touch
-`.repogrammar/`.
+By default the installer does not edit instruction files: live instruction
+writing stays deferred unless an explicit `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>`
+override resolves to an absolute path. The installer still does not repair
+malformed native agent config, upload telemetry, run paired experiments, or
+touch `.repogrammar/`.

@@ -4,6 +4,39 @@
 
 ### Added
 
+- Conservative TS/JS exact-anchor family support for Express route handlers and
+  Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL` anchors only
+  for exact import/require bindings, app/router factories, and literal methods
+  (Express) or imported/ambient-in-test-file runners (Jest/Vitest); reassigned,
+  shadowed, dynamic-receiver, custom-wrapper, conditional-import, and
+  object-literal lookalikes stay `UNKNOWN`. The application layer promotes those
+  anchors to `DATAFLOW_DERIVED` support facts (engine `repogrammar-tsjs-derived`,
+  method `bounded_exact_anchor_v1`), and the loose substring compatibility gate
+  is replaced by an exact target whitelist plus a safe-origin check. React
+  components/hooks remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the
+  source-span renderer work for JS/TS fixtures; default output stays source-free
+  and `--include-source-spans` / `include_source_spans=true` returns bounded
+  hash-checked line-numbered spans. New fixtures live under
+  `src/fixtures/typescript/release/v0_2`. This is a token-saving foundation, not
+  full TS/JS semantic analysis or an official v0.1 target change.
+- The installer target registry is now exposed through a per-target adapter
+  contract (`TargetAdapter`) that consolidates scope support, live-writer
+  status, the no-write config preview, and `describe_paths` planning. Dry-run
+  output now reports a per-target instruction-file plan line that names the
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override and its deferred default.
+  Live writes still cover only global Codex and Claude Code, and `--target all`
+  still installs only live-supported targets all-or-rollback.
+- The installer now has a reversible, idempotent managed instruction-file
+  writer using the exact markers `<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->`
+  and `<!-- END REPOGRAMMAR MANAGED SECTION -->`. It creates, appends, replaces,
+  or leaves unchanged the managed section, refuses malformed or partial markers,
+  writes atomically with re-read verification, and on uninstall or rollback
+  removes that section, deleting a file RepoGrammar created when removal leaves
+  it empty while preserving any pre-existing or user-added content. Receipts now
+  record `instruction_file_path` and
+  `instruction_action`. Live instruction writing stays deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path, because
+  real Codex/Claude instruction-file locations are not yet verified.
 - `repogrammar index` and `repogrammar sync` now emit progress while they run.
   Human progress uses stderr and exact completed/total counts when known;
   `--json --progress always` emits progress NDJSON on stderr while preserving
@@ -595,3 +628,12 @@
   omit CLI/MCP family detail with typed `StaleEvidence` `UNKNOWN`.
 - Hardened MCP install self-tests with a bounded timeout that kills and reaps
   hanging self-test processes before native agent configuration.
+
+### Fixed
+
+- `repogrammar index`/`sync` `semantic_facts` totals (surfaced by `index --json`
+  and `status`) now include TS/JS-derived support facts. The reported count had
+  omitted `repogrammar-tsjs-derived` facts even though they were recorded and
+  fed family construction, undercounting the total for Express/Jest/Vitest
+  repositories; the reported total now equals the facts actually stored in the
+  active generation.
