@@ -36,7 +36,9 @@ allowed.
   and `receipts/init.json`,
   `uninit --yes`, unlock inspection without `--force --yes`, confirmed stale
   `index.lock` removal with `--force --yes`, active/unknown/invalid lock
-  refusal, daemon/SQLite lock preservation, and redacted logs metadata.
+  refusal, daemon/SQLite lock preservation, repo-local autosync
+  enable/status/disable config behavior, autosync daemon-lock inspection, and
+  redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   Python `.py` inclusion, unsupported module extensions,
   default dependency/build/generated/state-dir
@@ -82,6 +84,13 @@ allowed.
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
   snippets or absolute paths in CLI output and stored metadata.
+- Auto-sync CLI tests must cover `autosync` defaulting to `status`,
+  `enable/start/status/stop/disable/run` routing, `--poll-ms` and
+  `--debounce-ms` validation, `--progress` compatibility, strict-gitignore
+  propagation, human and JSON output, and no source snippets or absolute paths.
+  Default tests must not start or kill real user background services;
+  product-runtime background behavior may be covered through
+  temporary-repository smoke tests or ignored/manual tests.
 - Family storage tests must cover generation-scoped family records, members,
   variation slots, family-bound evidence, building-only writes, non-`UNKNOWN`
   family validation requiring evidence, active-generation list/show reads,
@@ -144,12 +153,12 @@ allowed.
   installation, delegated
   `repogrammar install` / `repogrammar uninstall` invocation through a fake
   binary, source-checkout `--from-source` install/configure dogfood without
-  network access, actionable no-release failure text, refusal of foreign
-  command paths, missing-worker artifact rejection, release-workflow artifact
-  and installer-script checksum contract checks, target/scope pass-through for
-  comma-separated, `none`, and local-scope install requests, and command
-  removal. Default tests must not use wrapper scripts to call real `codex` or
-  `claude` binaries.
+  network access, actionable no-release failure text, backup/replacement of
+  older unmanaged command files, missing-worker artifact rejection,
+  release-workflow artifact and installer-script checksum contract checks,
+  target/scope pass-through for comma-separated, `none`, and local-scope
+  install requests, and command removal. Default tests must not use wrapper
+  scripts to call real `codex` or `claude` binaries.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
   cover the full public-preview platform/artifact matrix, unsupported

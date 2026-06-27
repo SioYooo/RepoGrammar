@@ -464,10 +464,14 @@ remain visible to query and MCP callers.
 
 ## Sync and freshness
 
-The v0.1 indexing model is manual: `init`, `index`, `sync`, freshness warnings
-in `status`, and freshness checks before query or MCP claims. A daemon or
-watcher is optional and must not be required for correctness.
+The baseline indexing model remains explicit: `init`, `index`, `sync`,
+freshness warnings in `status`, and freshness checks before query or MCP
+claims. Optional repository-local auto-sync can be enabled with
+`repogrammar autosync start`. Auto-sync is not required for correctness, is not
+started by MCP serving or agent installation, and does not scan repositories
+that have not explicitly initialized RepoGrammar state.
 
-If a future watcher is implemented, it should reparse changed units, mark
-affected families stale, and lazily recompute on query. It should not eagerly
-recompute the whole repository by default.
+The current auto-sync worker is conservative and reuses the existing full
+`sync` path after detecting a changed discovery fingerprint and debouncing file
+changes. Incremental changed-unit reparsing, affected-family stale marking, and
+lazy query-time recomputation remain future work.

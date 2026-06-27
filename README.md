@@ -185,6 +185,7 @@ From a repository you want to analyze:
 repogrammar install
 repogrammar init
 repogrammar index
+repogrammar autosync start
 repogrammar status
 repogrammar families
 repogrammar find --project . --token-budget 8000 <target>
@@ -200,6 +201,18 @@ index or family claim exists.
 `repogrammar index` shows progress automatically in an interactive terminal.
 Use `repogrammar index --progress always` to force progress output, or
 `repogrammar index --progress never` for quiet scripts.
+
+`repogrammar autosync start` is optional but recommended for dogfooding. It
+enables repository-local auto-sync and starts a background worker that watches
+for file changes, debounces saves, and reuses the existing `sync` path. It does
+not run from `install`, does not initialize other repositories, and can be
+managed with:
+
+```text
+repogrammar autosync status
+repogrammar autosync stop
+repogrammar autosync disable
+```
 
 ## Agent Integration
 

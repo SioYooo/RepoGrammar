@@ -501,11 +501,14 @@ fact with typed `StaleEvidence`.
 Repository-revision, worktree-wide, and persisted family freshness remain
 deferred.
 
-Auto-sync is optional in v0.1. The v0.1 baseline is `init`, `index`, `sync`,
-freshness warnings in `status`, and freshness checks before MCP claims. A future
-watcher may reparse changed units, mark affected families stale, and lazily
-recompute on query, but it should not eagerly recompute the whole repository by
-default.
+Auto-sync is optional. The baseline remains `init`, `index`, `sync`, freshness
+warnings in `status`, and freshness checks before MCP claims. When enabled with
+`repogrammar autosync start`, RepoGrammar stores `.repogrammar/autosync.json`,
+uses `.repogrammar/locks/daemon.lock` for the running worker, and writes
+diagnostics to `.repogrammar/logs/daemon.log`. The current worker detects
+changed discovery fingerprints and calls the existing full `sync` path after a
+debounce interval. Incremental changed-unit reparsing, affected-family stale
+marking, and lazy query-time recomputation remain future work.
 
 ## Migration Strategy
 

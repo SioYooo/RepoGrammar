@@ -4,7 +4,12 @@ use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
+use repogrammar::application::autosync::{
+    acquire_autosync_daemon, autosync_status, daemon_log_path, disable_autosync, enable_autosync,
+    stop_autosync, AutosyncReport, AutosyncRequest, AutosyncSettings,
+};
 use repogrammar::application::indexing::{
+    discover_repository_files,
     index_repository_with_discovery_parser_frameworks_families_and_store_with_progress,
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
@@ -30,17 +35,17 @@ use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
 #[cfg(test)]
 use repogrammar::interfaces::cli::run_with_runtime;
-#[cfg(test)]
-use repogrammar::interfaces::cli::ProgressMode;
 use repogrammar::interfaces::cli::{
     parse_serve_options, render_index_progress_event, repository_root,
-    run_with_runtime_and_install_prompt, should_emit_progress, state_dir_override, CliIndexRequest,
-    CliRuntime, InstallTelemetryPrompt,
+    run_with_runtime_and_install_prompt, should_emit_progress, state_dir_override, AutosyncCommand,
+    CliAutosyncRequest, CliIndexRequest, CliRuntime, InstallTelemetryPrompt, ProgressMode,
 };
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
+use sha2::{Digest, Sha256};
+use std::fs;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -105,6 +110,153 @@ impl ProductCliRuntime {
     ) -> Result<SqliteIndexStore, RepoGrammarError> {
         let location = repository_state_location(request.clone())?;
         Ok(SqliteIndexStore::new(location.state_dir))
+    }
+
+    fn autosync_request(&self, request: &CliAutosyncRequest) -> AutosyncRequest {
+        AutosyncRequest {
+            path: request.repository_root.clone(),
+            state_dir_override: request.state_dir_override.clone(),
+        }
+    }
+
+    fn autosync_settings(&self, request: &CliAutosyncRequest) -> AutosyncSettings {
+        AutosyncSettings {
+            poll_ms: request.poll_ms,
+            debounce_ms: request.debounce_ms,
+        }
+    }
+
+    fn repository_fingerprint(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<String, RepoGrammarError> {
+        let report = discover_repository_files(
+            IndexingRequest {
+                repository_root: request.repository_root.clone(),
+                state_dir_override: request.state_dir_override.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                strict_gitignore: request.strict_gitignore,
+            },
+            &FilesystemFileDiscovery,
+        )?;
+        let mut hasher = Sha256::new();
+        for file in report.files {
+            hasher.update(file.path.as_bytes());
+            hasher.update([0]);
+            hasher.update(file.content_hash.as_str().as_bytes());
+            hasher.update([0]);
+            hasher.update(file.size_bytes.to_string().as_bytes());
+            hasher.update([0]);
+            hasher.update(file.language.as_str().as_bytes());
+            hasher.update([0xff]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    fn run_autosync_loop(
+        &self,
+        request: CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(&request);
+        let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
+        let mut current = self.repository_fingerprint(&request)?;
+        if !request.quiet {
+            eprintln!("autosync: watching repository for changes");
+        }
+        loop {
+            std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            let next = self.repository_fingerprint(&request)?;
+            if next == current {
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(settings.debounce_ms));
+            let stable = self.repository_fingerprint(&request)?;
+            if stable == current {
+                continue;
+            }
+            current = stable;
+            if !request.quiet {
+                eprintln!("autosync: change detected; running sync");
+            }
+            let sync_request = CliIndexRequest {
+                repository_root: root.display().to_string(),
+                state_dir_override: request.state_dir_override.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                strict_gitignore: request.strict_gitignore,
+                semantic_worker_executable: None,
+                semantic_worker_args: Vec::new(),
+                progress: ProgressMode::Never,
+                json: false,
+                quiet: true,
+                stderr_is_terminal: false,
+            };
+            match self.index_repository("sync", sync_request) {
+                Ok(_) if !request.quiet => eprintln!("autosync: sync complete"),
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("autosync: sync failed: {error}");
+                }
+            }
+        }
+    }
+
+    fn start_autosync_process(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(request);
+        let settings = self.autosync_settings(request);
+        enable_autosync(autosync_request.clone(), settings)?;
+        let status = autosync_status(autosync_request.clone())?;
+        if status.running {
+            return Ok(AutosyncReport {
+                message: "auto-sync is already running".to_string(),
+                ..status
+            });
+        }
+        let log_path = daemon_log_path(&autosync_request)?;
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .map_err(|_| {
+                RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
+            })?;
+        let log_err = log.try_clone().map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
+        })?;
+        let mut command = Command::new(std::env::current_exe().map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+        })?);
+        command
+            .arg("autosync")
+            .arg("run")
+            .arg("--path")
+            .arg(&request.repository_root)
+            .arg("--poll-ms")
+            .arg(request.poll_ms.to_string())
+            .arg("--debounce-ms")
+            .arg(request.debounce_ms.to_string())
+            .arg("--quiet")
+            .current_dir(&request.repository_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err));
+        if let Some(state_dir) = &request.state_dir_override {
+            command.env("REPOGRAMMAR_DIR", state_dir);
+        }
+        let child = command
+            .spawn()
+            .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))?;
+        Ok(AutosyncReport {
+            state_dir: status.state_dir,
+            enabled: true,
+            running: true,
+            pid: Some(child.id()),
+            poll_ms: request.poll_ms,
+            debounce_ms: request.debounce_ms,
+            message: "auto-sync started".to_string(),
+        })
     }
 }
 
@@ -212,6 +364,23 @@ impl CliRuntime for ProductCliRuntime {
         };
         let store = self.store_for_status_request(&status_request)?;
         repository_doctor_with_storage(request, &store)
+    }
+
+    fn autosync(
+        &self,
+        command: AutosyncCommand,
+        request: CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(&request);
+        let settings = self.autosync_settings(&request);
+        match command {
+            AutosyncCommand::Enable => enable_autosync(autosync_request, settings),
+            AutosyncCommand::Disable => disable_autosync(autosync_request),
+            AutosyncCommand::Start => self.start_autosync_process(&request),
+            AutosyncCommand::Stop => stop_autosync(autosync_request),
+            AutosyncCommand::Status => autosync_status(autosync_request),
+            AutosyncCommand::Run => self.run_autosync_loop(request),
+        }
     }
 
     fn indexed_files(

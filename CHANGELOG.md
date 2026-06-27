@@ -17,6 +17,12 @@
 
 ### Added
 
+- `repogrammar autosync` now provides optional repository-local automatic sync
+  management. `autosync start` enables and starts a background worker that
+  polls the existing discovery fingerprint, debounces file saves, and reuses the
+  existing full `sync` path; `status`, `stop`, `disable`, and foreground `run`
+  manage the worker. The feature is explicit per repository and is not started
+  by MCP serving, agent installation, or queries.
 - Public-preview readiness documentation now includes an explicit support matrix
   for Python v0.1, conservative JS/TS v0.2 Express/Jest/Vitest exact-anchor
   support, unsupported JS/TS frameworks, source-span opt-in, token-saving claim

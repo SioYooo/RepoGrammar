@@ -1,5 +1,6 @@
 //! Application use-case boundaries.
 
+pub mod autosync;
 pub mod conformance;
 pub mod family;
 pub mod indexing;

@@ -51,7 +51,13 @@
   risk, and reports measured token savings only when local paired
   baseline/treatment experiment records are comparable. `index` and `sync` emit
   typed stage progress to stderr while running, with exact counts when known
-  and NDJSON progress available through `--json --progress always`. Anonymous telemetry
+  and NDJSON progress available through `--json --progress always`.
+  `repogrammar autosync` now provides optional repo-local automatic sync:
+  `autosync start` enables and launches a background worker that polls the
+  existing discovery fingerprint, debounces saves, and reuses the current full
+  `sync` path, while `status`, `stop`, `disable`, and foreground `run` manage
+  the worker. It is explicit per repository and is not started by MCP serving,
+  queries, or agent installation. Anonymous telemetry
   upload is explicit opt-in, enabled `stats --json` writes only an allowlisted
   local rollup without queue creation or network upload, does not include a
   repository instance id, reports rollup counts / upload-open-network status,
@@ -88,8 +94,10 @@
   `repogrammar install`. The managed layout places bundled Python workers under
   install state discoverable from the managed executable, and refresh rollback
   restores the previous managed executable/command copy if self-test or native
-  agent configuration fails. It refuses foreign command paths rather than
-  adopting arbitrary existing binaries. The optional npm package
+  agent configuration fails. It backs up older unmanaged command files before
+  replacing them from the source-checkout installer, while native agent
+  configuration still refuses missing or foreign managed receipts. The optional
+  npm package
   `@sioyooo/repogrammar` is a thin npx launcher over those same release
   artifacts, not a JavaScript implementation; local npm dogfood can use
   `REPOGRAMMAR_BINARY` to execute an already built binary without release

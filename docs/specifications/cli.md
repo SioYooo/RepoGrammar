@@ -11,6 +11,7 @@ Project lifecycle:
 - `uninit`
 - `index`
 - `sync`
+- `autosync`
 - `status`
 - `doctor`
 - `unlock`
@@ -80,8 +81,8 @@ All long-running commands must support:
 - `--quiet`
 - `--verbose`
 
-Long-running commands include repository initialization, indexing, sync, and MCP
-serving.
+Long-running commands include repository initialization, indexing, sync,
+`autosync run`, and MCP serving.
 
 For `index` and `sync`, human progress is emitted to stderr when
 `--progress always` is set, or when `--progress auto` detects an interactive
@@ -190,6 +191,37 @@ The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
 during acquisition. Successful runs remove only the lock content they wrote.
+
+`repogrammar autosync` manages optional repository-local automatic sync. It
+supports subcommands:
+
+- `status`
+- `enable`
+- `start`
+- `stop`
+- `disable`
+- `run`
+
+With no subcommand, `autosync` is equivalent to `autosync status`. `start`
+enables auto-sync for the current repository if needed and launches a
+background `repogrammar autosync run` worker. The worker polls the same
+discovery fingerprint used by indexing, debounces changes, and calls the
+existing `sync` implementation when indexed files change. It must not scan
+repositories that have not explicitly run `init`, and it must not be started by
+`install`, `serve`, MCP queries, or agent wiring. `run` is the foreground worker
+entrypoint used by `start`; it writes diagnostics to
+`.repogrammar/logs/daemon.log` when started in the background. `stop` terminates
+the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
+`disable` requires the daemon to be stopped first and removes
+`.repogrammar/autosync.json`.
+
+`autosync` supports `--project <path>`, `--path <path>`, `--json`, `--quiet`,
+`--progress auto|always|never` for long-running command compatibility,
+`--poll-ms <n>` where `n` is 100 through 600000, and `--debounce-ms <n>` where
+`n` is 0 through 60000. `REPOGRAMMAR_STRICT_GITIGNORE=true` applies to
+auto-sync discovery and sync just as it does for manual `index` and `sync`.
+Auto-sync output must not include source snippets, absolute paths, content
+hashes, symbols, raw targets, or repository-identifying details.
 
 `repogrammar unlock` must remove only confirmed stale locks. It must inspect the
 recorded process, host, OS, and advisory lock state before deletion. `--force`

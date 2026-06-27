@@ -1,5 +1,6 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
+use crate::application::autosync::{AutosyncReport, AutosyncSettings};
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
     known_agent_targets, normalize_concrete_targets, owned_install_receipt_exists, plan_install,
@@ -59,6 +60,55 @@ pub struct CliIndexRequest {
     pub stderr_is_terminal: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosyncCommand {
+    Enable,
+    Disable,
+    Start,
+    Stop,
+    Status,
+    Run,
+}
+
+impl AutosyncCommand {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "enable" => Ok(Self::Enable),
+            "disable" => Ok(Self::Disable),
+            "start" => Ok(Self::Start),
+            "stop" => Ok(Self::Stop),
+            "status" => Ok(Self::Status),
+            "run" => Ok(Self::Run),
+            _ => Err(
+                "autosync subcommand must be enable, disable, start, stop, status, or run"
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Enable => "enable",
+            Self::Disable => "disable",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Status => "status",
+            Self::Run => "run",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliAutosyncRequest {
+    pub repository_root: String,
+    pub state_dir_override: Option<String>,
+    pub strict_gitignore: bool,
+    pub poll_ms: u64,
+    pub debounce_ms: u64,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 pub trait CliRuntime {
     fn index_repository(
         &self,
@@ -75,6 +125,14 @@ pub trait CliRuntime {
         &self,
         request: RepositoryDoctorRequest,
     ) -> Result<RepositoryDoctorReport, RepoGrammarError>;
+
+    fn autosync(
+        &self,
+        _command: AutosyncCommand,
+        _request: CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("autosync"))
+    }
 
     fn indexed_files(
         &self,
@@ -375,7 +433,7 @@ fn usage() -> String {
     [
         "Usage: repogrammar <command> [options]",
         "",
-        "Project lifecycle: init, uninit, index, sync, status, doctor, unlock, logs",
+        "Project lifecycle: init, uninit, index, sync, autosync, status, doctor, unlock, logs",
         "Pattern-family queries: find, families, family, member, explain, check, files, units",
         "Agent integration: serve, install, uninstall",
         "Metrics: stats, telemetry",
@@ -388,7 +446,7 @@ fn usage() -> String {
 fn is_project_lifecycle_command(command: &str) -> bool {
     matches!(
         command,
-        "init" | "uninit" | "index" | "sync" | "status" | "doctor" | "unlock" | "logs"
+        "init" | "uninit" | "index" | "sync" | "autosync" | "status" | "doctor" | "unlock" | "logs"
     )
 }
 
@@ -423,6 +481,12 @@ where
     if command == "logs" {
         return match parse_logs_options(rest) {
             Ok(options) => handle_logs(&options, current_dir, env_lookup),
+            Err(error) => CliOutput::failure(2, format!("{error}\n")),
+        };
+    }
+    if command == "autosync" {
+        return match parse_autosync_options(rest) {
+            Ok(options) => handle_autosync(&options, current_dir, env_lookup, runtime),
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         };
     }
@@ -3186,6 +3250,31 @@ where
     }
 }
 
+fn handle_autosync<F>(
+    options: &AutosyncOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let request = CliAutosyncRequest {
+        repository_root: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
+        poll_ms: options.poll_ms,
+        debounce_ms: options.debounce_ms,
+        json: options.json,
+        quiet: options.quiet,
+    };
+    match runtime.autosync(options.command, request) {
+        Ok(report) if options.json => CliOutput::success(autosync_json(options.command, &report)),
+        Ok(report) => CliOutput::success(autosync_human(options.command, &report, options)),
+        Err(error) => lifecycle_error("autosync", options.json, error),
+    }
+}
+
 fn semantic_worker_args<F>(env_lookup: &F) -> Result<Vec<String>, String>
 where
     F: Fn(&str) -> Option<String>,
@@ -3376,6 +3465,29 @@ struct LogsOptions {
     redact: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutosyncOptions {
+    command: AutosyncCommand,
+    project_path: Option<String>,
+    json: bool,
+    quiet: bool,
+    poll_ms: u64,
+    debounce_ms: u64,
+}
+
+impl Default for AutosyncOptions {
+    fn default() -> Self {
+        Self {
+            command: AutosyncCommand::Status,
+            project_path: None,
+            json: false,
+            quiet: false,
+            poll_ms: AutosyncSettings::default().poll_ms,
+            debounce_ms: AutosyncSettings::default().debounce_ms,
+        }
+    }
+}
+
 impl Default for LogsOptions {
     fn default() -> Self {
         Self {
@@ -3483,6 +3595,62 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
         }
     }
     Ok(options)
+}
+
+fn parse_autosync_options(rest: &[String]) -> Result<AutosyncOptions, String> {
+    let mut options = AutosyncOptions::default();
+    let mut index = 0;
+    if let Some(first) = rest.first().filter(|value| !value.starts_with('-')) {
+        options.command = AutosyncCommand::parse(first)?;
+        index = 1;
+    }
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--project" | "--path" => {
+                let value = option_value(rest, index, rest[index].as_str(), "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" => {
+                options.quiet = true;
+                index += 1;
+            }
+            "--poll-ms" => {
+                let value = option_value(rest, index, "--poll-ms", "milliseconds")?;
+                options.poll_ms = parse_autosync_millis("--poll-ms", value, 100, 600_000)?;
+                index += 2;
+            }
+            "--debounce-ms" => {
+                let value = option_value(rest, index, "--debounce-ms", "milliseconds")?;
+                options.debounce_ms = parse_autosync_millis("--debounce-ms", value, 0, 60_000)?;
+                index += 2;
+            }
+            "--progress" => {
+                let value = option_value(rest, index, "--progress", "auto, always, or never")?;
+                ProgressMode::parse(value)?;
+                index += 2;
+            }
+            other if !other.starts_with('-') => {
+                return Err(format!("unexpected autosync argument: {other}"));
+            }
+            other => return Err(format!("unknown autosync option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_autosync_millis(option: &str, value: &str, min: u64, max: u64) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| format!("{option} requires an integer"))?;
+    if parsed < min || parsed > max {
+        return Err(format!("{option} must be between {min} and {max}"));
+    }
+    Ok(parsed)
 }
 
 fn parse_logs_options(rest: &[String]) -> Result<LogsOptions, String> {
@@ -4116,6 +4284,47 @@ fn logs_json(outcome: &RepositoryLogsReport, options: &LogsOptions) -> String {
     }))
 }
 
+fn autosync_human(
+    command: AutosyncCommand,
+    report: &AutosyncReport,
+    options: &AutosyncOptions,
+) -> String {
+    if options.quiet {
+        return String::new();
+    }
+    let mut output = format!(
+        "autosync: {}\ncommand: {}\nstate_dir: {}\nenabled: {}\nrunning: {}\n",
+        report.message,
+        command.as_str(),
+        report.state_dir,
+        report.enabled,
+        report.running
+    );
+    if let Some(pid) = report.pid {
+        output.push_str(&format!("pid: {pid}\n"));
+    }
+    output.push_str(&format!(
+        "poll_ms: {}\ndebounce_ms: {}\n",
+        report.poll_ms, report.debounce_ms
+    ));
+    output
+}
+
+fn autosync_json(command: AutosyncCommand, report: &AutosyncReport) -> String {
+    json_line(json!({
+        "command": "autosync",
+        "subcommand": command.as_str(),
+        "status": "complete",
+        "state_dir": report.state_dir,
+        "enabled": report.enabled,
+        "running": report.running,
+        "pid": report.pid,
+        "poll_ms": report.poll_ms,
+        "debounce_ms": report.debounce_ms,
+        "message": report.message,
+    }))
+}
+
 fn repository_status_value(status: &RepositoryStatus) -> &'static str {
     match status {
         RepositoryStatus::NotInitialized => "not_initialized",
@@ -4746,6 +4955,61 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct AutosyncRequestRuntime {
+        last_command: Cell<Option<AutosyncCommand>>,
+        last_request: RefCell<Option<CliAutosyncRequest>>,
+    }
+
+    impl CliRuntime for AutosyncRequestRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            unreachable!("autosync command should not call index directly through CLI test runtime")
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("autosync command should not request status directly")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("autosync command should not request doctor directly")
+        }
+
+        fn autosync(
+            &self,
+            command: AutosyncCommand,
+            request: CliAutosyncRequest,
+        ) -> Result<AutosyncReport, RepoGrammarError> {
+            self.last_command.set(Some(command));
+            self.last_request.replace(Some(request.clone()));
+            Ok(AutosyncReport {
+                state_dir: ".repogrammar".to_string(),
+                enabled: matches!(
+                    command,
+                    AutosyncCommand::Enable
+                        | AutosyncCommand::Start
+                        | AutosyncCommand::Status
+                        | AutosyncCommand::Run
+                ),
+                running: matches!(command, AutosyncCommand::Start | AutosyncCommand::Run),
+                pid: matches!(command, AutosyncCommand::Start | AutosyncCommand::Run)
+                    .then_some(1234),
+                poll_ms: request.poll_ms,
+                debounce_ms: request.debounce_ms,
+                message: format!("autosync {} ok", command.as_str()),
+            })
+        }
+    }
+
     impl CliRuntime for TestRuntime {
         fn index_repository(
             &self,
@@ -5084,6 +5348,103 @@ mod tests {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("index JSON");
         assert_eq!(value["progress"], "always");
+    }
+
+    #[test]
+    fn autosync_start_passes_settings_to_runtime() {
+        let workspace = TempWorkspace::new("cli-autosync-start");
+        let env = |_: &str| None;
+        let runtime = AutosyncRequestRuntime::default();
+        let output = run_with_context_and_runtime(
+            [
+                "autosync",
+                "start",
+                "--json",
+                "--poll-ms",
+                "250",
+                "--debounce-ms",
+                "125",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert_eq!(runtime.last_command.get(), Some(AutosyncCommand::Start));
+        let request = runtime
+            .last_request
+            .borrow()
+            .clone()
+            .expect("autosync request");
+        assert_eq!(request.poll_ms, 250);
+        assert_eq!(request.debounce_ms, 125);
+        assert!(!request.strict_gitignore);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("autosync JSON");
+        assert_eq!(value["command"], "autosync");
+        assert_eq!(value["subcommand"], "start");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["running"], true);
+        assert_eq!(value["pid"], 1234);
+    }
+
+    #[test]
+    fn autosync_defaults_to_status_human_output() {
+        let workspace = TempWorkspace::new("cli-autosync-status");
+        let env = |_: &str| None;
+        let runtime = AutosyncRequestRuntime::default();
+        let output = run_with_context_and_runtime(["autosync"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("command: status\n"));
+        assert_eq!(runtime.last_command.get(), Some(AutosyncCommand::Status));
+    }
+
+    #[test]
+    fn autosync_rejects_invalid_poll_interval() {
+        let workspace = TempWorkspace::new("cli-autosync-bad-poll");
+        let env = |_: &str| None;
+        let runtime = AutosyncRequestRuntime::default();
+        let output = run_with_context_and_runtime(
+            ["autosync", "start", "--poll-ms", "99"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert!(output
+            .stderr
+            .contains("--poll-ms must be between 100 and 600000"));
+        assert_eq!(runtime.last_command.get(), None);
+    }
+
+    #[test]
+    fn autosync_accepts_progress_for_long_running_compatibility() {
+        let workspace = TempWorkspace::new("cli-autosync-progress");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_STRICT_GITIGNORE" => Some("true".to_string()),
+            _ => None,
+        };
+        let runtime = AutosyncRequestRuntime::default();
+        let output = run_with_context_and_runtime(
+            ["autosync", "run", "--progress", "never", "--quiet"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert_eq!(runtime.last_command.get(), Some(AutosyncCommand::Run));
+        let request = runtime
+            .last_request
+            .borrow()
+            .clone()
+            .expect("autosync request");
+        assert!(request.strict_gitignore);
+        assert!(request.quiet);
     }
 
     #[test]
