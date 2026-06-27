@@ -100,6 +100,13 @@ Some unknowns block only specific claims:
   `tsjs_receiver_binding`, `tsjs_runner_binding`, or `tsjs_support_target`
   claim while other exact-anchor units in the same repository can still form a
   family when they have enough independent compatible support.
+- TS/JS dynamic imports, conditional or non-literal `require`, unresolved
+  repo-local imports, unresolved or conflicting path aliases, ambiguous star
+  re-exports, and missing ambient test-runner project context must remain typed
+  `UNKNOWN`. These unknowns may be blocking only when they affect framework
+  identity, runner/receiver binding, support target, or another emitted family
+  claim; otherwise they remain context/read-plan guard evidence and must not be
+  guessed away.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

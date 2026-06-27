@@ -265,10 +265,13 @@ allowed.
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
   object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed negatives,
   typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver and runner
-  boundaries, bounded `package.json`/`tsconfig.json` project-config context,
-  Jest/Vitest imported and ambient-in-test-file positives, custom-wrapper and
-  foreign-import negatives, that `FRAMEWORK_HEURISTIC` facts never derive
-  support, that only
+  boundaries, bounded `package.json`/`tsconfig.json`/`jsconfig.json`
+  project-config context, bounded static relative/path-alias import resolution,
+  typed `UNKNOWN` for dynamic import, non-literal or conditional `require`,
+  unresolved/conflicting aliases, ambiguous star re-exports, Jest/Vitest
+  imported positives, ambient-in-test-file positives only with package/config
+  test-runner context, custom-wrapper and foreign-import negatives, that
+  `FRAMEWORK_HEURISTIC` facts never derive support, that only
   `repogrammar-tsjs-derived` `DATAFLOW_DERIVED` facts with exact whitelisted
   targets form families, that TS/JS families require at least three compatible
   support facts, that complete-link clustering rejects single-link bridge

@@ -9,9 +9,11 @@ use crate::core::model::{
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::ports::parser::{
-    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, SourceDocument, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParser,
 };
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Default)]
 pub struct SyntaxCodeUnitParser;
@@ -28,6 +30,25 @@ impl SourceParser for SyntaxCodeUnitParser {
             return Err(ParseError::UnsupportedLanguage);
         }
         let mut scanner = SyntaxScanner::new(document);
+        scanner.scan()?;
+        scanner.finish()
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        if document.language == Language::TsJsConfig {
+            return tsjs_project_config_report(document);
+        }
+        if !matches!(
+            document.language,
+            Language::TypeScript | Language::JavaScript
+        ) {
+            return Err(ParseError::UnsupportedLanguage);
+        }
+        let mut scanner = SyntaxScanner::new_with_context(document, context);
         scanner.scan()?;
         scanner.finish()
     }
@@ -266,8 +287,502 @@ fn tsjs_project_config_unknown_fact(
     })
 }
 
+fn tsjs_import_resolution_facts(
+    document: &SourceDocument<'_>,
+    units: &[CodeUnit],
+    context: &ParserProjectContext,
+) -> Result<Vec<SemanticFact>, ParseError> {
+    let Some(module_unit) = units.iter().find(|unit| unit.kind == CodeUnitKind::Module) else {
+        return Ok(Vec::new());
+    };
+    let module_paths = context
+        .tsjs_module_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut facts = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (line_start, line) in lines_with_offsets(document.text) {
+        let line_end = line_start + line.len();
+        if line_contains_dynamic_import(line) {
+            push_unique_import_fact(
+                &mut facts,
+                &mut seen,
+                tsjs_source_unknown_fact(
+                    document,
+                    module_unit,
+                    line_start,
+                    line_end,
+                    TsJsUnknownSpec {
+                        reason: "DynamicImport",
+                        affected_claim: "tsjs_import_resolution",
+                        kind: "dynamic_import",
+                        note: "dynamic TS/JS import expression is not resolved",
+                    },
+                )?,
+            );
+            continue;
+        }
+        if line_contains_conditional_require(line) {
+            push_unique_import_fact(
+                &mut facts,
+                &mut seen,
+                tsjs_source_unknown_fact(
+                    document,
+                    module_unit,
+                    line_start,
+                    line_end,
+                    TsJsUnknownSpec {
+                        reason: "BuildVariantAmbiguity",
+                        affected_claim: "tsjs_import_resolution",
+                        kind: "conditional_require",
+                        note: "conditional TS/JS require call is not resolved",
+                    },
+                )?,
+            );
+            continue;
+        }
+        if line_contains_dynamic_require(line) {
+            push_unique_import_fact(
+                &mut facts,
+                &mut seen,
+                tsjs_source_unknown_fact(
+                    document,
+                    module_unit,
+                    line_start,
+                    line_end,
+                    TsJsUnknownSpec {
+                        reason: "DynamicImport",
+                        affected_claim: "tsjs_import_resolution",
+                        kind: "dynamic_require",
+                        note: "dynamic TS/JS require call is not resolved",
+                    },
+                )?,
+            );
+            continue;
+        }
+        if is_export_star_line(line) {
+            push_unique_import_fact(
+                &mut facts,
+                &mut seen,
+                tsjs_source_unknown_fact(
+                    document,
+                    module_unit,
+                    line_start,
+                    line_end,
+                    TsJsUnknownSpec {
+                        reason: "ConflictingFacts",
+                        affected_claim: "tsjs_reexport_resolution",
+                        kind: "ambiguous_reexport",
+                        note: "star re-export is ambiguous without a semantic provider",
+                    },
+                )?,
+            );
+            continue;
+        }
+        for specifier in static_import_export_specifiers(line) {
+            match resolve_tsjs_import_specifier(
+                document.path,
+                &specifier,
+                &module_paths,
+                &context.tsjs_path_aliases,
+            ) {
+                ImportResolution::Resolved {
+                    path,
+                    resolution_kind,
+                } => push_unique_import_fact(
+                    &mut facts,
+                    &mut seen,
+                    tsjs_resolved_import_fact(
+                        document,
+                        module_unit,
+                        line_start,
+                        line_end,
+                        &path,
+                        resolution_kind,
+                    )?,
+                ),
+                ImportResolution::Unknown { reason, kind } => push_unique_import_fact(
+                    &mut facts,
+                    &mut seen,
+                    tsjs_source_unknown_fact(
+                        document,
+                        module_unit,
+                        line_start,
+                        line_end,
+                        TsJsUnknownSpec {
+                            reason,
+                            affected_claim: "tsjs_import_resolution",
+                            kind,
+                            note: "bounded TS/JS import resolution could not prove a unique target",
+                        },
+                    )?,
+                ),
+                ImportResolution::IgnoredExternal => {}
+            }
+        }
+    }
+    facts.sort_by(|left, right| {
+        (
+            left.kind.as_protocol_str(),
+            left.target.as_ref().map(SymbolId::as_str),
+            left.evidence.range.start_byte,
+            left.evidence.range.end_byte,
+            left.subject.as_str(),
+        )
+            .cmp(&(
+                right.kind.as_protocol_str(),
+                right.target.as_ref().map(SymbolId::as_str),
+                right.evidence.range.start_byte,
+                right.evidence.range.end_byte,
+                right.subject.as_str(),
+            ))
+    });
+    Ok(facts)
+}
+
+fn push_unique_import_fact(
+    facts: &mut Vec<SemanticFact>,
+    seen: &mut BTreeSet<(String, String, usize, usize)>,
+    fact: SemanticFact,
+) {
+    let target = fact
+        .target
+        .as_ref()
+        .map(SymbolId::as_str)
+        .unwrap_or("")
+        .to_string();
+    let key = (
+        fact.kind.as_protocol_str().to_string(),
+        target,
+        fact.evidence.range.start_byte,
+        fact.evidence.range.end_byte,
+    );
+    if seen.insert(key) {
+        facts.push(fact);
+    }
+}
+
+fn tsjs_resolved_import_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    start_byte: usize,
+    end_byte: usize,
+    target_path: &str,
+    resolution_kind: &'static str,
+) -> Result<SemanticFact, ParseError> {
+    Ok(SemanticFact {
+        kind: SemanticFactKind::ResolvedImport,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(format!("module:{target_path}")).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: TSJS_ANCHOR_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: "bounded_import_resolver_v1".to_string(),
+        },
+        certainty: FactCertainty::Structural,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
+            SourceRange::new(start_byte, end_byte).map_err(ParseError::Internal)?,
+            Provenance::new(
+                document.path,
+                document.content_hash.clone(),
+                document.repository_revision.clone(),
+            )
+            .map_err(ParseError::Internal)?,
+            "bounded static TS/JS import target",
+        )
+        .map_err(ParseError::Internal)?,
+        assumptions: vec![
+            format!("tsjs_import_resolution={resolution_kind}"),
+            "provider_resolved=false".to_string(),
+        ],
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TsJsUnknownSpec {
+    reason: &'static str,
+    affected_claim: &'static str,
+    kind: &'static str,
+    note: &'static str,
+}
+
+fn tsjs_source_unknown_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    start_byte: usize,
+    end_byte: usize,
+    spec: TsJsUnknownSpec,
+) -> Result<SemanticFact, ParseError> {
+    Ok(SemanticFact {
+        kind: SemanticFactKind::Unknown,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(spec.reason.to_string()).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: TSJS_ANCHOR_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: "bounded_import_resolver_v1".to_string(),
+        },
+        certainty: FactCertainty::Unknown,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
+            SourceRange::new(start_byte, end_byte).map_err(ParseError::Internal)?,
+            Provenance::new(
+                document.path,
+                document.content_hash.clone(),
+                document.repository_revision.clone(),
+            )
+            .map_err(ParseError::Internal)?,
+            spec.note,
+        )
+        .map_err(ParseError::Internal)?,
+        assumptions: vec![
+            format!("affected_claim={}", spec.affected_claim),
+            format!("tsjs_unknown_kind={}", spec.kind),
+        ],
+    })
+}
+
+enum ImportResolution {
+    Resolved {
+        path: String,
+        resolution_kind: &'static str,
+    },
+    Unknown {
+        reason: &'static str,
+        kind: &'static str,
+    },
+    IgnoredExternal,
+}
+
+fn resolve_tsjs_import_specifier(
+    current_path: &str,
+    specifier: &str,
+    module_paths: &BTreeSet<String>,
+    aliases: &[crate::ports::parser::ParserTsJsPathAlias],
+) -> ImportResolution {
+    if specifier.starts_with("./") || specifier.starts_with("../") {
+        let Some(base) = normalize_relative_specifier(current_path, specifier) else {
+            return ImportResolution::Unknown {
+                reason: "UnresolvedImport",
+                kind: "unresolved_import",
+            };
+        };
+        return resolve_module_base(&base, module_paths, "literal_relative");
+    }
+    let mut matched_alias = false;
+    let mut matches = BTreeSet::new();
+    for alias in aliases {
+        let Some(replacements) = alias_replacements(specifier, &alias.alias_pattern) else {
+            continue;
+        };
+        matched_alias = true;
+        for replacement in replacements {
+            for target_pattern in &alias.target_patterns {
+                let candidate = apply_alias_target(target_pattern, &replacement);
+                match resolve_module_base(&candidate, module_paths, "path_alias") {
+                    ImportResolution::Resolved { path, .. } => {
+                        matches.insert(path);
+                    }
+                    ImportResolution::Unknown { .. } | ImportResolution::IgnoredExternal => {}
+                }
+            }
+        }
+    }
+    if matches.len() == 1 {
+        return ImportResolution::Resolved {
+            path: matches.into_iter().next().expect("one alias match"),
+            resolution_kind: "path_alias",
+        };
+    }
+    if matched_alias {
+        return ImportResolution::Unknown {
+            reason: if matches.is_empty() {
+                "UnresolvedImport"
+            } else {
+                "ConflictingFacts"
+            },
+            kind: if matches.is_empty() {
+                "unresolved_path_alias"
+            } else {
+                "path_alias_conflict"
+            },
+        };
+    }
+    ImportResolution::IgnoredExternal
+}
+
+fn resolve_module_base(
+    base: &str,
+    module_paths: &BTreeSet<String>,
+    resolution_kind: &'static str,
+) -> ImportResolution {
+    let mut matches = BTreeSet::new();
+    for candidate in module_path_candidates(base) {
+        if module_paths.contains(&candidate) {
+            matches.insert(candidate);
+        }
+    }
+    match matches.len() {
+        0 => ImportResolution::Unknown {
+            reason: "UnresolvedImport",
+            kind: "unresolved_import",
+        },
+        1 => ImportResolution::Resolved {
+            path: matches.into_iter().next().expect("one module match"),
+            resolution_kind,
+        },
+        _ => ImportResolution::Unknown {
+            reason: "ConflictingFacts",
+            kind: "ambiguous_import",
+        },
+    }
+}
+
+fn module_path_candidates(base: &str) -> Vec<String> {
+    let has_extension = [".ts", ".tsx", ".js", ".jsx"]
+        .iter()
+        .any(|extension| base.ends_with(extension));
+    if has_extension {
+        return vec![base.to_string()];
+    }
+    let mut candidates = Vec::new();
+    for extension in [".ts", ".tsx", ".js", ".jsx"] {
+        candidates.push(format!("{base}{extension}"));
+    }
+    for extension in [".ts", ".tsx", ".js", ".jsx"] {
+        candidates.push(format!("{base}/index{extension}"));
+    }
+    candidates
+}
+
+fn normalize_relative_specifier(current_path: &str, specifier: &str) -> Option<String> {
+    let mut parts = current_path
+        .rsplit_once('/')
+        .map(|(directory, _)| directory.split('/').collect::<Vec<_>>())
+        .unwrap_or_default();
+    for part in specifier.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            value => parts.push(value),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+fn alias_replacements(specifier: &str, alias_pattern: &str) -> Option<Vec<String>> {
+    if !alias_pattern.contains('*') {
+        return (specifier == alias_pattern).then(|| vec![String::new()]);
+    }
+    let mut segments = alias_pattern.split('*');
+    let prefix = segments.next().unwrap_or("");
+    let suffix = segments.next().unwrap_or("");
+    if segments.next().is_some() {
+        return None;
+    }
+    if !specifier.starts_with(prefix) || !specifier.ends_with(suffix) {
+        return None;
+    }
+    let replacement = &specifier[prefix.len()..specifier.len() - suffix.len()];
+    Some(vec![replacement.to_string()])
+}
+
+fn apply_alias_target(target_pattern: &str, replacement: &str) -> String {
+    if target_pattern.contains('*') {
+        target_pattern.replace('*', replacement)
+    } else {
+        target_pattern.to_string()
+    }
+}
+
+fn static_import_export_specifiers(line: &str) -> Vec<String> {
+    let trimmed = line.trim_start();
+    let mut specifiers = Vec::new();
+    if trimmed.starts_with("import ") {
+        if let Some(specifier) = first_quoted_after(trimmed, " from ") {
+            specifiers.push(specifier);
+        } else if let Some(specifier) = first_quoted_after(trimmed, "import ") {
+            specifiers.push(specifier);
+        }
+    }
+    if trimmed.starts_with("export ") && !trimmed.starts_with("export *") {
+        if let Some(specifier) = first_quoted_after(trimmed, " from ") {
+            specifiers.push(specifier);
+        }
+    }
+    for specifier in quoted_require_specifiers(trimmed) {
+        specifiers.push(specifier);
+    }
+    specifiers
+}
+
+fn first_quoted_after(line: &str, marker: &str) -> Option<String> {
+    let index = line.find(marker)? + marker.len();
+    first_quoted(&line[index..])
+}
+
+fn first_quoted(text: &str) -> Option<String> {
+    let quote_index = text.find(['"', '\''])?;
+    let quote = text.as_bytes()[quote_index] as char;
+    let rest = &text[quote_index + 1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+fn quoted_require_specifiers(line: &str) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut rest = line;
+    while let Some(index) = rest.find("require(") {
+        let after = &rest[index + "require(".len()..];
+        if let Some(specifier) = first_quoted(after) {
+            output.push(specifier);
+        }
+        rest = &after[after
+            .find(')')
+            .map(|offset| offset + 1)
+            .unwrap_or(after.len())..];
+    }
+    output
+}
+
+fn line_contains_dynamic_import(line: &str) -> bool {
+    line.contains("import(")
+}
+
+fn line_contains_dynamic_require(line: &str) -> bool {
+    let mut rest = line;
+    while let Some(index) = rest.find("require(") {
+        let after = rest[index + "require(".len()..].trim_start();
+        if !after.starts_with('"') && !after.starts_with('\'') {
+            return true;
+        }
+        rest = &after[after
+            .find(')')
+            .map(|offset| offset + 1)
+            .unwrap_or(after.len())..];
+    }
+    false
+}
+
+fn line_contains_conditional_require(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.contains("require(")
+        && (trimmed.starts_with("if ")
+            || trimmed.starts_with("if(")
+            || trimmed.contains(" ? require("))
+}
+
+fn is_export_star_line(line: &str) -> bool {
+    line.trim_start().starts_with("export *")
+}
+
 struct SyntaxScanner<'a> {
     document: SourceDocument<'a>,
+    context: Option<&'a ParserProjectContext>,
     units: Vec<CodeUnit>,
     diagnostics: Vec<ParseDiagnostic>,
     ordinal: usize,
@@ -277,6 +792,17 @@ impl<'a> SyntaxScanner<'a> {
     fn new(document: SourceDocument<'a>) -> Self {
         Self {
             document,
+            context: None,
+            units: Vec::new(),
+            diagnostics: Vec::new(),
+            ordinal: 0,
+        }
+    }
+
+    fn new_with_context(document: SourceDocument<'a>, context: &'a ParserProjectContext) -> Self {
+        Self {
+            document,
+            context: Some(context),
             units: Vec::new(),
             diagnostics: Vec::new(),
             ordinal: 0,
@@ -310,8 +836,19 @@ impl<'a> SyntaxScanner<'a> {
         });
         let ir_nodes = ir_nodes_for_units(&self.units).map_err(ParseError::Internal)?;
         let ir_edges = ir_edges_for_units(&self.units).map_err(ParseError::Internal)?;
-        let semantic_facts =
-            super::tsjs_anchors::exact_framework_anchors(&self.document, &self.units)?;
+        let mut semantic_facts = super::tsjs_anchors::exact_framework_anchors(
+            &self.document,
+            &self.units,
+            self.context
+                .is_some_and(|context| context.tsjs_has_test_runner_context),
+        )?;
+        if let Some(context) = self.context {
+            semantic_facts.extend(tsjs_import_resolution_facts(
+                &self.document,
+                &self.units,
+                context,
+            )?);
+        }
         Ok(ParseReport {
             units: self.units,
             ir_nodes,
@@ -959,6 +1496,127 @@ describe("users", () => {
                     .target
                     .as_ref()
                     .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")
+        }));
+    }
+
+    #[test]
+    fn tsjs_context_resolves_static_relative_and_alias_imports_only() {
+        let context = ParserProjectContext {
+            tsjs_module_paths: vec![
+                "src/api/users.ts".to_string(),
+                "src/api/orders.ts".to_string(),
+                "src/lib/client.ts".to_string(),
+            ],
+            tsjs_path_aliases: vec![crate::ports::parser::ParserTsJsPathAlias {
+                alias_pattern: "@/*".to_string(),
+                target_patterns: vec!["src/*".to_string()],
+            }],
+            tsjs_has_test_runner_context: true,
+            ..ParserProjectContext::default()
+        };
+        let source = r#"
+import users from "./users";
+import { client } from "@/lib/client";
+import express from "express";
+export { orders } from "./orders";
+"#;
+
+        let report = SyntaxCodeUnitParser
+            .parse_with_context(document("src/api/routes.ts", source), &context)
+            .expect("parse with TS/JS context");
+        let resolved_targets = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::ResolvedImport)
+            .filter_map(|fact| fact.target.as_ref().map(SymbolId::as_str))
+            .collect::<BTreeSet<_>>();
+
+        assert!(resolved_targets.contains("module:src/api/users.ts"));
+        assert!(resolved_targets.contains("module:src/api/orders.ts"));
+        assert!(resolved_targets.contains("module:src/lib/client.ts"));
+        assert!(!resolved_targets
+            .iter()
+            .any(|target| target.contains("express")));
+        assert!(report.semantic_facts.iter().all(|fact| {
+            fact.evidence.provenance.path == "src/api/routes.ts"
+                && !format!("{fact:?}").contains("/Users/")
+        }));
+    }
+
+    #[test]
+    fn tsjs_context_marks_dynamic_and_ambiguous_import_boundaries_unknown() {
+        let context = ParserProjectContext {
+            tsjs_module_paths: vec![
+                "src/a.ts".to_string(),
+                "src/ambiguous.ts".to_string(),
+                "src/ambiguous.tsx".to_string(),
+            ],
+            ..ParserProjectContext::default()
+        };
+        let source = r#"
+const name = "./a";
+await import(name);
+const loaded = require(name);
+if (flag) require("./a");
+export * from "./a";
+import ambiguous from "./ambiguous";
+"#;
+
+        let report = SyntaxCodeUnitParser
+            .parse_with_context(document("src/main.ts", source), &context)
+            .expect("parse dynamic import boundaries");
+        let unknown_kinds = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::Unknown)
+            .flat_map(|fact| fact.assumptions.iter())
+            .filter_map(|assumption| assumption.strip_prefix("tsjs_unknown_kind="))
+            .collect::<BTreeSet<_>>();
+
+        assert!(unknown_kinds.contains("dynamic_import"));
+        assert!(unknown_kinds.contains("dynamic_require"));
+        assert!(unknown_kinds.contains("conditional_require"));
+        assert!(unknown_kinds.contains("ambiguous_reexport"));
+        assert!(unknown_kinds.contains("ambiguous_import"));
+    }
+
+    #[test]
+    fn ambient_jest_vitest_runner_requires_project_context() {
+        let source = r#"
+describe("users", () => {
+  it("loads", () => {});
+});
+"#;
+        let no_context = SyntaxCodeUnitParser
+            .parse_with_context(
+                document("tests/users.test.ts", source),
+                &ParserProjectContext::default(),
+            )
+            .expect("parse without test context");
+        assert!(no_context.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "tsjs_unknown_kind=ambient_runner_without_project_context"
+                })
+        }));
+        assert!(no_context.semantic_facts.iter().all(|fact| fact
+            .target
+            .as_ref()
+            .map(SymbolId::as_str)
+            != Some("jest_vitest.describe")));
+
+        let with_context = SyntaxCodeUnitParser
+            .parse_with_context(
+                document("tests/users.test.ts", source),
+                &ParserProjectContext {
+                    tsjs_has_test_runner_context: true,
+                    ..ParserProjectContext::default()
+                },
+            )
+            .expect("parse with test context");
+        assert!(with_context.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("jest_vitest.describe")
         }));
     }
 

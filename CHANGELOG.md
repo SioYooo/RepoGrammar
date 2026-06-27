@@ -24,6 +24,15 @@
   hash-checked line-numbered spans. New fixtures live under
   `src/fixtures/typescript/release/v0_2`. This is a token-saving foundation, not
   full TS/JS semantic analysis or an official v0.1 target change.
+- Bounded TS/JS project context now feeds parser-mode indexing: discovered
+  TS/JS module paths, JSON `tsconfig.json`/`jsconfig.json` path aliases, and
+  package/config Jest/Vitest context are passed into the syntax parser. Unique
+  literal relative imports and unique path-alias imports can be persisted as
+  `STRUCTURAL` `RESOLVED_IMPORT` context facts, while dynamic imports,
+  non-literal or conditional `require`, unresolved or conflicting aliases, and
+  star re-exports persist typed `UNKNOWN`s. Ambient Jest/Vitest globals now
+  require package/config test-runner context; test-file location alone is not
+  enough to form support.
 - The installer target registry is now exposed through a per-target adapter
   contract (`TargetAdapter`) that consolidates scope support, live-writer
   status, the no-write config preview, and `describe_paths` planning. Dry-run

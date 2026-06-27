@@ -26,8 +26,8 @@ use crate::ports::index_store::{
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, SourceDocument,
-    SourceParser,
+    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
+    SourceDocument, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -679,6 +679,9 @@ fn parser_project_context(
         .collect();
     let python_source_roots =
         python_source_roots_from_project_config(request, report, source_store, parser)?;
+    let tsjs_module_paths = tsjs_module_paths(report);
+    let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
+    let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
     let mut python_conftest_files = Vec::new();
     for file in &report.files {
         if file.language != DiscoveredLanguage::Python || !is_python_conftest_path(&file.path) {
@@ -702,7 +705,132 @@ fn parser_project_context(
         python_module_paths,
         python_source_roots,
         python_conftest_files,
+        tsjs_module_paths,
+        tsjs_path_aliases,
+        tsjs_has_test_runner_context,
     })
+}
+
+fn tsjs_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
+    report
+        .files
+        .iter()
+        .filter(|file| is_tsjs_source_language(file.language))
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn is_tsjs_source_language(language: DiscoveredLanguage) -> bool {
+    matches!(
+        language,
+        DiscoveredLanguage::TypeScript
+            | DiscoveredLanguage::TypeScriptReact
+            | DiscoveredLanguage::JavaScript
+            | DiscoveredLanguage::JavaScriptReact
+    )
+}
+
+fn tsjs_path_aliases_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<Vec<ParserTsJsPathAlias>, RepoGrammarError> {
+    let mut aliases = Vec::new();
+    for config_path in ["tsconfig.json", "jsconfig.json"] {
+        let Some(file) = report.files.iter().find(|file| {
+            file.language == DiscoveredLanguage::TsJsConfig && file.path == config_path
+        }) else {
+            continue;
+        };
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+            continue;
+        };
+        let Some(paths) = value
+            .get("compilerOptions")
+            .and_then(|compiler_options| compiler_options.get("paths"))
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        for (alias_pattern, target_patterns) in paths {
+            let targets = target_patterns
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if !targets.is_empty() {
+                aliases.push(ParserTsJsPathAlias {
+                    alias_pattern: alias_pattern.clone(),
+                    target_patterns: targets,
+                });
+            }
+        }
+    }
+    aliases.sort_by(|left, right| {
+        left.alias_pattern
+            .cmp(&right.alias_pattern)
+            .then_with(|| left.target_patterns.cmp(&right.target_patterns))
+    });
+    aliases.dedup();
+    Ok(aliases)
+}
+
+fn tsjs_has_test_runner_context(
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+    request: &IndexingRequest,
+) -> Result<bool, RepoGrammarError> {
+    if report.files.iter().any(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig
+            && matches!(
+                file.path.as_str(),
+                "jest.config.json" | "vitest.config.json"
+            )
+    }) {
+        return Ok(true);
+    }
+    let Some(package_file) = report.files.iter().find(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig && file.path == "package.json"
+    }) else {
+        return Ok(false);
+    };
+    let source = source_store
+        .read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: package_file.path.clone(),
+            expected_content_hash: package_file.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        })
+        .map_err(source_store_error)?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+        return Ok(false);
+    };
+    for field in ["dependencies", "devDependencies", "peerDependencies"] {
+        if value
+            .get(field)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|dependencies| {
+                dependencies.contains_key("vitest")
+                    || dependencies.contains_key("@jest/globals")
+                    || dependencies.contains_key("jest")
+            })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn is_python_conftest_path(path: &str) -> bool {

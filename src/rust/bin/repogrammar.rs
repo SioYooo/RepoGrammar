@@ -2449,6 +2449,40 @@ mod tests {
                     .as_deref()
                     .is_some_and(|target| target.starts_with("tsconfig.path_alias:"))
         }));
+        let resolved_imports = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "RESOLVED_IMPORT")
+            .filter_map(|fact| fact.target.as_deref())
+            .collect::<Vec<_>>();
+        assert!(resolved_imports.contains(&"module:src/lib/client.ts"));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_path_alias")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("DynamicImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=dynamic_import")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=ambiguous_reexport")
+        }));
         assert!(facts.facts.iter().any(|fact| {
             fact.kind == "UNKNOWN"
                 && fact.path == "lookalikes.ts"
@@ -2669,7 +2703,7 @@ mod tests {
     }
 
     #[test]
-    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_remain_low_support_unknown() {
+    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_require_project_context() {
         let workspace = TempWorkspace::new("tsjs-v0-1-jest-vitest-basic-ambient");
         copy_release_fixture("jest-vitest-basic", workspace.path());
         let runtime = ProductCliRuntime;
@@ -2700,8 +2734,29 @@ mod tests {
             .iter()
             .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
             .count();
-        assert_eq!(suites, 2, "ambient describe in two test files");
-        assert_eq!(cases, 2, "ambient it/test in two test files");
+        assert_eq!(
+            suites, 0,
+            "ambient describe without package/config context must not support a family"
+        );
+        assert_eq!(
+            cases, 0,
+            "ambient it/test without package/config context must not support a family"
+        );
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("MissingProjectConfig")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "tsjs_unknown_kind=ambient_runner_without_project_context"
+                })
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2711,7 +2766,7 @@ mod tests {
         let family_array = families_json["families"].as_array().expect("families");
         assert!(
             family_array.is_empty(),
-            "two ambient suites/tests are below the conservative TS/JS support threshold"
+            "ambient suites/tests without project context must stay UNKNOWN"
         );
     }
 

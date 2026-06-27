@@ -19,12 +19,21 @@ pub struct ParserProjectContext {
     pub python_module_paths: Vec<String>,
     pub python_source_roots: Vec<String>,
     pub python_conftest_files: Vec<ParserProjectFileContext>,
+    pub tsjs_module_paths: Vec<String>,
+    pub tsjs_path_aliases: Vec<ParserTsJsPathAlias>,
+    pub tsjs_has_test_runner_context: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserProjectFileContext {
     pub path: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserTsJsPathAlias {
+    pub alias_pattern: String,
+    pub target_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

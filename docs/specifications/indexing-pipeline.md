@@ -71,7 +71,17 @@ families require at least three compatible exact-anchor support facts and use
 complete-link compatibility over route method/path/handler profiles or
 runner/test/import profiles. Bounded project inventory for `package.json`,
 `tsconfig.json`, `jsconfig.json`, and Jest/Vitest config files is structural
-context only; script configs are not executed. React components and hooks remain
+context only; script configs are not executed. The parser project context also
+builds a bounded repo-local TS/JS module inventory plus JSON `paths` aliases
+from `tsconfig.json`/`jsconfig.json`. It can persist `STRUCTURAL`
+`RESOLVED_IMPORT` facts only for unique literal relative imports or unique
+path-alias imports that resolve to discovered repo files. Dynamic
+`import(...)`, non-literal `require(...)`, conditional `require(...)`,
+unresolved aliases/imports, conflicting alias candidates, and `export *` stay
+typed `UNKNOWN`; those facts are context/abstention evidence and do not become
+family support. Ambient Jest/Vitest globals require bounded project test-runner
+context from package or config inventory; otherwise they emit
+`MissingProjectConfig` instead of support. React components and hooks remain
 `UNKNOWN` in this slice. This is a token-saving foundation, not full TS/JS
 semantic analysis, and TS/JS remains a transitional substrate rather than the
 official v0.1 target.
@@ -232,8 +242,12 @@ membership by themselves; only the application-layer `repogrammar-tsjs-derived`
 promotion can turn them into `DATAFLOW_DERIVED` support. It also emits typed
 TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express
 receivers, unsafe or unresolved Jest/Vitest runner bindings, and bounded config
-parse/execution ambiguity; these facts remain blocked from support and may only
-affect claim abstention, compatibility, or read-plan guidance.
+parse/execution ambiguity. The bounded import resolver additionally emits
+structural repo-local import facts or typed `UNKNOWN` records for dynamic
+imports, conditional or non-literal `require`, unresolved/conflicting
+path-alias resolution, and ambiguous star re-exports. These facts remain blocked
+from support and may only affect claim abstention, compatibility, or read-plan
+guidance.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython

@@ -49,9 +49,12 @@ reassigned or shadowed bindings, dynamic receivers or methods, custom test
 wrappers, and React components/hooks stay `UNKNOWN`. TS/JS family claims require
 at least three compatible exact-anchor support facts and use conservative
 complete-link clustering so incompatible handler/test shapes do not single-link
-into one family. Bounded `package.json` and `tsconfig.json` inventory is stored
-as structural context only. This is not full TypeScript/JavaScript semantic
-analysis.
+into one family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
+Jest/Vitest config inventory is stored as structural context only. A bounded
+repo-local static import resolver can record relative/path-alias imports as
+structural context, while dynamic imports, conditional `require`, unresolved
+aliases, and star re-exports remain typed `UNKNOWN`. This is not full
+TypeScript/JavaScript semantic analysis.
 
 ## Install
 

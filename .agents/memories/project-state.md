@@ -362,7 +362,14 @@ TS/JS support facts, and applies complete-link compatibility over conservative
 route/test feature profiles so bridge members cannot single-link incompatible
 families. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
 Jest/Vitest config inventory is stored only as structural context or typed
-config `UNKNOWN`. Reassigned/shadowed/dynamic/lookalike Express receivers,
+config `UNKNOWN`. Parser-mode TS/JS indexing also passes discovered TS/JS
+module paths, JSON path aliases, and bounded test-runner package/config context
+into the syntax parser. Unique literal relative and path-alias imports can be
+persisted as structural repo-local import context; dynamic imports,
+non-literal/conditional `require`, unresolved or conflicting aliases, and star
+re-exports stay typed `UNKNOWN`. Ambient Jest/Vitest globals require that
+package/config test-runner context rather than test-file path alone.
+Reassigned/shadowed/dynamic/lookalike Express receivers,
 dynamic route methods, custom Jest/Vitest wrappers, ambiguous non-test-file
 globals, and all React components/hooks stay `UNKNOWN`.
 `src/fixtures/typescript/release/v0_2/express_exact_routes` and

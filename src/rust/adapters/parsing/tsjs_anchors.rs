@@ -28,11 +28,12 @@ const RUNNER_MODULES: [&str; 2] = ["vitest", "@jest/globals"];
 pub fn exact_framework_anchors(
     document: &SourceDocument<'_>,
     units: &[CodeUnit],
+    ambient_runner_allowed: bool,
 ) -> Result<Vec<SemanticFact>, ParseError> {
     let bindings = ModuleBindings::analyze(document.text);
     let mut facts = Vec::new();
     for unit in units {
-        match anchor_for_unit(document, &bindings, unit) {
+        match anchor_for_unit(document, &bindings, unit, ambient_runner_allowed) {
             AnchorOutcome::Anchor(anchor) => facts.push(anchor_fact(document, unit, anchor)?),
             AnchorOutcome::Unknown(unknown) => facts.push(unknown_fact(document, unit, unknown)?),
             AnchorOutcome::None => {}
@@ -97,6 +98,7 @@ fn anchor_for_unit(
     document: &SourceDocument<'_>,
     bindings: &ModuleBindings,
     unit: &CodeUnit,
+    ambient_runner_allowed: bool,
 ) -> AnchorOutcome {
     let Some(slice) = document
         .text
@@ -106,8 +108,12 @@ fn anchor_for_unit(
     };
     match unit.kind {
         CodeUnitKind::ExpressRoute => express_route_anchor(bindings, slice),
-        CodeUnitKind::TestSuite => test_anchor(document, bindings, slice, true),
-        CodeUnitKind::TestCase => test_anchor(document, bindings, slice, false),
+        CodeUnitKind::TestSuite => {
+            test_anchor(document, bindings, slice, true, ambient_runner_allowed)
+        }
+        CodeUnitKind::TestCase => {
+            test_anchor(document, bindings, slice, false, ambient_runner_allowed)
+        }
         _ => AnchorOutcome::None,
     }
 }
@@ -166,6 +172,7 @@ fn test_anchor(
     bindings: &ModuleBindings,
     slice: &str,
     is_suite: bool,
+    ambient_runner_allowed: bool,
 ) -> AnchorOutcome {
     let Some(name) = test_call_name(slice) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
@@ -213,6 +220,14 @@ fn test_anchor(
         name == "it" || name == "test"
     };
     if expected_ambient && is_ambient_runner(document.path, bindings, name) {
+        if !ambient_runner_allowed {
+            return AnchorOutcome::Unknown(UnknownAnchor {
+                reason: UnknownReasonCode::MissingProjectConfig,
+                affected_claim: "tsjs_runner_binding",
+                kind: "ambient_runner_without_project_context",
+                note: "TS/JS ambient test runner lacks bounded project test context",
+            });
+        }
         return AnchorOutcome::Anchor(test_anchor_for_runner(
             name, name, "ambient", is_suite, slice,
         ));
@@ -850,9 +865,28 @@ mod tests {
     use super::*;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::core::model::{ContentHash, Language, RepositoryRevision};
-    use crate::ports::parser::SourceParser;
+    use crate::ports::parser::{ParserProjectContext, SourceParser};
 
     fn parse_facts(path: &str, text: &str) -> Vec<SemanticFact> {
+        parse_facts_with_context(path, text, None)
+    }
+
+    fn parse_facts_with_test_context(path: &str, text: &str) -> Vec<SemanticFact> {
+        parse_facts_with_context(
+            path,
+            text,
+            Some(ParserProjectContext {
+                tsjs_has_test_runner_context: true,
+                ..ParserProjectContext::default()
+            }),
+        )
+    }
+
+    fn parse_facts_with_context(
+        path: &str,
+        text: &str,
+        context: Option<ParserProjectContext>,
+    ) -> Vec<SemanticFact> {
         let language = if path.ends_with(".js") || path.ends_with(".jsx") {
             Language::JavaScript
         } else {
@@ -868,14 +902,32 @@ mod tests {
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
             text,
         };
-        SyntaxCodeUnitParser
-            .parse(document)
-            .expect("parse")
-            .semantic_facts
+        match context {
+            Some(context) => {
+                SyntaxCodeUnitParser
+                    .parse_with_context(document, &context)
+                    .expect("parse with context")
+                    .semantic_facts
+            }
+            None => {
+                SyntaxCodeUnitParser
+                    .parse(document)
+                    .expect("parse")
+                    .semantic_facts
+            }
+        }
     }
 
     fn targets(path: &str, text: &str) -> Vec<String> {
-        let mut targets = parse_facts(path, text)
+        targets_from_facts(parse_facts(path, text))
+    }
+
+    fn targets_with_test_context(path: &str, text: &str) -> Vec<String> {
+        targets_from_facts(parse_facts_with_test_context(path, text))
+    }
+
+    fn targets_from_facts(facts: Vec<SemanticFact>) -> Vec<String> {
+        let mut targets = facts
             .iter()
             .filter(|fact| fact.kind != SemanticFactKind::Unknown)
             .map(|fact| fact.target.as_ref().expect("target").as_str().to_string())
@@ -885,7 +937,15 @@ mod tests {
     }
 
     fn unknown_kinds(path: &str, text: &str) -> Vec<String> {
-        let mut kinds = parse_facts(path, text)
+        unknown_kinds_from_facts(parse_facts(path, text))
+    }
+
+    fn unknown_kinds_with_test_context(path: &str, text: &str) -> Vec<String> {
+        unknown_kinds_from_facts(parse_facts_with_test_context(path, text))
+    }
+
+    fn unknown_kinds_from_facts(facts: Vec<SemanticFact>) -> Vec<String> {
+        let mut kinds = facts
             .iter()
             .filter(|fact| fact.kind == SemanticFactKind::Unknown)
             .filter_map(|fact| {
@@ -1132,10 +1192,18 @@ suite("orders", () => {
 });
 "#;
         assert_eq!(
-            targets("src/users.test.ts", ambient),
+            targets_with_test_context("src/users.test.ts", ambient),
             vec![
                 "jest_vitest.describe".to_string(),
                 "jest_vitest.it".to_string()
+            ]
+        );
+        assert!(targets("src/users.test.ts", ambient).is_empty());
+        assert_eq!(
+            unknown_kinds("src/users.test.ts", ambient),
+            vec![
+                "ambient_runner_without_project_context".to_string(),
+                "ambient_runner_without_project_context".to_string()
             ]
         );
 
@@ -1151,13 +1219,13 @@ describe("users", () => {
 });
 "#;
         // `it` is locally declared (a custom wrapper), so the test case has no anchor;
-        // `describe` is ambient in this test file and still anchors.
+        // `describe` is ambient in this test file and still anchors with project context.
         assert_eq!(
-            targets("src/users.test.ts", wrapper),
+            targets_with_test_context("src/users.test.ts", wrapper),
             vec!["jest_vitest.describe".to_string()]
         );
         assert_eq!(
-            unknown_kinds("src/users.test.ts", wrapper),
+            unknown_kinds_with_test_context("src/users.test.ts", wrapper),
             vec!["unsafe_test_runner_binding".to_string()]
         );
 

@@ -2221,6 +2221,7 @@ def load():
             ],
             python_source_roots: Vec::new(),
             python_conftest_files: Vec::new(),
+            ..ParserProjectContext::default()
         };
         let report = PythonAstParser::default()
             .parse_with_context(document(source), &context)
@@ -3071,6 +3072,7 @@ from acme.missing import value\n";
             ],
             python_source_roots: Vec::new(),
             python_conftest_files: Vec::new(),
+            ..ParserProjectContext::default()
         };
         let parser = PythonAstParser::default();
         let report = parser
@@ -3143,6 +3145,7 @@ from acme.missing import value\n";
                 text: "import pytest as pt\n\n@pt.fixture\ndef client():\n    return object()\n"
                     .to_string(),
             }],
+            ..ParserProjectContext::default()
         };
         let parser = PythonAstParser::default();
         let report = parser
@@ -3273,6 +3276,7 @@ def client():
 "#
                 .to_string(),
             }],
+            ..ParserProjectContext::default()
         };
         let report = PythonAstParser::default()
             .parse_with_context(document_at("tests/sub/test_api.py", source), &context)
@@ -3438,6 +3442,7 @@ def _api_client():
 "#
                 .to_string(),
             }],
+            ..ParserProjectContext::default()
         };
         let report = PythonAstParser::default()
             .parse_with_context(

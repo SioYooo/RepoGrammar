@@ -102,10 +102,16 @@ transitional substrate from the earlier bootstrap. They may remain useful, but
 they are no longer the official v0.1 language target. The v0.2 preview may emit
 conservative Express and Jest/Vitest exact-anchor families only when there are
 at least three complete-link-compatible derived support facts and no
-claim-relevant blocking `UNKNOWN`s. Production-quality TS/JS semantic analysis,
-React/Next/Fastify family support, TypeScript compiler-backed evidence,
-re-export/path-alias completion, and dynamic-wrapper support remain deferred
-unless a later ADR changes the sequence again.
+claim-relevant blocking `UNKNOWN`s. Bounded TS/JS project inventory may record
+package/config test-runner context and JSON path aliases, and the syntax parser
+may record unique repo-local literal relative/path-alias imports as
+`STRUCTURAL` context. Dynamic imports, non-literal or conditional `require`,
+unresolved aliases/imports, ambiguous re-exports, and missing test-runner
+project context remain typed `UNKNOWN` rather than family support.
+Production-quality TS/JS semantic analysis, React/Next/Fastify family support,
+TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
+and dynamic-wrapper support remain deferred unless a later ADR changes the
+sequence again.
 
 Django, C/C++, whole-program Python call graphs, sound full Python semantic
 analysis, and default runtime tracing are deferred.
