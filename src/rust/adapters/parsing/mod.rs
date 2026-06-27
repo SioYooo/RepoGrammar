@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 pub mod python;
 pub mod syntax;
 pub mod tree_sitter;
+pub mod tsjs_anchors;
 
 #[derive(Debug, Default)]
 pub struct RepoGrammarSourceParser {

@@ -53,6 +53,22 @@ Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
 layer from exact CPython structural anchors plus a single syntax-origin Python
 framework role; raw parser facts and framework heuristics remain insufficient by
 themselves.
+A parallel, deliberately conservative TS/JS path exists for Express route
+handlers and Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL`
+exact-anchor facts only when an exact import/require binding, app/router factory,
+and literal method (Express) or an imported/ambient-in-test-file runner
+(Jest/Vitest) resolve without reassignment, shadowing, dynamic receivers, custom
+wrappers, or conditional imports; otherwise the unit stays `UNKNOWN`. The
+application layer promotes those anchors to `DATAFLOW_DERIVED` support facts with
+engine `repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
+`provider_resolved=false`, `derived_from=tsjs_structural_anchors`,
+`framework_role=<role>`, and `tsjs_anchor_kind=<kind>` assumptions. The
+family-support gate accepts only exact recognized targets (for example
+`express.route.get`, `jest_vitest.describe`) under a safe origin; it must not
+infer support from fact text that merely contains a framework name. React
+components and hooks remain `UNKNOWN` in this slice. This is a token-saving
+foundation, not full TS/JS semantic analysis, and TS/JS remains a transitional
+substrate rather than the official v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -201,7 +217,11 @@ Not every stored semantic fact is worker-originated: syntax-origin framework
 role facts may be recorded by the current TS/JS framework adapter with
 `FRAMEWORK_HEURISTIC` certainty. Those facts remain blocked from family-claim
 input as insufficient support unless the current claim builder can combine them
-with stronger compatible evidence.
+with stronger compatible evidence. The TS/JS syntax parser additionally emits
+`STRUCTURAL` exact-anchor facts (engine `repogrammar-tsjs-syntax`, method
+`exact_anchor_v1`) that, like the Python structural anchors, cannot support
+membership by themselves; only the application-layer `repogrammar-tsjs-derived`
+promotion can turn them into `DATAFLOW_DERIVED` support.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython

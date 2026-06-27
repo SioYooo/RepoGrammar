@@ -70,11 +70,13 @@ impl<'a> SyntaxScanner<'a> {
         });
         let ir_nodes = ir_nodes_for_units(&self.units).map_err(ParseError::Internal)?;
         let ir_edges = ir_edges_for_units(&self.units).map_err(ParseError::Internal)?;
+        let semantic_facts =
+            super::tsjs_anchors::exact_framework_anchors(&self.document, &self.units)?;
         Ok(ParseReport {
             units: self.units,
             ir_nodes,
             ir_edges,
-            semantic_facts: Vec::new(),
+            semantic_facts,
             diagnostics: self.diagnostics,
         })
     }

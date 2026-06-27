@@ -802,8 +802,21 @@ mod tests {
             .join("v0_1")
     }
 
+    fn release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("typescript")
+            .join("release")
+            .join("v0_2")
+    }
+
     fn copy_release_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_root().join(name), destination);
+    }
+
+    fn copy_release_v0_2_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
     fn copy_python_release_fixture(name: &str, destination: &Path) {
@@ -856,6 +869,10 @@ mod tests {
         assert!(
             !output.contains(python_release_fixture_root().to_string_lossy().as_ref()),
             "{command} leaked absolute Python fixture path: {output}"
+        );
+        assert!(
+            !output.contains(release_fixture_v0_2_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute v0.2 fixture path: {output}"
         );
         for snippet in [
             "app.get(",
@@ -1542,10 +1559,15 @@ mod tests {
 
     #[test]
     fn release_fixtures_default_product_smoke_returns_json_without_claim_inflation() {
+        // These v0.1 fixtures are object-literal/react lookalikes that must stay
+        // UNKNOWN. `jest-vitest-basic` was moved out of this no-inflation baseline
+        // because it contains genuine ambient `describe`/`it`/`test` calls in
+        // `.test.ts`/`.spec.ts` files, which v0.2 conservative ambient support
+        // legitimately resolves into families (covered by
+        // `tsjs_v0_1_jest_vitest_basic_ambient_tests_form_families`).
         const RELEASE_FIXTURES: &[(&str, &str)] = &[
             ("express-basic", "users.ts"),
             ("react-basic", "UserCard.tsx"),
-            ("jest-vitest-basic", "users.test.ts"),
             ("mixed-js-ts", "routes.js"),
             ("unknown-low-support", "lonely-route.ts"),
         ];
@@ -2324,6 +2346,292 @@ mod tests {
             let deep_json = parse_machine_output("family", &family_deep, &workspace);
             assert_python_exact_anchor_evidence("family", &deep_json, *case, "deep", None);
         }
+    }
+
+    fn index_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_release_v0_2_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+        (workspace, runtime)
+    }
+
+    fn tsjs_derived_support_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<(String, String, String)> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        // No FRAMEWORK_HEURISTIC role fact may ever masquerade as derived support.
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.certainty == "DATAFLOW_DERIVED"
+                && fact.origin_engine == "repogrammar-frameworks")
+        }));
+        facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-tsjs-derived"
+                    && fact.origin_method == "bounded_exact_anchor_v1"
+            })
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                (
+                    fact.path.clone(),
+                    fact.target.clone().unwrap_or_default(),
+                    fact.certainty.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tsjs_express_exact_routes_form_family_without_worker() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("express_exact_routes", "tsjs-release-express-exact-routes");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(derived.len(), 5, "five exact express routes derive support");
+        assert!(derived
+            .iter()
+            .all(|(_, target, _)| target.starts_with("express.route.")));
+        // The object-literal lookalike and dynamic receiver never derive support.
+        assert!(derived.iter().all(|(path, _, _)| path != "lookalikes.ts"));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert_eq!(family_array[0]["classification"], "DOMINANT_PATTERN");
+        assert_eq!(family_array[0]["support"], 5);
+        let family_id = family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .to_string();
+        assert!(family_id.starts_with("family:typescript:express_route:"));
+
+        // Default family detail is metadata-only and source-free.
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[&family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
+        assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
+        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+        let members = detail_json["members"].as_array().expect("members");
+        assert_eq!(members.len(), 5);
+        assert!(members
+            .iter()
+            .all(|member| member["role"] == "framework:express.route_handler"));
+
+        // find resolves the family; check stays advisory CONTEXT_ONLY.
+        let find = run_with_runtime(
+            cli_args("find", workspace.path(), &["app.ts", "--json"]),
+            &runtime,
+        );
+        let find_json = parse_machine_output("find", &find, &workspace);
+        assert_eq!(find_json["status"], "ok");
+        assert_eq!(find_json["family"]["family_id"], family_id);
+        let check = run_with_runtime(
+            cli_args("check", workspace.path(), &["app.ts", "--json"]),
+            &runtime,
+        );
+        let check_json = parse_machine_output("check", &check, &workspace);
+        assert_eq!(check_json["status"], "CONTEXT_ONLY");
+        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+
+        // Default MCP output is also source-free.
+        let default_mcp = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({"operation": "show_family", "target": family_id}),
+        );
+        assert_eq!(default_mcp["source_spans"]["requested"], false);
+        assert_eq!(default_mcp["family"]["family_id"], family_id);
+
+        // Explicit opt-in renders bounded, hash-checked, line-numbered spans only.
+        let spanned = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[&family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(spanned.status, 0, "stderr: {}", spanned.stderr);
+        let spanned_json: Value =
+            serde_json::from_str(spanned.stdout.trim()).expect("span json parses");
+        assert_eq!(spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        let spans = spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("spans");
+        assert!(!spans.is_empty());
+        assert!(spans.iter().all(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains('\t')
+                && span["start_line"].as_u64().expect("start line")
+                    <= span["end_line"].as_u64().expect("end line")
+        }));
+        assert!(spans.iter().any(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains("app.get(") || text.contains("router.put(")
+        }));
+        assert_eq!(spanned_json["read_plan"]["source_snippets_included"], true);
+
+        // MCP opt-in renders the same bounded spans.
+        let context = McpServeContext {
+            repository_root: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let mcp_spanned = handle_context_call(
+            &runtime,
+            &context,
+            &serde_json::json!({
+                "operation": "show_family",
+                "target": family_id,
+                "include_source_spans": true,
+            }),
+        )
+        .expect("mcp source-span payload");
+        assert_eq!(mcp_spanned["source_spans"]["requested"], true);
+        assert_eq!(
+            mcp_spanned["source_spans"]["source_snippets_included"],
+            true
+        );
+        assert!(!mcp_spanned["source_spans"]["spans"]
+            .as_array()
+            .expect("mcp spans")
+            .is_empty());
+    }
+
+    #[test]
+    fn tsjs_jest_vitest_exact_tests_form_suite_and_test_families() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("jest_vitest_exact_tests", "tsjs-release-jest-vitest-exact");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        let suites = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.describe")
+            .count();
+        let cases = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+            .count();
+        assert_eq!(suites, 2, "two imported-runner describe suites");
+        assert_eq!(cases, 4, "four imported-runner test cases");
+        // The custom-wrapper test file derives no support.
+        assert!(derived.iter().all(|(path, _, _)| path != "wrapper.test.ts"));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 2);
+        let family_ids = family_array
+            .iter()
+            .map(|family| family["family_id"].as_str().expect("family id").to_string())
+            .collect::<Vec<_>>();
+        assert!(family_ids
+            .iter()
+            .any(|id| id.starts_with("family:typescript:test_suite:")));
+        assert!(family_ids
+            .iter()
+            .any(|id| id.starts_with("family:typescript:test_case:")));
+
+        for family in family_array {
+            let family_id = family["family_id"].as_str().expect("family id");
+            let detail = run_with_runtime(
+                cli_args("family", workspace.path(), &[family_id, "--json"]),
+                &runtime,
+            );
+            let detail_json = parse_machine_output("family", &detail, &workspace);
+            assert_eq!(detail_json["status"], "ok");
+            assert_eq!(detail_json["output"]["source_snippets_included"], false);
+        }
+    }
+
+    #[test]
+    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_form_families() {
+        let workspace = TempWorkspace::new("tsjs-v0-1-jest-vitest-basic-ambient");
+        copy_release_fixture("jest-vitest-basic", workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        let suites = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.describe")
+            .count();
+        let cases = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+            .count();
+        assert_eq!(suites, 2, "ambient describe in two test files");
+        assert_eq!(cases, 2, "ambient it/test in two test files");
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 2);
+        assert!(family_array
+            .iter()
+            .all(|family| family["classification"] == "DOMINANT_PATTERN"));
     }
 
     #[test]

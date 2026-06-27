@@ -348,7 +348,22 @@ queries, gate rendered family evidence against current source hashes, and
 report stale evidence as typed `StaleEvidence` `UNKNOWN`. Syntax-origin
 framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
-evidence.
+evidence. A conservative TS/JS exact-anchor path now exists alongside the Python
+one: the syntax parser emits `STRUCTURAL` anchors (engine
+`repogrammar-tsjs-syntax`, method `exact_anchor_v1`) only for exact Express
+import/app/router/literal-method shapes and imported or ambient-in-test-file
+Jest/Vitest runners, and the application layer promotes them to
+`DATAFLOW_DERIVED` support (engine `repogrammar-tsjs-derived`, method
+`bounded_exact_anchor_v1`, assumptions `provider_resolved=false`,
+`derived_from=tsjs_structural_anchors`, `framework_role=<role>`,
+`tsjs_anchor_kind=<kind>`). The family gate now matches exact TS/JS targets plus
+a safe origin instead of substring text. Reassigned/shadowed/dynamic/lookalike
+Express receivers, custom Jest/Vitest wrappers, ambiguous non-test-file globals,
+and all React components/hooks stay `UNKNOWN`. `src/fixtures/typescript/release/
+v0_2/express_exact_routes` and `jest_vitest_exact_tests` exercise the positive
+and negative product paths, and the v0.1 `jest-vitest-basic` fixture now forms
+ambient suite/test families. TS/JS remains a transitional substrate, not the
+official Python-first v0.1 target, and this is not full TS/JS semantic analysis.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright
