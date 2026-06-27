@@ -17,6 +17,15 @@
 
 ### Added
 
+- Rust structural self-dogfood indexing for RepoGrammar's own implementation
+  families. The new Tree-sitter Rust adapter discovers `.rs` files and
+  `Cargo.toml`, extracts structural Rust units, emits typed UNKNOWNs for
+  cfg/build variants, macro/proc-macro syntax, unresolved modules, and
+  trait-object dispatch, and derives bounded internal `DATAFLOW_DERIVED`
+  support only for RepoGrammar-owned roles. Product fixtures under
+  `src/fixtures/rust/release/v0_2` prove support>=3 positive families,
+  cfg-blocked abstention, metadata-only default output, and explicit
+  source-span opt-in. This is not general Rust semantic analysis.
 - CLI family query output, MCP `repogrammar_context` family responses, and
   `repogrammar stats` now surface `estimated_potential_token_savings` as an
   `ESTIMATED` local potential-read-displacement diagnostic. Successful family

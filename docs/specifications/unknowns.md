@@ -117,6 +117,17 @@ Some unknowns block only specific claims:
   aliases, and ambiguous star re-exports are `ConflictingFacts`. These mappings
   are intentionally conservative and do not create new public reason codes for
   every syntax shape.
+- Rust self-dogfood maps unresolved external modules to `UnresolvedImport`,
+  `#[cfg]` / `#[cfg_attr]` and target-specific Cargo sections to
+  `BuildVariantAmbiguity`, macro/proc-macro syntax to `MacroOrPreprocessor`,
+  trait-object dispatch to `FrameworkMagic`, and stale Rust source evidence to
+  `StaleEvidence`.
+- Rust UNKNOWNs block only the affected claim. `rust_build_variant`,
+  `rust_macro_expansion`, `rust_trait_dispatch`, `rust_module_resolution`, and
+  `rust_family_membership` block the relevant internal RepoGrammar family
+  claim; unrelated optional call-shape details may remain non-blocking
+  metadata. Rust UNKNOWNs must not be guessed away by naming convention or path
+  similarity.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

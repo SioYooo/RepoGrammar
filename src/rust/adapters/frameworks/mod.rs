@@ -4,6 +4,7 @@ use crate::core::model::{
     CodeUnit, CodeUnitKind, Evidence, FactCertainty, FactOrigin, SemanticFact, SemanticFactKind,
     SymbolId,
 };
+use crate::core::policy::rust_self_dogfood::rust_self_dogfood_role_for_unit;
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 
 pub mod express;
@@ -93,7 +94,18 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             "CPython ast code unit indicates SQLAlchemy repository method role",
             "SQLAlchemy transaction behavior unresolved",
         ),
-        _ => return None,
+        _ => {
+            let rust_role = rust_self_dogfood_role_for_unit(
+                unit.provenance.path.as_str(),
+                unit.kind.as_str(),
+                unit.id.as_str(),
+            )?;
+            (
+                rust_role.framework_role,
+                rust_role.note,
+                rust_role.unresolved_assumption,
+            )
+        }
     };
     Some(FrameworkRole {
         unit,
@@ -169,10 +181,20 @@ mod tests {
                     CodeUnitKind::SqlAlchemyRepositoryMethod,
                     "sqlalchemy-repository",
                 ),
+                rust_unit(
+                    CodeUnitKind::RustFunction,
+                    "src/rust/application/indexing.rs",
+                    "index_repository",
+                ),
+                rust_unit(
+                    CodeUnitKind::RustTestFunction,
+                    "src/rust/bin/repogrammar.rs",
+                    "product_runtime",
+                ),
             ])
             .expect("detect roles");
 
-        assert_eq!(facts.len(), 11);
+        assert_eq!(facts.len(), 13);
         let forbidden_fragments = [
             "/tmp/secret",
             "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE",
@@ -188,7 +210,8 @@ mod tests {
                 && fact.certainty == FactCertainty::FrameworkHeuristic
                 && fact.origin.engine == "repogrammar-frameworks"
                 && fact.origin.method == "syntax_code_unit_kind"
-                && fact.evidence.provenance.path == "src/app.ts"
+                && !fact.evidence.provenance.path.starts_with('/')
+                && !fact.evidence.provenance.path.contains("..")
                 && forbidden_fragments.iter().all(|fragment| {
                     !fact.subject.contains(fragment)
                         && fact
@@ -220,7 +243,9 @@ mod tests {
                 "framework:pytest.fixture",
                 "framework:pydantic.model",
                 "framework:sqlalchemy.model",
-                "framework:sqlalchemy.repository_method"
+                "framework:sqlalchemy.repository_method",
+                "framework:repogrammar.rust_indexing_phase",
+                "framework:repogrammar.rust_product_test"
             ]
         );
     }
@@ -235,10 +260,30 @@ mod tests {
                 unit(CodeUnitKind::ArrowFunction, "arrow"),
                 unit(CodeUnitKind::Class, "class"),
                 unit(CodeUnitKind::Method, "method"),
+                unit(CodeUnitKind::RustFunction, "rust-helper"),
                 unit(CodeUnitKind::Unknown, "unknown"),
             ])
             .expect("detect roles");
 
         assert!(facts.is_empty());
+    }
+
+    fn rust_unit(kind: CodeUnitKind, path: &str, name: &str) -> CodeUnit {
+        CodeUnit {
+            id: CodeUnitId::new(format!("unit:{path}#{}:{name}:0-10:0", kind.as_str()))
+                .expect("valid id"),
+            language: Language::Rust,
+            kind,
+            range: SourceRange::new(0, 10).expect("valid range"),
+            provenance: Provenance::new(
+                path,
+                ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            )
+            .expect("valid provenance"),
+        }
     }
 }

@@ -59,6 +59,14 @@ For Jest/Vitest, package dependencies and JSON config files can provide ambient
 runner context; script configs such as `jest.config.ts` or `vitest.config.js`
 are recorded only as metadata/typed `UNKNOWN` and are not executed.
 
+Rust is currently used only for RepoGrammar self-dogfooding. The v0.2 preview
+can index `.rs` files with Tree-sitter Rust and form conservative internal
+RepoGrammar implementation families such as indexing phases, family gates,
+parser adapters, CLI/MCP handlers, installer actions, storage validation, and
+product tests. This path is structural only: it does not run Cargo, rustc,
+build scripts, or procedural macros, and it is not general-purpose Rust semantic
+analysis.
+
 ## Public Preview Support Matrix
 
 | Area | Public-preview status | Boundary |
@@ -71,6 +79,7 @@ are recorded only as metadata/typed `UNKNOWN` and are not executed.
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
 | JS/TS React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; any lookalike or framework-shaped evidence must remain unsupported or `UNKNOWN`. |
 | Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
+| Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
 | Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
 | Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |

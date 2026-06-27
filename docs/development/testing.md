@@ -112,6 +112,12 @@ allowed.
   hash-mismatched span omission with Read/Grep fallback guidance, missing
   variation/exception coverage reporting, JSON/human CLI output, advisory
   `check` behavior, and absence of source snippets unless explicitly requested.
+- Rust self-dogfood tests must cover `.rs` and `Cargo.toml` discovery,
+  Tree-sitter Rust code-unit extraction, structural Rust anchors, typed
+  `MacroOrPreprocessor`, `BuildVariantAmbiguity`, `FrameworkMagic`, and
+  `UnresolvedImport` UNKNOWN boundaries, support>=3 for internal Rust families,
+  low-support abstention, default source-free CLI/MCP output, explicit
+  source-span opt-in, and fixtures under `src/fixtures/rust/release/v0_2/`.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,

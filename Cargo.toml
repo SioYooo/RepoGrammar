@@ -27,3 +27,8 @@ serde_json = "1"
 # Production: filesystem adapters compute strict SHA-256 content hashes for
 # repository evidence using the standard RustCrypto implementation.
 sha2 = "0.10"
+# Production: Rust self-dogfood indexing uses Tree-sitter Rust for tolerant
+# structural code-unit extraction without executing Cargo, rustc, build scripts,
+# or procedural macros.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.20"

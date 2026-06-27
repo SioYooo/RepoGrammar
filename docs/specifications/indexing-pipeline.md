@@ -33,6 +33,12 @@ semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
 code-unit evidence; they are candidate grouping facts, not family evidence by
 themselves.
+The current CLI can also discover `.rs` files and `Cargo.toml` manifests for
+RepoGrammar self-dogfooding. Rust parsing uses Tree-sitter Rust to extract
+structural modules, use items, structs, enums, traits, impl blocks, functions,
+methods, test functions, and macro syntax. Cargo manifests are bounded
+structural inventory only. This Rust path never runs Cargo, rustc, build
+scripts, proc macros, or project code.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index` and `sync` can also ask that worker for facts about the discovered
 repo-relative TS/JS file set. Optional worker arguments come from
@@ -40,8 +46,9 @@ repo-relative TS/JS file set. Optional worker arguments come from
 command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
-This slice does not use Tree-sitter, call a TypeScript compiler, perform full
-multi-view alignment, or anti-unify templates. It does include
+Outside the internal Rust self-dogfood extractor, this slice does not use
+Tree-sitter, call a TypeScript compiler, perform full multi-view alignment, or
+anti-unify templates. It does include
 a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, then applies a bounded
 role-specific complete-link clustering pass over internal support-family
@@ -53,6 +60,16 @@ Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
 layer from exact CPython structural anchors plus a single syntax-origin Python
 framework role; raw parser facts and framework heuristics remain insufficient by
 themselves.
+A parallel internal Rust self-dogfood path can synthesize
+`DATAFLOW_DERIVED` support facts from Tree-sitter Rust structural anchors only
+for RepoGrammar-owned roles such as family gates, indexing phases, parser
+adapters, CLI/MCP handlers, installer actions, storage validation, source-span
+renderers, and product tests. Rust families require sufficient compatible
+support, complete-link-compatible structural features, fresh same-generation
+evidence, and no claim-relevant Rust `UNKNOWN`. Structural anchors alone,
+generic Rust functions, unresolved module links, build-variant ambiguity,
+macro/proc-macro expansion, trait-object dispatch, and stale evidence must not
+be upgraded into confident family claims.
 A parallel, deliberately conservative TS/JS path exists for Express route
 handlers and Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL`
 exact-anchor facts only when an exact import/require binding, app/router factory,
@@ -176,7 +193,7 @@ roots and parent-worktree subdirectory projects.
 
 ## Tree-sitter parsing
 
-Tree-sitter will be used in parsing and language adapters. AST nodes must be
+Tree-sitter may be used in parsing and language adapters. AST nodes must be
 converted into `CodeUnit` and unified IR types before entering `core`.
 
 The current implementation uses dependency-free syntax-only extractor adapters
@@ -190,7 +207,9 @@ and fixtures, Pydantic model-shaped classes, SQLAlchemy model-shaped classes,
 and SQLAlchemy repository method-shaped functions. Both extractors preserve
 byte ranges, return diagnostics for parser errors, and store RepoGrammar-owned
 `CodeUnit` metadata plus CodeUnit-derived IR nodes and conservative containment
-edges. Tree-sitter integration remains planned.
+edges. The Rust self-dogfood extractor uses Tree-sitter Rust for tolerant
+structural extraction and typed UNKNOWN generation. No Tree-sitter node type is
+stored in core, persistence, CLI, or MCP output.
 
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
@@ -423,6 +442,13 @@ Jest/Vitest runner calls; the application layer may derive
 `DATAFLOW_DERIVED` support from those exact anchors. It still does not perform
 TypeScript compiler-backed binding/export propagation, React runtime behavior,
 dependency injection, or lifecycle semantics.
+
+The current Rust adapter maps only RepoGrammar's own repository structure into
+internal self-dogfood roles. It records structural anchors and typed UNKNOWNs
+for Cargo/build variants, unresolved external modules, macro/proc-macro
+expansion, and trait-object dispatch. Those facts are bounded evidence for
+RepoGrammar self-dogfood only; they are not provider-backed Rust semantics and
+do not imply general Rust target-language support.
 
 ## Classification
 

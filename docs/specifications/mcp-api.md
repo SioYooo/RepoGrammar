@@ -211,6 +211,10 @@ grep/find/manual reads for implementation-pattern analogues, family
 conformance, deviations, or repeated framework behavior. Agents must fall back
 to normal Read/Grep when RepoGrammar returns `UNKNOWN`, stale/omitted spans, or
 insufficient support.
+When Rust self-dogfood families are present, MCP returns them through the same
+metadata-only/read-plan contract as Python and TS/JS families. The MCP surface
+does not expose Tree-sitter nodes, Cargo output, rustc output, source text by
+default, or additional Rust-specific tools.
 
 ## Boundary rules
 

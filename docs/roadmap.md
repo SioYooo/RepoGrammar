@@ -163,7 +163,11 @@ derivation, bounded same-function FastAPI service-call context anchors, plus an
 internal semantic-fact file-hash freshness and claim-input
 readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
-v0.1 TS/JS and Python release fixture smoke gates. The Rust ports layer now also
+v0.1 TS/JS and Python release fixture smoke gates. A v0.2 internal Rust
+self-dogfood slice now discovers `.rs`/`Cargo.toml`, uses Tree-sitter Rust for
+structural code units and typed UNKNOWNs, and can form conservative
+RepoGrammar-owned implementation families without running Cargo, rustc, build
+scripts, or macros. The Rust ports layer now also
 has a future Python semantic-provider contract for candidate-scoped requests,
 provider provenance assumptions, cache-key dimensions, and recoverable
 provider-unavailable `UNKNOWN`s, plus an internal planner for future Pyrefly

@@ -7,6 +7,7 @@ use crate::ports::parser::{
 use std::collections::BTreeSet;
 
 pub mod python;
+pub mod rust_syntax;
 pub mod syntax;
 pub mod tree_sitter;
 pub mod tsjs_anchors;
@@ -15,6 +16,7 @@ pub mod tsjs_anchors;
 pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
+    rust: rust_syntax::RustSyntaxParser,
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -25,6 +27,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::TsJsConfig => self.syntax.parse(document),
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse(document)
+            }
+            crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
+                self.rust.parse(document)
             }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
         }
@@ -43,6 +48,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
+                self.rust.parse_with_context(document, context)
             }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
         }
@@ -119,9 +127,19 @@ fn range_contains(parent: &CodeUnit, child: &CodeUnit) -> bool {
 }
 
 fn is_class_like(kind: &str) -> bool {
-    matches!(kind, "class" | "pydantic_model" | "sqlalchemy_model")
+    matches!(
+        kind,
+        "class" | "pydantic_model" | "sqlalchemy_model" | "rust_impl_block" | "rust_trait"
+    )
 }
 
 fn is_method_like(kind: &str) -> bool {
-    matches!(kind, "method" | "sqlalchemy_repository_method")
+    matches!(
+        kind,
+        "method"
+            | "sqlalchemy_repository_method"
+            | "rust_method"
+            | "rust_trait_method"
+            | "rust_associated_function"
+    )
 }

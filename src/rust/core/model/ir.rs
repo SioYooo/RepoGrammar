@@ -69,6 +69,18 @@ impl IrNodeKind {
             CodeUnitKind::PydanticModel => Self::PydanticModel,
             CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
             CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
+            CodeUnitKind::RustModule
+            | CodeUnitKind::RustInlineModule
+            | CodeUnitKind::RustExternalModule => Self::Module,
+            CodeUnitKind::RustStruct | CodeUnitKind::RustEnum | CodeUnitKind::RustTrait => {
+                Self::Class
+            }
+            CodeUnitKind::RustImplBlock => Self::Class,
+            CodeUnitKind::RustFunction | CodeUnitKind::RustTestFunction => Self::Function,
+            CodeUnitKind::RustMethod
+            | CodeUnitKind::RustTraitMethod
+            | CodeUnitKind::RustAssociatedFunction => Self::Method,
+            CodeUnitKind::RustUseItem | CodeUnitKind::RustMacroInvocation => Self::Unknown,
             CodeUnitKind::ProjectConfig => Self::ProjectConfig,
             CodeUnitKind::Unknown => Self::Unknown,
         }

@@ -168,6 +168,11 @@ Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
 exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
 without running a semantic worker. These are bounded RepoGrammar support facts,
 not compiler/provider-backed facts.
+Rust self-dogfood indexing may likewise add Tree-sitter-origin structural
+anchors, Cargo manifest inventory, Rust typed `UNKNOWN`s, and bounded internal
+`DATAFLOW_DERIVED` support facts for RepoGrammar-owned implementation roles.
+Those facts are not Cargo/rustc-backed semantics and do not imply general Rust
+target-language support.
 During a non-quiet run, `index` and `sync` emit progress for project discovery,
 file scanning, syntax parsing, local support-fact recording, semantic-worker
 deferred/running state, candidate/family construction, and persistence

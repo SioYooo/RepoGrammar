@@ -22,6 +22,8 @@ pub struct ParserProjectContext {
     pub tsjs_module_paths: Vec<String>,
     pub tsjs_path_aliases: Vec<ParserTsJsPathAlias>,
     pub tsjs_has_test_runner_context: bool,
+    pub rust_module_paths: Vec<String>,
+    pub rust_cargo_files: Vec<ParserProjectFileContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -992,12 +992,25 @@ mod tests {
             .join("v0_2")
     }
 
+    fn rust_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("rust")
+            .join("release")
+            .join("v0_2")
+    }
+
     fn copy_release_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_root().join(name), destination);
     }
 
     fn copy_release_v0_2_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
+    }
+
+    fn copy_rust_release_v0_2_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&rust_release_fixture_v0_2_root().join(name), destination);
     }
 
     fn copy_python_release_fixture(name: &str, destination: &Path) {
@@ -1055,6 +1068,10 @@ mod tests {
             !output.contains(release_fixture_v0_2_root().to_string_lossy().as_ref()),
             "{command} leaked absolute v0.2 fixture path: {output}"
         );
+        assert!(
+            !output.contains(rust_release_fixture_v0_2_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute Rust v0.2 fixture path: {output}"
+        );
         for snippet in [
             "app.get(",
             "export function",
@@ -1096,6 +1113,10 @@ mod tests {
             "python-fixture-provider",
             "release_fixture_semantic_support",
             "origin_engine",
+            "pub fn support_",
+            "fn validate_family",
+            "#[cfg(",
+            "macro_rules!",
         ] {
             assert!(
                 !output.contains(snippet),
@@ -1614,6 +1635,8 @@ mod tests {
             DiscoveredLanguage::Python => Language::Python,
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
             DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+            DiscoveredLanguage::Rust => Language::Rust,
+            DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
     }
 
@@ -2595,6 +2618,208 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn index_rust_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_rust_release_v0_2_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "Rust fixture should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    fn rust_derived_support_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<(String, String, String)> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.certainty == "DATAFLOW_DERIVED"
+                && fact.origin_engine == "repogrammar-frameworks")
+        }));
+        facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-rust-derived"
+                    && fact.origin_method == "bounded_tree_sitter_anchor_v1"
+            })
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                (
+                    fact.path.clone(),
+                    fact.target.clone().unwrap_or_default(),
+                    fact.certainty.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rust_structural_self_dogfood_forms_internal_family_without_source_snippets() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("internal_family_gates", "rust-release-family-gates");
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let rust_functions = units_json["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .filter(|unit| {
+                unit["language"] == "rust"
+                    && unit["kind"] == "rust_function"
+                    && unit["path"] == "src/rust/application/family.rs"
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            rust_functions.len() >= 4,
+            "expected Rust functions, got {units_json}"
+        );
+
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        let family_gate_support = derived
+            .iter()
+            .filter(|(path, target, certainty)| {
+                path == "src/rust/application/family.rs"
+                    && target == "repogrammar.rust.family_gate"
+                    && certainty == "DATAFLOW_DERIVED"
+            })
+            .count();
+        assert!(
+            family_gate_support >= 4,
+            "Rust structural anchors should derive bounded support: {derived:?}"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        let family = &family_array[0];
+        assert_eq!(family["classification"], "DOMINANT_PATTERN");
+        assert_eq!(family["support"], 3);
+        let family_id = family["family_id"].as_str().expect("family id");
+        assert!(
+            family_id
+                .starts_with("family:rust:rust_function:framework_repogrammar_rust_family_gate"),
+            "unexpected Rust family id: {family_id}"
+        );
+
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
+        assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
+        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+
+        let spanned = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(spanned.status, 0, "stderr: {}", spanned.stderr);
+        assert!(!spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let spanned_json: Value =
+            serde_json::from_str(spanned.stdout.trim()).expect("span json parses");
+        assert_eq!(spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        assert!(spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| span["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("pub fn support_"))));
+    }
+
+    #[test]
+    fn rust_cfg_unknown_blocks_structural_family_claim() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("cfg_blocked_family", "rust-release-cfg-blocked");
+
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "repogrammar.rust.family_gate")
+                .count(),
+            1,
+            "cfg-gated units must not derive claim support; only the un-gated helper may remain: {derived:?}"
+        );
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/rust/application/family.rs"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("BuildVariantAmbiguity")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_build_variant")
+        }));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
     }
 
     #[test]

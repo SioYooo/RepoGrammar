@@ -17,6 +17,8 @@ pub enum DiscoveredLanguage {
     Python,
     PythonConfig,
     TsJsConfig,
+    Rust,
+    RustConfig,
 }
 
 impl DiscoveredLanguage {
@@ -29,6 +31,8 @@ impl DiscoveredLanguage {
             Self::Python => "python",
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
+            Self::Rust => "rust",
+            Self::RustConfig => "rust-config",
         }
     }
 }

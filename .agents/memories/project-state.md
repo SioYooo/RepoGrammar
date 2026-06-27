@@ -1,7 +1,8 @@
 # Project State
 
 - Status: Bootstrap plus conservative v0.2 TS/JS exact-anchor family substrate
-  for Express and Jest/Vitest, Python `.py` discovery, CPython AST structural
+  for Express and Jest/Vitest, internal v0.2 Rust structural self-dogfood
+  indexing for RepoGrammar-owned implementation families, Python `.py` discovery, CPython AST structural
   indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error/request-shape anchors,
@@ -52,6 +53,9 @@
   baseline/treatment experiment records are comparable. `index` and `sync` emit
   typed stage progress to stderr while running, with exact counts when known
   and NDJSON progress available through `--json --progress always`.
+  Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
+  extraction and typed UNKNOWNs; it does not run Cargo, rustc, build scripts,
+  procedural macros, or general Rust semantic analysis.
   `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full

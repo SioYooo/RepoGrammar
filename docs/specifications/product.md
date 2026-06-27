@@ -118,6 +118,16 @@ TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
 and dynamic-wrapper support remain deferred unless a later ADR changes the
 sequence again.
 
+Rust support in the v0.2 preview is limited to RepoGrammar self-dogfooding. It
+uses Tree-sitter Rust for structural code-unit extraction and RepoGrammar-owned
+internal role anchors. It may produce bounded internal families for
+RepoGrammar's own indexing phases, family gates, parser adapters, CLI/MCP
+handlers, installer actions, storage validation, source-span renderers, and
+product tests when support is sufficient and no Rust-specific `UNKNOWN` blocks
+the claim. It must not be described as general Rust semantic analysis: the
+indexer does not run Cargo, rustc, build scripts, procedural macros, or
+whole-program trait/call resolution.
+
 ## Public-preview support matrix
 
 | Area | Status | Public claim |
@@ -130,6 +140,7 @@ sequence again.
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
 | React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; static lookalikes remain unsupported or `UNKNOWN`. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
+| Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 

@@ -1,11 +1,12 @@
 //! Indexing use-case boundary.
 
+use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs_anchors::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
     python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
-    tsjs_support_target_is_role_compatible, TSJS_DERIVED_SUPPORT_ENGINE,
-    TSJS_DERIVED_SUPPORT_METHOD,
+    tsjs_support_target_is_role_compatible, RUST_DERIVED_SUPPORT_ENGINE,
+    RUST_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::core::model::{
@@ -14,6 +15,7 @@ use crate::core::model::{
     SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
+use crate::core::policy::rust_self_dogfood::rust_support_target_is_role_compatible;
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::FamilyStore;
 use crate::ports::file_discovery::{
@@ -523,10 +525,26 @@ fn index_repository_with_optional_semantic_worker(
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
         &derived_tsjs_support_facts,
     )?;
+    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_rust_support_facts);
+    let derived_rust_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count,
+        &derived_rust_support_facts,
+    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count;
+        + derived_tsjs_support_fact_count
+        + derived_rust_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -580,12 +598,14 @@ fn index_repository_with_optional_semantic_worker(
                 + framework_role_facts.len()
                 + derived_python_support_facts.len()
                 + derived_tsjs_support_facts.len()
+                + derived_rust_support_facts.len()
                 + worker_facts.len(),
         );
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(derived_tsjs_support_facts);
+        family_facts.extend(derived_rust_support_facts);
         family_facts.extend(worker_facts);
         record_family_claims(
             family_store,
@@ -682,6 +702,26 @@ fn parser_project_context(
     let tsjs_module_paths = tsjs_module_paths(report);
     let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
     let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
+    let rust_module_paths = rust_module_paths(report);
+    let mut rust_cargo_files = Vec::new();
+    for file in &report.files {
+        if file.language != DiscoveredLanguage::RustConfig {
+            continue;
+        }
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        rust_cargo_files.push(ParserProjectFileContext {
+            path: source.path,
+            text: source.text,
+        });
+    }
+    rust_cargo_files.sort_by(|left, right| left.path.cmp(&right.path));
     let mut python_conftest_files = Vec::new();
     for file in &report.files {
         if file.language != DiscoveredLanguage::Python || !is_python_conftest_path(&file.path) {
@@ -708,6 +748,8 @@ fn parser_project_context(
         tsjs_module_paths,
         tsjs_path_aliases,
         tsjs_has_test_runner_context,
+        rust_module_paths,
+        rust_cargo_files,
     })
 }
 
@@ -716,6 +758,17 @@ fn tsjs_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
         .files
         .iter()
         .filter(|file| is_tsjs_source_language(file.language))
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn rust_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
+    report
+        .files
+        .iter()
+        .filter(|file| file.language == DiscoveredLanguage::Rust)
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -1584,6 +1637,190 @@ fn derived_tsjs_framework_support_fact(
     })
 }
 
+fn derive_rust_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units = rust_framework_support_blocked_units(code_units, parser_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_rust_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "rust" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if rust_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_rust_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+            fact,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn rust_framework_support_blocked_units(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+) -> BTreeSet<String> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocked = BTreeSet::new();
+    for fact in parser_facts {
+        if !rust_framework_support_blocking_unknown(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language == "rust" && parser_fact_evidence_is_within_unit(fact, unit) {
+            blocked.insert(code_unit_id.to_string());
+        }
+    }
+    blocked
+}
+
+fn rust_framework_support_blocking_unknown(fact: &SemanticFact) -> bool {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != RUST_ANCHOR_ENGINE
+        || fact.origin.method != RUST_ANCHOR_METHOD
+    {
+        return false;
+    }
+    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
+        return false;
+    };
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("rust_family_membership");
+    match reason {
+        "MacroOrPreprocessor"
+        | "BuildVariantAmbiguity"
+        | "ConflictingFacts"
+        | "StaleEvidence"
+        | "UnresolvedImport"
+        | "FrameworkMagic" => matches!(
+            affected_claim,
+            "rust_family_membership"
+                | "rust_macro_expansion"
+                | "rust_build_variant"
+                | "rust_trait_dispatch"
+                | "rust_module_resolution"
+        ),
+        _ => false,
+    }
+}
+
+fn is_rust_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall
+            | SemanticFactKind::ResolvedImport
+            | SemanticFactKind::Symbol
+            | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == RUST_ANCHOR_ENGINE
+        && fact.origin.method == RUST_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_rust_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=tree_sitter_rust_structural_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+    ];
+    assumptions.extend(
+        source_fact
+            .assumptions
+            .iter()
+            .filter(|assumption| {
+                assumption.starts_with("rust_anchor_kind=")
+                    || assumption.starts_with("rust_signature_shape=")
+                    || assumption.starts_with("rust_error_shape=")
+                    || assumption.starts_with("rust_call_shape=")
+                    || assumption.starts_with("rust_control_shape=")
+                    || assumption.starts_with("rust_path_context=")
+            })
+            .cloned(),
+    );
+    assumptions.sort();
+    assumptions.dedup();
+
+    Ok(SemanticFact {
+        kind,
+        subject: unit.id.clone(),
+        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
+        origin: FactOrigin {
+            engine: RUST_DERIVED_SUPPORT_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: RUST_DERIVED_SUPPORT_METHOD.to_string(),
+        },
+        certainty: FactCertainty::DataflowDerived,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(unit.start_byte, unit.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &unit.path,
+                unit.content_hash.clone(),
+                repository_revision.clone(),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            "bounded Rust structural role support",
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions,
+    })
+}
+
 fn record_semantic_worker_facts(
     request: &IndexingRequest,
     discovery_report: &FileDiscoveryReport,
@@ -1921,6 +2158,8 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::Python => Language::Python,
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
         DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+        DiscoveredLanguage::Rust => Language::Rust,
+        DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
 }
 

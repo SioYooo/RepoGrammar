@@ -3,6 +3,10 @@
 use crate::core::model::{
     FactCertainty, SemanticFact, SemanticFactKind, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
+use crate::core::policy::rust_self_dogfood::{
+    rust_family_eligible_kind, rust_role_is_known, rust_support_family,
+    rust_support_target_is_role_compatible,
+};
 use crate::ports::family_store::{
     IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
     IndexedVariationSlotRecord,
@@ -22,6 +26,8 @@ pub(crate) const TSJS_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-tsjs-derived";
 pub(crate) const TSJS_DERIVED_SUPPORT_METHOD: &str = "bounded_exact_anchor_v1";
 /// Pinned TS/JS semantic worker engine identity accepted as a safe support origin.
 const TSJS_WORKER_ENGINE: &str = "typescript";
+pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
+pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyCandidate {
@@ -254,13 +260,13 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         let clusters = complete_link_family_clusters(&key, supported_evidence, &features_by_unit);
         let ready_cluster_count = clusters
             .iter()
-            .filter(|cluster| cluster.len() >= min_family_support(&key.language))
+            .filter(|cluster| cluster.len() >= min_family_support_for_key(&key))
             .count();
         let mut emitted_ready_clusters = 0usize;
         for cluster in clusters {
             let cluster_suffix = (ready_cluster_count > 1)
                 .then(|| family_cluster_signature(&key, &cluster, &features_by_unit));
-            if cluster.len() < min_family_support(&key.language) {
+            if cluster.len() < min_family_support_for_key(&key) {
                 unknowns.push(insufficient_support_unknown(family_affected_claim(
                     &key,
                     cluster_suffix.as_deref(),
@@ -724,6 +730,10 @@ fn family_features_by_unit(
             add_tsjs_family_features(entry, fact, role_by_unit, support_targets_by_unit);
             continue;
         }
+        if unit.language == "rust" {
+            add_rust_family_features(entry, fact, role_by_unit, support_targets_by_unit);
+            continue;
+        }
         if unit.language != "python" {
             continue;
         }
@@ -913,6 +923,63 @@ fn add_tsjs_family_features(
     }
 }
 
+fn add_rust_family_features(
+    entry: &mut BTreeSet<String>,
+    fact: &SemanticFact,
+    _role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) {
+    let code_unit_id = fact.evidence.code_unit_id.as_str();
+    for assumption in &fact.assumptions {
+        for (prefix, feature_prefix) in [
+            ("rust_anchor_kind=", "anchor_kind:"),
+            ("rust_signature_shape=", "signature_shape:"),
+            ("rust_error_shape=", "error_shape:"),
+            ("rust_call_shape=", "call_shape:"),
+            ("rust_control_shape=", "control_shape:"),
+            ("rust_path_context=", "path_context:"),
+            ("rust_module_resolution=", "import_context:"),
+        ] {
+            if let Some(value) = assumption.strip_prefix(prefix) {
+                entry.insert(format!("{feature_prefix}{}", stable_token(value)));
+            }
+        }
+    }
+    if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
+        let is_support_target = support_targets_by_unit
+            .get(code_unit_id)
+            .is_some_and(|targets| targets.contains(target));
+        if is_support_target {
+            entry.insert(format!("framework_api_anchor:{}", stable_token(target)));
+        } else if target.starts_with("module:") {
+            entry.insert(format!("import_context:{}", stable_token(target)));
+        }
+    }
+    if fact.kind == SemanticFactKind::Unknown || fact.certainty == FactCertainty::Unknown {
+        if let Some(reason) = fact
+            .target
+            .as_ref()
+            .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())
+        {
+            let affected_claim = fact
+                .assumptions
+                .iter()
+                .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+                .unwrap_or("rust_family_membership");
+            entry.insert(format!(
+                "unknown_reason:{}",
+                stable_token(reason.as_protocol_str())
+            ));
+            if rust_unknown_reason_blocks_family_membership(reason, affected_claim, "") {
+                entry.insert(format!(
+                    "unknown_blocker:{}",
+                    stable_token(reason.as_protocol_str())
+                ));
+            }
+        }
+    }
+}
+
 fn family_blocking_unknowns_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
@@ -942,6 +1009,8 @@ fn family_blocking_unknowns_by_unit(
             python_family_blocking_unknown(fact, framework_role)
         } else if is_tsjs_language_name(&unit.language) {
             tsjs_family_blocking_unknown(fact, framework_role)
+        } else if unit.language == "rust" {
+            rust_family_blocking_unknown(fact, framework_role)
         } else {
             None
         };
@@ -985,6 +1054,8 @@ fn family_non_blocking_unknowns_by_unit(
             python_family_non_blocking_unknown(fact, framework_role)
         } else if is_tsjs_language_name(&unit.language) {
             tsjs_family_non_blocking_unknown(fact, framework_role)
+        } else if unit.language == "rust" {
+            rust_family_non_blocking_unknown(fact, framework_role)
         } else {
             None
         };
@@ -1234,6 +1305,108 @@ fn tsjs_unknown_is_non_blocking_family_subclaim(
     )
 }
 
+fn rust_family_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("rust_family_membership");
+
+    if !rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role) {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::Blocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve the blocking Rust UNKNOWN before claiming a family".to_string()),
+    })
+}
+
+fn rust_family_non_blocking_unknown(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("rust_family_membership");
+
+    if rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+        || !rust_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
+    {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::NonBlocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve this Rust subclaim before relying on it".to_string()),
+    })
+}
+
+fn rust_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::MacroOrPreprocessor
+        | UnknownReasonCode::BuildVariantAmbiguity
+        | UnknownReasonCode::ConflictingFacts
+        | UnknownReasonCode::StaleEvidence
+        | UnknownReasonCode::UnresolvedImport
+        | UnknownReasonCode::FrameworkMagic => {
+            rust_unknown_affected_claim_blocks_family(affected_claim, framework_role)
+        }
+        UnknownReasonCode::DynamicImport
+        | UnknownReasonCode::MonkeyPatch
+        | UnknownReasonCode::PytestFixtureInjection
+        | UnknownReasonCode::RuntimeDependencyInjection
+        | UnknownReasonCode::MissingProjectConfig
+        | UnknownReasonCode::MissingDependency
+        | UnknownReasonCode::InsufficientSupport => false,
+    }
+}
+
+fn rust_unknown_affected_claim_blocks_family(affected_claim: &str, framework_role: &str) -> bool {
+    match affected_claim {
+        "rust_family_membership"
+        | "rust_macro_expansion"
+        | "rust_build_variant"
+        | "rust_trait_dispatch"
+        | "rust_module_resolution" => true,
+        claim if claim.starts_with("family:") => true,
+        _ => rust_role_is_known(framework_role) && affected_claim.starts_with("rust_"),
+    }
+}
+
+fn rust_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    _framework_role: &str,
+) -> bool {
+    matches!(reason, UnknownReasonCode::FrameworkMagic)
+        && matches!(affected_claim, "rust_optional_call_shape")
+}
+
 fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
     fact.evidence.provenance.path == unit.path
         && fact.evidence.provenance.content_hash == unit.content_hash
@@ -1284,6 +1457,9 @@ fn evidence_pair_is_compatible(
     }
     if is_tsjs_language_name(&key.language) {
         return tsjs_evidence_pair_is_compatible(left, right, features_by_unit);
+    }
+    if key.language == "rust" {
+        return rust_evidence_pair_is_compatible(left, right, features_by_unit);
     }
     true
 }
@@ -1352,6 +1528,24 @@ fn tsjs_evidence_pair_is_compatible(
     }
 }
 
+fn rust_evidence_pair_is_compatible(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    if !prefixed_features(left, features_by_unit, "unknown_blocker:").is_empty()
+        || !prefixed_features(right, features_by_unit, "unknown_blocker:").is_empty()
+    {
+        return false;
+    }
+    equal_feature_profiles(
+        left,
+        right,
+        features_by_unit,
+        &["anchor_kind:", "signature_shape:", "error_shape:"],
+    )
+}
+
 fn equal_feature_profiles(
     left: &FamilyEvidence,
     right: &FamilyEvidence,
@@ -1408,6 +1602,9 @@ fn family_cluster_signature(
     }
     if is_tsjs_language_name(&key.language) {
         return tsjs_cluster_signature(cluster, features_by_unit);
+    }
+    if key.language == "rust" {
+        return rust_cluster_signature(cluster, features_by_unit);
     }
     "family_cluster".to_string()
 }
@@ -1477,6 +1674,35 @@ fn tsjs_cluster_signature(
     )
 }
 
+fn rust_cluster_signature(
+    cluster: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let signature_features = cluster
+        .iter()
+        .flat_map(|evidence| {
+            [
+                "support_family:",
+                "anchor_kind:",
+                "signature_shape:",
+                "error_shape:",
+                "call_shape:",
+                "control_shape:",
+                "path_context:",
+            ]
+            .into_iter()
+            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
+        })
+        .collect::<BTreeSet<_>>();
+    if signature_features.is_empty() {
+        return "rust_family_cluster".to_string();
+    }
+    format!(
+        "cluster:{}",
+        signature_features.into_iter().collect::<Vec<_>>().join("+")
+    )
+}
+
 fn support_target_family(target: &str, framework_role: &str) -> String {
     match framework_role {
         "framework:express.route_handler" => "express.route_handler".to_string(),
@@ -1504,6 +1730,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
             }
             _ => "sqlalchemy.query_call".to_string(),
         },
+        framework_role if rust_role_is_known(framework_role) => {
+            rust_support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -1607,7 +1836,29 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if tsjs_framework_role_is_known(framework_role) {
         return tsjs_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if rust_role_is_known(framework_role) {
+        return rust_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     false
+}
+
+fn rust_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = rust_support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && rust_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn rust_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    match fact.certainty {
+        FactCertainty::DataflowDerived => {
+            fact.origin.engine == RUST_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == RUST_DERIVED_SUPPORT_METHOD
+                && fact_has_assumption(fact, "provider_resolved=false")
+                && fact_has_assumption(fact, "derived_from=tree_sitter_rust_structural_anchors")
+                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
+        }
+        _ => false,
+    }
 }
 
 fn tsjs_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -1810,7 +2061,15 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "pydantic_model"
             | "sqlalchemy_model"
             | "sqlalchemy_repository_method"
-    )
+    ) || rust_family_eligible_kind(kind)
+}
+
+fn min_family_support_for_key(key: &FamilyKey) -> usize {
+    if key.language == "rust" && key.framework_role == "framework:repogrammar.rust_parser_adapter" {
+        2
+    } else {
+        min_family_support(&key.language)
+    }
 }
 
 pub(crate) fn min_family_support(language: &str) -> usize {
@@ -1818,6 +2077,8 @@ pub(crate) fn min_family_support(language: &str) -> usize {
         PYTHON_MIN_FAMILY_SUPPORT
     } else if is_tsjs_language_name(language) {
         TSJS_MIN_FAMILY_SUPPORT
+    } else if language == "rust" {
+        3
     } else {
         DEFAULT_MIN_FAMILY_SUPPORT
     }

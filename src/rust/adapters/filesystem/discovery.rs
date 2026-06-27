@@ -3,6 +3,7 @@
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
 use crate::adapters::languages::python::PythonLanguageAdapter;
+use crate::adapters::languages::rust::RustLanguageAdapter;
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -387,6 +388,9 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
     if path == "pyproject.toml" {
         return Some(DiscoveredLanguage::PythonConfig);
     }
+    if path == "Cargo.toml" || path.ends_with("/Cargo.toml") {
+        return Some(DiscoveredLanguage::RustConfig);
+    }
     if is_tsjs_project_config_path(path) {
         return Some(DiscoveredLanguage::TsJsConfig);
     }
@@ -398,6 +402,9 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
         "jsx" => Some(DiscoveredLanguage::JavaScriptReact),
         extension if PythonLanguageAdapter::supports_extension(extension) => {
             Some(DiscoveredLanguage::Python)
+        }
+        extension if RustLanguageAdapter::supports_extension(extension) => {
+            Some(DiscoveredLanguage::Rust)
         }
         _ => None,
     }
@@ -523,6 +530,45 @@ mod tests {
                 ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
             ]
         );
+    }
+
+    #[test]
+    fn discovers_rust_sources_and_cargo_manifest_without_target_output() {
+        let workspace = TempWorkspace::new("discovery-rust");
+        fs::create_dir_all(workspace.path().join("src")).expect("create src");
+        fs::create_dir_all(workspace.path().join("target/debug")).expect("create target");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .expect("write cargo");
+        fs::write(workspace.path().join("src/lib.rs"), "pub fn demo() {}\n").expect("write rust");
+        fs::write(
+            workspace.path().join("target/debug/generated.rs"),
+            "pub fn generated() {}\n",
+        )
+        .expect("write target rust");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Cargo.toml", DiscoveredLanguage::RustConfig),
+                ("src/lib.rs", DiscoveredLanguage::Rust),
+            ]
+        );
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "target" && skipped.reason == SkippedReason::DefaultExcludedDirectory
+        }));
     }
 
     #[test]
