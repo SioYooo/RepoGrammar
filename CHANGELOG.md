@@ -4,6 +4,19 @@
 
 ### Added
 
+- Public-preview readiness documentation now includes an explicit support matrix
+  for Python v0.1, conservative JS/TS v0.2 Express/Jest/Vitest exact-anchor
+  support, unsupported JS/TS frameworks, source-span opt-in, token-saving claim
+  limits, and installer platform boundaries. A readiness report and real-repo
+  dogfood protocol were added under `docs/reports/` and `docs/experiments/`.
+- Release/install readiness tests now verify npm platform-to-artifact mappings
+  for macOS, Linux, and Windows preview targets, unsupported npm platform/arch
+  rejection, required bundled Python worker assets, Bash installer state-boundary
+  behavior, release workflow artifact names, and installer script checksum
+  publication.
+- Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support and
+  React/Next/Fastify/Prisma/Drizzle lookalikes that must not derive public family
+  support.
 - Conservative TS/JS exact-anchor family support for Express route handlers and
   Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL` anchors only
   for exact import/require bindings, app/router factories, and literal methods

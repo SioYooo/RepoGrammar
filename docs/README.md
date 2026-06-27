@@ -15,6 +15,10 @@ development, and governance documentation.
 - `plans/`: current implementation coordination plans. Plans are active
   execution guidance and must stay consistent with accepted ADRs and
   specifications.
+- `reports/`: release-readiness and audit reports. Reports are evidence
+  snapshots, not canonical product contracts.
+- `experiments/`: reproducible experiment and dogfood protocols. Protocols do
+  not imply measured results until filled with run evidence.
 - `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
   references used to design implementation milestones.
 - `roadmap.md`: current staged implementation plan and deferred work.
@@ -45,6 +49,8 @@ context lives under `.agents/memories/`.
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,
   `specifications/indexing-pipeline.md`, `specifications/unknowns.md`,
   `specifications/cli.md`, and `specifications/mcp-api.md`.
+- v0.2 public-preview readiness: `reports/v0.2-public-preview-readiness.md`
+  and `experiments/v0.2-real-repo-dogfood.md`.
 - Historical Python dogfooding boundary:
   `decisions/ADR-0009-experimental-python-dogfooding.md` and
   `plans/python-dogfooding-plan.md`.

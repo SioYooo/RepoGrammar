@@ -56,6 +56,22 @@ structural context, while dynamic imports, conditional `require`, unresolved
 aliases, and star re-exports remain typed `UNKNOWN`. This is not full
 TypeScript/JavaScript semantic analysis.
 
+## Public Preview Support Matrix
+
+| Area | Public-preview status | Boundary |
+|---|---|---|
+| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence only; dynamic decorators, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
+| Python pytest | Supported | Bounded test/fixture family evidence; ambiguous fixture injection and dynamic plugin behavior produce `UNKNOWN`. |
+| Python Pydantic | Supported | Bounded model/settings family evidence; dynamic model factories and unresolved bases produce `UNKNOWN`. |
+| Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |
+| JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls only; support requires at least three complete-link-compatible examples. |
+| JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
+| JS/TS React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; any lookalike or framework-shaped evidence must remain unsupported or `UNKNOWN`. |
+| Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
+| Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
+| Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements; repo-shape diagnostics are not causal savings claims. |
+| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |
+
 ## Install
 
 Once a public-preview prerelease has been published, install the prebuilt CLI
@@ -80,13 +96,14 @@ npm install -g @sioyooo/repogrammar
 repogrammar install
 ```
 
-The installer downloads the matching macOS or Linux release artifact, verifies
-its checksum, installs `repogrammar` into a user-writable command directory, and
-then can launch the agent setup wizard. It does not require Rust, Cargo,
-Node.js, Docker, a local LLM, an embedding model, or a cloud API key. The
-current Python preview still requires a `python3` interpreter at indexing time
-to run RepoGrammar's bundled CPython AST worker; it does not require a Python
-virtualenv or project dependency installation.
+The installer downloads the matching macOS/Linux release artifact, verifies its
+checksum, installs `repogrammar` into a user-writable command directory, and
+then can launch the agent setup wizard. Windows preview builds use the
+PowerShell installer below. Neither path requires Rust, Cargo, Node.js, Docker,
+a local LLM, an embedding model, or a cloud API key. The current Python preview
+still requires a `python3` interpreter at indexing time to run RepoGrammar's
+bundled CPython AST worker; it does not require a Python virtualenv or project
+dependency installation.
 
 The `npx` / npm path requires Node/npm by definition, but still does not require
 Rust or Cargo. On Windows preview builds, use PowerShell:
@@ -243,6 +260,9 @@ analyzer. In this preview:
 
 - Python support is limited to bounded framework-family evidence.
 - Dynamic Python behavior often produces typed `UNKNOWN`.
+- JS/TS preview support is limited to exact-anchor Express and Jest/Vitest
+  families. Full JS/TS semantics, React, Next.js, Fastify, Prisma, Drizzle,
+  dynamic wrappers, and complete alias/re-export resolution are deferred.
 - Source snippets are not returned by default.
 - Full Python semantic providers, runtime observation, and broader language
   support are deferred.
