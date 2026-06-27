@@ -90,6 +90,9 @@ jobs:
         run: |
           cp src/install/repogrammar-install.sh release-assets/install.sh
           cp src/install/install.ps1 release-assets/install.ps1
+          cd release-assets
+          sha256sum install.sh > install.sh.sha256
+          sha256sum install.ps1 > install.ps1.sha256
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: true

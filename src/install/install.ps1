@@ -83,21 +83,22 @@ function Install-Cli {
         if (!(Test-Path $binary)) {
             throw "release artifact did not contain repogrammar.exe"
         }
+        $worker = Join-Path $temp.FullName "workers\python\worker.py"
+        if (!(Test-Path $worker)) {
+            throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
+        }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
         Copy-Item $binary $installedBinary -Force
         New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
         Copy-Item $installedBinary $commandPath -Force
-        $worker = Join-Path $temp.FullName "workers\python\worker.py"
-        if (Test-Path $worker) {
-            $workerRoots = @($WorkerRoot)
-            if (!$env:REPOGRAMMAR_WORKER_ROOT) {
-                $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
-            }
-            foreach ($root in ($workerRoots | Select-Object -Unique)) {
-                $workerDest = Join-Path $root "python"
-                New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
-                Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
-            }
+        $workerRoots = @($WorkerRoot)
+        if (!$env:REPOGRAMMAR_WORKER_ROOT) {
+            $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
+        }
+        foreach ($root in ($workerRoots | Select-Object -Unique)) {
+            $workerDest = Join-Path $root "python"
+            New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
+            Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
         }
         Write-Output "Installed $commandPath"
     } finally {

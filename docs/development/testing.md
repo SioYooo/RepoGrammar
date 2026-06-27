@@ -145,15 +145,18 @@ allowed.
   `repogrammar install` / `repogrammar uninstall` invocation through a fake
   binary, source-checkout `--from-source` install/configure dogfood without
   network access, actionable no-release failure text, refusal of foreign
-  command paths, target/scope pass-through for comma-separated, `none`, and
-  local-scope install requests, and command removal. Default tests must not use
-  wrapper scripts to call real `codex` or `claude` binaries.
+  command paths, missing-worker artifact rejection, release-workflow artifact
+  and installer-script checksum contract checks, target/scope pass-through for
+  comma-separated, `none`, and local-scope install requests, and command
+  removal. Default tests must not use wrapper scripts to call real `codex` or
+  `claude` binaries.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
-  cover target selection, checksum rejection, binary/worker cache installation,
-  `REPOGRAMMAR_BINARY` local dogfood bypass, argument forwarding including
-  target lists, local scope, and `--print-config`, and npm package shape via
-  `npm pack --dry-run`.
+  cover the full public-preview platform/artifact matrix, unsupported
+  platform/arch rejection, checksum rejection, binary/worker cache
+  installation, missing-worker artifact rejection, `REPOGRAMMAR_BINARY` local
+  dogfood bypass, argument forwarding including target lists, local scope, and
+  `--print-config`, and npm package shape via `npm pack --dry-run`.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry

@@ -58,6 +58,20 @@ test -f "${TMP_ROOT}/share/repogrammar/workers/python/worker.py"
 test -f "${COMMAND_DIR}/repogrammar-workers/python/worker.py"
 test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
 
+STATE_REPO="${TMP_ROOT}/state-boundary-repo"
+STATE_COMMAND_DIR="${TMP_ROOT}/state-boundary-bin"
+STATE_INSTALL_DIR="${TMP_ROOT}/state-boundary-data"
+mkdir -p "${STATE_REPO}/.repogrammar"
+printf 'keep\n' > "${STATE_REPO}/.repogrammar/sentinel"
+(
+  cd "$STATE_REPO"
+  REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$STATE_COMMAND_DIR" \
+  REPOGRAMMAR_INSTALL_DIR="$STATE_INSTALL_DIR" \
+  "$INSTALLER" --install-cli-only --yes >/dev/null
+)
+grep -q "keep" "${STATE_REPO}/.repogrammar/sentinel"
+
 REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
 REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
@@ -183,3 +197,46 @@ fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
+
+MISSING_WORKER_RELEASE="${TMP_ROOT}/missing-worker-release"
+MISSING_WORKER_PACKAGE="${TMP_ROOT}/missing-worker-package"
+mkdir -p "$MISSING_WORKER_RELEASE" "$MISSING_WORKER_PACKAGE"
+cp "${PACKAGE_DIR}/repogrammar" "${MISSING_WORKER_PACKAGE}/repogrammar"
+tar -czf "${MISSING_WORKER_RELEASE}/${ARTIFACT}" -C "$MISSING_WORKER_PACKAGE" repogrammar
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$MISSING_WORKER_RELEASE" && sha256sum "$ARTIFACT" > "${ARTIFACT}.sha256")
+else
+  (cd "$MISSING_WORKER_RELEASE" && shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256")
+fi
+MISSING_WORKER_ERR="${TMP_ROOT}/missing-worker.err"
+set +e
+REPOGRAMMAR_RELEASE_DIR="$MISSING_WORKER_RELEASE" \
+REPOGRAMMAR_COMMAND_DIR="${TMP_ROOT}/missing-worker-bin" \
+REPOGRAMMAR_INSTALL_DIR="${TMP_ROOT}/missing-worker-data" \
+"$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/missing-worker.out" 2>"$MISSING_WORKER_ERR"
+MISSING_WORKER_STATUS=$?
+set -e
+if [[ "$MISSING_WORKER_STATUS" -eq 0 ]]; then
+  echo "missing worker release unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "bundled Python worker" "$MISSING_WORKER_ERR"
+if [[ -e "${TMP_ROOT}/missing-worker-bin/repogrammar" || -e "${TMP_ROOT}/missing-worker-data/bin/repogrammar" ]]; then
+  echo "missing worker release left a partial command install" >&2
+  exit 1
+fi
+
+RELEASE_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/release.yml"
+grep -q "repogrammar-x86_64-unknown-linux-gnu.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-aarch64-unknown-linux-gnu.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-x86_64-apple-darwin.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-aarch64-apple-darwin.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$RELEASE_WORKFLOW"
+grep -q "src/workers/python/worker.py" "$RELEASE_WORKFLOW"
+grep -q "install.sh" "$RELEASE_WORKFLOW"
+grep -q "install.ps1" "$RELEASE_WORKFLOW"
+grep -q ".sha256" "$RELEASE_WORKFLOW"
+
+WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
+grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
+grep -q "Get-FileHash -Algorithm SHA256" "$WINDOWS_INSTALLER"

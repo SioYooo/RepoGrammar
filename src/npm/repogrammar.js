@@ -191,18 +191,19 @@ async function ensureBinary() {
     if (!fs.existsSync(extractedBinary)) {
       throw new Error(`release artifact did not contain ${binaryName()}`);
     }
+    const workerSource = path.join(tempDir, "workers", "python", "worker.py");
+    if (!fs.existsSync(workerSource)) {
+      throw new Error("release artifact did not contain bundled Python worker at workers/python/worker.py");
+    }
     fs.rmSync(installDir, { recursive: true, force: true });
     ensureDirectory(installDir);
     fs.copyFileSync(extractedBinary, installed);
     if (process.platform !== "win32") {
       fs.chmodSync(installed, 0o755);
     }
-    const workerSource = path.join(tempDir, "workers", "python", "worker.py");
-    if (fs.existsSync(workerSource)) {
-      const workerDestination = path.join(installDir, "workers", "python");
-      ensureDirectory(workerDestination);
-      fs.copyFileSync(workerSource, path.join(workerDestination, "worker.py"));
-    }
+    const workerDestination = path.join(installDir, "workers", "python");
+    ensureDirectory(workerDestination);
+    fs.copyFileSync(workerSource, path.join(workerDestination, "worker.py"));
     return installed;
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

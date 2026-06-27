@@ -277,7 +277,7 @@ command_worker_root() {
 install_worker_asset() {
   local worker_source="$1"
   if [[ ! -f "$worker_source" ]]; then
-    return
+    die "release artifact did not contain bundled Python worker at workers/python/worker.py"
   fi
   local worker_dest_root
   worker_dest_root="$(default_worker_root)"
@@ -312,6 +312,7 @@ install_cli_from_release() {
   verify_checksum "${tmpdir}/${artifact}" "${tmpdir}/${artifact}.sha256"
   tar -xzf "${tmpdir}/${artifact}" -C "$tmpdir"
   [[ -x "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
+  [[ -f "${tmpdir}/workers/python/worker.py" ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
   install_managed_cli_binary "${tmpdir}/repogrammar"
   install_worker_asset "${tmpdir}/workers/python/worker.py"
   printf "Installed %s\n" "$COMMAND_PATH"

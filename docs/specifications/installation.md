@@ -45,6 +45,9 @@ Public-preview release artifacts use these platform targets:
 Every release artifact must include the `repogrammar` executable and the
 bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
+The published `install.sh` and `install.ps1` assets must also have matching
+`.sha256` checksum assets. Installers must fail instead of silently installing
+an artifact that omits the bundled Python worker.
 
 Source checkouts may provide a dependency-light wrapper script at
 `src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
