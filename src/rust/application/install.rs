@@ -702,6 +702,120 @@ pub fn target_plan_line(target: AgentTarget, scope: InstallScope) -> String {
     }
 }
 
+/// Human-readable instruction-file plan line for dry-run/planning output. Surfaces
+/// the deferred default and the env override that enables managed instruction
+/// writes, without guessing any instruction-file path.
+pub fn target_instruction_plan_line<F>(
+    target: AgentTarget,
+    scope: InstallScope,
+    lookup: &F,
+) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if !target.supports_scope(scope) {
+        return format!(
+            "instruction: deferred {} {} instruction writes are unsupported",
+            target.as_str(),
+            scope.as_str()
+        );
+    }
+    match resolve_instruction_file(target, lookup) {
+        Some(path) => format!("instruction: managed section -> {path}"),
+        None => format!(
+            "instruction: deferred; set {} to an absolute path to enable managed instruction writes",
+            instruction_env_var(target)
+        ),
+    }
+}
+
+/// CodeGraph-style per-target adapter contract. Consolidates the registry's
+/// per-target capabilities (scope support, live-writer status, config preview,
+/// native and instruction plan lines) behind one cohesive type so callers query
+/// the registry through a single contract instead of scattered free functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetAdapter {
+    target: AgentTarget,
+}
+
+impl TargetAdapter {
+    pub fn new(target: AgentTarget) -> Self {
+        Self { target }
+    }
+
+    pub fn target(&self) -> AgentTarget {
+        self.target
+    }
+
+    pub fn target_id(&self) -> &'static str {
+        self.target.as_str()
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        self.target.display_name()
+    }
+
+    pub fn detection_binary(&self) -> Option<&'static str> {
+        self.target.detection_binary()
+    }
+
+    pub fn supports_scope(&self, scope: InstallScope) -> bool {
+        self.target.supports_scope(scope)
+    }
+
+    pub fn has_live_writer(&self, scope: InstallScope) -> bool {
+        self.target.has_live_writer(scope)
+    }
+
+    pub fn instruction_env_var(&self) -> String {
+        instruction_env_var(self.target)
+    }
+
+    /// No-write MCP configuration preview for the target/scope.
+    pub fn print_config(&self, scope: InstallScope) -> Result<String, String> {
+        target_config_snippet(self.target, scope)
+    }
+
+    /// Native MCP plan line shown during dry-run planning.
+    pub fn native_plan_line(&self, scope: InstallScope) -> String {
+        target_plan_line(self.target, scope)
+    }
+
+    /// Instruction-file plan line shown during dry-run planning.
+    pub fn instruction_plan_line<F>(&self, scope: InstallScope, lookup: &F) -> String
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        target_instruction_plan_line(self.target, scope, lookup)
+    }
+
+    /// Full ordered planning description for the target/scope: native MCP plan
+    /// line followed by the instruction-file plan line.
+    pub fn describe_paths<F>(&self, scope: InstallScope, lookup: &F) -> Vec<String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        vec![
+            self.native_plan_line(scope),
+            self.instruction_plan_line(scope, lookup),
+        ]
+    }
+}
+
+/// Adapter for a single known target.
+pub fn target_adapter(target: AgentTarget) -> TargetAdapter {
+    TargetAdapter::new(target)
+}
+
+/// Adapters for every known target, in registry order.
+pub fn known_target_adapters() -> Vec<TargetAdapter> {
+    KNOWN_AGENT_TARGETS
+        .iter()
+        .copied()
+        .map(TargetAdapter::new)
+        .collect()
+}
+
 fn normalize_targets_for_display(targets: &[AgentTarget]) -> Vec<AgentTarget> {
     let mut normalized = Vec::new();
     for known in KNOWN_AGENT_TARGETS {
@@ -1464,6 +1578,54 @@ mod tests {
         assert!(!AgentTarget::Codex.has_live_writer(InstallScope::ProjectLocal));
         assert!(!AgentTarget::Hermes.supports_scope(InstallScope::ProjectLocal));
         assert!(AgentTarget::Gemini.supports_scope(InstallScope::ProjectLocal));
+    }
+
+    #[test]
+    fn target_adapter_contract_covers_known_targets_and_marks_live_writers() {
+        let adapters = known_target_adapters();
+        assert_eq!(adapters.len(), 8);
+        for adapter in &adapters {
+            assert!(!adapter.target_id().is_empty());
+            assert!(!adapter.display_name().is_empty());
+            let snippet = adapter
+                .print_config(InstallScope::Global)
+                .expect("config preview");
+            assert!(snippet.contains("repogrammar"));
+            assert!(snippet.contains("serve"));
+            assert!(!snippet.contains(".repogrammar/"));
+            assert!(adapter
+                .instruction_env_var()
+                .starts_with("REPOGRAMMAR_INSTRUCTION_FILE_"));
+        }
+        let live: Vec<&'static str> = adapters
+            .iter()
+            .filter(|adapter| adapter.has_live_writer(InstallScope::Global))
+            .map(|adapter| adapter.target_id())
+            .collect();
+        assert_eq!(live, vec!["codex", "claude-code"]);
+        assert!(!target_adapter(AgentTarget::Codex).has_live_writer(InstallScope::ProjectLocal));
+    }
+
+    #[test]
+    fn target_adapter_describe_paths_defers_instruction_without_override() {
+        let lookup_none = |_: &str| None;
+        let codex = target_adapter(AgentTarget::Codex);
+        let described = codex.describe_paths(InstallScope::Global, &lookup_none);
+        assert_eq!(described.len(), 2);
+        assert!(described[0].starts_with("native_mcp: codex mcp add"));
+        assert!(described[1].contains("instruction: deferred"));
+        assert!(described[1].contains("REPOGRAMMAR_INSTRUCTION_FILE_CODEX"));
+
+        let absolute = if cfg!(windows) {
+            "C:\\agents\\AGENTS.md"
+        } else {
+            "/srv/agents/AGENTS.md"
+        };
+        let key = instruction_env_var(AgentTarget::Codex);
+        let lookup_override = |requested: &str| (requested == key).then(|| absolute.to_string());
+        let with_override = codex.instruction_plan_line(InstallScope::Global, &lookup_override);
+        assert!(with_override.contains("managed section -> "));
+        assert!(with_override.contains(absolute));
     }
 
     #[test]

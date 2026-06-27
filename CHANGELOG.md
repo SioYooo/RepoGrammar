@@ -4,6 +4,13 @@
 
 ### Added
 
+- The installer target registry is now exposed through a per-target adapter
+  contract (`TargetAdapter`) that consolidates scope support, live-writer
+  status, the no-write config preview, and `describe_paths` planning. Dry-run
+  output now reports a per-target instruction-file plan line that names the
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override and its deferred default.
+  Live writes still cover only global Codex and Claude Code, and `--target all`
+  still installs only live-supported targets all-or-rollback.
 - The installer now has a reversible, idempotent managed instruction-file
   writer using the exact markers `<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->`
   and `<!-- END REPOGRAMMAR MANAGED SECTION -->`. It creates, appends, replaces,

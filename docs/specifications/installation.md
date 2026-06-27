@@ -272,9 +272,12 @@ noninteractive live writes, and a dependency-light text wizard:
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
 - the installer has a target registry for Codex, Claude Code, Cursor,
-  opencode, Hermes, Gemini, Antigravity, and Kiro. The current registry exposes
-  deferred targets through dry-run and `--print-config` snippets only; live
-  writes remain implemented for global Codex and global Claude Code;
+  opencode, Hermes, Gemini, Antigravity, and Kiro, exposed through a per-target
+  adapter contract (`TargetAdapter`) that consolidates scope support, live-writer
+  status, the no-write config preview, and the native MCP plus instruction-file
+  plan lines (`describe_paths`). The current registry exposes deferred targets
+  through dry-run and `--print-config` snippets only; live writes remain
+  implemented for global Codex and global Claude Code;
 - re-running the wizard can add missing supported agents later or refresh the
   RepoGrammar-managed command path even when all selected agents are already
   managed, without re-running native agent add commands for already managed
