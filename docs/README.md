@@ -41,6 +41,10 @@ context lives under `.agents/memories/`.
   `decisions/ADR-0013-agent-adoption-read-displacement.md`,
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,
   `specifications/mcp-api.md`, and `specifications/cli.md`.
+- v0.2 conservative TS/JS exact-anchor hardening:
+  `plans/v0.2-agent-adoption-read-displacement-plan.md`,
+  `specifications/indexing-pipeline.md`, `specifications/unknowns.md`,
+  `specifications/cli.md`, and `specifications/mcp-api.md`.
 - Historical Python dogfooding boundary:
   `decisions/ADR-0009-experimental-python-dogfooding.md` and
   `plans/python-dogfooding-plan.md`.

@@ -107,6 +107,16 @@ Some unknowns block only specific claims:
   identity, runner/receiver binding, support target, or another emitted family
   claim; otherwise they remain context/read-plan guard evidence and must not be
   guessed away.
+- The TS/JS parser maps granular v0.2 cases onto the stable reason-code set:
+  dynamic `import(...)` is `DynamicImport`; non-literal or conditional
+  `require`, dynamic route/test calls, and unresolved custom runner/framework
+  magic are `FrameworkMagic`; unresolved relative imports, unresolved path
+  aliases, unresolved Express receivers, and missing ambient runner context are
+  `UnresolvedImport` or `MissingProjectConfig` as applicable; reassigned or
+  shadowed Express receivers, unsafe test runner bindings, conflicting path
+  aliases, and ambiguous star re-exports are `ConflictingFacts`. These mappings
+  are intentionally conservative and do not create new public reason codes for
+  every syntax shape.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

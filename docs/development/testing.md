@@ -239,11 +239,13 @@ allowed.
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, and absence of source snippets, absolute paths, or unsafe
   dynamic-import literal targets.
-- Transitional release fixture smoke tests currently copy committed TS/JS source
-  fixtures from `src/fixtures/typescript/release/v0_1/` and Python source
-  fixtures from `src/fixtures/python/release/v0_1/` into temporary workspaces and
-  run the product CLI through `init`, `index`, `files`, `units`, `families`,
-  `family`, `member`, `find`, `explain`, `check`, and `doctor` JSON paths.
+- Release fixture smoke tests currently copy committed TS/JS source fixtures
+  from both the legacy transitional `src/fixtures/typescript/release/v0_1/`
+  corpus and the conservative exact-anchor `src/fixtures/typescript/release/v0_2/`
+  corpus, plus Python source fixtures from `src/fixtures/python/release/v0_1/`,
+  into temporary workspaces and run the product CLI through `init`, `index`,
+  `files`, `units`, `families`, `family`, `member`, `find`, `explain`, `check`,
+  and `doctor` JSON paths.
   Default smoke expectations must remain conservative: syntax-only indexing
   succeeds, machine output is parseable and does not leak source snippets,
   parser/provider internals, or absolute paths, low-support and dynamic cases

@@ -1,7 +1,8 @@
 # Project State
 
-- Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
-  discovery, CPython AST structural indexing slice, persisted internal Python
+- Status: Bootstrap plus conservative v0.2 TS/JS exact-anchor family substrate
+  for Express and Jest/Vitest, Python `.py` discovery, CPython AST structural
+  indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error/request-shape anchors,
   pytest parametrize argument anchors, Pydantic field/config/member anchors, typed
@@ -167,8 +168,11 @@
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
 - Related canonical docs: `README.md`, `docs/roadmap.md`,
-  `docs/specifications/cli.md`, `docs/specifications/storage.md`,
-  `docs/specifications/indexing-pipeline.md`,
+  `docs/specifications/cli.md`, `docs/specifications/mcp-api.md`,
+  `docs/specifications/storage.md`, `docs/specifications/indexing-pipeline.md`,
+  `docs/specifications/unknowns.md`, `docs/specifications/product.md`,
+  `docs/specifications/installation.md`, `docs/development/testing.md`,
+  `docs/plans/v0.2-agent-adoption-read-displacement-plan.md`,
   `docs/specifications/python-analysis.md`,
   `docs/decisions/ADR-0011-python-first-v0-1.md`,
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`

@@ -2504,6 +2504,50 @@ mod tests {
     }
 
     #[test]
+    fn tsjs_complete_link_clustering_emits_distinct_ready_route_clusters() {
+        let units = (0..6)
+            .map(|index| unit(&format!("src/route{index}.ts"), "express_route", index))
+            .collect::<Vec<_>>();
+        let mut facts = units
+            .iter()
+            .map(|unit| role_fact(unit, "framework:express.route_handler"))
+            .collect::<Vec<_>>();
+        for unit in units.iter().take(3) {
+            facts.push(tsjs_derived_fact_with_assumptions(
+                unit,
+                "express.route.get",
+                "framework:express.route_handler",
+                vec!["handler_shape=inline_json"],
+            ));
+        }
+        for unit in units.iter().skip(3) {
+            facts.push(tsjs_derived_fact_with_assumptions(
+                unit,
+                "express.route.post",
+                "framework:express.route_handler",
+                vec!["handler_shape=referenced_handler"],
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+
+        assert_eq!(report.claims.len(), 2);
+        let mut supports = report
+            .claims
+            .iter()
+            .map(|claim| (claim.framework_role.as_str(), claim.support))
+            .collect::<Vec<_>>();
+        supports.sort();
+        assert_eq!(
+            supports,
+            [
+                ("framework:express.route_handler", 3),
+                ("framework:express.route_handler", 3)
+            ]
+        );
+    }
+
+    #[test]
     fn tsjs_blocking_unknown_prevents_exact_anchor_family_support() {
         let first = unit("src/a.ts", "express_route", 0);
         let second = unit("src/b.ts", "express_route", 1);

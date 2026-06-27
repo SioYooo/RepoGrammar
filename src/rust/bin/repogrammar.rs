@@ -2624,6 +2624,78 @@ mod tests {
             .as_array()
             .expect("mcp spans")
             .is_empty());
+
+        // find also honors the explicit source-span opt-in on the product path.
+        let find_spanned = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["app.ts", "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(find_spanned.status, 0, "stderr: {}", find_spanned.stderr);
+        assert!(!find_spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let find_spanned_json: Value =
+            serde_json::from_str(find_spanned.stdout.trim()).expect("find span json parses");
+        assert_eq!(find_spanned_json["status"], "ok");
+        assert_eq!(find_spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            find_spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        assert!(find_spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("find spans")
+            .iter()
+            .any(|span| span["text"]
+                .as_str()
+                .is_some_and(|text| { text.contains('\t') && text.contains("app.get(") })));
+
+        let mcp_find_spanned = handle_context_call(
+            &runtime,
+            &context,
+            &serde_json::json!({
+                "operation": "find_analogues",
+                "target": "app.ts",
+                "include_source_spans": true,
+            }),
+        )
+        .expect("mcp find source-span payload");
+        assert_eq!(mcp_find_spanned["source_spans"]["requested"], true);
+        assert!(!mcp_find_spanned
+            .to_string()
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "import express from \"express\";\nconst app = express();\napp.get(\"/users\", (req, res) => res.json([\"changed\"]));\n",
+        )
+        .expect("mutate express fixture");
+        let stale = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[&family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_python_stale_unknown("family", &stale_json, &family_id);
+        assert!(stale_json.get("source_spans").is_none());
+
+        let mcp_stale = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "show_family",
+                "target": family_id,
+                "include_source_spans": true,
+            }),
+        );
+        assert_python_stale_unknown("family", &mcp_stale, &family_id);
     }
 
     #[test]
@@ -2700,6 +2772,144 @@ mod tests {
             assert_eq!(detail_json["status"], "ok");
             assert_eq!(detail_json["output"]["source_snippets_included"], false);
         }
+
+        let case_family_id = family_ids
+            .iter()
+            .find(|id| id.starts_with("family:typescript:test_case:"))
+            .expect("test case family id");
+        let spanned = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[case_family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(spanned.status, 0, "stderr: {}", spanned.stderr);
+        assert!(!spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let spanned_json: Value =
+            serde_json::from_str(spanned.stdout.trim()).expect("Jest/Vitest span json parses");
+        assert_eq!(spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        let spans = spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("Jest/Vitest spans");
+        assert!(!spans.is_empty());
+        assert!(spans.iter().all(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains('\t') && !text.contains("wrapper.test.ts")
+        }));
+        assert!(spans.iter().any(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains("it(") || text.contains("test(") || text.contains("case_(")
+        }));
+    }
+
+    #[test]
+    fn tsjs_jest_vitest_ambient_project_context_forms_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "jest_vitest_ambient_context_tests",
+            "tsjs-release-jest-vitest-ambient-context",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        let suites = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.describe")
+            .count();
+        let cases = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+            .count();
+        assert_eq!(
+            suites, 3,
+            "ambient describe in test files with package context derives support"
+        );
+        assert_eq!(
+            cases, 6,
+            "ambient it/test in test files with package context derives support"
+        );
+        assert!(derived
+            .iter()
+            .all(|(path, _, _)| path != "src/not_a_test.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/not_a_test.ts"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_test_runner")
+        }));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 3);
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:typescript:test_suite:"))
+                && family["support"] == 3
+        }));
+        assert_eq!(
+            family_array
+                .iter()
+                .filter(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("family:typescript:test_case:"))
+                    && family["support"] == 3)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn tsjs_javascript_exact_routes_form_family_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "javascript_exact_routes",
+            "tsjs-release-javascript-exact-routes",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(derived.len(), 3);
+        assert!(derived
+            .iter()
+            .all(|(path, target, _)| path == "app.js" && target.starts_with("express.route.")));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        let family_id = family_array[0]["family_id"].as_str().expect("family id");
+        assert!(family_id.starts_with("family:javascript:express_route:"));
+        assert_eq!(family_array[0]["support"], 3);
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
     }
 
     #[test]

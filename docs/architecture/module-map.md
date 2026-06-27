@@ -14,7 +14,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/adapters/parsing/` | Parser boundaries, including transitional TS/JS syntax extraction, bounded TS/JS project-config inventory, conservative TS/JS exact-anchor structural/UNKNOWN facts (`tsjs_anchors.rs`), and the CPython AST-backed Python extractor | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/semantic_workers/` | Rust-side process boundary for language-native semantic workers | `docs/specifications/semantic-workers.md`, `docs/decisions/ADR-0004-rust-core-language-native-workers.md` |
-| `src/rust/adapters/frameworks/` | Framework recognition boundaries; current TS/JS transitional roles plus future Python FastAPI, pytest, SQLAlchemy, and Pydantic roles | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md`, `docs/specifications/python-analysis.md` |
+| `src/rust/adapters/frameworks/` | Framework recognition boundaries; current TS/JS transitional roles plus Python FastAPI, pytest, SQLAlchemy, and Pydantic roles | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md`, `docs/specifications/python-analysis.md` |
 | `src/rust/adapters/persistence/` | SQLite storage boundary | `docs/specifications/storage.md`, `docs/decisions/ADR-0002-local-sqlite-index.md` |
 | `src/rust/adapters/telemetry/` | Local diagnostic event sink boundary | `docs/architecture/overview.md` |
 | `src/rust/interfaces/cli/` | Pattern-family-first CLI argument and output boundary | `README.md`, `docs/specifications/cli.md` |
@@ -29,7 +29,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/workers/python/` | CPython `ast`/`symtable`-backed Python worker for private parse-document extraction, private `tomllib` project-config summaries, and conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
 | `src/fixtures/typescript/` | TypeScript source fixtures | `docs/development/testing.md` |
-| `src/fixtures/python/` | Future Python v0.1 source fixtures | `docs/development/testing.md`, `docs/specifications/python-analysis.md` |
+| `src/fixtures/python/` | Python v0.1 source fixtures | `docs/development/testing.md`, `docs/specifications/python-analysis.md` |
 
 Every `src/` change must include a relevant documentation update in the same
 commit unless the documentation already precisely describes the resulting

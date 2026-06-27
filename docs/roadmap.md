@@ -45,6 +45,11 @@
   pattern-family questions, and CLI/MCP expose explicit bounded source-span
   opt-in over hash-checked read-plan spans while keeping metadata-only output as
   the default.
+- v0.2 conservative TS/JS exact-anchor family support for Express route
+  handlers and Jest/Vitest suites/tests. Support is derived only from exact
+  structural anchors, requires at least three complete-link-compatible members,
+  and blocks dynamic, unsafe, unresolved, stale, or insufficient evidence with
+  typed `UNKNOWN`.
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.
@@ -245,8 +250,14 @@ evidence contracts remain validated together.
 
 - Existing TS/JS discovery, syntax extraction, framework-role facts, worker
   protocol scaffolding, and fixtures remain transitional substrate.
-- Production-quality TS/JS family evidence is deferred until after Python v0.1
-  unless a later ADR changes scope again.
+- A conservative v0.2 token-saving path exists for Express route handlers and
+  Jest/Vitest suites/tests under exact-anchor evidence only. It is not
+  compiler-backed TypeScript analysis, does not support React/Next/Fastify, and
+  does not perform binding/export propagation beyond the bounded structural
+  project-context resolver.
+- Production-quality broad TS/JS family evidence remains deferred until after
+  the Python-first path validates the product surface, unless a later ADR
+  changes scope again.
 
 ## CodeGraph provider path
 

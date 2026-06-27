@@ -410,9 +410,13 @@ family; framework heuristics alone stay `UNKNOWN`.
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
 Express routes, React components, React hooks, Jest/Vitest suites, and
 Jest/Vitest tests into syntax-origin `FRAMEWORK_ROLE` fact records. It records
-repo-relative evidence and unresolved-binding assumptions, but it does not
-resolve handlers, runner identity, React runtime behavior, dependency
-injection, or lifecycle semantics.
+repo-relative evidence and unresolved-binding assumptions. For the conservative
+v0.2 path, the parser also emits structural exact-anchor facts for
+app/router-bound Express route calls and imported or project-context ambient
+Jest/Vitest runner calls; the application layer may derive
+`DATAFLOW_DERIVED` support from those exact anchors. It still does not perform
+TypeScript compiler-backed binding/export propagation, React runtime behavior,
+dependency injection, or lifecycle semantics.
 
 ## Classification
 

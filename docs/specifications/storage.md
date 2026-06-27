@@ -123,8 +123,9 @@ including `.repogrammar/telemetry/`, `.repogrammar/.gitignore`,
 Python `.py` discovery metadata plus syntax-only code-unit records,
 CodeUnit-derived IR nodes, and conservative IR containment edges, then activates
 `.repogrammar/current-generation` after validation. It does not yet create a
-top-level `.repogrammar/repogrammar.sqlite`, freshness manifests, or safe
-source-span rendering. Telemetry upload queues and sent receipts are created
+top-level `.repogrammar/repogrammar.sqlite` or freshness manifests. Safe
+source-span rendering is a query/read-plan concern and is available only through
+explicit CLI/MCP opt-in. Telemetry upload queues and sent receipts are created
 only by explicit `repogrammar telemetry export/upload` paths. The current
 storage adapter has
 generation-scoped family tables and a FamilyStore port. The product `index` and

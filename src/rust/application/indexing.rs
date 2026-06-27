@@ -5050,6 +5050,83 @@ extraPaths = ["src/lib", "C:/secret"]
     }
 
     #[test]
+    fn parser_context_receives_deterministic_tsjs_inventory_aliases_and_test_runner_context() {
+        let workspace = TempWorkspace::new("indexing-tsjs-parser-context");
+        fs::create_dir_all(workspace.path().join("src/lib")).expect("create src/lib");
+        fs::create_dir_all(workspace.path().join("tests")).expect("create tests");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"devDependencies":{"vitest":"^1.0.0"}}"#,
+        )
+        .expect("write package");
+        fs::write(
+            workspace.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@lib/*":["src/lib/*"],"@test/*":["tests/*"]}}}"#,
+        )
+        .expect("write tsconfig");
+        fs::write(
+            workspace.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@shared/*":["src/shared/*"]}}}"#,
+        )
+        .expect("write jsconfig");
+        fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const app = 1;\n",
+        )
+        .expect("write app");
+        fs::write(
+            workspace.path().join("src/lib/client.js"),
+            "export const client = 1;\n",
+        )
+        .expect("write client");
+        fs::write(
+            workspace.path().join("tests/app.test.ts"),
+            "describe('app', () => { it('works', () => {}); });\n",
+        )
+        .expect("write test");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RecordingContextParser::new();
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &store,
+        )
+        .expect("index with TS/JS recording parser");
+
+        assert_eq!(outcome.discovered_files, 6);
+        let contexts = parser.contexts.lock().expect("recorded contexts");
+        assert_eq!(contexts.len(), 6);
+        for context in contexts.iter() {
+            assert_eq!(
+                context.tsjs_module_paths,
+                ["src/app.ts", "src/lib/client.js", "tests/app.test.ts"]
+            );
+            assert_eq!(context.tsjs_path_aliases.len(), 3);
+            assert_eq!(context.tsjs_path_aliases[0].alias_pattern, "@lib/*");
+            assert_eq!(context.tsjs_path_aliases[0].target_patterns, ["src/lib/*"]);
+            assert_eq!(context.tsjs_path_aliases[1].alias_pattern, "@shared/*");
+            assert_eq!(
+                context.tsjs_path_aliases[1].target_patterns,
+                ["src/shared/*"]
+            );
+            assert_eq!(context.tsjs_path_aliases[2].alias_pattern, "@test/*");
+            assert_eq!(context.tsjs_path_aliases[2].target_patterns, ["tests/*"]);
+            assert!(context.tsjs_has_test_runner_context);
+            assert!(context.tsjs_module_paths.iter().all(|path| {
+                (path.ends_with(".ts") || path.ends_with(".js"))
+                    && !Path::new(path).is_absolute()
+                    && !path.contains("..")
+                    && !path.contains(workspace.path().to_string_lossy().as_ref())
+            }));
+        }
+    }
+
+    #[test]
     fn python_source_root_context_uses_only_safe_project_config_facts() {
         let content_hash =
             strict_hash("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");

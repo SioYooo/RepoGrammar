@@ -1,8 +1,8 @@
 # MCP API Specification
 
 The MCP interface is implemented as a minimal pre-alpha read-only stdio server.
-This file records the concrete v0.1 bootstrap tool boundary without claiming a
-final stable API or installer integration.
+This file records the concrete bootstrap tool boundary and the current
+Codex/Claude Code installer wiring without claiming a final stable API.
 
 ## Default tool surface
 
