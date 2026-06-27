@@ -1432,6 +1432,7 @@ mod tests {
             }
             DiscoveredLanguage::Python => Language::Python,
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
+            DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
         }
     }
 
@@ -2010,14 +2011,19 @@ mod tests {
         let workspace = TempWorkspace::new("product-runtime-positive-family");
         fs::write(
             workspace.path().join("users.ts"),
-            "app.get('/users', function listUsers(req, res) { res.json([]); });\n",
+            "import express from 'express';\nconst app = express();\napp.get('/users', function listUsers(req, res) { res.json([]); });\n",
         )
         .expect("write users route");
         fs::write(
             workspace.path().join("accounts.ts"),
-            "app.get('/accounts', function listAccounts(req, res) { res.json([]); });\n",
+            "import express from 'express';\nconst app = express();\napp.get('/accounts', function listAccounts(req, res) { res.json([]); });\n",
         )
         .expect("write accounts route");
+        fs::write(
+            workspace.path().join("orders.ts"),
+            "import express from 'express';\nconst app = express();\napp.get('/orders', function listOrders(req, res) { res.json([]); });\n",
+        )
+        .expect("write orders route");
         let worker_script = semantic_support_worker_script(&workspace);
         let runtime = ProductCliRuntime;
         let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
@@ -2044,7 +2050,7 @@ mod tests {
             outcome.semantic_worker,
             repogrammar::application::indexing::SemanticWorkerRunStatus::Complete
         );
-        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(outcome.semantic_facts, 12);
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2422,6 +2428,54 @@ mod tests {
             .all(|(_, target, _)| target.starts_with("express.route.")));
         // The object-literal lookalike and dynamic receiver never derive support.
         assert!(derived.iter().all(|(path, _, _)| path != "lookalikes.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:express")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "tsconfig.json"
+                && fact
+                    .target
+                    .as_deref()
+                    .is_some_and(|target| target.starts_with("tsconfig.path_alias:"))
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=dynamic_route_call")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_express_receiver")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unsafe_receiver_binding")
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2552,10 +2606,33 @@ mod tests {
             .iter()
             .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
             .count();
-        assert_eq!(suites, 2, "two imported-runner describe suites");
-        assert_eq!(cases, 4, "four imported-runner test cases");
+        assert_eq!(
+            suites, 3,
+            "three imported-runner describe suites, including aliases"
+        );
+        assert_eq!(
+            cases, 6,
+            "six imported-runner test cases, including aliases"
+        );
         // The custom-wrapper test file derives no support.
         assert!(derived.iter().all(|(path, _, _)| path != "wrapper.test.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "wrapper.test.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unsafe_test_runner_binding")
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2563,7 +2640,7 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         let family_array = families_json["families"].as_array().expect("families");
-        assert_eq!(family_array.len(), 2);
+        assert_eq!(family_array.len(), 3);
         let family_ids = family_array
             .iter()
             .map(|family| family["family_id"].as_str().expect("family id").to_string())
@@ -2571,9 +2648,13 @@ mod tests {
         assert!(family_ids
             .iter()
             .any(|id| id.starts_with("family:typescript:test_suite:")));
-        assert!(family_ids
-            .iter()
-            .any(|id| id.starts_with("family:typescript:test_case:")));
+        assert_eq!(
+            family_ids
+                .iter()
+                .filter(|id| id.starts_with("family:typescript:test_case:"))
+                .count(),
+            2
+        );
 
         for family in family_array {
             let family_id = family["family_id"].as_str().expect("family id");
@@ -2588,7 +2669,7 @@ mod tests {
     }
 
     #[test]
-    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_form_families() {
+    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_remain_low_support_unknown() {
         let workspace = TempWorkspace::new("tsjs-v0-1-jest-vitest-basic-ambient");
         copy_release_fixture("jest-vitest-basic", workspace.path());
         let runtime = ProductCliRuntime;
@@ -2628,10 +2709,10 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         let family_array = families_json["families"].as_array().expect("families");
-        assert_eq!(family_array.len(), 2);
-        assert!(family_array
-            .iter()
-            .all(|family| family["classification"] == "DOMINANT_PATTERN"));
+        assert!(
+            family_array.is_empty(),
+            "two ambient suites/tests are below the conservative TS/JS support threshold"
+        );
     }
 
     #[test]

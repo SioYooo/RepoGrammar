@@ -8,14 +8,19 @@
   Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL` anchors only
   for exact import/require bindings, app/router factories, and literal methods
   (Express) or imported/ambient-in-test-file runners (Jest/Vitest); reassigned,
-  shadowed, dynamic-receiver, custom-wrapper, conditional-import, and
+  shadowed, dynamic-receiver or dynamic-method, custom-wrapper, conditional-import, and
   object-literal lookalikes stay `UNKNOWN`. The application layer promotes those
   anchors to `DATAFLOW_DERIVED` support facts (engine `repogrammar-tsjs-derived`,
   method `bounded_exact_anchor_v1`), and the loose substring compatibility gate
-  is replaced by an exact target whitelist plus a safe-origin check. React
-  components/hooks remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the
-  source-span renderer work for JS/TS fixtures; default output stays source-free
-  and `--include-source-spans` / `include_source_spans=true` returns bounded
+  is replaced by an exact target whitelist plus a safe-origin check. TS/JS
+  family construction now requires at least three compatible support facts,
+  uses complete-link clustering over conservative route/test feature profiles,
+  records route/test variation slots, and keeps project-config inventory
+  (`package.json`, `tsconfig.json`, `jsconfig.json`, Jest/Vitest config files)
+  as structural context or typed config `UNKNOWN` only. React components/hooks
+  remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the source-span renderer
+  work for JS/TS fixtures; default output stays source-free and
+  `--include-source-spans` / `include_source_spans=true` returns bounded
   hash-checked line-numbered spans. New fixtures live under
   `src/fixtures/typescript/release/v0_2`. This is a token-saving foundation, not
   full TS/JS semantic analysis or an official v0.1 target change.

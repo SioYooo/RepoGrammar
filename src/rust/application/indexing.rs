@@ -1757,6 +1757,7 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         }
         DiscoveredLanguage::Python => Language::Python,
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
+        DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
     }
 }
 
@@ -2095,13 +2096,14 @@ mod tests {
         path: &str,
         end_byte: usize,
     ) -> SemanticFact {
-        semantic_fact_for_unit_with_target(content_hash, code_unit_id, path, end_byte, None)
+        semantic_fact_for_unit_with_target(content_hash, code_unit_id, path, 0, end_byte, None)
     }
 
     fn semantic_fact_for_unit_with_target(
         content_hash: ContentHash,
         code_unit_id: &str,
         path: &str,
+        start_byte: usize,
         end_byte: usize,
         target: Option<&str>,
     ) -> SemanticFact {
@@ -2117,7 +2119,7 @@ mod tests {
             certainty: FactCertainty::Semantic,
             evidence: Evidence::new(
                 CodeUnitId::new(code_unit_id).expect("valid code unit id"),
-                SourceRange::new(0, end_byte).expect("valid range"),
+                SourceRange::new(start_byte, end_byte).expect("valid range"),
                 Provenance::new(
                     path,
                     content_hash,
@@ -2262,10 +2264,12 @@ mod tests {
     fn exact_express_route_anchors_derive_family_support() {
         let first = indexed_tsjs_unit("src/a.ts", "express_route", 0);
         let second = indexed_tsjs_unit("src/b.ts", "express_route", 1);
-        let units = vec![first.clone(), second.clone()];
+        let third = indexed_tsjs_unit("src/c.ts", "express_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
         let parser_facts = vec![
             tsjs_structural_anchor_fact(&first, "express.route.get"),
             tsjs_structural_anchor_fact(&second, "express.route.post"),
+            tsjs_structural_anchor_fact(&third, "express.route.delete"),
         ];
         let role_facts = units
             .iter()
@@ -2275,7 +2279,7 @@ mod tests {
         let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
             .expect("derive exact express support");
 
-        assert_eq!(derived.len(), 2);
+        assert_eq!(derived.len(), 3);
         assert!(derived.iter().all(|fact| {
             fact.certainty == FactCertainty::DataflowDerived
                 && fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
@@ -2294,7 +2298,7 @@ mod tests {
             report.claims[0].framework_role,
             "framework:express.route_handler"
         );
-        assert_eq!(report.claims[0].support, 2);
+        assert_eq!(report.claims[0].support, 3);
     }
 
     #[test]
@@ -2418,6 +2422,7 @@ mod tests {
                     unit.provenance.content_hash,
                     unit.id.as_str(),
                     &unit.provenance.path,
+                    unit.range.start_byte,
                     unit.range.end_byte,
                     Some("package:express"),
                 ));
@@ -4396,7 +4401,7 @@ mod tests {
 
         assert_eq!(outcome.discovered_files, 2);
         assert_eq!(outcome.indexed_units, 7);
-        assert_eq!(outcome.semantic_facts, 5);
+        assert_eq!(outcome.semantic_facts, 8);
         assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Deferred);
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
 
@@ -4404,8 +4409,20 @@ mod tests {
             .list_active_semantic_facts()
             .expect("list semantic facts");
         assert_eq!(facts.generation_id, "gen-000001");
-        assert_eq!(facts.facts.len(), 5);
-        assert!(facts.facts.iter().all(|fact| {
+        assert_eq!(facts.facts.len(), 8);
+        let role_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "FRAMEWORK_ROLE")
+            .collect::<Vec<_>>();
+        let unknown_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "UNKNOWN")
+            .collect::<Vec<_>>();
+        assert_eq!(role_facts.len(), 5);
+        assert_eq!(unknown_facts.len(), 3);
+        assert!(role_facts.iter().all(|fact| {
             fact.kind == "FRAMEWORK_ROLE"
                 && fact.certainty == "FRAMEWORK_HEURISTIC"
                 && fact.origin_engine == "repogrammar-frameworks"
@@ -4420,8 +4437,21 @@ mod tests {
                     .contains(workspace.path().to_string_lossy().as_ref())
                 && fact.content_hash.as_str().starts_with("sha256:")
         }));
-        let targets = facts
-            .facts
+        assert!(unknown_facts.iter().all(|fact| {
+            fact.certainty == "UNKNOWN"
+                && fact.origin_engine == "repogrammar-tsjs-syntax"
+                && fact.origin_method == "exact_anchor_v1"
+                && fact.path != sentinel
+                && !fact
+                    .path
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && !fact.note.contains(sentinel)
+                && !fact
+                    .note
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && fact.content_hash.as_str().starts_with("sha256:")
+        }));
+        let targets = role_facts
             .iter()
             .map(|fact| fact.target.as_deref().expect("framework role target"))
             .collect::<Vec<_>>();
@@ -4482,7 +4512,7 @@ mod tests {
             &FilesystemSourceStore,
         )
         .expect("assess framework fact readiness");
-        assert_eq!(readiness.facts.len(), 5);
+        assert_eq!(readiness.facts.len(), 8);
         for fact in readiness.facts {
             let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
                 panic!("framework heuristic facts must not become family claim input");
@@ -4496,20 +4526,31 @@ mod tests {
         let workspace = TempWorkspace::new("indexing-family-builder");
         fs::write(
             workspace.path().join("users.ts"),
-            "app.get('/users', (req, res) => { res.json([]); });\n",
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/users', (req, res) => { res.json([]); });\n",
         )
         .expect("write users route");
         fs::write(
             workspace.path().join("accounts.ts"),
-            "app.get('/accounts', (req, res) => { res.json([]); });\n",
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/accounts', (req, res) => { res.json([]); });\n",
         )
         .expect("write accounts route");
+        fs::write(
+            workspace.path().join("orders.ts"),
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/orders', (req, res) => { res.json([]); });\n",
+        )
+        .expect("write orders route");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let detector = SyntaxFrameworkRoleDetector;
         let (expected_files, facts) = semantic_support_facts_for_express_routes(&workspace);
-        assert_eq!(facts.len(), 2);
+        assert_eq!(facts.len(), 3);
         let worker = StaticSemanticWorker {
             expected_files,
             result: Ok(facts),
@@ -4528,7 +4569,10 @@ mod tests {
             .expect("index semantic-supported family");
 
         assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
-        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(
+            outcome.semantic_facts as u32,
+            semantic_fact_count(&state, "gen-000001")
+        );
         let families = store.list_active_families().expect("list families");
         assert_eq!(families.generation_id, "gen-000001");
         assert_eq!(families.families.len(), 1);
@@ -4537,8 +4581,8 @@ mod tests {
             .show_family(&families.families[0].family_id)
             .expect("show family")
             .expect("family exists");
-        assert_eq!(family.members.len(), 2);
-        assert_eq!(family.evidence.len(), 2);
+        assert_eq!(family.members.len(), 3);
+        assert_eq!(family.evidence.len(), 3);
         assert!(family
             .members
             .iter()
@@ -4560,7 +4604,8 @@ mod tests {
             "import express from 'express';\n\
              const app = express();\n\
              app.get('/users', (req, res) => { res.json([]); });\n\
-             app.post('/users', (req, res) => { res.json({}); });\n",
+             app.post('/users', (req, res) => { res.json({}); });\n\
+             app.delete('/users/:id', (req, res) => { res.json({}); });\n",
         )
         .expect("write resolved express server");
         let state = workspace.path().join(".repogrammar");

@@ -10,7 +10,7 @@
 
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{ParseError, SourceDocument};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,72 +32,220 @@ pub fn exact_framework_anchors(
     let bindings = ModuleBindings::analyze(document.text);
     let mut facts = Vec::new();
     for unit in units {
-        let Some((target, fact_kind)) = anchor_for_unit(document, &bindings, unit) else {
-            continue;
-        };
-        facts.push(anchor_fact(document, unit, target, fact_kind)?);
+        match anchor_for_unit(document, &bindings, unit) {
+            AnchorOutcome::Anchor(anchor) => facts.push(anchor_fact(document, unit, anchor)?),
+            AnchorOutcome::Unknown(unknown) => facts.push(unknown_fact(document, unit, unknown)?),
+            AnchorOutcome::None => {}
+        }
     }
     Ok(facts)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TestRunnerCallNames {
+    pub suite_names: BTreeSet<String>,
+    pub test_names: BTreeSet<String>,
+}
+
+pub(crate) fn exact_test_runner_call_names(text: &str) -> TestRunnerCallNames {
+    let bindings = ModuleBindings::analyze(text);
+    let mut names = TestRunnerCallNames::default();
+    for (local, binding) in &bindings.imports {
+        if bindings.unsafe_names.contains(local)
+            || !RUNNER_MODULES.contains(&binding.module.as_str())
+        {
+            continue;
+        }
+        let ImportKind::Named(original) = &binding.kind else {
+            continue;
+        };
+        match original.as_str() {
+            "describe" => {
+                names.suite_names.insert(local.clone());
+            }
+            "it" | "test" => {
+                names.test_names.insert(local.clone());
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Anchor {
+    target: String,
+    fact_kind: SemanticFactKind,
+    assumptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnknownAnchor {
+    reason: UnknownReasonCode,
+    affected_claim: &'static str,
+    kind: &'static str,
+    note: &'static str,
+}
+
+enum AnchorOutcome {
+    Anchor(Anchor),
+    Unknown(UnknownAnchor),
+    None,
 }
 
 fn anchor_for_unit(
     document: &SourceDocument<'_>,
     bindings: &ModuleBindings,
     unit: &CodeUnit,
-) -> Option<(String, SemanticFactKind)> {
-    let slice = document
+) -> AnchorOutcome {
+    let Some(slice) = document
         .text
-        .get(unit.range.start_byte..unit.range.end_byte)?;
+        .get(unit.range.start_byte..unit.range.end_byte)
+    else {
+        return AnchorOutcome::None;
+    };
     match unit.kind {
-        CodeUnitKind::ExpressRoute => express_route_target(bindings, slice)
-            .map(|target| (target, SemanticFactKind::ResolvedCall)),
-        CodeUnitKind::TestSuite => test_target(document, bindings, slice, true)
-            .map(|target| (target, SemanticFactKind::ResolvedCall)),
-        CodeUnitKind::TestCase => test_target(document, bindings, slice, false)
-            .map(|target| (target, SemanticFactKind::ResolvedCall)),
-        _ => None,
+        CodeUnitKind::ExpressRoute => express_route_anchor(bindings, slice),
+        CodeUnitKind::TestSuite => test_anchor(document, bindings, slice, true),
+        CodeUnitKind::TestCase => test_anchor(document, bindings, slice, false),
+        _ => AnchorOutcome::None,
     }
 }
 
-fn express_route_target(bindings: &ModuleBindings, slice: &str) -> Option<String> {
-    let (receiver, method) = route_call_parts(slice)?;
+fn express_route_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    let Some((receiver, method)) = route_call_parts(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "tsjs_support_target",
+            kind: "dynamic_route_call",
+            note: "TS/JS route call shape is dynamic",
+        });
+    };
     if !HTTP_METHODS.contains(&method) {
-        return None;
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "tsjs_support_target",
+            kind: "unsupported_route_method",
+            note: "TS/JS route method is not in the exact anchor allowlist",
+        });
     }
     if bindings.unsafe_names.contains(receiver) {
-        return None;
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::ConflictingFacts,
+            affected_claim: "tsjs_receiver_binding",
+            kind: "unsafe_receiver_binding",
+            note: "TS/JS route receiver is reassigned or redeclared",
+        });
     }
-    bindings
-        .express_receivers
-        .get(receiver)
-        .map(|_| format!("express.route.{method}"))
+    if !bindings.express_receivers.contains_key(receiver) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "tsjs_receiver_binding",
+            kind: "unresolved_express_receiver",
+            note: "TS/JS route receiver is not an exact Express app/router binding",
+        });
+    }
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=express_route".to_string(),
+        format!("route_method={method}"),
+        format!("handler_shape={}", handler_shape(slice)),
+        format!("async_shape={}", async_shape(slice)),
+    ];
+    if let Some(path_shape) = route_path_shape(slice) {
+        assumptions.push(format!("route_path_shape={path_shape}"));
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: format!("express.route.{method}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions,
+    })
 }
 
-fn test_target(
+fn test_anchor(
     document: &SourceDocument<'_>,
     bindings: &ModuleBindings,
     slice: &str,
     is_suite: bool,
-) -> Option<String> {
-    let name = test_call_name(slice)?;
-    let expected = if is_suite {
+) -> AnchorOutcome {
+    let Some(name) = test_call_name(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "tsjs_runner_binding",
+            kind: "dynamic_test_call",
+            note: "TS/JS test runner call shape is dynamic",
+        });
+    };
+    if bindings.unsafe_names.contains(name) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::ConflictingFacts,
+            affected_claim: "tsjs_runner_binding",
+            kind: "unsafe_test_runner_binding",
+            note: "TS/JS test runner name is locally reassigned or redeclared",
+        });
+    }
+    if bindings.local_decls.contains(name) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::ConflictingFacts,
+            affected_claim: "tsjs_runner_binding",
+            kind: "unsafe_test_runner_binding",
+            note: "TS/JS test runner name is a local custom wrapper",
+        });
+    }
+    if let Some((module, original)) = bindings.imported_runner(name) {
+        if (is_suite && original == "describe") || (!is_suite && matches!(original, "it" | "test"))
+        {
+            return AnchorOutcome::Anchor(test_anchor_for_runner(
+                name, original, module, is_suite, slice,
+            ));
+        }
+    }
+    if bindings.imports.contains_key(name) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "tsjs_runner_binding",
+            kind: "unresolved_test_runner",
+            note: "TS/JS test runner import does not resolve to a known runner",
+        });
+    }
+    let expected_ambient = if is_suite {
         name == "describe"
     } else {
         name == "it" || name == "test"
     };
-    if !expected {
-        return None;
+    if expected_ambient && is_ambient_runner(document.path, bindings, name) {
+        return AnchorOutcome::Anchor(test_anchor_for_runner(
+            name, name, "ambient", is_suite, slice,
+        ));
     }
-    if bindings.unsafe_names.contains(name) {
-        return None;
+    AnchorOutcome::Unknown(UnknownAnchor {
+        reason: UnknownReasonCode::FrameworkMagic,
+        affected_claim: "tsjs_runner_binding",
+        kind: "unresolved_test_runner",
+        note: "TS/JS test runner binding is not exact",
+    })
+}
+
+fn test_anchor_for_runner(
+    local_name: &str,
+    original: &str,
+    runner_kind: &str,
+    is_suite: bool,
+    slice: &str,
+) -> Anchor {
+    Anchor {
+        target: format!("jest_vitest.{original}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            format!(
+                "tsjs_anchor_kind={}",
+                if is_suite { "test_suite" } else { "test_case" }
+            ),
+            format!("runner_kind={runner_kind}"),
+            format!("test_shape={original}"),
+            format!("async_shape={}", async_shape(slice)),
+            format!("import_context={local_name}"),
+        ],
     }
-    if bindings.is_imported_runner(name) {
-        return Some(format!("jest_vitest.{name}"));
-    }
-    if is_ambient_runner(document.path, bindings, name) {
-        return Some(format!("jest_vitest.{name}"));
-    }
-    None
 }
 
 /// A bare `describe`/`it`/`test` is only treated as a runner global in an actual
@@ -126,8 +274,7 @@ fn is_test_file(path: &str) -> bool {
 fn anchor_fact(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
-    target: String,
-    kind: SemanticFactKind,
+    anchor: Anchor,
 ) -> Result<SemanticFact, ParseError> {
     let provenance = Provenance::new(
         document.path,
@@ -144,9 +291,9 @@ fn anchor_fact(
     )
     .map_err(ParseError::Internal)?;
     Ok(SemanticFact {
-        kind,
+        kind: anchor.fact_kind,
         subject: unit.id.as_str().to_string(),
-        target: Some(SymbolId::new(target).map_err(ParseError::Internal)?),
+        target: Some(SymbolId::new(anchor.target).map_err(ParseError::Internal)?),
         origin: FactOrigin {
             engine: TSJS_ANCHOR_ENGINE.to_string(),
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -154,7 +301,46 @@ fn anchor_fact(
         },
         certainty: FactCertainty::Structural,
         evidence,
-        assumptions: vec![format!("tsjs_anchor_kind={}", unit.kind.as_str())],
+        assumptions: anchor.assumptions,
+    })
+}
+
+fn unknown_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    unknown: UnknownAnchor,
+) -> Result<SemanticFact, ParseError> {
+    let provenance = Provenance::new(
+        document.path,
+        document.content_hash.clone(),
+        document.repository_revision.clone(),
+    )
+    .map_err(ParseError::Internal)?;
+    let evidence = Evidence::new(
+        CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
+        SourceRange::new(unit.range.start_byte, unit.range.end_byte)
+            .map_err(ParseError::Internal)?,
+        provenance,
+        unknown.note,
+    )
+    .map_err(ParseError::Internal)?;
+    Ok(SemanticFact {
+        kind: SemanticFactKind::Unknown,
+        subject: unit.id.as_str().to_string(),
+        target: Some(
+            SymbolId::new(unknown.reason.as_protocol_str()).map_err(ParseError::Internal)?,
+        ),
+        origin: FactOrigin {
+            engine: TSJS_ANCHOR_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: TSJS_ANCHOR_METHOD.to_string(),
+        },
+        certainty: FactCertainty::Unknown,
+        evidence,
+        assumptions: vec![
+            format!("affected_claim={}", unknown.affected_claim),
+            format!("tsjs_unknown_kind={}", unknown.kind),
+        ],
     })
 }
 
@@ -248,13 +434,17 @@ impl ModuleBindings {
         }
     }
 
-    fn is_imported_runner(&self, name: &str) -> bool {
+    fn imported_runner(&self, name: &str) -> Option<(&str, &str)> {
         match self.imports.get(name) {
-            Some(binding) => {
-                RUNNER_MODULES.contains(&binding.module.as_str())
-                    && matches!(&binding.kind, ImportKind::Named(original) if original == name)
+            Some(binding) if RUNNER_MODULES.contains(&binding.module.as_str()) => {
+                match &binding.kind {
+                    ImportKind::Named(original) => {
+                        Some((binding.module.as_str(), original.as_str()))
+                    }
+                    ImportKind::Default | ImportKind::Namespace => None,
+                }
             }
-            None => false,
+            _ => None,
         }
     }
 }
@@ -551,6 +741,77 @@ fn route_call_parts(slice: &str) -> Option<(&str, &str)> {
     Some((receiver, method))
 }
 
+fn route_path_shape(slice: &str) -> Option<String> {
+    let open = slice.find('(')?;
+    let path = first_quoted(&slice[open + 1..])?;
+    Some(normalize_route_path(&path))
+}
+
+fn normalize_route_path(path: &str) -> String {
+    let normalized = path
+        .split('/')
+        .map(|segment| {
+            if segment.is_empty() {
+                String::new()
+            } else if segment.starts_with(':') {
+                ":param".to_string()
+            } else if segment
+                .chars()
+                .any(|character| character == '*' || character == '?')
+            {
+                ":pattern".to_string()
+            } else if segment.chars().all(|character| character.is_ascii_digit()) {
+                ":number".to_string()
+            } else {
+                segment.to_ascii_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if normalized.is_empty() {
+        "/".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn handler_shape(slice: &str) -> &'static str {
+    let has_inline_arrow = slice.contains("=>");
+    let has_inline_function = slice.contains("function");
+    let has_req_body = slice.contains(".body");
+    let has_req_query = slice.contains(".query");
+    let has_req_params = slice.contains(".params");
+    let has_res_json = slice.contains(".json(");
+    let has_res_send = slice.contains(".send(");
+    let has_res_end = slice.contains(".end(");
+    match (
+        has_inline_arrow || has_inline_function,
+        has_req_body,
+        has_req_query,
+        has_req_params,
+        has_res_json,
+        has_res_send,
+        has_res_end,
+    ) {
+        (true, true, _, _, true, _, _) => "inline_body_json",
+        (true, _, true, _, true, _, _) => "inline_query_json",
+        (true, _, _, true, true, _, _) => "inline_params_json",
+        (true, _, _, _, true, _, _) => "inline_json",
+        (true, _, _, _, _, true, _) => "inline_send",
+        (true, _, _, _, _, _, true) => "inline_end",
+        (true, _, _, _, _, _, _) => "inline_handler",
+        _ => "referenced_handler",
+    }
+}
+
+fn async_shape(slice: &str) -> &'static str {
+    if slice.contains("async ") || slice.contains("async(") || slice.contains("async (") {
+        "async"
+    } else {
+        "sync"
+    }
+}
+
 fn test_call_name(slice: &str) -> Option<&str> {
     let (name, after) = leading_identifier(slice)?;
     if !slice[after..].trim_start().starts_with('(') {
@@ -616,10 +877,26 @@ mod tests {
     fn targets(path: &str, text: &str) -> Vec<String> {
         let mut targets = parse_facts(path, text)
             .iter()
+            .filter(|fact| fact.kind != SemanticFactKind::Unknown)
             .map(|fact| fact.target.as_ref().expect("target").as_str().to_string())
             .collect::<Vec<_>>();
         targets.sort();
         targets
+    }
+
+    fn unknown_kinds(path: &str, text: &str) -> Vec<String> {
+        let mut kinds = parse_facts(path, text)
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::Unknown)
+            .filter_map(|fact| {
+                fact.assumptions
+                    .iter()
+                    .find_map(|assumption| assumption.strip_prefix("tsjs_unknown_kind="))
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        kinds.sort();
+        kinds
     }
 
     #[test]
@@ -643,6 +920,27 @@ app.delete("/users/:id", (req, res) => { res.end(); });
             assert_eq!(fact.origin.engine, TSJS_ANCHOR_ENGINE);
             assert_eq!(fact.origin.method, TSJS_ANCHOR_METHOD);
         }
+        let facts = parse_facts("src/server.ts", text);
+        let get_fact = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "express.route.get")
+            })
+            .expect("get route fact");
+        assert!(get_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "route_method=get"));
+        assert!(get_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "route_path_shape=/users"));
+        assert!(get_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "handler_shape=inline_json"));
     }
 
     #[test]
@@ -685,6 +983,10 @@ app.put("/a", (req, res) => { res.end(); });
 app.get("/users", (req, res) => { res.json([]); });
 "#;
         assert!(targets("src/fake.ts", text).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fake.ts", text),
+            vec!["unresolved_express_receiver".to_string()]
+        );
     }
 
     #[test]
@@ -695,6 +997,10 @@ app = makeOtherApp();
 app.get("/users", (req, res) => { res.json([]); });
 "#;
         assert!(targets("src/reassigned.ts", reassigned).is_empty());
+        assert_eq!(
+            unknown_kinds("src/reassigned.ts", reassigned),
+            vec!["unsafe_receiver_binding".to_string()]
+        );
 
         let shadowed = r#"import express from "express";
 const express2 = express;
@@ -703,6 +1009,10 @@ const app = express();
 app.get("/users", (req, res) => { res.json([]); });
 "#;
         assert!(targets("src/shadowed.ts", shadowed).is_empty());
+        assert_eq!(
+            unknown_kinds("src/shadowed.ts", shadowed),
+            vec!["unresolved_express_receiver".to_string()]
+        );
     }
 
     #[test]
@@ -713,11 +1023,30 @@ getRouter().get("/users", (req, res) => { res.json([]); });
 "#;
         // getRouter() is not a resolved binding, so no anchor is produced.
         assert!(targets("src/dynamic.ts", dynamic).is_empty());
+        assert_eq!(
+            unknown_kinds("src/dynamic.ts", dynamic),
+            vec!["dynamic_route_call".to_string()]
+        );
 
         let unresolved = r#"const app = makeApp();
 app.get("/users", (req, res) => { res.json([]); });
 "#;
         assert!(targets("src/unresolved.ts", unresolved).is_empty());
+        assert_eq!(
+            unknown_kinds("src/unresolved.ts", unresolved),
+            vec!["unresolved_express_receiver".to_string()]
+        );
+
+        let dynamic_method = r#"import express from "express";
+const app = express();
+const method = "get";
+app[method]("/users", (req, res) => { res.json([]); });
+"#;
+        assert!(targets("src/dynamic-method.ts", dynamic_method).is_empty());
+        assert_eq!(
+            unknown_kinds("src/dynamic-method.ts", dynamic_method),
+            vec!["dynamic_route_call".to_string()]
+        );
     }
 
     #[test]
@@ -752,6 +1081,51 @@ describe("accounts", () => {
     }
 
     #[test]
+    fn jest_vitest_imported_runner_aliases_anchor_suites_and_tests() {
+        let text = r#"import { describe as suite, test as case_ } from "vitest";
+suite("orders", () => {
+  case_("creates", async () => {});
+});
+"#;
+        assert_eq!(
+            targets("src/orders.test.ts", text),
+            vec![
+                "jest_vitest.describe".to_string(),
+                "jest_vitest.test".to_string(),
+            ]
+        );
+        let facts = parse_facts("src/orders.test.ts", text);
+        let suite = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "jest_vitest.describe")
+            })
+            .expect("suite alias fact");
+        assert!(suite
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "runner_kind=vitest"));
+        assert!(suite
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "import_context=suite"));
+        let case_fact = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "jest_vitest.test")
+            })
+            .expect("test alias fact");
+        assert!(case_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "async_shape=async"));
+    }
+
+    #[test]
     fn jest_vitest_ambient_globals_anchor_only_in_test_files() {
         let ambient = r#"describe("users", () => {
   it("loads", () => {});
@@ -782,10 +1156,18 @@ describe("users", () => {
             targets("src/users.test.ts", wrapper),
             vec!["jest_vitest.describe".to_string()]
         );
+        assert_eq!(
+            unknown_kinds("src/users.test.ts", wrapper),
+            vec!["unsafe_test_runner_binding".to_string()]
+        );
 
         let foreign = r#"import { it } from "./helpers";
 it("loads", () => {});
 "#;
         assert!(targets("src/users.test.ts", foreign).is_empty());
+        assert_eq!(
+            unknown_kinds("src/users.test.ts", foreign),
+            vec!["unresolved_test_runner".to_string()]
+        );
     }
 }

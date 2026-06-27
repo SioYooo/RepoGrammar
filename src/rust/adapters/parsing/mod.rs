@@ -20,9 +20,9 @@ pub struct RepoGrammarSourceParser {
 impl SourceParser for RepoGrammarSourceParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
         match document.language {
-            crate::core::model::Language::TypeScript | crate::core::model::Language::JavaScript => {
-                self.syntax.parse(document)
-            }
+            crate::core::model::Language::TypeScript
+            | crate::core::model::Language::JavaScript
+            | crate::core::model::Language::TsJsConfig => self.syntax.parse(document),
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse(document)
             }
@@ -36,9 +36,9 @@ impl SourceParser for RepoGrammarSourceParser {
         context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
         match document.language {
-            crate::core::model::Language::TypeScript | crate::core::model::Language::JavaScript => {
-                self.syntax.parse(document)
-            }
+            crate::core::model::Language::TypeScript
+            | crate::core::model::Language::JavaScript
+            | crate::core::model::Language::TsJsConfig => self.syntax.parse(document),
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context(document, context)
             }

@@ -99,9 +99,13 @@ The canonical algorithm contract is
 Existing TypeScript/JavaScript discovery, syntax extraction, framework-role
 facts, TypeScript worker protocol scaffolding, and release fixtures are
 transitional substrate from the earlier bootstrap. They may remain useful, but
-they are no longer the official v0.1 language target. Production-quality TS/JS
-family evidence is deferred until after the Python v0.1 checkpoint unless a
-later ADR changes the sequence again.
+they are no longer the official v0.1 language target. The v0.2 preview may emit
+conservative Express and Jest/Vitest exact-anchor families only when there are
+at least three complete-link-compatible derived support facts and no
+claim-relevant blocking `UNKNOWN`s. Production-quality TS/JS semantic analysis,
+React/Next/Fastify family support, TypeScript compiler-backed evidence,
+re-export/path-alias completion, and dynamic-wrapper support remain deferred
+unless a later ADR changes the sequence again.
 
 Django, C/C++, whole-program Python call graphs, sound full Python semantic
 analysis, and default runtime tracing are deferred.
@@ -142,7 +146,9 @@ store a `DOMINANT_PATTERN` family when repeated compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
 non-framework evidence. That support must be role-compatible: an arbitrary
 semantic fact for an unrelated package, API, or framework cannot prove an
-FastAPI, pytest, SQLAlchemy, Pydantic, Express, React, Jest, or Vitest family.
+FastAPI, pytest, SQLAlchemy, Pydantic, Express, Jest, or Vitest family. React
+components/hooks are currently recognized only as syntax/framework-role shapes
+and stay `UNKNOWN`.
 Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default

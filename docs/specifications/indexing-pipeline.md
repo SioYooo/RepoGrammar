@@ -44,11 +44,11 @@ This slice does not use Tree-sitter, call a TypeScript compiler, perform full
 multi-view alignment, or anti-unify templates. It does include
 a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, then applies a bounded
-Python complete-link clustering pass over internal support-family feature
-vectors so bridge members cannot single-link incompatible Python evidence into
-one claim. It writes family rows only when each supporting member also has
-compatible same-generation `SEMANTIC` or `DATAFLOW_DERIVED` non-framework
-evidence. The current
+role-specific complete-link clustering pass over internal support-family
+feature vectors so bridge members cannot single-link incompatible Python or
+TS/JS evidence into one claim. It writes family rows only when each supporting
+member also has compatible same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
+non-framework evidence. The current
 Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
 layer from exact CPython structural anchors plus a single syntax-origin Python
 framework role; raw parser facts and framework heuristics remain insufficient by
@@ -58,17 +58,23 @@ handlers and Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL`
 exact-anchor facts only when an exact import/require binding, app/router factory,
 and literal method (Express) or an imported/ambient-in-test-file runner
 (Jest/Vitest) resolve without reassignment, shadowing, dynamic receivers, custom
-wrappers, or conditional imports; otherwise the unit stays `UNKNOWN`. The
+wrappers, dynamic methods, or conditional imports; otherwise the unit emits a
+typed `UNKNOWN` for the affected receiver, runner, or support-target claim. The
 application layer promotes those anchors to `DATAFLOW_DERIVED` support facts with
 engine `repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
 `provider_resolved=false`, `derived_from=tsjs_structural_anchors`,
 `framework_role=<role>`, and `tsjs_anchor_kind=<kind>` assumptions. The
 family-support gate accepts only exact recognized targets (for example
 `express.route.get`, `jest_vitest.describe`) under a safe origin; it must not
-infer support from fact text that merely contains a framework name. React
-components and hooks remain `UNKNOWN` in this slice. This is a token-saving
-foundation, not full TS/JS semantic analysis, and TS/JS remains a transitional
-substrate rather than the official v0.1 target.
+infer support from fact text that merely contains a framework name. TS/JS
+families require at least three compatible exact-anchor support facts and use
+complete-link compatibility over route method/path/handler profiles or
+runner/test/import profiles. Bounded project inventory for `package.json`,
+`tsconfig.json`, `jsconfig.json`, and Jest/Vitest config files is structural
+context only; script configs are not executed. React components and hooks remain
+`UNKNOWN` in this slice. This is a token-saving foundation, not full TS/JS
+semantic analysis, and TS/JS remains a transitional substrate rather than the
+official v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -106,8 +112,10 @@ coverage, virtual environment, and generated output directories. Files larger
 than the configured size limit are skipped, with 1 MB as the default inclusive
 limit.
 
-The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, and
-`.py`.
+The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, `.py`,
+Python `pyproject.toml`, and bounded TS/JS project-config files such as
+`package.json`, `tsconfig.json`, `jsconfig.json`, `jest.config.*`, and
+`vitest.config.*`.
 Module-specific extensions such as `.mjs`, `.cjs`, `.mts`, and `.cts` remain
 deferred until language-mode policy is defined. Discovery reports contain
 repository-relative paths, language classification, strict
@@ -221,7 +229,11 @@ with stronger compatible evidence. The TS/JS syntax parser additionally emits
 `STRUCTURAL` exact-anchor facts (engine `repogrammar-tsjs-syntax`, method
 `exact_anchor_v1`) that, like the Python structural anchors, cannot support
 membership by themselves; only the application-layer `repogrammar-tsjs-derived`
-promotion can turn them into `DATAFLOW_DERIVED` support.
+promotion can turn them into `DATAFLOW_DERIVED` support. It also emits typed
+TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express
+receivers, unsafe or unresolved Jest/Vitest runner bindings, and bounded config
+parse/execution ambiguity; these facts remain blocked from support and may only
+affect claim abstention, compatibility, or read-plan guidance.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython

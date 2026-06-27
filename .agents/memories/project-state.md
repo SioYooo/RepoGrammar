@@ -357,13 +357,20 @@ Jest/Vitest runners, and the application layer promotes them to
 `bounded_exact_anchor_v1`, assumptions `provider_resolved=false`,
 `derived_from=tsjs_structural_anchors`, `framework_role=<role>`,
 `tsjs_anchor_kind=<kind>`). The family gate now matches exact TS/JS targets plus
-a safe origin instead of substring text. Reassigned/shadowed/dynamic/lookalike
-Express receivers, custom Jest/Vitest wrappers, ambiguous non-test-file globals,
-and all React components/hooks stay `UNKNOWN`. `src/fixtures/typescript/release/
-v0_2/express_exact_routes` and `jest_vitest_exact_tests` exercise the positive
-and negative product paths, and the v0.1 `jest-vitest-basic` fixture now forms
-ambient suite/test families. TS/JS remains a transitional substrate, not the
-official Python-first v0.1 target, and this is not full TS/JS semantic analysis.
+a safe origin instead of substring text, requires at least three compatible
+TS/JS support facts, and applies complete-link compatibility over conservative
+route/test feature profiles so bridge members cannot single-link incompatible
+families. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
+Jest/Vitest config inventory is stored only as structural context or typed
+config `UNKNOWN`. Reassigned/shadowed/dynamic/lookalike Express receivers,
+dynamic route methods, custom Jest/Vitest wrappers, ambiguous non-test-file
+globals, and all React components/hooks stay `UNKNOWN`.
+`src/fixtures/typescript/release/v0_2/express_exact_routes` and
+`jest_vitest_exact_tests` exercise the positive and negative product paths; the
+v0.1 `jest-vitest-basic` fixture remains below the conservative TS/JS support
+threshold and returns `UNKNOWN` rather than forming ambient suite/test
+families. TS/JS remains a transitional substrate, not the official Python-first
+v0.1 target, and this is not full TS/JS semantic analysis.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright

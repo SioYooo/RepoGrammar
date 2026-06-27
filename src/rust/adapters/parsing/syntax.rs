@@ -3,17 +3,24 @@
 //! This adapter is a bootstrap parser boundary. It emits structural code-unit
 //! candidates and diagnostics only; it does not provide semantic certainty.
 
-use super::{ir_edges_for_units, ir_nodes_for_units};
-use crate::core::model::{CodeUnit, CodeUnitId, CodeUnitKind, Language, Provenance, SourceRange};
+use super::{ir_edges_for_units, ir_nodes_for_units, tsjs_anchors::TSJS_ANCHOR_ENGINE};
+use crate::core::model::{
+    CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+};
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, SourceDocument, SourceParser,
 };
+use serde_json::Value;
 
 #[derive(Debug, Default)]
 pub struct SyntaxCodeUnitParser;
 
 impl SourceParser for SyntaxCodeUnitParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        if document.language == Language::TsJsConfig {
+            return tsjs_project_config_report(document);
+        }
         if !matches!(
             document.language,
             Language::TypeScript | Language::JavaScript
@@ -24,6 +31,239 @@ impl SourceParser for SyntaxCodeUnitParser {
         scanner.scan()?;
         scanner.finish()
     }
+}
+
+fn tsjs_project_config_report(document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+    let unit = project_config_unit(&document)?;
+    let mut semantic_facts = Vec::new();
+    let mut diagnostics = Vec::new();
+    if document.path.ends_with(".json") {
+        match serde_json::from_str::<Value>(document.text) {
+            Ok(value) => {
+                semantic_facts.extend(tsjs_json_project_config_facts(&document, &unit, &value)?);
+            }
+            Err(_) => {
+                semantic_facts.push(tsjs_project_config_unknown_fact(
+                    &document,
+                    &unit,
+                    "BuildVariantAmbiguity",
+                    "tsjs_project_config",
+                    "bounded JSON project config could not be parsed",
+                )?);
+                diagnostics.push(ParseDiagnostic {
+                    path: document.path.to_string(),
+                    range: None,
+                    severity: ParseDiagnosticSeverity::Warning,
+                    message: "TS/JS project config JSON could not be parsed".to_string(),
+                });
+            }
+        }
+    } else {
+        semantic_facts.push(tsjs_project_config_fact(
+            &document,
+            &unit,
+            "tsjs.config.metadata",
+            vec![
+                "tsjs_project_config=script_config".to_string(),
+                "config_execution=disabled".to_string(),
+            ],
+            "non-executing TS/JS project config metadata",
+        )?);
+        semantic_facts.push(tsjs_project_config_unknown_fact(
+            &document,
+            &unit,
+            "BuildVariantAmbiguity",
+            "tsjs_project_config",
+            "script project config was not executed",
+        )?);
+    }
+    let units = vec![unit];
+    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
+    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
+    Ok(ParseReport {
+        units,
+        ir_nodes,
+        ir_edges,
+        semantic_facts,
+        diagnostics,
+    })
+}
+
+fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
+    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
+    let provenance = Provenance::new(
+        document.path,
+        document.content_hash.clone(),
+        document.repository_revision.clone(),
+    )
+    .map_err(ParseError::Internal)?;
+    let id = CodeUnitId::new(format!(
+        "unit:{}#project_config:0-{}:0",
+        document.path,
+        document.text.len()
+    ))
+    .map_err(ParseError::Internal)?;
+    Ok(CodeUnit {
+        id,
+        language: Language::TsJsConfig,
+        kind: CodeUnitKind::ProjectConfig,
+        range,
+        provenance,
+    })
+}
+
+fn tsjs_json_project_config_facts(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    value: &Value,
+) -> Result<Vec<SemanticFact>, ParseError> {
+    let mut facts = Vec::new();
+    let object = value.as_object();
+    facts.push(tsjs_project_config_fact(
+        document,
+        unit,
+        match document.path {
+            "package.json" => "tsjs.package_json",
+            "tsconfig.json" => "tsjs.tsconfig",
+            "jsconfig.json" => "tsjs.jsconfig",
+            "jest.config.json" => "tsjs.jest_config",
+            "vitest.config.json" => "tsjs.vitest_config",
+            _ => "tsjs.config.metadata",
+        },
+        vec![json_config_assumption(document.path).to_string()],
+        "bounded TS/JS project config metadata",
+    )?);
+    if document.path == "package.json" {
+        if let Some(object) = object {
+            for field in ["dependencies", "devDependencies", "peerDependencies"] {
+                if let Some(dependencies) = object.get(field).and_then(Value::as_object) {
+                    for package in dependencies.keys() {
+                        facts.push(tsjs_project_config_fact(
+                            document,
+                            unit,
+                            &format!("package:{package}"),
+                            vec![
+                                json_config_assumption(document.path).to_string(),
+                                format!("dependency_field={field}"),
+                            ],
+                            "bounded package dependency metadata",
+                        )?);
+                    }
+                }
+            }
+        }
+    }
+    if matches!(document.path, "tsconfig.json" | "jsconfig.json") {
+        if let Some(compiler_options) = object
+            .and_then(|object| object.get("compilerOptions"))
+            .and_then(Value::as_object)
+        {
+            if let Some(paths) = compiler_options.get("paths").and_then(Value::as_object) {
+                for alias in paths.keys() {
+                    facts.push(tsjs_project_config_fact(
+                        document,
+                        unit,
+                        &format!("tsconfig.path_alias:{alias}"),
+                        vec![
+                            json_config_assumption(document.path).to_string(),
+                            "project_config=path_alias".to_string(),
+                        ],
+                        "bounded path alias metadata",
+                    )?);
+                }
+            }
+            if let Some(jsx) = compiler_options.get("jsx").and_then(Value::as_str) {
+                facts.push(tsjs_project_config_fact(
+                    document,
+                    unit,
+                    &format!("tsconfig.jsx:{jsx}"),
+                    vec![
+                        json_config_assumption(document.path).to_string(),
+                        "project_config=jsx_runtime".to_string(),
+                    ],
+                    "bounded JSX runtime metadata",
+                )?);
+            }
+        }
+    }
+    Ok(facts)
+}
+
+fn json_config_assumption(path: &str) -> &'static str {
+    match path {
+        "package.json" => "tsjs_project_config=package_json",
+        "tsconfig.json" => "tsjs_project_config=tsconfig_json",
+        "jsconfig.json" => "tsjs_project_config=jsconfig_json",
+        "jest.config.json" => "tsjs_project_config=jest_config_json",
+        "vitest.config.json" => "tsjs_project_config=vitest_config_json",
+        _ => "tsjs_project_config=json_config",
+    }
+}
+
+fn tsjs_project_config_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    target: &str,
+    assumptions: Vec<String>,
+    note: &str,
+) -> Result<SemanticFact, ParseError> {
+    Ok(SemanticFact {
+        kind: SemanticFactKind::ProjectConfig,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(target.to_string()).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: TSJS_ANCHOR_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: "bounded_project_inventory_v1".to_string(),
+        },
+        certainty: FactCertainty::Structural,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
+            SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?,
+            Provenance::new(
+                document.path,
+                document.content_hash.clone(),
+                document.repository_revision.clone(),
+            )
+            .map_err(ParseError::Internal)?,
+            note,
+        )
+        .map_err(ParseError::Internal)?,
+        assumptions,
+    })
+}
+
+fn tsjs_project_config_unknown_fact(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    reason: &str,
+    affected_claim: &str,
+    note: &str,
+) -> Result<SemanticFact, ParseError> {
+    Ok(SemanticFact {
+        kind: SemanticFactKind::Unknown,
+        subject: unit.id.as_str().to_string(),
+        target: Some(SymbolId::new(reason.to_string()).map_err(ParseError::Internal)?),
+        origin: FactOrigin {
+            engine: TSJS_ANCHOR_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: "bounded_project_inventory_v1".to_string(),
+        },
+        certainty: FactCertainty::Unknown,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
+            SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?,
+            Provenance::new(
+                document.path,
+                document.content_hash.clone(),
+                document.repository_revision.clone(),
+            )
+            .map_err(ParseError::Internal)?,
+            note,
+        )
+        .map_err(ParseError::Internal)?,
+        assumptions: vec![format!("affected_claim={affected_claim}")],
+    })
 }
 
 struct SyntaxScanner<'a> {
@@ -123,19 +363,44 @@ impl<'a> SyntaxScanner<'a> {
         lines: &[(usize, &str)],
         class_ranges: &[(usize, usize)],
     ) -> Result<(), ParseError> {
+        let test_runner_names =
+            super::tsjs_anchors::exact_test_runner_call_names(self.document.text);
         for (line_start, line) in lines {
             let line_end = line_start + line.len();
             if let Some((method, offset)) = express_route_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::ExpressRoute, method, start, end)?;
-            }
-            if let Some(offset) = call_offset(line, "describe") {
+            } else if let Some(offset) = dynamic_route_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
-                self.add_unit(CodeUnitKind::TestSuite, "describe", start, end)?;
+                self.add_unit(CodeUnitKind::ExpressRoute, "dynamic_route", start, end)?;
+            }
+            for suite_name in &test_runner_names.suite_names {
+                if let Some(offset) = call_offset(line, suite_name) {
+                    let start = line_start + offset;
+                    let end = declaration_extent(self.document.text, start, line_end);
+                    self.add_unit(CodeUnitKind::TestSuite, suite_name, start, end)?;
+                }
+            }
+            if !test_runner_names.suite_names.contains("describe") {
+                if let Some(offset) = call_offset(line, "describe") {
+                    let start = line_start + offset;
+                    let end = declaration_extent(self.document.text, start, line_end);
+                    self.add_unit(CodeUnitKind::TestSuite, "describe", start, end)?;
+                }
+            }
+            for test_name in &test_runner_names.test_names {
+                if let Some(offset) = call_offset(line, test_name) {
+                    let start = line_start + offset;
+                    let end = declaration_extent(self.document.text, start, line_end);
+                    self.add_unit(CodeUnitKind::TestCase, test_name, start, end)?;
+                }
             }
             for test_name in ["it", "test"] {
+                if test_runner_names.test_names.contains(test_name) {
+                    continue;
+                }
                 if let Some(offset) = call_offset(line, test_name) {
                     let start = line_start + offset;
                     let end = declaration_extent(self.document.text, start, line_end);
@@ -360,6 +625,27 @@ fn express_route_call(line: &str) -> Option<(&'static str, usize)> {
         }
     }
     None
+}
+
+fn dynamic_route_call(line: &str) -> Option<usize> {
+    let bracket = line.find('[')?;
+    let close = line[bracket + 1..].find(']')? + bracket + 1;
+    if !line[close + 1..].trim_start().starts_with('(') {
+        return None;
+    }
+    if !line[close + 1..].contains('"') && !line[close + 1..].contains('\'') {
+        return None;
+    }
+    let start = line[..bracket]
+        .rfind(|character: char| character.is_whitespace())
+        .map(|offset| offset + 1)
+        .unwrap_or(0);
+    let receiver = line[start..bracket].trim();
+    (!receiver.is_empty()
+        && receiver.chars().next().is_some_and(|character| {
+            character.is_ascii_alphabetic() || character == '_' || character == '$'
+        }))
+    .then_some(start)
 }
 
 fn call_offset(line: &str, function_name: &str) -> Option<usize> {
@@ -608,6 +894,72 @@ describe("users", () => {
         assert_eq!(report.diagnostics.len(), 1);
         assert_eq!(report.diagnostics[0].path, "src/broken.ts");
         assert!(report.diagnostics[0].message.contains("unbalanced"));
+    }
+
+    #[test]
+    fn tsjs_project_config_json_emits_metadata_facts_without_source_units() {
+        let report = SyntaxCodeUnitParser
+            .parse(SourceDocument {
+                path: "package.json",
+                language: Language::TsJsConfig,
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                text: r#"{"dependencies":{"express":"latest"},"devDependencies":{"vitest":"latest"}}"#,
+            })
+            .expect("parse package metadata");
+
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert_eq!(report.units[0].language, Language::TsJsConfig);
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ProjectConfig
+                && fact
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "package:express")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ProjectConfig
+                && fact
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "package:vitest")
+        }));
+    }
+
+    #[test]
+    fn tsjs_script_config_is_metadata_only_and_unknown() {
+        let report = SyntaxCodeUnitParser
+            .parse(SourceDocument {
+                path: "vitest.config.ts",
+                language: Language::TsJsConfig,
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                text: "export default defineConfig({});\n",
+            })
+            .expect("parse script config metadata");
+
+        assert_eq!(report.units.len(), 1);
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ProjectConfig
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "config_execution=disabled")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")
+        }));
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub enum Language {
     JavaScript,
     Python,
     PythonConfig,
+    TsJsConfig,
     Unknown(String),
 }
 
@@ -55,6 +56,7 @@ impl Language {
             Self::JavaScript => "javascript",
             Self::Python => "python",
             Self::PythonConfig => "python-config",
+            Self::TsJsConfig => "tsjs-config",
             Self::Unknown(value) => value.as_str(),
         }
     }
@@ -158,6 +160,7 @@ mod tests {
     fn python_language_and_unit_kinds_use_stable_tokens() {
         assert_eq!(Language::Python.as_str(), "python");
         assert_eq!(Language::PythonConfig.as_str(), "python-config");
+        assert_eq!(Language::TsJsConfig.as_str(), "tsjs-config");
         assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");
         assert_eq!(CodeUnitKind::FastApiRoute.as_str(), "fastapi_route");
         assert_eq!(CodeUnitKind::PytestTest.as_str(), "pytest_test");

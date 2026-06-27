@@ -11,5 +11,5 @@ app.post("/users", (req, res) => {
 });
 
 app.delete("/users/:id", (req, res) => {
-  res.end();
+  res.json({});
 });

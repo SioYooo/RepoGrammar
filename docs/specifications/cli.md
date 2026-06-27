@@ -141,8 +141,8 @@ for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
 `repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. The implemented bootstrap path runs TS/JS and
-Python `.py` discovery, reads source through a
+repository-local state directory. The implemented bootstrap path runs TS/JS,
+bounded TS/JS project-config, and Python `.py` discovery, reads source through a
 repo-relative hash-checked boundary, store repo-relative file metadata and
 syntax-only code-unit records plus any syntax-origin framework-role fact records
 in a new generation-scoped SQLite database, validate the generation, and
@@ -154,11 +154,12 @@ and `mining: deferred`. By default, `semantic_worker` is `deferred`.
 During the current TS/JS and Python framework-role slices, `semantic_facts` may
 be greater than zero even when `semantic_worker` is `deferred`; those records
 are syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty,
-Python parser-origin structural/`UNKNOWN` facts, or root `pyproject.toml`
-`PROJECT_CONFIG`/config-`UNKNOWN` records. Python exact-anchor derivation may
-also add separate `DATAFLOW_DERIVED` support facts without running a semantic
-worker. These are bounded RepoGrammar support facts, not compiler/provider-backed
-facts.
+Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
+`PROJECT_CONFIG`/config-`UNKNOWN` records, or TS/JS project-config
+`PROJECT_CONFIG`/config-`UNKNOWN` records. Python and conservative TS/JS
+exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
+without running a semantic worker. These are bounded RepoGrammar support facts,
+not compiler/provider-backed facts.
 During a non-quiet run, `index` and `sync` emit progress for project discovery,
 file scanning, syntax parsing, local support-fact recording, semantic-worker
 deferred/running state, candidate/family construction, and persistence
@@ -520,8 +521,8 @@ ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
 repo-local lifecycle information without claiming parser/mining support.
 `index` and `sync` currently create syntax-only SQLite generations from the
-TS/JS file discovery substrate plus the Python `.py` discovery/CPython AST
-structural extractor. Their JSON output
+TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
+the Python `.py` discovery/CPython AST structural extractor. Their JSON output
 includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, the actual `semantic_facts` count, `indexing:
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
@@ -529,10 +530,12 @@ deferred`. The structural extractors can also produce syntax-origin
 framework-role fact records for recognized Express, React, Jest/Vitest,
 FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes; these may increase
 `semantic_facts` while `semantic_worker: deferred` remains true. Python
-parser-origin structural facts and root `pyproject.toml` project-config records
-may also increase `semantic_facts` without changing `semantic_worker:
-deferred`. Exact-anchor Python `DATAFLOW_DERIVED` support facts may also be
-stored in this default path. By default the
+parser-origin structural facts, root `pyproject.toml` project-config records,
+TS/JS project-config records, TS/JS exact-anchor support facts, and TS/JS typed
+`UNKNOWN` records for dynamic/unsafe receiver or runner boundaries may also
+increase `semantic_facts` without changing `semantic_worker: deferred`.
+Exact-anchor Python `DATAFLOW_DERIVED` support facts may also be stored in this
+default path. By default the
 commands do not launch a semantic worker and report
 `semantic_worker: deferred`. When
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, optional
@@ -562,9 +565,11 @@ thin-wrapper/token-saving risk without reporting measured token savings.
 FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
 self-test. The CLI now includes the first Python structural indexing slice, but
-Pyrefly/Pyright provider evidence, richer repo-local import semantics, safe
-source-span deep output, and broad Python family mining remain deferred. Narrow
-exact-anchor Python family rows may exist when EC-MVFI-lite has enough derived
-support. Unsupported live target/scope combinations return explicit deferred
-errors; dry-run planning remains available
-for all targets and scopes.
+Pyrefly/Pyright provider evidence, richer repo-local module resolution, broad
+Python family mining, React/Next/Fastify TS/JS support, and TypeScript
+compiler-backed analysis remain deferred. Narrow exact-anchor Python family
+rows and conservative TS/JS Express/Jest/Vitest family rows may exist when
+EC-MVFI-lite has enough derived support. Explicit `--include-source-spans` is
+implemented for bounded hash-checked spans; default output remains source-free.
+Unsupported live target/scope combinations return explicit deferred errors;
+dry-run planning remains available for all targets and scopes.

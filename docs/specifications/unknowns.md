@@ -94,7 +94,12 @@ Some unknowns block only specific claims:
   remain non-supporting external context;
 - dynamic FastAPI dependency target expressions may block the dependency-target
   sub-claim while still allowing a route family when route membership has enough
-  independent exact-anchor support.
+  independent exact-anchor support;
+- dynamic TS/JS route methods, unsafe or unresolved Express receivers, and
+  unsafe or unresolved Jest/Vitest runner bindings may block the affected
+  `tsjs_receiver_binding`, `tsjs_runner_binding`, or `tsjs_support_target`
+  claim while other exact-anchor units in the same repository can still form a
+  family when they have enough independent compatible support.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

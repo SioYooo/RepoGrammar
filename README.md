@@ -45,9 +45,13 @@ TypeScript and JavaScript are not official v0.1 support targets. A conservative
 v0.2 token-saving foundation adds exact-anchor family support for Express route
 handlers and Jest/Vitest suites/tests only: a family is claimed solely when an
 exact import/require binding and literal call shape resolve, while lookalikes,
-reassigned or shadowed bindings, dynamic receivers, custom test wrappers, and
-React components/hooks stay `UNKNOWN`. This is not full TypeScript/JavaScript
-semantic analysis.
+reassigned or shadowed bindings, dynamic receivers or methods, custom test
+wrappers, and React components/hooks stay `UNKNOWN`. TS/JS family claims require
+at least three compatible exact-anchor support facts and use conservative
+complete-link clustering so incompatible handler/test shapes do not single-link
+into one family. Bounded `package.json` and `tsconfig.json` inventory is stored
+as structural context only. This is not full TypeScript/JavaScript semantic
+analysis.
 
 ## Install
 

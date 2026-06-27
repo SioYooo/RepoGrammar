@@ -59,6 +59,15 @@ for recognized Express, React, and Jest/Vitest code-unit shapes. These facts
 carry repo-relative code-unit evidence, `FRAMEWORK_HEURISTIC` certainty, and
 explicit unresolved-binding assumptions; they do not resolve TypeScript symbols,
 framework runtime behavior, or family membership.
+The TS/JS syntax parser can also persist `STRUCTURAL` exact-anchor facts for
+bounded Express and Jest/Vitest shapes, typed `UNKNOWN` facts for dynamic,
+unsafe, or unresolved receiver/runner/support-target boundaries, and structural
+project-config facts for bounded `package.json`, `tsconfig.json`,
+`jsconfig.json`, Jest config, and Vitest config inventory. Project-config facts
+remain context only. Only application-layer `repogrammar-tsjs-derived`
+`DATAFLOW_DERIVED` facts with exact whitelisted targets can support conservative
+TS/JS families, and those families require repeated compatible support rather
+than a single syntax match.
 Current default Python indexing can store syntax-origin `FRAMEWORK_ROLE` facts
 for FastAPI route-shaped units, pytest tests/fixtures, Pydantic models,
 SQLAlchemy models, and SQLAlchemy repository methods. These facts also use

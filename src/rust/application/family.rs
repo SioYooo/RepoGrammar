@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
 const PYTHON_MIN_FAMILY_SUPPORT: usize = 3;
+const TSJS_MIN_FAMILY_SUPPORT: usize = 3;
 const PYTHON_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-python-derived";
 const PYTHON_DERIVED_SUPPORT_METHOD: &str = "bounded_ast_anchor_v1";
 const PYTHON_FIXTURE_PROVIDER_ENGINE: &str = "python-fixture-provider";
@@ -161,12 +162,9 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
     let support_targets_by_unit =
         eligible_support_by_unit(input.units, &input.support_facts, &role_by_unit);
     let blocking_unknowns =
-        python_family_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
-    let non_blocking_unknowns = python_family_non_blocking_unknowns_by_unit(
-        input.units,
-        &input.unknown_facts,
-        &role_by_unit,
-    );
+        family_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
+    let non_blocking_unknowns =
+        family_non_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
     let mut all_facts = Vec::with_capacity(
         input.role_facts.len()
             + input.support_facts.len()
@@ -260,8 +258,8 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             .count();
         let mut emitted_ready_clusters = 0usize;
         for cluster in clusters {
-            let cluster_suffix = (key.language == "python" && ready_cluster_count > 1)
-                .then(|| python_cluster_signature(&cluster, &features_by_unit));
+            let cluster_suffix = (ready_cluster_count > 1)
+                .then(|| family_cluster_signature(&key, &cluster, &features_by_unit));
             if cluster.len() < min_family_support(&key.language) {
                 unknowns.push(insufficient_support_unknown(family_affected_claim(
                     &key,
@@ -345,6 +343,11 @@ fn family_claim_from_supported_evidence(
         });
     }
     variation_slots.extend(python_context_variation_slots(
+        key,
+        &supported_evidence,
+        features_by_unit,
+    ));
+    variation_slots.extend(tsjs_context_variation_slots(
         key,
         &supported_evidence,
         features_by_unit,
@@ -486,6 +489,50 @@ fn python_variation_feature_prefixes(
             ("python_sqlalchemy_effect_marker", &["effect_marker:"]),
             ("python_sqlalchemy_call_shape", &["call_shape:"]),
             ("python_import_context", &["import_context:"]),
+        ],
+        _ => &[],
+    }
+}
+
+fn tsjs_context_variation_slots(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationSlot> {
+    if !is_tsjs_language_name(&key.language) {
+        return Vec::new();
+    }
+    tsjs_variation_feature_prefixes(key.framework_role.as_str())
+        .iter()
+        .filter_map(|(slot_name, prefixes)| {
+            let profiles = evidence
+                .iter()
+                .map(|item| prefixed_feature_profile(item, features_by_unit, prefixes))
+                .collect::<BTreeSet<_>>();
+            let has_context = profiles.iter().any(|profile| !profile.is_empty());
+            (has_context && profiles.len() > 1).then(|| VariationSlot {
+                slot_id: format!("slot:{slot_name}"),
+                description: format!(
+                    "variation:{slot_name}:context metadata differs across supported members"
+                ),
+            })
+        })
+        .collect()
+}
+
+fn tsjs_variation_feature_prefixes(
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match framework_role {
+        "framework:express.route_handler" => &[
+            ("tsjs_route_method", &["route_method:"]),
+            ("tsjs_route_path_shape", &["route_path_shape:"]),
+            ("tsjs_handler_shape", &["handler_shape:", "async_shape:"]),
+        ],
+        "framework:jest_vitest.suite" | "framework:jest_vitest.test" => &[
+            ("tsjs_runner_kind", &["runner_kind:"]),
+            ("tsjs_test_shape", &["test_shape:", "async_shape:"]),
+            ("tsjs_import_context", &["import_context:"]),
         ],
         _ => &[],
     }
@@ -667,12 +714,19 @@ fn family_features_by_unit(
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
         };
-        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+        if !fact_evidence_is_within_unit(fact, unit) {
             continue;
         }
         let entry = features
             .entry(code_unit_id.to_string())
             .or_insert_with(BTreeSet::new);
+        if is_tsjs_language_name(&unit.language) {
+            add_tsjs_family_features(entry, fact, role_by_unit, support_targets_by_unit);
+            continue;
+        }
+        if unit.language != "python" {
+            continue;
+        }
         for anchor_kind in fact
             .assumptions
             .iter()
@@ -772,7 +826,94 @@ fn family_features_by_unit(
     features
 }
 
-fn python_family_blocking_unknowns_by_unit(
+fn add_tsjs_family_features(
+    entry: &mut BTreeSet<String>,
+    fact: &SemanticFact,
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) {
+    let code_unit_id = fact.evidence.code_unit_id.as_str();
+    let framework_role = role_by_unit
+        .get(code_unit_id)
+        .and_then(single_framework_role)
+        .unwrap_or("");
+
+    for anchor_kind in fact
+        .assumptions
+        .iter()
+        .filter_map(|assumption| assumption.strip_prefix("tsjs_anchor_kind="))
+    {
+        entry.insert(format!("anchor_kind:{}", stable_token(anchor_kind)));
+    }
+    for assumption in &fact.assumptions {
+        for (prefix, feature_prefix) in [
+            ("route_method=", "route_method:"),
+            ("route_path_shape=", "route_path_shape:"),
+            ("handler_shape=", "handler_shape:"),
+            ("runner_kind=", "runner_kind:"),
+            ("test_shape=", "test_shape:"),
+            ("async_shape=", "async_shape:"),
+            ("import_context=", "import_context:"),
+            ("path_alias=", "import_context:path_alias_"),
+        ] {
+            if let Some(value) = assumption.strip_prefix(prefix) {
+                entry.insert(format!("{feature_prefix}{}", stable_token(value)));
+            }
+        }
+    }
+
+    if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
+        entry.insert(format!("framework_api_anchor:{}", stable_token(target)));
+        if let Some(method) = target.strip_prefix("express.route.") {
+            entry.insert("anchor_kind:express_route_call".to_string());
+            entry.insert(format!("route_method:{}", stable_token(method)));
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        } else if let Some(test_target) = target.strip_prefix("jest_vitest.") {
+            entry.insert("runner_kind:jest_vitest".to_string());
+            entry.insert(format!("test_shape:{}", stable_token(test_target)));
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        }
+        let is_support_target = support_targets_by_unit
+            .get(code_unit_id)
+            .is_some_and(|targets| targets.contains(target));
+        if !is_support_target {
+            entry.insert(format!("import_context:{}", stable_token(target)));
+        }
+    }
+
+    if fact.kind == SemanticFactKind::Unknown || fact.certainty == FactCertainty::Unknown {
+        if let Some(reason) = fact
+            .target
+            .as_ref()
+            .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())
+        {
+            let affected_claim = fact
+                .assumptions
+                .iter()
+                .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+                .unwrap_or("tsjs_family_membership");
+            entry.insert(format!(
+                "unknown_reason:{}",
+                stable_token(reason.as_protocol_str())
+            ));
+            if tsjs_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+            {
+                entry.insert(format!(
+                    "unknown_blocker:{}",
+                    stable_token(reason.as_protocol_str())
+                ));
+            }
+        }
+    }
+}
+
+fn family_blocking_unknowns_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
     role_by_unit: &BTreeMap<String, BTreeSet<String>>,
@@ -788,7 +929,7 @@ fn python_family_blocking_unknowns_by_unit(
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
         };
-        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+        if !fact_evidence_is_within_unit(fact, unit) {
             continue;
         }
         let Some(framework_role) = role_by_unit
@@ -797,7 +938,14 @@ fn python_family_blocking_unknowns_by_unit(
         else {
             continue;
         };
-        if let Some(unknown) = python_family_blocking_unknown(fact, framework_role) {
+        let unknown = if unit.language == "python" {
+            python_family_blocking_unknown(fact, framework_role)
+        } else if is_tsjs_language_name(&unit.language) {
+            tsjs_family_blocking_unknown(fact, framework_role)
+        } else {
+            None
+        };
+        if let Some(unknown) = unknown {
             blocking
                 .entry(code_unit_id.to_string())
                 .or_default()
@@ -808,7 +956,7 @@ fn python_family_blocking_unknowns_by_unit(
     blocking
 }
 
-fn python_family_non_blocking_unknowns_by_unit(
+fn family_non_blocking_unknowns_by_unit(
     units: &[IndexedCodeUnitRecord],
     facts: &[SemanticFact],
     role_by_unit: &BTreeMap<String, BTreeSet<String>>,
@@ -824,7 +972,7 @@ fn python_family_non_blocking_unknowns_by_unit(
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
         };
-        if unit.language != "python" || !fact_evidence_is_within_unit(fact, unit) {
+        if !fact_evidence_is_within_unit(fact, unit) {
             continue;
         }
         let Some(framework_role) = role_by_unit
@@ -833,7 +981,14 @@ fn python_family_non_blocking_unknowns_by_unit(
         else {
             continue;
         };
-        if let Some(unknown) = python_family_non_blocking_unknown(fact, framework_role) {
+        let unknown = if unit.language == "python" {
+            python_family_non_blocking_unknown(fact, framework_role)
+        } else if is_tsjs_language_name(&unit.language) {
+            tsjs_family_non_blocking_unknown(fact, framework_role)
+        } else {
+            None
+        };
+        if let Some(unknown) = unknown {
             non_blocking
                 .entry(code_unit_id.to_string())
                 .or_default()
@@ -958,6 +1113,127 @@ fn python_unknown_is_non_blocking_family_subclaim(
         && affected_claim == "fastapi_dependency_target"
 }
 
+fn tsjs_family_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("tsjs_family_membership");
+
+    if !tsjs_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role) {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::Blocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve the blocking TS/JS UNKNOWN before claiming a family".to_string()),
+    })
+}
+
+fn tsjs_family_non_blocking_unknown(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("tsjs_family_membership");
+
+    if tsjs_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+        || !tsjs_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
+    {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::NonBlocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve this TS/JS subclaim before relying on it".to_string()),
+    })
+}
+
+fn tsjs_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::DynamicImport
+        | UnknownReasonCode::UnresolvedImport
+        | UnknownReasonCode::MissingProjectConfig
+        | UnknownReasonCode::MissingDependency
+        | UnknownReasonCode::FrameworkMagic
+        | UnknownReasonCode::BuildVariantAmbiguity
+        | UnknownReasonCode::ConflictingFacts
+        | UnknownReasonCode::StaleEvidence => {
+            tsjs_unknown_affected_claim_blocks_family(affected_claim, framework_role)
+        }
+        UnknownReasonCode::RuntimeDependencyInjection
+        | UnknownReasonCode::MonkeyPatch
+        | UnknownReasonCode::MacroOrPreprocessor
+        | UnknownReasonCode::PytestFixtureInjection
+        | UnknownReasonCode::InsufficientSupport => false,
+    }
+}
+
+fn tsjs_unknown_affected_claim_blocks_family(affected_claim: &str, framework_role: &str) -> bool {
+    match affected_claim {
+        "tsjs_family_membership"
+        | "tsjs_framework_identity"
+        | "tsjs_receiver_binding"
+        | "tsjs_runner_binding"
+        | "tsjs_support_target"
+        | "tsjs_import_resolution"
+        | "tsjs_path_alias"
+        | "tsjs_reexport_resolution" => true,
+        claim if claim.starts_with("family:") => true,
+        claim => {
+            (framework_role.starts_with("framework:express")
+                && (claim.contains("receiver")
+                    || claim.contains("method")
+                    || claim.contains("framework")))
+                || (framework_role.starts_with("framework:jest_vitest")
+                    && (claim.contains("runner")
+                        || claim.contains("wrapper")
+                        || claim.contains("framework")))
+        }
+    }
+}
+
+fn tsjs_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    _framework_role: &str,
+) -> bool {
+    matches!(
+        reason,
+        UnknownReasonCode::FrameworkMagic
+            | UnknownReasonCode::RuntimeDependencyInjection
+            | UnknownReasonCode::BuildVariantAmbiguity
+    ) && matches!(
+        affected_claim,
+        "tsjs_handler_shape" | "tsjs_variation_detail" | "tsjs_optional_call_target"
+    )
+}
+
 fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
     fact.evidence.provenance.path == unit.path
         && fact.evidence.provenance.content_hash == unit.content_hash
@@ -970,16 +1246,12 @@ fn complete_link_family_clusters(
     evidence: Vec<FamilyEvidence>,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
 ) -> Vec<Vec<FamilyEvidence>> {
-    if key.language != "python" {
-        return vec![evidence];
-    }
-
     let mut clusters: Vec<Vec<FamilyEvidence>> = Vec::new();
     for item in evidence {
         if let Some(cluster) = clusters.iter_mut().find(|cluster| {
             cluster
                 .iter()
-                .all(|other| python_evidence_pair_is_compatible(&item, other, features_by_unit))
+                .all(|other| evidence_pair_is_compatible(key, &item, other, features_by_unit))
         }) {
             cluster.push(item);
         } else {
@@ -987,6 +1259,33 @@ fn complete_link_family_clusters(
         }
     }
     clusters
+}
+
+fn evidence_pair_is_compatible(
+    key: &FamilyKey,
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let left_groups = prefixed_features(left, features_by_unit, "support_family:");
+    let right_groups = prefixed_features(right, features_by_unit, "support_family:");
+    if left_groups.is_empty() || left_groups.is_disjoint(&right_groups) {
+        return false;
+    }
+
+    let left_roles = prefixed_features(left, features_by_unit, "framework_role:");
+    let right_roles = prefixed_features(right, features_by_unit, "framework_role:");
+    if left_roles != right_roles {
+        return false;
+    }
+
+    if key.language == "python" {
+        return python_evidence_pair_is_compatible(left, right, features_by_unit);
+    }
+    if is_tsjs_language_name(&key.language) {
+        return tsjs_evidence_pair_is_compatible(left, right, features_by_unit);
+    }
+    true
 }
 
 fn python_evidence_pair_is_compatible(
@@ -1021,6 +1320,34 @@ fn python_evidence_pair_is_compatible(
         "framework_sqlalchemy_model" | "framework_sqlalchemy_repository_method" => {
             equal_feature_profiles(left, right, features_by_unit, &[])
         }
+        _ => true,
+    }
+}
+
+fn tsjs_evidence_pair_is_compatible(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    if !prefixed_features(left, features_by_unit, "unknown_blocker:").is_empty()
+        || !prefixed_features(right, features_by_unit, "unknown_blocker:").is_empty()
+    {
+        return false;
+    }
+
+    let roles = prefixed_features(left, features_by_unit, "framework_role:");
+    let role = roles.iter().next().map(String::as_str).unwrap_or("");
+    match role {
+        "framework_express_route_handler" => {
+            equal_feature_profiles(left, right, features_by_unit, &["handler_shape:"])
+        }
+        "framework_jest_vitest_suite" | "framework_jest_vitest_test" => equal_feature_profiles(
+            left,
+            right,
+            features_by_unit,
+            &["runner_kind:", "test_shape:", "async_shape:"],
+        ),
+        "framework_react_component" | "framework_react_hook" => false,
         _ => true,
     }
 }
@@ -1071,6 +1398,20 @@ fn non_builtin_pytest_fixture_context(
         .collect()
 }
 
+fn family_cluster_signature(
+    key: &FamilyKey,
+    cluster: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    if key.language == "python" {
+        return python_cluster_signature(cluster, features_by_unit);
+    }
+    if is_tsjs_language_name(&key.language) {
+        return tsjs_cluster_signature(cluster, features_by_unit);
+    }
+    "family_cluster".to_string()
+}
+
 fn python_cluster_signature(
     cluster: &[FamilyEvidence],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
@@ -1104,8 +1445,43 @@ fn python_cluster_signature(
     )
 }
 
+fn tsjs_cluster_signature(
+    cluster: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let signature_features = cluster
+        .iter()
+        .flat_map(|evidence| {
+            [
+                "support_family:",
+                "anchor_kind:",
+                "framework_api_anchor:",
+                "route_method:",
+                "route_path_shape:",
+                "handler_shape:",
+                "runner_kind:",
+                "test_shape:",
+                "async_shape:",
+                "path_context:",
+            ]
+            .into_iter()
+            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
+        })
+        .collect::<BTreeSet<_>>();
+    if signature_features.is_empty() {
+        return "tsjs_family_cluster".to_string();
+    }
+    format!(
+        "cluster:{}",
+        signature_features.into_iter().collect::<Vec<_>>().join("+")
+    )
+}
+
 fn support_target_family(target: &str, framework_role: &str) -> String {
     match framework_role {
+        "framework:express.route_handler" => "express.route_handler".to_string(),
+        "framework:jest_vitest.suite" => "jest_vitest.suite".to_string(),
+        "framework:jest_vitest.test" => "jest_vitest.test".to_string(),
         "framework:fastapi.route" => "fastapi.route_decorator".to_string(),
         "framework:pytest.test" => match target {
             "pytest.fixture" => "pytest.fixture_decorator".to_string(),
@@ -1441,9 +1817,15 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
 pub(crate) fn min_family_support(language: &str) -> usize {
     if language == "python" {
         PYTHON_MIN_FAMILY_SUPPORT
+    } else if is_tsjs_language_name(language) {
+        TSJS_MIN_FAMILY_SUPPORT
     } else {
         DEFAULT_MIN_FAMILY_SUPPORT
     }
+}
+
+fn is_tsjs_language_name(language: &str) -> bool {
+    language == "typescript" || language == "javascript"
 }
 
 fn normalized_shape(kind: &str, framework_role: &str) -> String {
@@ -1828,21 +2210,24 @@ mod tests {
     fn builds_family_only_with_repeated_compatible_semantic_support() {
         let first = unit("src/a.ts", "express_route", 0);
         let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
         let report = build_family_claims(
-            &[first.clone(), second.clone()],
+            &[first.clone(), second.clone(), third.clone()],
             &[
                 role_fact(&first, "framework:express.route_handler"),
                 role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
                 semantic_support_fact(&first),
                 semantic_support_fact(&second),
+                semantic_support_fact(&third),
             ],
         );
 
         assert_eq!(report.claims.len(), 1);
         let claim = &report.claims[0];
         assert_eq!(claim.classification, "DOMINANT_PATTERN");
-        assert_eq!(claim.support, 2);
-        assert_eq!(claim.evidence.len(), 2);
+        assert_eq!(claim.support, 3);
+        assert_eq!(claim.evidence.len(), 3);
         assert_eq!(claim.unknowns[0].class, UnknownClass::NonBlocking);
         assert_eq!(claim.unknowns[0].reason, UnknownReasonCode::FrameworkMagic);
     }
@@ -1873,6 +2258,26 @@ mod tests {
         target: &str,
         framework_role: &str,
     ) -> SemanticFact {
+        tsjs_derived_fact_with_assumptions(unit, target, framework_role, Vec::new())
+    }
+
+    fn tsjs_derived_fact_with_assumptions(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+        extra_assumptions: Vec<&str>,
+    ) -> SemanticFact {
+        let mut assumptions = vec![
+            "provider_resolved=false".to_string(),
+            "derived_from=tsjs_structural_anchors".to_string(),
+            format!("framework_role={framework_role}"),
+            format!("tsjs_anchor_kind={}", unit.kind),
+        ];
+        assumptions.extend(
+            extra_assumptions
+                .into_iter()
+                .map(std::string::ToString::to_string),
+        );
         SemanticFact {
             kind: SemanticFactKind::ResolvedCall,
             subject: unit.id.clone(),
@@ -1895,24 +2300,21 @@ mod tests {
                 "bounded TS/JS framework anchor support",
             )
             .expect("valid evidence"),
-            assumptions: vec![
-                "provider_resolved=false".to_string(),
-                "derived_from=tsjs_structural_anchors".to_string(),
-                format!("framework_role={framework_role}"),
-                format!("tsjs_anchor_kind={}", unit.kind),
-            ],
+            assumptions,
         }
     }
 
     #[test]
-    fn tsjs_derived_exact_anchor_support_forms_family_but_role_alone_does_not() {
+    fn tsjs_derived_exact_anchor_support_requires_three_members_but_role_alone_does_not() {
         let first = unit("src/a.ts", "express_route", 0);
         let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
         let role_only = build_family_claims(
-            &[first.clone(), second.clone()],
+            &[first.clone(), second.clone(), third.clone()],
             &[
                 role_fact(&first, "framework:express.route_handler"),
                 role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
             ],
         );
         assert!(role_only.claims.is_empty());
@@ -1938,9 +2340,38 @@ mod tests {
                 ),
             ],
         );
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                ),
+            ],
+        );
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].classification, "DOMINANT_PATTERN");
-        assert_eq!(report.claims[0].support, 2);
+        assert_eq!(report.claims[0].support, 3);
         assert_eq!(
             report.claims[0].framework_role,
             "framework:express.route_handler"
@@ -1995,6 +2426,182 @@ mod tests {
             ],
         );
         assert!(unrelated.claims.is_empty());
+    }
+
+    fn tsjs_unknown_fact(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: format!("{}#tsjs_unknown", unit.id),
+            target: Some(
+                SymbolId::new(reason.as_protocol_str()).expect("valid UNKNOWN reason target"),
+            ),
+            origin: FactOrigin {
+                engine: "repogrammar-tsjs-syntax".to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: "exact_anchor_v1".to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "typed TS/JS UNKNOWN",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("affected_claim={affected_claim}")],
+        }
+    }
+
+    #[test]
+    fn tsjs_complete_link_clustering_rejects_single_link_bridge() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact_with_assumptions(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                    vec!["handler_shape=inline_json"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                    vec!["handler_shape=referenced_handler"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                    vec!["handler_shape=inline_json"],
+                ),
+            ],
+        );
+
+        assert!(
+            report.claims.is_empty(),
+            "complete-link clustering must not let a referenced-handler bridge merge incompatible TS/JS route styles"
+        );
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn tsjs_blocking_unknown_prevents_exact_anchor_family_support() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                ),
+                tsjs_unknown_fact(
+                    &third,
+                    UnknownReasonCode::DynamicImport,
+                    "tsjs_receiver_binding",
+                ),
+            ],
+        );
+
+        assert!(report.claims.is_empty());
+        assert!(report.unknowns.iter().any(|unknown| {
+            unknown.class == UnknownClass::Blocking
+                && unknown.reason == UnknownReasonCode::DynamicImport
+        }));
+    }
+
+    #[test]
+    fn tsjs_variation_slots_surface_route_method_path_and_handler_shape() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact_with_assumptions(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                    vec![
+                        "route_method=get",
+                        "route_path_shape=/users",
+                        "handler_shape=inline_json",
+                    ],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                    vec![
+                        "route_method=post",
+                        "route_path_shape=/users",
+                        "handler_shape=inline_json",
+                    ],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                    vec![
+                        "route_method=delete",
+                        "route_path_shape=/users/:param",
+                        "handler_shape=inline_json",
+                    ],
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:tsjs_route_method"));
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:tsjs_route_path_shape"));
+        assert!(!claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:tsjs_handler_shape"));
     }
 
     #[test]
@@ -2965,13 +3572,16 @@ mod tests {
     fn storage_records_do_not_contain_source_snippets_or_absolute_paths() {
         let first = unit("src/a.ts", "test_case", 0);
         let second = unit("src/b.ts", "test_case", 1);
+        let third = unit("src/c.ts", "test_case", 2);
         let report = build_family_claims(
-            &[first.clone(), second.clone()],
+            &[first.clone(), second.clone(), third.clone()],
             &[
                 role_fact(&first, "framework:jest_vitest.test"),
                 role_fact(&second, "framework:jest_vitest.test"),
+                role_fact(&third, "framework:jest_vitest.test"),
                 semantic_support_fact_with_target(&first, "package:vitest"),
                 semantic_support_fact_with_target(&second, "package:vitest"),
+                semantic_support_fact_with_target(&third, "package:vitest"),
             ],
         );
         let records = family_storage_records(&report.claims[0]);
@@ -2980,7 +3590,7 @@ mod tests {
         assert!(!serialized.contains("=>"));
         assert!(!serialized.contains("it("));
         assert!(!serialized.contains("/tmp"));
-        assert_eq!(records.members.len(), 2);
-        assert_eq!(records.evidence.len(), 2);
+        assert_eq!(records.members.len(), 3);
+        assert_eq!(records.evidence.len(), 3);
     }
 }

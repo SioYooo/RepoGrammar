@@ -387,6 +387,9 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
     if path == "pyproject.toml" {
         return Some(DiscoveredLanguage::PythonConfig);
     }
+    if is_tsjs_project_config_path(path) {
+        return Some(DiscoveredLanguage::TsJsConfig);
+    }
     let extension = Path::new(path).extension()?.to_str()?;
     match extension {
         "ts" => Some(DiscoveredLanguage::TypeScript),
@@ -398,6 +401,25 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
         }
         _ => None,
     }
+}
+
+fn is_tsjs_project_config_path(path: &str) -> bool {
+    matches!(
+        path,
+        "package.json"
+            | "tsconfig.json"
+            | "jsconfig.json"
+            | "jest.config.json"
+            | "jest.config.js"
+            | "jest.config.cjs"
+            | "jest.config.mjs"
+            | "jest.config.ts"
+            | "vitest.config.json"
+            | "vitest.config.js"
+            | "vitest.config.cjs"
+            | "vitest.config.mjs"
+            | "vitest.config.ts"
+    )
 }
 
 fn repo_relative_string(path: &Path) -> Option<String> {
@@ -460,6 +482,47 @@ mod tests {
         assert!(report.files[0].content_hash.as_str().starts_with("sha256:"));
         assert_eq!(report.files[1].path, "src/b.js");
         assert_eq!(report.git_ignore_status, GitIgnoreStatus::NotRepository);
+    }
+
+    #[test]
+    fn discovers_tsjs_project_configs_as_metadata() {
+        let workspace = TempWorkspace::new("discovery-tsjs-configs");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"express":"latest"}}
+"#,
+        )
+        .expect("write package");
+        fs::write(
+            workspace.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["src/*"]}}}
+"#,
+        )
+        .expect("write tsconfig");
+        fs::write(
+            workspace.path().join("jest.config.ts"),
+            "export default {};\n",
+        )
+        .expect("write jest config");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("jest.config.ts", DiscoveredLanguage::TsJsConfig),
+                ("package.json", DiscoveredLanguage::TsJsConfig),
+                ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
+            ]
+        );
     }
 
     #[test]

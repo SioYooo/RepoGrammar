@@ -263,12 +263,18 @@ allowed.
   (`src/rust/application/family.rs`), the derivation pass
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
-  object-literal/dynamic/reassigned/shadowed negatives, Jest/Vitest imported and
-  ambient-in-test-file positives, custom-wrapper and foreign-import negatives,
-  that `FRAMEWORK_HEURISTIC` facts never derive support, that only
+  object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed negatives,
+  typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver and runner
+  boundaries, bounded `package.json`/`tsconfig.json` project-config context,
+  Jest/Vitest imported and ambient-in-test-file positives, custom-wrapper and
+  foreign-import negatives, that `FRAMEWORK_HEURISTIC` facts never derive
+  support, that only
   `repogrammar-tsjs-derived` `DATAFLOW_DERIVED` facts with exact whitelisted
-  targets form families, and that default JS/TS query output stays source-free
-  while `--include-source-spans` / `include_source_spans=true` returns bounded
+  targets form families, that TS/JS families require at least three compatible
+  support facts, that complete-link clustering rejects single-link bridge
+  members, that route/test variation slots are recorded from context profiles,
+  and that default JS/TS query output stays source-free while
+  `--include-source-spans` / `include_source_spans=true` returns bounded
   hash-checked line-numbered spans. Positive TS/JS family fixtures live under
   `src/fixtures/typescript/release/v0_2/express_exact_routes` and
   `jest_vitest_exact_tests`.
