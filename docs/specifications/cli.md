@@ -219,7 +219,8 @@ the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `--progress auto|always|never` for long-running command compatibility,
 `--poll-ms <n>` where `n` is 100 through 600000, and `--debounce-ms <n>` where
 `n` is 0 through 60000. `REPOGRAMMAR_STRICT_GITIGNORE=true` applies to
-auto-sync discovery and sync just as it does for manual `index` and `sync`.
+auto-sync discovery and sync just as it does for manual `index` and `sync`;
+semantic worker environment variables are inherited by the foreground worker.
 Auto-sync output must not include source snippets, absolute paths, content
 hashes, symbols, raw targets, or repository-identifying details.
 

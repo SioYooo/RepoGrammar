@@ -3211,7 +3211,7 @@ where
 {
     let semantic_worker_executable =
         env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
-    let semantic_worker_args = match semantic_worker_args(env_lookup) {
+    let semantic_worker_args = match semantic_worker_args_from_env_lookup(env_lookup) {
         Ok(args) => args,
         Err(error) => {
             return lifecycle_error(command, options.json, RepoGrammarError::InvalidInput(error));
@@ -3275,7 +3275,7 @@ where
     }
 }
 
-fn semantic_worker_args<F>(env_lookup: &F) -> Result<Vec<String>, String>
+pub fn semantic_worker_args_from_env_lookup<F>(env_lookup: &F) -> Result<Vec<String>, String>
 where
     F: Fn(&str) -> Option<String>,
 {

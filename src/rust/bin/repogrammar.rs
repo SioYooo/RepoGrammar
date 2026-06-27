@@ -37,8 +37,9 @@ use repogrammar::error::RepoGrammarError;
 use repogrammar::interfaces::cli::run_with_runtime;
 use repogrammar::interfaces::cli::{
     parse_serve_options, render_index_progress_event, repository_root,
-    run_with_runtime_and_install_prompt, should_emit_progress, state_dir_override, AutosyncCommand,
-    CliAutosyncRequest, CliIndexRequest, CliRuntime, InstallTelemetryPrompt, ProgressMode,
+    run_with_runtime_and_install_prompt, semantic_worker_args_from_env_lookup,
+    should_emit_progress, state_dir_override, AutosyncCommand, CliAutosyncRequest, CliIndexRequest,
+    CliRuntime, InstallTelemetryPrompt, ProgressMode,
 };
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
@@ -159,6 +160,17 @@ impl ProductCliRuntime {
     ) -> Result<AutosyncReport, RepoGrammarError> {
         let autosync_request = self.autosync_request(&request);
         let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let semantic_worker_executable =
+            env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
+        let semantic_worker_args = semantic_worker_args_from_env_lookup(&env_lookup)
+            .map_err(RepoGrammarError::InvalidInput)?;
+        if semantic_worker_executable.is_none() && !semantic_worker_args.is_empty() {
+            return Err(RepoGrammarError::InvalidInput(
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON requires REPOGRAMMAR_TYPESCRIPT_WORKER"
+                    .to_string(),
+            ));
+        }
         let mut current = self.repository_fingerprint(&request)?;
         if !request.quiet {
             eprintln!("autosync: watching repository for changes");
@@ -183,8 +195,8 @@ impl ProductCliRuntime {
                 state_dir_override: request.state_dir_override.clone(),
                 max_file_bytes: DEFAULT_MAX_FILE_BYTES,
                 strict_gitignore: request.strict_gitignore,
-                semantic_worker_executable: None,
-                semantic_worker_args: Vec::new(),
+                semantic_worker_executable: semantic_worker_executable.clone(),
+                semantic_worker_args: semantic_worker_args.clone(),
                 progress: ProgressMode::Never,
                 json: false,
                 quiet: true,

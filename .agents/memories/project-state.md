@@ -56,8 +56,9 @@
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full
   `sync` path, while `status`, `stop`, `disable`, and foreground `run` manage
-  the worker. It is explicit per repository and is not started by MCP serving,
-  queries, or agent installation. Anonymous telemetry
+  the worker. The foreground worker inherits strict-gitignore and semantic
+  worker environment settings. It is explicit per repository and is not started
+  by MCP serving, queries, or agent installation. Anonymous telemetry
   upload is explicit opt-in, enabled `stats --json` writes only an allowlisted
   local rollup without queue creation or network upload, does not include a
   repository instance id, reports rollup counts / upload-open-network status,

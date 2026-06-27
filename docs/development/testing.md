@@ -87,8 +87,9 @@ allowed.
 - Auto-sync CLI tests must cover `autosync` defaulting to `status`,
   `enable/start/status/stop/disable/run` routing, `--poll-ms` and
   `--debounce-ms` validation, `--progress` compatibility, strict-gitignore
-  propagation, human and JSON output, and no source snippets or absolute paths.
-  Default tests must not start or kill real user background services;
+  propagation, semantic worker environment inheritance, human and JSON output,
+  and no source snippets or absolute paths. Default tests must not start or kill
+  real user background services;
   product-runtime background behavior may be covered through
   temporary-repository smoke tests or ignored/manual tests.
 - Family storage tests must cover generation-scoped family records, members,
