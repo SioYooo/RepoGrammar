@@ -28,6 +28,31 @@ pub struct MetricReport {
     pub caveat: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EstimatedPotentialTokenSavings {
+    pub estimated_baseline_tokens: u64,
+    pub estimated_returned_tokens: u64,
+    pub estimated_potential_token_savings: u64,
+    pub measurement_kind: MeasurementKind,
+    pub caveat: &'static str,
+}
+
+impl EstimatedPotentialTokenSavings {
+    pub const METRIC_NAME: &'static str = "estimated_potential_token_savings";
+    pub const CAVEAT: &'static str = "estimated potential only; not measured token savings";
+
+    pub fn new(estimated_baseline_tokens: u64, estimated_returned_tokens: u64) -> Self {
+        Self {
+            estimated_baseline_tokens,
+            estimated_returned_tokens,
+            estimated_potential_token_savings: estimated_baseline_tokens
+                .saturating_sub(estimated_returned_tokens),
+            measurement_kind: MeasurementKind::Estimated,
+            caveat: Self::CAVEAT,
+        }
+    }
+}
+
 impl MetricReport {
     pub fn context_compression_ratio(
         returned_context_units: u64,
@@ -95,5 +120,20 @@ mod tests {
                 .value,
             "20"
         );
+    }
+
+    #[test]
+    fn estimated_potential_token_savings_is_estimated_and_saturating() {
+        let metric = EstimatedPotentialTokenSavings::new(120, 80);
+
+        assert_eq!(
+            metric.estimated_potential_token_savings, 40,
+            "baseline minus returned context is the potential estimate"
+        );
+        assert_eq!(metric.measurement_kind, MeasurementKind::Estimated);
+        assert!(metric.caveat.contains("not measured token savings"));
+
+        let saturated = EstimatedPotentialTokenSavings::new(80, 120);
+        assert_eq!(saturated.estimated_potential_token_savings, 0);
     }
 }

@@ -14,6 +14,6 @@ pub use family::{
     FamilyId, PatternClassification, TypedUnknown, UnknownClass, UnknownReason, UnknownReasonCode,
 };
 pub use ir::{IrEdge, IrEdgeLabel, IrNode, IrNodeId, IrNodeKind};
-pub use measurement::{MeasurementKind, MetricReport};
+pub use measurement::{EstimatedPotentialTokenSavings, MeasurementKind, MetricReport};
 pub use provenance::{ContentHash, Provenance, RepositoryRevision};
 pub use semantic::{FactCertainty, FactOrigin, SemanticFact, SemanticFactKind, SymbolId};

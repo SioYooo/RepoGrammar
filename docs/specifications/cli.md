@@ -72,6 +72,13 @@ All query commands must support:
 - `--include-exceptions`
 - `--include-source-spans`
 
+Successful `find`, `family`, `member`, `explain`, and `check` outputs include
+metadata-only `estimated_potential_token_savings` diagnostics with
+`measurement_kind: ESTIMATED`. This field estimates potential read displacement
+from selected family evidence, read-plan metadata, and optional source-span
+token estimates. It must not be described as actual token savings and it must
+carry a caveat saying it is not measured token savings.
+
 ## Long-running commands
 
 All long-running commands must support:
@@ -320,7 +327,11 @@ paired token experiment exists, and diagnostic metrics:
 
 These values are product diagnostics, not causal token-saving claims. If data
 is insufficient, individual values must be `null` or `unknown` rather than
-guessed. The output must not include source snippets, query text, repository
+guessed. `stats` may report the repo-local aggregate
+`estimated_potential_token_savings` with event count, estimated baseline and
+returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
+Measured `token_savings` remains `null` unless a comparable paired experiment
+exists. The output must not include source snippets, query text, repository
 names, or absolute paths. If repository state or the active index is missing,
 `stats --json` uses the same missing-index fallback shape as implemented
 inventory commands and keeps `implemented: true`.

@@ -17,6 +17,12 @@
 
 ### Added
 
+- CLI family query output, MCP `repogrammar_context` family responses, and
+  `repogrammar stats` now surface `estimated_potential_token_savings` as an
+  `ESTIMATED` local potential-read-displacement diagnostic. Successful family
+  context responses update a repo-local aggregate under
+  `.repogrammar/telemetry/local-metrics/` without adding anonymous upload queue
+  entries, source text, paths, hashes, prompts, query text, or evidence text.
 - `repogrammar autosync` now provides optional repository-local automatic sync
   management. `autosync start` enables and starts a background worker that
   polls the existing discovery fingerprint, debounces file saves, and reuses the

@@ -398,6 +398,13 @@ threshold and returns `UNKNOWN` rather than forming ambient suite/test
 families. TS/JS remains a transitional substrate, not the official Python-first
 v0.1 target, and this is not full TS/JS semantic analysis.
 
+Family query output, MCP `repogrammar_context` family responses, and
+`repogrammar stats` now expose `estimated_potential_token_savings` as an
+`ESTIMATED` local potential-read-displacement diagnostic. Successful family
+context responses update only a repo-local aggregate under
+`.repogrammar/telemetry/local-metrics/`; this is not measured token savings,
+not causal evidence, and not part of anonymous telemetry upload payloads.
+
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright
 provider execution, provider-backed canonical framework evidence,

@@ -7,7 +7,10 @@ use crate::application::repository::{
 use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
-use crate::core::model::{FactCertainty, SemanticFactKind, UnknownClass, UnknownReasonCode};
+use crate::core::model::{
+    EstimatedPotentialTokenSavings, FactCertainty, SemanticFactKind, UnknownClass,
+    UnknownReasonCode,
+};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
@@ -888,6 +891,36 @@ pub fn read_plan_with_rendered_spans(
     output
 }
 
+pub fn estimate_family_output_potential_token_savings(
+    family: &FamilyDetailReport,
+    selected_evidence: &SelectedFamilyEvidence,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> EstimatedPotentialTokenSavings {
+    let all_family_evidence_tokens = family
+        .evidence
+        .iter()
+        .map(estimated_evidence_tokens)
+        .sum::<usize>();
+    let source_span_tokens = source_spans
+        .map(|spans| spans.policy.estimated_tokens)
+        .unwrap_or(0);
+    let estimated_baseline_tokens =
+        all_family_evidence_tokens.saturating_add(read_plan.estimated_tokens);
+    let estimated_returned_tokens = selected_evidence
+        .estimated_tokens
+        .saturating_add(read_plan.estimated_tokens)
+        .saturating_add(source_span_tokens);
+    EstimatedPotentialTokenSavings::new(
+        usize_to_u64_saturating(estimated_baseline_tokens),
+        usize_to_u64_saturating(estimated_returned_tokens),
+    )
+}
+
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 fn render_source_span_item(
     item: &ReadPlanItem,
     source: &SourceText,
@@ -1577,7 +1610,9 @@ fn stale_evidence_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnkno
 mod tests {
     use super::*;
     use crate::application::repository::RepositoryManifestStatus;
-    use crate::core::model::{ContentHash, UnknownClass, UnknownReasonCode};
+    use crate::core::model::{
+        ContentHash, EstimatedPotentialTokenSavings, UnknownClass, UnknownReasonCode,
+    };
     use crate::ports::family_store::{
         ActiveFamilies, IndexedFamilyRecord, IndexedVariationSlotRecord,
     };
@@ -2478,6 +2513,53 @@ mod tests {
         let debug = format!("{read_plan:?}");
         assert!(!debug.contains("function"));
         assert!(!debug.contains("/repo"));
+    }
+
+    #[test]
+    fn estimated_potential_token_savings_is_estimated_from_omitted_family_metadata() {
+        let detail = family_detail_with_evidence(vec![
+            family_evidence("src/routes/a.ts", 0, "canonical support evidence"),
+            family_evidence("src/routes/b.ts", 1, "second support evidence"),
+        ]);
+        let options = FamilyOutputOptions::default();
+        let selected = select_family_evidence(&detail, options);
+        let read_plan = build_read_plan(
+            &detail,
+            Some("src/routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+            options,
+        );
+
+        let metric =
+            estimate_family_output_potential_token_savings(&detail, &selected, &read_plan, None);
+
+        assert_eq!(
+            metric.measurement_kind,
+            EstimatedPotentialTokenSavings::new(1, 1).measurement_kind
+        );
+        assert!(metric.estimated_baseline_tokens > metric.estimated_returned_tokens);
+        assert!(metric.estimated_potential_token_savings > 0);
+        assert!(metric.caveat.contains("not measured token savings"));
+
+        let rendered = SourceSpanRenderReport {
+            policy: SourceSpanPolicy {
+                requested: true,
+                source_snippets_included: true,
+                estimated_tokens: usize::MAX,
+                budget_satisfied: false,
+                selection_strategy: "hash_checked_line_numbered_spans_v1",
+                fallback_guidance: "test",
+            },
+            spans: Vec::new(),
+            omissions: Vec::new(),
+        };
+        let saturated = estimate_family_output_potential_token_savings(
+            &detail,
+            &selected,
+            &read_plan,
+            Some(&rendered),
+        );
+        assert_eq!(saturated.estimated_potential_token_savings, 0);
     }
 
     #[test]

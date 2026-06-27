@@ -1,18 +1,19 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
 use crate::application::query::{
-    build_read_plan, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown, QueryPreflightOperation,
-    QueryPreflightReport, ReadPlan, ReadPlanItem, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
-    MAX_QUERY_TOKEN_BUDGET,
+    build_read_plan, estimate_family_output_potential_token_savings, query_preflight,
+    read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
+    validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
+    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem, SourceSpanRenderReport,
+    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
 };
 #[cfg(test)]
 use crate::application::query::{
     ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
+use crate::application::telemetry::record_estimated_potential_token_savings;
 use crate::error::RepoGrammarError;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -246,7 +247,7 @@ pub fn handle_context_call(
                 );
                 let source_spans = if arguments.include_source_spans {
                     match runtime.render_source_spans(
-                        request,
+                        request.clone(),
                         &read_plan,
                         arguments.include_source_spans,
                         arguments.output_options.token_budget,
@@ -264,6 +265,19 @@ pub fn handle_context_call(
                 } else {
                     None
                 };
+                let selected_evidence = select_family_evidence(&family, arguments.output_options);
+                let rendered_read_plan = source_spans
+                    .as_ref()
+                    .map(|rendered| read_plan_with_rendered_spans(&read_plan, rendered))
+                    .unwrap_or_else(|| read_plan.clone());
+                let estimated_potential = estimate_family_output_potential_token_savings(
+                    &family,
+                    &selected_evidence,
+                    &rendered_read_plan,
+                    source_spans.as_ref(),
+                );
+                let _ =
+                    record_estimated_potential_token_savings(request.clone(), &estimated_potential);
                 Ok(family_detail_value(
                     arguments.operation,
                     &family,
@@ -591,6 +605,12 @@ fn family_detail_value(
     let read_plan = source_spans
         .map(|rendered| read_plan_with_rendered_spans(base_read_plan, rendered))
         .unwrap_or_else(|| base_read_plan.clone());
+    let estimated_potential = estimate_family_output_potential_token_savings(
+        family,
+        &selected_evidence,
+        &read_plan,
+        source_spans,
+    );
     let check = if operation == McpOperation::CheckConformance {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -616,6 +636,11 @@ fn family_detail_value(
             "token_budget": selected_evidence.token_budget,
             "estimated_evidence_tokens": selected_evidence.estimated_tokens,
             "estimated_read_plan_tokens": read_plan.estimated_tokens,
+            "estimated_baseline_tokens": estimated_potential.estimated_baseline_tokens,
+            "estimated_returned_tokens": estimated_potential.estimated_returned_tokens,
+            "estimated_potential_token_savings": estimated_potential.estimated_potential_token_savings,
+            "estimated_potential_token_savings_kind": estimated_potential.measurement_kind.as_str(),
+            "estimated_potential_token_savings_caveat": estimated_potential.caveat,
             "selection_strategy": selected_evidence.selection_strategy,
             "budget_satisfied": selected_evidence.budget_satisfied,
             "covered_claims": selected_evidence.covered_claims,
@@ -919,6 +944,22 @@ mod tests {
                 .as_u64()
                 .expect("read plan tokens")
                 > 0
+        );
+        assert!(
+            response["output"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("estimated potential")
+                > 0
+        );
+        assert_eq!(
+            response["output"]["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(
+            response["output"]["estimated_potential_token_savings_caveat"]
+                .as_str()
+                .expect("estimated caveat")
+                .contains("not measured token savings")
         );
         assert_eq!(response["output"]["source_snippets_included"], false);
         assert_eq!(response["source_spans"]["requested"], false);

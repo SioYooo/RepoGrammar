@@ -72,7 +72,7 @@ are recorded only as metadata/typed `UNKNOWN` and are not executed.
 | JS/TS React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; any lookalike or framework-shaped evidence must remain unsupported or `UNKNOWN`. |
 | Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
-| Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements; repo-shape diagnostics are not causal savings claims. |
+| Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
 | Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |
 
 ## Install

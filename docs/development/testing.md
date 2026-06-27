@@ -177,7 +177,10 @@ allowed.
   payloads, explicit upload receipt behavior with fake transports, inspect-only
   telemetry export without queue/rollup creation, enabled `stats --json`
   writing only a bucketed local rollup and disabled stats writing no telemetry
-  state, redacted research export,
+  state, local-only `estimated_potential_token_savings` aggregate recording
+  without upload queue entries or source/path/hash/query fields, stats reporting
+  that aggregate as `ESTIMATED` while leaving measured `token_savings` null
+  without paired measurements, redacted research export,
   redacted experiment export without raw names/session ids/token counts, paired
   baseline/treatment token experiment recording, default-no experiment prompts,
   record-existing prompt no-extra-session wording, controlled-pair

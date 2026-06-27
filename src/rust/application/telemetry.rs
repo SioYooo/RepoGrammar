@@ -2,6 +2,7 @@
 
 use crate::application::query::DiagnosticSignal;
 use crate::application::repository::{repository_state_location, RepositoryStatusRequest};
+use crate::core::model::{EstimatedPotentialTokenSavings, MeasurementKind};
 use crate::error::RepoGrammarError;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -12,6 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const TELEMETRY_SCHEMA_VERSION: &str = "telemetry.v1";
 pub const TELEMETRY_PREFERENCE_SCHEMA_VERSION: &str = "telemetry-preferences.v1";
 pub const TOKEN_EXPERIMENT_SCHEMA_VERSION: &str = "token-experiment.v1";
+pub const ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION: &str =
+    "estimated-potential-token-savings.v1";
 pub const TELEMETRY_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_TELEMETRY_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
@@ -168,6 +171,29 @@ pub struct TelemetryExportReport {
     pub payload: Value,
     pub payload_bytes: usize,
     pub queued: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EstimatedPotentialTokenSavingsRollup {
+    pub event_count: u64,
+    pub total_estimated_baseline_tokens: u64,
+    pub total_estimated_returned_tokens: u64,
+    pub total_estimated_potential_token_savings: u64,
+    pub measurement_kind: MeasurementKind,
+    pub caveat: &'static str,
+}
+
+impl Default for EstimatedPotentialTokenSavingsRollup {
+    fn default() -> Self {
+        Self {
+            event_count: 0,
+            total_estimated_baseline_tokens: 0,
+            total_estimated_returned_tokens: 0,
+            total_estimated_potential_token_savings: 0,
+            measurement_kind: MeasurementKind::Estimated,
+            caveat: EstimatedPotentialTokenSavings::CAVEAT,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -504,6 +530,33 @@ where
     }
     write_rollup(paths, &payload)?;
     Ok(true)
+}
+
+pub fn record_estimated_potential_token_savings(
+    request: RepositoryStatusRequest,
+    metric: &EstimatedPotentialTokenSavings,
+) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    let path = estimated_potential_token_savings_file(request)?;
+    let mut rollup = read_estimated_potential_token_savings_file(&path)?;
+    rollup.event_count = rollup.event_count.saturating_add(1);
+    rollup.total_estimated_baseline_tokens = rollup
+        .total_estimated_baseline_tokens
+        .saturating_add(metric.estimated_baseline_tokens);
+    rollup.total_estimated_returned_tokens = rollup
+        .total_estimated_returned_tokens
+        .saturating_add(metric.estimated_returned_tokens);
+    rollup.total_estimated_potential_token_savings = rollup
+        .total_estimated_potential_token_savings
+        .saturating_add(metric.estimated_potential_token_savings);
+    write_estimated_potential_token_savings_file(&path, &rollup)?;
+    Ok(rollup)
+}
+
+pub fn estimated_potential_token_savings_rollup(
+    request: RepositoryStatusRequest,
+) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    let path = estimated_potential_token_savings_file(request)?;
+    read_estimated_potential_token_savings_file(&path)
 }
 
 pub fn upload_anonymous_telemetry<F>(
@@ -1194,6 +1247,54 @@ fn write_rollup(paths: &TelemetryPaths, payload: &Value) -> Result<(), RepoGramm
     write_json_atomically(&path, payload)
 }
 
+fn estimated_potential_token_savings_file(
+    request: RepositoryStatusRequest,
+) -> Result<PathBuf, RepoGrammarError> {
+    let location = repository_state_location(request)?;
+    if !location.state_dir.is_dir() {
+        return Err(invalid_input(
+            "repository-local telemetry state is unavailable",
+        ));
+    }
+    Ok(location
+        .state_dir
+        .join("telemetry")
+        .join("local-metrics")
+        .join(format!(
+            "{}.json",
+            EstimatedPotentialTokenSavings::METRIC_NAME
+        )))
+}
+
+fn read_estimated_potential_token_savings_file(
+    path: &Path,
+) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    if !path.exists() {
+        return Ok(EstimatedPotentialTokenSavingsRollup::default());
+    }
+    parse_estimated_potential_token_savings_rollup(&read_json_file_bounded(path)?)
+}
+
+fn write_estimated_potential_token_savings_file(
+    path: &Path,
+    rollup: &EstimatedPotentialTokenSavingsRollup,
+) -> Result<(), RepoGrammarError> {
+    ensure_parent_dir(path)?;
+    write_json_atomically(
+        path,
+        &json!({
+            "schema_version": ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION,
+            "metric_name": EstimatedPotentialTokenSavings::METRIC_NAME,
+            "measurement_kind": rollup.measurement_kind.as_str(),
+            "event_count": rollup.event_count,
+            "total_estimated_baseline_tokens": rollup.total_estimated_baseline_tokens,
+            "total_estimated_returned_tokens": rollup.total_estimated_returned_tokens,
+            "total_estimated_potential_token_savings": rollup.total_estimated_potential_token_savings,
+            "caveat": rollup.caveat,
+        }),
+    )
+}
+
 fn write_upload_receipt(
     paths: &TelemetryPaths,
     receipt: &TelemetryUploadReceipt,
@@ -1735,6 +1836,45 @@ fn require_bucket_map(payload: &Value, field: &str) -> Result<(), RepoGrammarErr
     Ok(())
 }
 
+fn parse_estimated_potential_token_savings_rollup(
+    value: &Value,
+) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_input("estimated potential token savings rollup is invalid"))?;
+    if object.get("schema_version").and_then(Value::as_str)
+        != Some(ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION)
+        || object.get("metric_name").and_then(Value::as_str)
+            != Some(EstimatedPotentialTokenSavings::METRIC_NAME)
+        || object.get("measurement_kind").and_then(Value::as_str)
+            != Some(MeasurementKind::Estimated.as_str())
+        || object.get("caveat").and_then(Value::as_str)
+            != Some(EstimatedPotentialTokenSavings::CAVEAT)
+    {
+        return Err(invalid_input(
+            "estimated potential token savings rollup is invalid",
+        ));
+    }
+    Ok(EstimatedPotentialTokenSavingsRollup {
+        event_count: rollup_u64(object, "event_count")?,
+        total_estimated_baseline_tokens: rollup_u64(object, "total_estimated_baseline_tokens")?,
+        total_estimated_returned_tokens: rollup_u64(object, "total_estimated_returned_tokens")?,
+        total_estimated_potential_token_savings: rollup_u64(
+            object,
+            "total_estimated_potential_token_savings",
+        )?,
+        measurement_kind: MeasurementKind::Estimated,
+        caveat: EstimatedPotentialTokenSavings::CAVEAT,
+    })
+}
+
+fn rollup_u64(object: &Map<String, Value>, field: &str) -> Result<u64, RepoGrammarError> {
+    object
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_input("estimated potential token savings rollup is invalid"))
+}
+
 fn read_json_file_bounded(path: &Path) -> Result<Value, RepoGrammarError> {
     let metadata = fs::metadata(path).map_err(|_| invalid_input("failed to read state file"))?;
     if !metadata.is_file() || metadata.len() > MAX_STATE_FILE_BYTES {
@@ -2115,6 +2255,60 @@ mod tests {
         assert!(!paths.global_data_dir.exists());
         assert_eq!(status.queue_count, 0);
         assert_eq!(status.sent_receipt_count, 0);
+    }
+
+    #[test]
+    fn estimated_potential_token_savings_rollup_is_local_aggregate_only() {
+        let workspace = TempWorkspace::new("estimated-potential-token-savings-rollup");
+        let repository_root = workspace.path().join("repo");
+        fs::create_dir_all(&repository_root).expect("repo root");
+        fs::create_dir_all(repository_root.join(".repogrammar")).expect("state dir");
+        let request = RepositoryStatusRequest {
+            path: repository_root.display().to_string(),
+            state_dir_override: None,
+        };
+
+        let missing = estimated_potential_token_savings_rollup(request.clone())
+            .expect("missing rollup defaults");
+        assert_eq!(missing.event_count, 0);
+        assert_eq!(missing.total_estimated_potential_token_savings, 0);
+
+        let first = record_estimated_potential_token_savings(
+            request.clone(),
+            &EstimatedPotentialTokenSavings::new(120, 80),
+        )
+        .expect("record first estimate");
+        let second = record_estimated_potential_token_savings(
+            request.clone(),
+            &EstimatedPotentialTokenSavings::new(40, 70),
+        )
+        .expect("record second estimate");
+
+        assert_eq!(first.event_count, 1);
+        assert_eq!(second.event_count, 2);
+        assert_eq!(second.total_estimated_baseline_tokens, 160);
+        assert_eq!(second.total_estimated_returned_tokens, 150);
+        assert_eq!(second.total_estimated_potential_token_savings, 40);
+        assert_eq!(second.measurement_kind, MeasurementKind::Estimated);
+
+        let path = estimated_potential_token_savings_file(request).expect("rollup path");
+        let serialized = fs::read_to_string(path).expect("rollup JSON");
+        assert!(serialized.contains(EstimatedPotentialTokenSavings::METRIC_NAME));
+        for forbidden in [
+            "src/",
+            "sha256:",
+            "query_text",
+            "target",
+            "repository_name",
+            "evidence_text",
+            "content_hash",
+            "byte_range",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "rollup leaked forbidden token {forbidden}"
+            );
+        }
     }
 
     #[test]

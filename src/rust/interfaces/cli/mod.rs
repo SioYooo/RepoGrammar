@@ -9,13 +9,13 @@ use crate::application::install::{
 };
 use crate::application::progress::{ProgressEvent, WorkUnits};
 use crate::application::query::{
-    build_read_plan, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
-    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    RepoShapeDiagnosticsReport, SourceSpanRenderReport,
+    build_read_plan, estimate_family_output_potential_token_savings, query_preflight,
+    read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
+    validate_query_target, validate_query_token_budget, DiagnosticSignal, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    RepoShapeDiagnosticsReport, SelectedFamilyEvidence, SourceSpanRenderReport,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -31,16 +31,19 @@ use crate::application::repository::{
     RepositoryUnlockReport, RepositoryUnlockRequest,
 };
 use crate::application::telemetry::{
-    experiment_export, experiment_purge, experiment_record, experiment_report,
-    experiment_report_json, experiment_start, experiment_stop, export_anonymous_telemetry,
-    latest_comparable_experiment_report, purge_telemetry, record_passive_diagnostics_rollup,
+    estimated_potential_token_savings_rollup, experiment_export, experiment_purge,
+    experiment_record, experiment_report, experiment_report_json, experiment_start,
+    experiment_stop, export_anonymous_telemetry, latest_comparable_experiment_report,
+    purge_telemetry, record_estimated_potential_token_savings, record_passive_diagnostics_rollup,
     research_export, research_purge, set_anonymous_telemetry, set_research_trace,
     telemetry_disabled_by_environment, telemetry_status, upload_anonymous_telemetry,
-    validate_telemetry_endpoint, ExperimentMode, ExperimentRecordRequest, ExperimentStartRequest,
-    ExperimentWorkflowMode, MeasurementSource, TelemetryDiagnostics, TelemetryExportReport,
-    TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport, TelemetryUploadReceipt,
-    TelemetryUploadReport, TelemetryUploadRequest, TelemetryUploadTransport, TestOutcome,
+    validate_telemetry_endpoint, EstimatedPotentialTokenSavingsRollup, ExperimentMode,
+    ExperimentRecordRequest, ExperimentStartRequest, ExperimentWorkflowMode, MeasurementSource,
+    TelemetryDiagnostics, TelemetryExportReport, TelemetryPaths, TelemetryPurgeReport,
+    TelemetryStatusReport, TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
+    TelemetryUploadTransport, TestOutcome,
 };
+use crate::core::model::EstimatedPotentialTokenSavings;
 use crate::error::RepoGrammarError;
 use serde_json::json;
 use std::io::IsTerminal;
@@ -606,7 +609,7 @@ where
                 Ok(report) if options.json => {
                     let source_spans = match maybe_render_source_spans(
                         runtime,
-                        request,
+                        request.clone(),
                         &report,
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
@@ -624,6 +627,14 @@ where
                             );
                         }
                     };
+                    record_family_query_estimated_potential_token_savings(
+                        request.clone(),
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        source_spans.as_ref(),
+                    );
                     CliOutput::success(family_lookup_json(
                         command,
                         &report,
@@ -636,7 +647,7 @@ where
                 Ok(report) => {
                     let source_spans = match maybe_render_source_spans(
                         runtime,
-                        request,
+                        request.clone(),
                         &report,
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
@@ -654,6 +665,14 @@ where
                             );
                         }
                     };
+                    record_family_query_estimated_potential_token_savings(
+                        request.clone(),
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        source_spans.as_ref(),
+                    );
                     CliOutput::success(family_lookup_human(
                         command,
                         &report,
@@ -715,6 +734,24 @@ fn maybe_render_source_spans(
             options.token_budget,
         )
         .map(Some)
+}
+
+fn record_family_query_estimated_potential_token_savings(
+    request: RepositoryStatusRequest,
+    report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
+) {
+    let FamilyLookupReport::Found(family) = report else {
+        return;
+    };
+    let output_components = family_output_components(family, target, mode, options, source_spans);
+    let _ = record_estimated_potential_token_savings(
+        request,
+        &output_components.estimated_potential_token_savings,
+    );
 }
 
 fn query_fallback(
@@ -905,11 +942,11 @@ fn family_lookup_human(
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
-            let selected_evidence = select_family_evidence(family, options);
-            let base_read_plan = build_read_plan(family, target, mode, options);
-            let read_plan = source_spans
-                .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
-                .unwrap_or(base_read_plan);
+            let output_components =
+                family_output_components(family, target, mode, options, source_spans);
+            let selected_evidence = &output_components.selected_evidence;
+            let read_plan = &output_components.read_plan;
+            let estimated_potential = &output_components.estimated_potential_token_savings;
             let snippets = if read_plan.source_snippets_included {
                 "included"
             } else {
@@ -951,6 +988,18 @@ fn family_lookup_human(
                 read_plan.estimated_tokens
             ));
             output.push_str(&format!(
+                "estimated_potential_token_savings: {}\n",
+                estimated_potential.estimated_potential_token_savings
+            ));
+            output.push_str(&format!(
+                "estimated_potential_token_savings_kind: {}\n",
+                estimated_potential.measurement_kind.as_str()
+            ));
+            output.push_str(&format!(
+                "estimated_potential_token_savings_caveat: {}\n",
+                estimated_potential.caveat
+            ));
+            output.push_str(&format!(
                 "read_plan_requires_source_before_edit: {}\n",
                 read_plan.requires_source_before_edit
             ));
@@ -966,7 +1015,7 @@ fn family_lookup_human(
                     selected_evidence.missing_claims.join(",")
                 ));
             }
-            push_read_plan_human(&mut output, &read_plan, selected_evidence.mode);
+            push_read_plan_human(&mut output, read_plan, selected_evidence.mode);
             if let Some(source_spans) = source_spans {
                 push_source_spans_human(&mut output, source_spans);
             }
@@ -1063,11 +1112,10 @@ fn family_detail_json(
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> String {
-    let selected_evidence = select_family_evidence(family, options);
-    let base_read_plan = build_read_plan(family, target, mode, options);
-    let read_plan = source_spans
-        .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
-        .unwrap_or(base_read_plan);
+    let output_components = family_output_components(family, target, mode, options, source_spans);
+    let selected_evidence = &output_components.selected_evidence;
+    let read_plan = &output_components.read_plan;
+    let estimated_potential = &output_components.estimated_potential_token_savings;
     let check = if command == "check" {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -1092,6 +1140,11 @@ fn family_detail_json(
             "token_budget": selected_evidence.token_budget,
             "estimated_evidence_tokens": selected_evidence.estimated_tokens,
             "estimated_read_plan_tokens": read_plan.estimated_tokens,
+            "estimated_baseline_tokens": estimated_potential.estimated_baseline_tokens,
+            "estimated_returned_tokens": estimated_potential.estimated_returned_tokens,
+            "estimated_potential_token_savings": estimated_potential.estimated_potential_token_savings,
+            "estimated_potential_token_savings_kind": estimated_potential.measurement_kind.as_str(),
+            "estimated_potential_token_savings_caveat": estimated_potential.caveat,
             "selection_strategy": selected_evidence.selection_strategy,
             "budget_satisfied": selected_evidence.budget_satisfied,
             "covered_claims": selected_evidence.covered_claims,
@@ -1127,11 +1180,42 @@ fn family_detail_json(
                 "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
-        "read_plan": read_plan_json(&read_plan),
+        "read_plan": read_plan_json(read_plan),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
         "check": check,
     }))
+}
+
+struct FamilyOutputComponents {
+    selected_evidence: SelectedFamilyEvidence,
+    read_plan: ReadPlan,
+    estimated_potential_token_savings: EstimatedPotentialTokenSavings,
+}
+
+fn family_output_components(
+    family: &FamilyDetailReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> FamilyOutputComponents {
+    let selected_evidence = select_family_evidence(family, options);
+    let base_read_plan = build_read_plan(family, target, mode, options);
+    let read_plan = source_spans
+        .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
+        .unwrap_or(base_read_plan);
+    let estimated_potential_token_savings = estimate_family_output_potential_token_savings(
+        family,
+        &selected_evidence,
+        &read_plan,
+        source_spans,
+    );
+    FamilyOutputComponents {
+        selected_evidence,
+        read_plan,
+        estimated_potential_token_savings,
+    }
 }
 
 fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyEvidenceMode) {
@@ -1953,11 +2037,13 @@ where
     }
 
     if options.json {
-        return match runtime.repo_shape_diagnostics(request) {
+        return match runtime.repo_shape_diagnostics(request.clone()) {
             Ok(report) => {
                 let measurement = telemetry_global_data_dir(env_lookup)
                     .ok()
                     .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
+                let estimated_rollup =
+                    estimated_potential_token_savings_rollup(request.clone()).unwrap_or_default();
                 record_stats_telemetry_rollup(
                     current_dir,
                     env_lookup,
@@ -1965,7 +2051,7 @@ where
                     &report,
                     measurement.as_ref(),
                 );
-                CliOutput::success(stats_json(&report, measurement.as_ref()))
+                CliOutput::success(stats_json(&report, measurement.as_ref(), &estimated_rollup))
             }
             Err(_) => query_fallback(
                 "stats",
@@ -1977,8 +2063,12 @@ where
         };
     }
 
-    match runtime.repo_shape_diagnostics(request) {
-        Ok(report) => CliOutput::success(stats_human(&report)),
+    match runtime.repo_shape_diagnostics(request.clone()) {
+        Ok(report) => {
+            let estimated_rollup =
+                estimated_potential_token_savings_rollup(request).unwrap_or_default();
+            CliOutput::success(stats_human(&report, &estimated_rollup))
+        }
         Err(_) => query_fallback(
             "stats",
             false,
@@ -2040,9 +2130,12 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
     Ok(options)
 }
 
-fn stats_human(report: &RepoShapeDiagnosticsReport) -> String {
+fn stats_human(
+    report: &RepoShapeDiagnosticsReport,
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+) -> String {
     format!(
-        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ninterpretation: {}\n",
+        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
         report.active_generation,
         report.eligible_code_units,
         report.family_count,
@@ -2054,6 +2147,10 @@ fn stats_human(report: &RepoShapeDiagnosticsReport) -> String {
         report.external_dependency_signal.as_str(),
         report.thin_wrapper_risk.as_str(),
         report.token_saving_risk.as_str(),
+        estimated_rollup.total_estimated_potential_token_savings,
+        estimated_rollup.event_count,
+        estimated_rollup.measurement_kind.as_str(),
+        estimated_rollup.caveat,
         report.interpretation
     )
 }
@@ -2061,6 +2158,7 @@ fn stats_human(report: &RepoShapeDiagnosticsReport) -> String {
 fn stats_json(
     report: &RepoShapeDiagnosticsReport,
     measurement: Option<&crate::application::telemetry::ExperimentReport>,
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
 ) -> String {
     let measurement_status = if measurement
         .and_then(|measurement| measurement.token_savings)
@@ -2093,6 +2191,15 @@ fn stats_json(
         "token_savings": measurement.and_then(|measurement| measurement.token_savings),
         "token_savings_ratio": measurement.and_then(|measurement| measurement.token_savings_ratio),
         "measurement_source": measurement.and_then(|measurement| measurement.measurement_source.as_deref()),
+        "estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
+        "estimated_potential_token_savings_metric": {
+            "measurement_kind": estimated_rollup.measurement_kind.as_str(),
+            "event_count": estimated_rollup.event_count,
+            "total_estimated_baseline_tokens": estimated_rollup.total_estimated_baseline_tokens,
+            "total_estimated_returned_tokens": estimated_rollup.total_estimated_returned_tokens,
+            "total_estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
+            "caveat": estimated_rollup.caveat,
+        },
         "measurement_status": measurement_status,
         "measurement_reason": measurement.and_then(|measurement| measurement.reason.as_deref()),
         "claim_validity": measurement.map(|measurement| measurement.claim_validity.as_str()).unwrap_or("unknown"),
@@ -5677,6 +5784,19 @@ mod tests {
         assert_eq!(value["metrics"]["thin_wrapper_risk"], "low");
         assert_eq!(value["metrics"]["token_saving_risk"], "low");
         assert_eq!(value["token_savings"], Value::Null);
+        assert_eq!(value["estimated_potential_token_savings"], 0);
+        assert_eq!(
+            value["estimated_potential_token_savings_metric"]["measurement_kind"],
+            "ESTIMATED"
+        );
+        assert_eq!(
+            value["estimated_potential_token_savings_metric"]["event_count"],
+            0
+        );
+        assert!(value["estimated_potential_token_savings_metric"]["caveat"]
+            .as_str()
+            .expect("estimated caveat")
+            .contains("not measured token savings"));
         assert!(value["claim"]
             .as_str()
             .expect("claim")
@@ -5834,6 +5954,7 @@ mod tests {
         let workspace = TempWorkspace::new("cli-family-query-json");
         let env = |_: &str| None;
         let runtime = FamilyQueryRuntime;
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
 
         let output = run_with_context_and_runtime(
             ["find", "src/routes/a.ts", "--json"],
@@ -5864,6 +5985,28 @@ mod tests {
                 .expect("read plan tokens")
                 > 0
         );
+        assert!(
+            value["output"]["estimated_baseline_tokens"]
+                .as_u64()
+                .expect("estimated baseline")
+                >= value["output"]["estimated_returned_tokens"]
+                    .as_u64()
+                    .expect("estimated returned")
+        );
+        assert!(
+            value["output"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("estimated potential")
+                > 0
+        );
+        assert_eq!(
+            value["output"]["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(value["output"]["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("estimated caveat")
+            .contains("not measured token savings"));
         assert_eq!(value["output"]["source_snippets_included"], false);
         assert!(value["evidence"].as_array().expect("evidence").is_empty());
         assert_eq!(value["read_plan"]["source_snippets_included"], false);
@@ -5896,6 +6039,9 @@ mod tests {
         assert_eq!(human.status, 0);
         assert!(!human.stdout.contains("evidence:"));
         assert!(human.stdout.contains("evidence_mode: compact"));
+        assert!(human
+            .stdout
+            .contains("estimated_potential_token_savings_kind: ESTIMATED"));
         assert!(human.stdout.contains("source_snippets: not_included"));
         assert!(human.stdout.contains("Suggested source spans to read"));
         assert!(human
@@ -5925,6 +6071,47 @@ mod tests {
             value["read_plan"]["items"][0]["purpose"],
             "target_body_required_for_edit"
         );
+
+        let local_metric = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("telemetry")
+            .join("local-metrics")
+            .join("estimated_potential_token_savings.json");
+        let rollup: Value = serde_json::from_str(
+            &fs::read_to_string(local_metric).expect("local estimated rollup"),
+        )
+        .expect("local estimated rollup JSON");
+        assert_eq!(rollup["metric_name"], "estimated_potential_token_savings");
+        assert_eq!(rollup["measurement_kind"], "ESTIMATED");
+        assert_eq!(rollup["event_count"], 3);
+        assert!(
+            rollup["total_estimated_potential_token_savings"]
+                .as_u64()
+                .expect("total estimated potential")
+                > 0
+        );
+        assert_eq!(
+            json_file_count(
+                &workspace
+                    .path()
+                    .join(DEFAULT_STATE_DIR)
+                    .join("telemetry")
+                    .join("queue")
+            ),
+            0
+        );
+
+        let stats =
+            run_with_context_and_runtime(["stats", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(stats.status, 0);
+        let stats_value: Value =
+            serde_json::from_str(stats.stdout.trim()).expect("stats JSON after family query");
+        assert_eq!(
+            stats_value["estimated_potential_token_savings"],
+            rollup["total_estimated_potential_token_savings"]
+        );
+        assert_eq!(stats_value["token_savings"], Value::Null);
     }
 
     #[test]

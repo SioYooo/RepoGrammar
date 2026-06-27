@@ -24,6 +24,14 @@ All token counts must include the tokenizer or host-provided measurement source.
 Accepted measurement sources are `host_reported`, `user_entered`, and
 `documented_tokenizer`.
 
+`estimated_potential_token_savings` is a separate `ESTIMATED` diagnostic. It is
+computed from RepoGrammar's selected family-evidence metadata, read-plan token
+estimates, and any explicitly requested source-span token estimate. It is a
+potential read-displacement estimate for the current RepoGrammar output shape;
+it is not actual token savings, not a causal claim, and not a substitute for a
+paired baseline/treatment measurement. The estimate must saturate at zero when
+the returned context is larger than the local baseline estimate.
+
 v0.1 records local paired measurements through:
 
 ```text
@@ -64,7 +72,10 @@ measured `token_savings`, `token_savings_ratio`, and `measurement_source` as
 diagnostics may report
 derived or estimated local-pattern-density, family-support-coverage,
 abstention-rate, external-dependency-signal, thin-wrapper-risk, and
-token-saving-risk values.
+token-saving-risk values. It may also report the repo-local aggregate
+`estimated_potential_token_savings` with `measurement_kind: ESTIMATED`,
+`event_count`, aggregate estimated baseline/returned token counts, and the
+caveat that it is not measured token savings.
 
 Stats output is allowed to include aggregate counts and diagnostic ratios, but
 it must not include source snippets, query text, repository names, absolute
@@ -76,5 +87,10 @@ rather than inventing repository metrics.
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics
 local-only and must not create upload queue entries.
+Successful family context responses may update a separate repo-local aggregate
+under `.repogrammar/telemetry/local-metrics/` for
+`estimated_potential_token_savings`. That aggregate is local-only and must not
+include source snippets, prompts, query text, paths, repository names, symbols,
+content hashes, byte ranges, evidence text, or raw targets.
 If treatment correctness fails, raw token deltas may still be reported, but the
 result must be marked invalid for product token-saving claims.

@@ -173,6 +173,17 @@ violates a meaningful rule. Counterexample storage is deferred.
 Compatibility expresses whether a target can be compared to a family:
 compatible, incompatible with reason, or unknown with reason.
 
+## Measurement
+
+Measurement kinds are `MEASURED`, `DERIVED`, `ESTIMATED`, and
+`CAUSAL_EXPERIMENT`. `EstimatedPotentialTokenSavings` is a core `ESTIMATED`
+measurement for the metric named `estimated_potential_token_savings`. It
+records aggregate-compatible estimated baseline tokens, estimated returned
+tokens, saturating potential savings, and a caveat that the value is not
+measured token savings. Actual `token_savings` remains a separate metric that
+requires comparable baseline/treatment session token counts and a measurement
+source.
+
 ## AbstentionReason
 
 Abstention prevents weak evidence from becoming a false claim. Reasons include
