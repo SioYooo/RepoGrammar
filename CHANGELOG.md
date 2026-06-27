@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed
+
+- Public-preview hardening now blocks React-shaped TypeScript semantic-worker
+  facts from forming unsupported JS/TS family claims, applies safe
+  `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,
+  documents that Jest/Vitest script configs are metadata/typed `UNKNOWN` only,
+  and recommends explicit preview tags instead of GitHub's `latest` redirect for
+  prerelease installer usage.
+- Installer launchers now validate release archive entry names before
+  extraction and reject unsafe or unexpected paths even when the checksum
+  matches. The npm launcher also validates release tags/cache containment and
+  stages binary+worker cache updates before swapping them into place.
+
 ### Added
 
 - Public-preview readiness documentation now includes an explicit support matrix

@@ -108,6 +108,11 @@ may record unique repo-local literal relative/path-alias imports as
 `STRUCTURAL` context. Dynamic imports, non-literal or conditional `require`,
 unresolved aliases/imports, ambiguous re-exports, and missing test-runner
 project context remain typed `UNKNOWN` rather than family support.
+Jest/Vitest script configs such as `jest.config.ts` or `vitest.config.js` are
+recorded as metadata/typed `UNKNOWN` only; they are not executed and do not by
+themselves provide ambient runner context. Unsupported JS/TS roles such as
+React components/hooks remain blocked from public family claims even if an
+explicit TypeScript semantic-worker fact names `react`.
 Production-quality TS/JS semantic analysis, React/Next/Fastify family support,
 TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
 and dynamic-wrapper support remain deferred unless a later ADR changes the

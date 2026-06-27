@@ -48,6 +48,15 @@ matching `.sha256` checksum asset.
 The published `install.sh` and `install.ps1` assets must also have matching
 `.sha256` checksum assets. Installers must fail instead of silently installing
 an artifact that omits the bundled Python worker.
+Public preview documentation must use an explicit preview tag such as
+`v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect, because
+preview releases may be marked prerelease. When a `latest` or explicit artifact
+lookup fails, installers must report that the release artifact was not found,
+suggest `--version` / `-Version <preview-tag>`, and mention
+`REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
+Installers must validate archive entry names before extraction: absolute paths,
+Windows absolute paths, traversal components, URI-like names, backslashes, and
+unexpected files are rejected even when the archive checksum matches.
 
 Source checkouts may provide a dependency-light wrapper script at
 `src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
@@ -265,14 +274,14 @@ noninteractive live writes, and a dependency-light text wizard:
   source-checkout dogfood remains the supported pre-release path;
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
   default it downloads a prebuilt release artifact instead of requiring Cargo,
-  verifies the checksum, installs the CLI and bundled worker asset, and can then
-  launch agent wiring or uninstall flows. In a source checkout, its interactive
-  menu makes the contributor source-build path first-class, and its
-  noninteractive `--from-source` mode supports dogfood before release artifacts
-  exist;
+  verifies the checksum, validates archive entry names before extraction,
+  installs the bundled worker asset plus CLI, and can then launch agent wiring
+  or uninstall flows. In a source checkout, its interactive menu makes the
+  contributor source-build path first-class, and its noninteractive
+  `--from-source` mode supports dogfood before release artifacts exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
-  Windows x86_64 artifact. Windows source-checkout dogfood builds remain
-  deferred;
+  Windows x86_64 artifact. It verifies checksums and validates zip entry names
+  before extraction. Windows source-checkout dogfood builds remain deferred;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,

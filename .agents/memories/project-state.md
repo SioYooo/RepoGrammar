@@ -376,6 +376,12 @@ package/config test-runner context rather than test-file path alone.
 Reassigned/shadowed/dynamic/lookalike Express receivers,
 dynamic route methods, custom Jest/Vitest wrappers, ambiguous non-test-file
 globals, and all React components/hooks stay `UNKNOWN`.
+React-shaped TypeScript semantic-worker support facts are also blocked from
+public-preview family claims; React/Next/Fastify/Prisma/Drizzle remain
+unsupported until a later ADR changes the support matrix. Jest/Vitest script
+configs (`jest.config.ts`, `vitest.config.js`, and similar) are metadata/typed
+`UNKNOWN` only; package dependencies and JSON config files provide the current
+ambient runner context.
 `src/fixtures/typescript/release/v0_2/express_exact_routes` and
 `jest_vitest_exact_tests` exercise the positive and negative product paths; the
 v0.1 `jest-vitest-basic` fixture remains below the conservative TS/JS support

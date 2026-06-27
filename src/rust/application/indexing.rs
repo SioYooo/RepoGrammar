@@ -755,9 +755,15 @@ fn tsjs_path_aliases_from_project_config(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
             continue;
         };
-        let Some(paths) = value
+        let Some(compiler_options) = value
             .get("compilerOptions")
-            .and_then(|compiler_options| compiler_options.get("paths"))
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        let base_url = tsjs_project_config_base_url(compiler_options.get("baseUrl"));
+        let Some(paths) = compiler_options
+            .get("paths")
             .and_then(serde_json::Value::as_object)
         else {
             continue;
@@ -768,7 +774,9 @@ fn tsjs_path_aliases_from_project_config(
                 .into_iter()
                 .flatten()
                 .filter_map(serde_json::Value::as_str)
-                .map(ToString::to_string)
+                .filter_map(|target| {
+                    tsjs_project_config_target_pattern(base_url.as_deref(), target)
+                })
                 .collect::<Vec<_>>();
             if !targets.is_empty() {
                 aliases.push(ParserTsJsPathAlias {
@@ -785,6 +793,33 @@ fn tsjs_path_aliases_from_project_config(
     });
     aliases.dedup();
     Ok(aliases)
+}
+
+fn tsjs_project_config_base_url(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value.and_then(serde_json::Value::as_str)?.trim();
+    if value.is_empty() || value == "." || value == "./" {
+        return None;
+    }
+    let normalized = value.trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty() || validate_repo_relative_path(normalized).is_err() {
+        return None;
+    }
+    Some(normalized.to_string())
+}
+
+fn tsjs_project_config_target_pattern(base_url: Option<&str>, target: &str) -> Option<String> {
+    let normalized = target.trim().trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty() {
+        return None;
+    }
+    let candidate = match base_url {
+        Some(base_url) => format!("{base_url}/{normalized}"),
+        None => normalized.to_string(),
+    };
+    if validate_repo_relative_path(&candidate).is_err() {
+        return None;
+    }
+    Some(candidate)
 }
 
 fn tsjs_has_test_runner_context(
@@ -5061,12 +5096,12 @@ extraPaths = ["src/lib", "C:/secret"]
         .expect("write package");
         fs::write(
             workspace.path().join("tsconfig.json"),
-            r#"{"compilerOptions":{"paths":{"@lib/*":["src/lib/*"],"@test/*":["tests/*"]}}}"#,
+            r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app":["app.ts"],"@lib/*":["lib/*"],"@unsafe/*":["../outside/*"]}}}"#,
         )
         .expect("write tsconfig");
         fs::write(
             workspace.path().join("jsconfig.json"),
-            r#"{"compilerOptions":{"paths":{"@shared/*":["src/shared/*"]}}}"#,
+            r#"{"compilerOptions":{"paths":{"@shared/*":["src/shared/*"],"@test/*":["tests/*"]}}}"#,
         )
         .expect("write jsconfig");
         fs::write(
@@ -5106,16 +5141,18 @@ extraPaths = ["src/lib", "C:/secret"]
                 context.tsjs_module_paths,
                 ["src/app.ts", "src/lib/client.js", "tests/app.test.ts"]
             );
-            assert_eq!(context.tsjs_path_aliases.len(), 3);
-            assert_eq!(context.tsjs_path_aliases[0].alias_pattern, "@lib/*");
-            assert_eq!(context.tsjs_path_aliases[0].target_patterns, ["src/lib/*"]);
-            assert_eq!(context.tsjs_path_aliases[1].alias_pattern, "@shared/*");
+            assert_eq!(context.tsjs_path_aliases.len(), 4);
+            assert_eq!(context.tsjs_path_aliases[0].alias_pattern, "@app");
+            assert_eq!(context.tsjs_path_aliases[0].target_patterns, ["src/app.ts"]);
+            assert_eq!(context.tsjs_path_aliases[1].alias_pattern, "@lib/*");
+            assert_eq!(context.tsjs_path_aliases[1].target_patterns, ["src/lib/*"]);
+            assert_eq!(context.tsjs_path_aliases[2].alias_pattern, "@shared/*");
             assert_eq!(
-                context.tsjs_path_aliases[1].target_patterns,
+                context.tsjs_path_aliases[2].target_patterns,
                 ["src/shared/*"]
             );
-            assert_eq!(context.tsjs_path_aliases[2].alias_pattern, "@test/*");
-            assert_eq!(context.tsjs_path_aliases[2].target_patterns, ["tests/*"]);
+            assert_eq!(context.tsjs_path_aliases[3].alias_pattern, "@test/*");
+            assert_eq!(context.tsjs_path_aliases[3].target_patterns, ["tests/*"]);
             assert!(context.tsjs_has_test_runner_context);
             assert!(context.tsjs_module_paths.iter().all(|path| {
                 (path.ends_with(".ts") || path.ends_with(".js"))

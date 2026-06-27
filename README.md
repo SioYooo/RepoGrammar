@@ -55,6 +55,9 @@ repo-local static import resolver can record relative/path-alias imports as
 structural context, while dynamic imports, conditional `require`, unresolved
 aliases, and star re-exports remain typed `UNKNOWN`. This is not full
 TypeScript/JavaScript semantic analysis.
+For Jest/Vitest, package dependencies and JSON config files can provide ambient
+runner context; script configs such as `jest.config.ts` or `vitest.config.js`
+are recorded only as metadata/typed `UNKNOWN` and are not executed.
 
 ## Public Preview Support Matrix
 
@@ -75,11 +78,12 @@ TypeScript/JavaScript semantic analysis.
 ## Install
 
 Once a public-preview prerelease has been published, install the prebuilt CLI
-binary first:
+binary first. During preview, use the exact prerelease tag rather than GitHub's
+`latest` redirect:
 
 ```text
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh
-bash install.sh
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh
+bash install.sh --version v0.2.0-preview.0
 ```
 
 After the npm package is published, users with Node/npm can use the wrapper to
@@ -109,8 +113,8 @@ The `npx` / npm path requires Node/npm by definition, but still does not require
 Rust or Cargo. On Windows preview builds, use PowerShell:
 
 ```text
-Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File install.ps1
+Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1 -Version v0.2.0-preview.0
 ```
 
 Agent integration requires the native CLI for the agent you choose: `codex` for
@@ -262,7 +266,8 @@ analyzer. In this preview:
 - Dynamic Python behavior often produces typed `UNKNOWN`.
 - JS/TS preview support is limited to exact-anchor Express and Jest/Vitest
   families. Full JS/TS semantics, React, Next.js, Fastify, Prisma, Drizzle,
-  dynamic wrappers, and complete alias/re-export resolution are deferred.
+  dynamic wrappers, executable Jest/Vitest script-config semantics, and complete
+  alias/re-export resolution are deferred.
 - Source snippets are not returned by default.
 - Full Python semantic providers, runtime observation, and broader language
   support are deferred.

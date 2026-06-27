@@ -71,20 +71,26 @@ families require at least three compatible exact-anchor support facts and use
 complete-link compatibility over route method/path/handler profiles or
 runner/test/import profiles. Bounded project inventory for `package.json`,
 `tsconfig.json`, `jsconfig.json`, and Jest/Vitest config files is structural
-context only; script configs are not executed. The parser project context also
-builds a bounded repo-local TS/JS module inventory plus JSON `paths` aliases
-from `tsconfig.json`/`jsconfig.json`. It can persist `STRUCTURAL`
-`RESOLVED_IMPORT` facts only for unique literal relative imports or unique
-path-alias imports that resolve to discovered repo files. Dynamic
+context only. Package dependencies and JSON `jest.config.json` /
+`vitest.config.json` files can provide ambient test-runner context; script
+configs such as `jest.config.ts` or `vitest.config.js` are not executed and
+remain metadata/typed `UNKNOWN` only. The parser project context also builds a
+bounded repo-local TS/JS module inventory plus JSON `paths` aliases from
+`tsconfig.json`/`jsconfig.json`; safe `baseUrl` prefixes are applied
+conservatively to alias targets before resolving against discovered repo files.
+It can persist `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique literal
+relative imports or unique path-alias imports that resolve to discovered repo
+files. Dynamic
 `import(...)`, non-literal `require(...)`, conditional `require(...)`,
 unresolved aliases/imports, conflicting alias candidates, and `export *` stay
 typed `UNKNOWN`; those facts are context/abstention evidence and do not become
 family support. Ambient Jest/Vitest globals require bounded project test-runner
 context from package or config inventory; otherwise they emit
 `MissingProjectConfig` instead of support. React components and hooks remain
-`UNKNOWN` in this slice. This is a token-saving foundation, not full TS/JS
-semantic analysis, and TS/JS remains a transitional substrate rather than the
-official v0.1 target.
+`UNKNOWN` in this slice, including when an external TypeScript semantic worker
+emits React-shaped semantic support. This is a token-saving foundation, not full
+TS/JS semantic analysis, and TS/JS remains a transitional substrate rather than
+the official v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,

@@ -1656,8 +1656,7 @@ pub(crate) fn tsjs_support_target_is_role_compatible(
             target,
             "package:vitest" | "package:@jest/globals" | "jest_vitest.it" | "jest_vitest.test"
         )),
-        "framework:react.component" => Some(matches!(target, "package:react" | "react.component")),
-        "framework:react.hook" => Some(matches!(target, "package:react" | "react.hook")),
+        "framework:react.component" | "framework:react.hook" => Some(false),
         _ if tsjs_framework_role_is_known(framework_role) => Some(false),
         _ => None,
     }
@@ -3607,6 +3606,51 @@ mod tests {
 
         assert!(report.claims.is_empty());
         assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+    }
+
+    #[test]
+    fn unsupported_react_semantic_facts_do_not_form_public_preview_families() {
+        let first = unit("src/a.tsx", "react_component", 0);
+        let second = unit("src/b.tsx", "react_component", 1);
+        let third = unit("src/c.tsx", "react_component", 2);
+        let component_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:react.component"),
+                role_fact(&second, "framework:react.component"),
+                role_fact(&third, "framework:react.component"),
+                semantic_support_fact_with_target(&first, "react.component"),
+                semantic_support_fact_with_target(&second, "react.component"),
+                semantic_support_fact_with_target(&third, "react.component"),
+            ],
+        );
+
+        assert!(component_report.claims.is_empty());
+        assert!(component_report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
+
+        let first = unit("src/hooks.ts", "react_hook", 0);
+        let second = unit("src/more-hooks.ts", "react_hook", 1);
+        let third = unit("src/use-feature.ts", "react_hook", 2);
+        let hook_report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:react.hook"),
+                role_fact(&second, "framework:react.hook"),
+                role_fact(&third, "framework:react.hook"),
+                semantic_support_fact_with_target(&first, "package:react"),
+                semantic_support_fact_with_target(&second, "package:react"),
+                semantic_support_fact_with_target(&third, "package:react"),
+            ],
+        );
+
+        assert!(hook_report.claims.is_empty());
+        assert!(hook_report
             .unknowns
             .iter()
             .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));

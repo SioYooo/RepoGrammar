@@ -195,8 +195,39 @@ if [[ "$NO_RELEASE_STATUS" -eq 0 ]]; then
   exit 1
 fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
+grep -q -- "--version v0.2.0-preview.0" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
+
+UNEXPECTED_RELEASE="${TMP_ROOT}/unexpected-release"
+UNEXPECTED_PACKAGE="${TMP_ROOT}/unexpected-package"
+mkdir -p "$UNEXPECTED_RELEASE" "$UNEXPECTED_PACKAGE/workers/python"
+cp "${PACKAGE_DIR}/repogrammar" "${UNEXPECTED_PACKAGE}/repogrammar"
+cp "${PACKAGE_DIR}/workers/python/worker.py" "${UNEXPECTED_PACKAGE}/workers/python/worker.py"
+printf 'unexpected\n' > "${UNEXPECTED_PACKAGE}/unexpected.txt"
+tar -czf "${UNEXPECTED_RELEASE}/${ARTIFACT}" -C "$UNEXPECTED_PACKAGE" repogrammar workers unexpected.txt
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$UNEXPECTED_RELEASE" && sha256sum "$ARTIFACT" > "${ARTIFACT}.sha256")
+else
+  (cd "$UNEXPECTED_RELEASE" && shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256")
+fi
+UNEXPECTED_ERR="${TMP_ROOT}/unexpected.err"
+set +e
+REPOGRAMMAR_RELEASE_DIR="$UNEXPECTED_RELEASE" \
+REPOGRAMMAR_COMMAND_DIR="${TMP_ROOT}/unexpected-bin" \
+REPOGRAMMAR_INSTALL_DIR="${TMP_ROOT}/unexpected-data" \
+"$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/unexpected.out" 2>"$UNEXPECTED_ERR"
+UNEXPECTED_STATUS=$?
+set -e
+if [[ "$UNEXPECTED_STATUS" -eq 0 ]]; then
+  echo "unexpected release path unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "unsafe or unexpected path" "$UNEXPECTED_ERR"
+if [[ -e "${TMP_ROOT}/unexpected-bin/repogrammar" || -e "${TMP_ROOT}/unexpected-data/bin/repogrammar" ]]; then
+  echo "unexpected release left a partial command install" >&2
+  exit 1
+fi
 
 MISSING_WORKER_RELEASE="${TMP_ROOT}/missing-worker-release"
 MISSING_WORKER_PACKAGE="${TMP_ROOT}/missing-worker-package"
@@ -240,3 +271,6 @@ grep -q ".sha256" "$RELEASE_WORKFLOW"
 WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
 grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
 grep -q "Get-FileHash -Algorithm SHA256" "$WINDOWS_INSTALLER"
+grep -q "Assert-SafeArchiveEntries" "$WINDOWS_INSTALLER"
+grep -q "release artifact was not found" "$WINDOWS_INSTALLER"
+grep -q "v0.2.0-preview.0" "$WINDOWS_INSTALLER"
