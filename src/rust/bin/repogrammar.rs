@@ -2913,6 +2913,102 @@ mod tests {
     }
 
     #[test]
+    fn tsjs_javascript_jest_vitest_exact_tests_form_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "javascript_jest_vitest_exact_tests",
+            "tsjs-release-javascript-jest-vitest-exact",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "jest_vitest.describe")
+                .count(),
+            3
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+                .count(),
+            6
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert!(family_array.iter().all(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_"))
+        }));
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_suite:"))
+                && family["support"] == 3
+        }));
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_case:"))
+                && family["support"]
+                    .as_u64()
+                    .is_some_and(|support| support >= 3)
+        }));
+    }
+
+    #[test]
+    fn tsjs_unsupported_framework_lookalikes_do_not_form_public_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "unsupported_framework_lookalikes",
+            "tsjs-release-unsupported-framework-lookalikes",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert!(
+            derived.is_empty(),
+            "React/Next/Fastify/Prisma/Drizzle lookalikes must not derive JS/TS support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:react")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:next")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "fastify_route.ts"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+        }));
+    }
+
+    #[test]
     fn tsjs_v0_1_jest_vitest_basic_ambient_tests_require_project_context() {
         let workspace = TempWorkspace::new("tsjs-v0-1-jest-vitest-basic-ambient");
         copy_release_fixture("jest-vitest-basic", workspace.path());

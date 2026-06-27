@@ -113,6 +113,21 @@ TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
 and dynamic-wrapper support remain deferred unless a later ADR changes the
 sequence again.
 
+## Public-preview support matrix
+
+| Area | Status | Public claim |
+|---|---|---|
+| Python FastAPI | Supported | Bounded framework-family evidence under sound-by-abstention gates. |
+| Python pytest | Supported | Bounded test/fixture family evidence with typed fixture ambiguity `UNKNOWN`. |
+| Python Pydantic | Supported | Bounded model/settings family evidence; dynamic factories remain `UNKNOWN`. |
+| Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |
+| JS/TS Express | Conservative v0.2 preview | Exact import/require plus direct literal route calls; support>=3 and complete-link compatibility required. |
+| JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
+| React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; static lookalikes remain unsupported or `UNKNOWN`. |
+| Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
+| Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
+| Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
+
 Django, C/C++, whole-program Python call graphs, sound full Python semantic
 analysis, and default runtime tracing are deferred.
 
