@@ -30,8 +30,10 @@
   writer using the exact markers `<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->`
   and `<!-- END REPOGRAMMAR MANAGED SECTION -->`. It creates, appends, replaces,
   or leaves unchanged the managed section, refuses malformed or partial markers,
-  writes atomically with re-read verification, and removes only the managed
-  section on uninstall. Receipts now record `instruction_file_path` and
+  writes atomically with re-read verification, and on uninstall or rollback
+  removes that section, deleting a file RepoGrammar created when removal leaves
+  it empty while preserving any pre-existing or user-added content. Receipts now
+  record `instruction_file_path` and
   `instruction_action`. Live instruction writing stays deferred unless
   `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path, because
   real Codex/Claude instruction-file locations are not yet verified.
@@ -626,3 +628,12 @@
   omit CLI/MCP family detail with typed `StaleEvidence` `UNKNOWN`.
 - Hardened MCP install self-tests with a bounded timeout that kills and reaps
   hanging self-test processes before native agent configuration.
+
+### Fixed
+
+- `repogrammar index`/`sync` `semantic_facts` totals (surfaced by `index --json`
+  and `status`) now include TS/JS-derived support facts. The reported count had
+  omitted `repogrammar-tsjs-derived` facts even though they were recorded and
+  fed family construction, undercounting the total for Express/Jest/Vitest
+  repositories; the reported total now equals the facts actually stored in the
+  active generation.

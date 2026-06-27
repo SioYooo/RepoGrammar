@@ -618,10 +618,10 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        semantic_facts: parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + worker_semantic_facts,
+        // `local_support_fact_count` already sums every locally recorded support
+        // fact (parser, framework role, Python-derived, and TS/JS-derived). Reuse
+        // it so the reported total cannot silently drop a support family again.
+        semantic_facts: local_support_fact_count + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -4546,6 +4546,49 @@ mod tests {
         let debug = format!("{family:?}");
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("res.json"));
+    }
+
+    #[test]
+    fn reported_semantic_facts_count_includes_derived_tsjs_support_facts() {
+        // A resolved Express server produces exact TS/JS anchors that are promoted
+        // to bounded TS/JS-derived support facts and recorded in the generation.
+        // Regression guard: `IndexingOutcome::semantic_facts` must count those
+        // derived facts, so the reported total equals what was actually stored.
+        let workspace = TempWorkspace::new("indexing-derived-tsjs-count");
+        fs::write(
+            workspace.path().join("server.ts"),
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/users', (req, res) => { res.json([]); });\n\
+             app.post('/users', (req, res) => { res.json({}); });\n",
+        )
+        .expect("write resolved express server");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index resolved express server");
+
+        // No semantic worker ran, so a family here can only come from the
+        // TS/JS-derived support facts the count must include.
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.families.len(), 1);
+        assert_eq!(families.families[0].classification, "DOMINANT_PATTERN");
+
+        let stored = semantic_fact_count(&state, "gen-000001");
+        assert!(stored >= 2, "derived TS/JS support facts must be recorded");
+        assert_eq!(
+            outcome.semantic_facts as u32, stored,
+            "reported semantic_facts must include TS/JS-derived support facts, not drop them"
+        );
     }
 
     #[test]

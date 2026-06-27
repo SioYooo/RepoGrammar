@@ -438,9 +438,10 @@ pub fn execute_uninstall(
         }
         validate_receipt_ownership(&receipt_path, target, request.scope)?;
         let instruction_path = receipt_instruction_file_path(&receipt_path);
+        let instruction_action = receipt_instruction_action(&receipt_path);
         configurator.remove_mcp_server(target, request.scope, &context.current_dir)?;
         if let Some(instruction_path) = instruction_path {
-            remove_managed_instruction_section(Path::new(&instruction_path))?;
+            revert_managed_instruction(Path::new(&instruction_path), instruction_action)?;
         }
         remove_receipt(&receipt_path)?;
         configured_targets.push(target);
@@ -978,7 +979,7 @@ fn rollback_install_run(
             InstructionAction::Created | InstructionAction::Appended | InstructionAction::Replaced
         );
         if let (Some(path), true) = (path, wrote_section) {
-            if let Err(error) = remove_managed_instruction_section(Path::new(path)) {
+            if let Err(error) = revert_managed_instruction(Path::new(path), *action) {
                 failures.push(format!("instruction rollback failed: {error}"));
             }
         }
@@ -1229,6 +1230,24 @@ fn receipt_instruction_file_path(receipt_path: &Path) -> Option<String> {
         .map(|value| value.to_string())
 }
 
+/// Recover the `instruction_action` recorded at install time so uninstall can
+/// reverse the exact write it performed. Falls back to `Deferred` (remove the
+/// section but never delete the file) when the receipt is unreadable or records
+/// an unrecognized action, keeping uninstall conservative about file deletion.
+fn receipt_instruction_action(receipt_path: &Path) -> InstructionAction {
+    let Ok(contents) = fs::read_to_string(receipt_path) else {
+        return InstructionAction::Deferred;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return InstructionAction::Deferred;
+    };
+    value
+        .get("instruction_action")
+        .and_then(|value| value.as_str())
+        .and_then(InstructionAction::from_receipt_str)
+        .unwrap_or(InstructionAction::Deferred)
+}
+
 fn receipt_path(
     context: &InstallExecutionContext,
     target: AgentTarget,
@@ -1285,6 +1304,21 @@ impl InstructionAction {
             Self::Unchanged => "unchanged",
             Self::Removed => "removed",
             Self::NotPresent => "not_present",
+        }
+    }
+
+    /// Parse the value previously serialized by [`InstructionAction::as_str`] back
+    /// into the enum. Returns `None` for any unrecognized receipt string.
+    fn from_receipt_str(value: &str) -> Option<Self> {
+        match value {
+            "deferred" => Some(Self::Deferred),
+            "created" => Some(Self::Created),
+            "appended" => Some(Self::Appended),
+            "replaced" => Some(Self::Replaced),
+            "unchanged" => Some(Self::Unchanged),
+            "removed" => Some(Self::Removed),
+            "not_present" => Some(Self::NotPresent),
+            _ => None,
         }
     }
 }
@@ -1522,6 +1556,38 @@ pub fn remove_managed_instruction_section(
         ));
     }
     Ok(InstructionAction::Removed)
+}
+
+/// Reverse a managed instruction write recorded with `original_action`. The
+/// managed section is always stripped; the file itself is deleted only when
+/// RepoGrammar created it from scratch and removing the section leaves it empty,
+/// so a created-from-nothing instruction file is not left behind as an empty
+/// artifact after rollback or uninstall. Files that pre-existed the install
+/// (`Appended`/`Replaced`), or that the user added content to after creation,
+/// keep their remaining content and are never deleted.
+fn revert_managed_instruction(
+    path: &Path,
+    original_action: InstructionAction,
+) -> Result<(), RepoGrammarError> {
+    remove_managed_instruction_section(path)?;
+    if original_action == InstructionAction::Created && instruction_file_is_empty(path) {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(RepoGrammarError::InvalidInput(format!(
+                    "failed to remove RepoGrammar-created instruction file: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn instruction_file_is_empty(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(false)
 }
 
 fn instruction_file_for(context: &InstallExecutionContext, target: AgentTarget) -> Option<&str> {
@@ -2422,6 +2488,92 @@ mod tests {
         assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
         assert!(!after.contains(MANAGED_INSTRUCTION_END));
         assert!(after.contains("keep me"));
+    }
+
+    #[test]
+    fn revert_managed_instruction_deletes_repogrammar_created_file() {
+        let dir = TempDir::new("instruction-revert-created");
+        let path = dir.file("AGENTS.md");
+        assert_eq!(
+            write_managed_instruction_section(&path).expect("create"),
+            InstructionAction::Created
+        );
+        assert!(path.is_file());
+
+        revert_managed_instruction(&path, InstructionAction::Created).expect("revert created");
+
+        assert!(
+            !path.exists(),
+            "a RepoGrammar-created instruction file must not linger as an empty artifact"
+        );
+    }
+
+    #[test]
+    fn revert_managed_instruction_keeps_created_file_with_later_user_content() {
+        let dir = TempDir::new("instruction-revert-created-edited");
+        let path = dir.file("AGENTS.md");
+        write_managed_instruction_section(&path).expect("create");
+        let with_section = fs::read_to_string(&path).expect("created contents");
+        fs::write(&path, format!("{with_section}\n# Added by user later\n"))
+            .expect("user edits the created file");
+
+        // The receipt still records `Created`, but the file now carries user
+        // content, so reversal must keep the file and only strip the section.
+        revert_managed_instruction(&path, InstructionAction::Created).expect("revert created");
+
+        let after = fs::read_to_string(&path).expect("file preserved");
+        assert!(after.contains("# Added by user later"));
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(!after.contains(MANAGED_INSTRUCTION_END));
+    }
+
+    #[test]
+    fn revert_managed_instruction_preserves_preexisting_appended_file() {
+        let dir = TempDir::new("instruction-revert-appended");
+        let path = dir.file("AGENTS.md");
+        fs::write(&path, "# User guide\n\nkeep me\n").expect("seed pre-existing file");
+        assert_eq!(
+            write_managed_instruction_section(&path).expect("append"),
+            InstructionAction::Appended
+        );
+
+        revert_managed_instruction(&path, InstructionAction::Appended).expect("revert appended");
+
+        let after = fs::read_to_string(&path).expect("pre-existing file preserved");
+        assert!(after.contains("keep me"));
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(!after.contains(MANAGED_INSTRUCTION_END));
+    }
+
+    #[test]
+    fn uninstall_deletes_repogrammar_created_instruction_file() {
+        let workspace = TempInstallWorkspace::new("instruction-uninstall-created");
+        let instructions = TempDir::new("instruction-uninstall-created-target");
+        let instruction_path = instructions.file("AGENTS.md");
+        let mut context = workspace.context.clone();
+        context.instruction_files =
+            vec![(AgentTarget::Codex, instruction_path.display().to_string())];
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &context, &configurator, &self_test).expect("install");
+        assert!(
+            instruction_path.is_file(),
+            "install must create the resolved instruction file"
+        );
+        configurator.actions.borrow_mut().clear();
+
+        execute_uninstall(&request, &context, &configurator).expect("uninstall");
+
+        assert!(
+            !instruction_path.exists(),
+            "uninstall must delete an instruction file RepoGrammar created from scratch"
+        );
     }
 
     struct TempDir {

@@ -215,10 +215,10 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
-The installer must not overwrite unrelated user instructions. `uninstall` may
-remove only the managed section. If a file has a malformed or incomplete managed
-section, the installer must stop and direct the user to a repair workflow such
-as `repogrammar doctor --repair-instructions`.
+The installer must not overwrite unrelated user instructions. `uninstall`
+reverses only RepoGrammar's own managed write. If a file has a malformed or
+incomplete managed section, the installer must stop and direct the user to a
+repair workflow such as `repogrammar doctor --repair-instructions`.
 
 The managed instruction writer is implemented as a reversible, idempotent
 operation:
@@ -231,8 +231,12 @@ operation:
 - it refuses to modify a file with malformed, partial, or duplicated markers;
 - it writes atomically through a sibling temp file plus rename and re-reads the
   file to verify the managed section before reporting success;
-- `uninstall` removes only the managed section recorded in the receipt and
-  leaves unrelated user content in place.
+- `uninstall` and rollback reverse exactly the recorded `instruction_action`:
+  they remove the managed section and preserve unrelated user content; when
+  RepoGrammar created the file (`instruction_action: "created"`) and stripping
+  the section leaves it empty, they also delete the file so no empty artifact is
+  left behind, but a file that pre-existed the install or gained user content
+  after creation keeps its remaining content and is never deleted.
 
 Because real Codex/Claude global instruction-file locations are not yet verified,
 live instruction writing is deferred by default. The installer resolves a
