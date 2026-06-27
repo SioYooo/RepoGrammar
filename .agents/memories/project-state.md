@@ -55,7 +55,10 @@
   and NDJSON progress available through `--json --progress always`.
   Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
   extraction and typed UNKNOWNs; it does not run Cargo, rustc, build scripts,
-  procedural macros, or general Rust semantic analysis.
+  procedural macros, or general Rust semantic analysis. The v0.2 Rust fixture
+  suite now includes family gates, parser adapters, installer actions, product
+  tests, low-support abstention, macro/cfg blockers, trait-dispatch blockers,
+  and bounded module-resolution/Cargo target-dependency inventory.
   `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full

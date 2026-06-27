@@ -445,10 +445,12 @@ dependency injection, or lifecycle semantics.
 
 The current Rust adapter maps only RepoGrammar's own repository structure into
 internal self-dogfood roles. It records structural anchors and typed UNKNOWNs
-for Cargo/build variants, unresolved external modules, macro/proc-macro
-expansion, and trait-object dispatch. Those facts are bounded evidence for
-RepoGrammar self-dogfood only; they are not provider-backed Rust semantics and
-do not imply general Rust target-language support.
+for signature shape, visibility, arity, return kind, attributes, test shape,
+bounded Cargo dependency inventory, safe repo-relative module declarations,
+Cargo/build variants, unresolved or conflicting external modules,
+macro/proc-macro expansion, and trait-object dispatch. Those facts are bounded
+evidence for RepoGrammar self-dogfood only; they are not provider-backed Rust
+semantics and do not imply general Rust target-language support.
 
 ## Classification
 

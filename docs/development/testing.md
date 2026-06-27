@@ -117,7 +117,11 @@ allowed.
   `MacroOrPreprocessor`, `BuildVariantAmbiguity`, `FrameworkMagic`, and
   `UnresolvedImport` UNKNOWN boundaries, support>=3 for internal Rust families,
   low-support abstention, default source-free CLI/MCP output, explicit
-  source-span opt-in, and fixtures under `src/fixtures/rust/release/v0_2/`.
+  source-span opt-in, safe and unsafe module resolution, target-specific Cargo
+  dependency inventory, and fixtures under `src/fixtures/rust/release/v0_2/`
+  including `internal_family_gates`, `parser_adapters`, `installer_actions`,
+  `product_tests`, `low_support_family`, `macro_cfg_unknowns`,
+  `trait_dispatch_unknowns`, and `module_resolution`.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,

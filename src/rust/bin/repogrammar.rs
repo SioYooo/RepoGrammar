@@ -905,7 +905,8 @@ fn run_native_agent_command(
 mod tests {
     use super::*;
     use repogrammar::application::query::{
-        assess_semantic_fact_readiness, list_semantic_facts, SemanticFactReadinessRequest,
+        assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
+        SemanticFactReadinessRequest,
     };
     use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision, UnknownReasonCode};
     use repogrammar::core::policy::freshness::ClaimInputReadiness;
@@ -2685,6 +2686,40 @@ mod tests {
             .collect()
     }
 
+    fn rust_semantic_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> IndexedSemanticFactsReport {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store).expect("list semantic facts")
+    }
+
+    fn rust_family_json(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> Value {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        parse_machine_output("families", &families, workspace)
+    }
+
+    fn assert_rust_family_role(value: &Value, role_token: &str, min_support: u64) {
+        assert!(
+            value["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(role_token))
+                    && family["support"].as_u64().unwrap_or_default() >= min_support),
+            "missing Rust family role {role_token} with support >= {min_support}: {value}"
+        );
+    }
+
     #[test]
     fn rust_structural_self_dogfood_forms_internal_family_without_source_snippets() {
         let (workspace, runtime) =
@@ -2775,6 +2810,82 @@ mod tests {
             .any(|span| span["text"]
                 .as_str()
                 .is_some_and(|text| text.contains("pub fn support_"))));
+
+        fs::write(
+            workspace.path().join("src/rust/application/family.rs"),
+            "pub fn support_route_family(value: usize) -> Result<usize, String> { Ok(value) }\n",
+        )
+        .expect("mutate Rust family fixture");
+        let stale = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_python_stale_unknown("family", &stale_json, family_id);
+        assert!(stale_json.get("source_spans").is_none());
+    }
+
+    #[test]
+    fn rust_release_fixtures_form_required_internal_role_families() {
+        for (fixture, role_token, support) in [
+            (
+                "parser_adapters",
+                "framework_repogrammar_rust_parser_adapter",
+                2,
+            ),
+            (
+                "installer_actions",
+                "framework_repogrammar_rust_installer_action",
+                3,
+            ),
+            (
+                "product_tests",
+                "framework_repogrammar_rust_product_test",
+                3,
+            ),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-required-{fixture}"),
+            );
+            let derived = rust_derived_support_facts(&runtime, &workspace);
+            assert!(
+                derived
+                    .iter()
+                    .filter(|(_, target, _)| target.starts_with("repogrammar.rust."))
+                    .count()
+                    >= support as usize,
+                "{fixture} should derive Rust support facts: {derived:?}"
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert_eq!(families_json["status"], "ok");
+            assert_rust_family_role(&families_json, role_token, support);
+        }
+    }
+
+    #[test]
+    fn rust_low_support_stays_unknown_without_family_rows() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("low_support_family", "rust-release-low-support");
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        let family_gate_support_count = derived
+            .iter()
+            .filter(|(_, target, _)| target == "repogrammar.rust.family_gate")
+            .count();
+        assert!(
+            family_gate_support_count >= 2,
+            "low-support fixture should derive family-gate support facts before clustering: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
     }
 
     #[test]
@@ -2820,6 +2931,88 @@ mod tests {
             .expect("families")
             .is_empty());
         assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn rust_macro_cfg_and_trait_dispatch_unknowns_block_claims() {
+        for (fixture, expected_reason) in [
+            ("macro_cfg_unknowns", "MacroOrPreprocessor"),
+            ("trait_dispatch_unknowns", "FrameworkMagic"),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-unknown-{fixture}"),
+            );
+            let facts = rust_semantic_facts(&runtime, &workspace);
+            assert!(
+                facts.facts.iter().any(|fact| {
+                    fact.kind == "UNKNOWN" && fact.target.as_deref() == Some(expected_reason)
+                }),
+                "{fixture} should emit {expected_reason}: {:?}",
+                facts.facts
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert!(families_json["families"]
+                .as_array()
+                .expect("families")
+                .is_empty());
+            assert_no_claim_payload("families", &families_json);
+        }
+    }
+
+    #[test]
+    fn rust_module_resolution_records_bounded_context_and_unknowns() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("module_resolution", "rust-release-module-resolution");
+        let facts = rust_semantic_facts(&runtime, &workspace);
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.workspace:members")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.dependency:libc")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("BuildVariantAmbiguity")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "SYMBOL"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact
+                    .target
+                    .as_deref()
+                    .is_some_and(|target| target == "module:src/rust/adapters/parsing/resolved.rs")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "SYMBOL"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref().is_some_and(|target| {
+                    target == "module:src/rust/adapters/parsing/custom_alias.rs"
+                })
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_module_resolution")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_module_resolution")
+        }));
     }
 
     #[test]

@@ -204,7 +204,12 @@ impl<'a> RustTreeScanner<'a> {
         } else {
             CodeUnitKind::RustInlineModule
         };
-        let unit = self.add_unit(kind, &name, node.start_byte(), node.end_byte())?;
+        let start_byte = if is_external {
+            leading_attribute_start_byte(node).unwrap_or(node.start_byte())
+        } else {
+            node.start_byte()
+        };
+        let unit = self.add_unit(kind, &name, start_byte, node.end_byte())?;
         if is_external {
             self.semantic_facts.extend(rust_module_resolution_facts(
                 &self.document,
@@ -317,9 +322,14 @@ impl<'a> RustTreeScanner<'a> {
                     "provider_resolved=false".to_string(),
                     format!("rust_anchor_kind={}", role.anchor_kind),
                     format!("rust_signature_shape={}", rust_signature_shape(slice)),
+                    format!("rust_visibility_shape={}", rust_visibility_shape(slice)),
+                    format!("rust_arity_shape={}", rust_arity_shape(slice)),
+                    format!("rust_return_shape={}", rust_return_shape(slice)),
+                    format!("rust_attribute_shape={}", rust_attribute_shape(slice)),
                     format!("rust_error_shape={}", rust_error_shape(slice)),
                     format!("rust_call_shape={}", rust_call_shape(slice)),
                     format!("rust_control_shape={}", rust_control_shape(slice)),
+                    format!("rust_test_shape={}", rust_test_shape(slice)),
                     format!(
                         "rust_path_context={}",
                         rust_path_context(&unit.provenance.path)
@@ -526,7 +536,7 @@ fn rust_cargo_toml_facts(
                     )?);
                 }
             }
-            "dependencies" | "dev-dependencies" | "build-dependencies" => {
+            _ if is_cargo_dependency_section(section) => {
                 facts.push(rust_project_config_fact(
                     document,
                     unit,
@@ -558,6 +568,15 @@ fn rust_cargo_toml_facts(
     Ok(facts)
 }
 
+fn is_cargo_dependency_section(section: &str) -> bool {
+    matches!(
+        section,
+        "dependencies" | "dev-dependencies" | "build-dependencies"
+    ) || section.ends_with(".dependencies")
+        || section.ends_with(".dev-dependencies")
+        || section.ends_with(".build-dependencies")
+}
+
 fn rust_module_resolution_facts(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
@@ -565,8 +584,11 @@ fn rust_module_resolution_facts(
     module_name: &str,
     node: Node<'_>,
 ) -> Result<Vec<SemanticFact>, ParseError> {
-    let Some(base) = module_base_path(document.path, module_name, node_text(document.text, node))
-    else {
+    let mod_text = document
+        .text
+        .get(unit.range.start_byte..node.end_byte())
+        .unwrap_or_else(|| node_text(document.text, node));
+    let Some(base) = module_base_path(document.path, module_name, mod_text) else {
         return Ok(vec![rust_unknown_fact(
             document,
             unit,
@@ -868,16 +890,21 @@ fn leading_attribute_start_byte(node: Node<'_>) -> Option<usize> {
 
 fn rust_signature_shape(slice: &str) -> String {
     let mut parts = Vec::new();
-    if slice.contains("async fn") {
+    let header = slice.split('{').next().unwrap_or(slice);
+    let header_tokens = header
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if header_tokens.contains(&"async") && header_tokens.contains(&"fn") {
         parts.push("async");
     }
-    if slice.contains("unsafe fn") {
+    if header_tokens.contains(&"unsafe") && header_tokens.contains(&"fn") {
         parts.push("unsafe");
     }
-    if slice.contains("const fn") {
+    if header_tokens.contains(&"const") && header_tokens.contains(&"fn") {
         parts.push("const");
     }
-    if slice.contains("<") && slice.split('{').next().unwrap_or(slice).contains('>') {
+    if slice.contains("<") && header.contains('>') {
         parts.push("generic");
     }
     if slice.contains("&mut self") {
@@ -889,13 +916,113 @@ fn rust_signature_shape(slice: &str) -> String {
     } else {
         parts.push("free_or_associated");
     }
-    if slice.split('{').next().unwrap_or(slice).contains("->") {
+    if header.contains("->") {
         parts.push("returns_value");
     } else {
         parts.push("returns_unit");
     }
     if parts.is_empty() {
         "plain".to_string()
+    } else {
+        parts.join("_")
+    }
+}
+
+fn rust_visibility_shape(slice: &str) -> &'static str {
+    let header = slice.split('{').next().unwrap_or(slice).trim_start();
+    if header.starts_with("pub(") || header.starts_with("pub (") {
+        "restricted_public"
+    } else if header.starts_with("pub ") || header.contains("\npub ") {
+        "public"
+    } else {
+        "private"
+    }
+}
+
+fn rust_arity_shape(slice: &str) -> String {
+    let header = slice.split('{').next().unwrap_or(slice);
+    let Some(start) = header.find('(') else {
+        return "arity_unknown".to_string();
+    };
+    let Some(end) = header[start + 1..].find(')') else {
+        return "arity_unknown".to_string();
+    };
+    let parameters = &header[start + 1..start + 1 + end];
+    let arity = parameters
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .count();
+    format!("arity_{arity}")
+}
+
+fn rust_return_shape(slice: &str) -> &'static str {
+    let header = slice.split('{').next().unwrap_or(slice);
+    let Some((_, return_type)) = header.split_once("->") else {
+        return "unit";
+    };
+    let return_type = return_type.trim();
+    if return_type.starts_with("Result") {
+        "result"
+    } else if return_type.starts_with("Option") {
+        "option"
+    } else if matches!(return_type, "bool") {
+        "bool"
+    } else if matches!(
+        return_type,
+        "usize"
+            | "u64"
+            | "u32"
+            | "u16"
+            | "u8"
+            | "isize"
+            | "i64"
+            | "i32"
+            | "i16"
+            | "i8"
+            | "f64"
+            | "f32"
+    ) {
+        "numeric"
+    } else if return_type.contains("String") || return_type.contains("&str") {
+        "string"
+    } else if return_type.contains("Vec<")
+        || return_type.contains("BTree")
+        || return_type.contains("Hash")
+        || return_type.contains("[]")
+    {
+        "collection"
+    } else if return_type.is_empty() {
+        "unknown"
+    } else {
+        "custom"
+    }
+}
+
+fn rust_attribute_shape(slice: &str) -> String {
+    let mut parts = Vec::new();
+    if slice.contains("#[test]") {
+        parts.push("test");
+    }
+    if slice.contains("#[cfg(test)]") {
+        parts.push("cfg_test");
+    } else if slice.contains("#[cfg(") || slice.contains("#[cfg_attr(") {
+        parts.push("cfg");
+    }
+    if slice.contains("#[derive(") {
+        parts.push("derive");
+    }
+    if slice.contains("#[serde(") {
+        parts.push("serde");
+    }
+    if slice.contains("#[allow(") {
+        parts.push("allow");
+    }
+    if slice.contains("#[proc_macro") {
+        parts.push("proc_macro");
+    }
+    if parts.is_empty() {
+        "none".to_string()
     } else {
         parts.join("_")
     }
@@ -968,6 +1095,19 @@ fn rust_control_shape(slice: &str) -> String {
     } else {
         parts.join("_")
     }
+}
+
+fn rust_test_shape(slice: &str) -> String {
+    if !slice.contains("#[test]") {
+        return "not_test".to_string();
+    }
+    let mut parts = vec!["test"];
+    for marker in ["assert_eq!", "assert_ne!", "assert_matches!", "assert!"] {
+        if slice.contains(marker) {
+            parts.push(marker.trim_end_matches('!'));
+        }
+    }
+    parts.join("_")
 }
 
 fn rust_path_context(path: &str) -> String {
@@ -1132,6 +1272,89 @@ macro_rules! make_item {
             .collect::<BTreeSet<_>>();
         assert!(reasons.contains("BuildVariantAmbiguity"));
         assert!(reasons.contains("MacroOrPreprocessor"));
+    }
+
+    #[test]
+    fn extracts_nested_traits_impls_attributes_and_signature_shapes() {
+        let text = r#"
+#[derive(Debug)]
+pub struct ParserState<T> {
+    value: T,
+}
+
+pub trait ParserAdapter {
+    fn parse_trait(&self, input: &str) -> Result<(), String>;
+}
+
+impl<T> ParserState<T> {
+    pub async unsafe fn parse_generic<'a>(&mut self, input: &'a str) -> Result<Option<&'a str>, String> {
+        parse_input(input)?;
+        Ok(Some(input))
+    }
+}
+
+mod nested {
+    pub fn parse_nested() {}
+}
+
+parse_macro!(ParserState);
+"#;
+        let report = RustSyntaxParser
+            .parse(document(
+                "src/rust/adapters/parsing/rust_syntax.rs",
+                text,
+                Language::Rust,
+            ))
+            .expect("parse Rust");
+        let kinds = report
+            .units
+            .iter()
+            .map(|unit| unit.kind.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(kinds.contains("rust_struct"));
+        assert!(kinds.contains("rust_trait"));
+        assert!(kinds.contains("rust_impl_block"));
+        assert!(kinds.contains("rust_method"));
+        assert!(kinds.contains("rust_trait_method"));
+        assert!(kinds.contains("rust_inline_module"));
+        assert!(kinds.contains("rust_macro_invocation"));
+
+        let parser_facts = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "repogrammar.rust.parser_adapter")
+            })
+            .collect::<Vec<_>>();
+        assert!(parser_facts.iter().any(|fact| fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "rust_attribute_shape=derive")));
+        assert!(parser_facts.iter().any(|fact| {
+            fact.assumptions.iter().any(|assumption| {
+                assumption == "rust_signature_shape=async_unsafe_generic_receiver_mut_ref_returns_value"
+            }) && fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == "rust_visibility_shape=public")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_arity_shape=arity_2")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_return_shape=result")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "MacroOrPreprocessor")
+        }));
     }
 
     #[test]

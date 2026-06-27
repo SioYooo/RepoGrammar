@@ -934,9 +934,14 @@ fn add_rust_family_features(
         for (prefix, feature_prefix) in [
             ("rust_anchor_kind=", "anchor_kind:"),
             ("rust_signature_shape=", "signature_shape:"),
+            ("rust_visibility_shape=", "visibility_shape:"),
+            ("rust_arity_shape=", "arity_shape:"),
+            ("rust_return_shape=", "return_shape:"),
+            ("rust_attribute_shape=", "attribute_shape:"),
             ("rust_error_shape=", "error_shape:"),
             ("rust_call_shape=", "call_shape:"),
             ("rust_control_shape=", "control_shape:"),
+            ("rust_test_shape=", "test_shape:"),
             ("rust_path_context=", "path_context:"),
             ("rust_module_resolution=", "import_context:"),
         ] {
@@ -1542,7 +1547,16 @@ fn rust_evidence_pair_is_compatible(
         left,
         right,
         features_by_unit,
-        &["anchor_kind:", "signature_shape:", "error_shape:"],
+        &[
+            "anchor_kind:",
+            "signature_shape:",
+            "visibility_shape:",
+            "arity_shape:",
+            "return_shape:",
+            "attribute_shape:",
+            "error_shape:",
+            "test_shape:",
+        ],
     )
 }
 
@@ -1685,9 +1699,14 @@ fn rust_cluster_signature(
                 "support_family:",
                 "anchor_kind:",
                 "signature_shape:",
+                "visibility_shape:",
+                "arity_shape:",
+                "return_shape:",
+                "attribute_shape:",
                 "error_shape:",
                 "call_shape:",
                 "control_shape:",
+                "test_shape:",
                 "path_context:",
             ]
             .into_iter()
