@@ -1,7 +1,8 @@
 use super::scope_graph::ScopeGraphLite;
 use super::{
-    async_shape, handler_shape, normalize_route_path, object_literal_string_field,
-    route_call_parts, route_path_shape, Anchor, AnchorOutcome, UnknownAnchor,
+    async_shape, handler_shape, normalize_route_path, object_literal_has_field,
+    object_literal_string_field, route_call_parts, route_path_shape, Anchor, AnchorOutcome,
+    UnknownAnchor,
 };
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
@@ -95,6 +96,14 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
             note: "Fastify full route path/url is not a literal string",
         });
     };
+    if !object_literal_has_field(slice, "handler") {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "fastify_route_shape",
+            kind: "fastify_missing_handler",
+            note: "Fastify full route handler is not an exact object-literal field",
+        });
+    }
     let mut assumptions = vec![
         "tsjs_anchor_kind=fastify_route".to_string(),
         format!("route_method={method}"),

@@ -113,8 +113,8 @@ Some unknowns block only specific claims:
   dynamic `import(...)` is `DynamicImport`; non-literal or conditional
   `require`, dynamic route/test calls, Next server-client/middleware/server
   action/re-export magic, Fastify dynamic route options or full routes without
-  literal `url`/`path`, Prisma callback, raw, bulk, or dynamic operations, and
-  Drizzle raw/dynamic builders are
+  literal `url`/`path` or handler fields, Prisma callback, raw, bulk, or
+  dynamic operations, and Drizzle raw/dynamic builders are
   `FrameworkMagic` or `BuildVariantAmbiguity`; exact local Next dynamic
   segments, route groups, and parallel routes are stored as context assumptions
   on accepted anchors rather than UNKNOWNs by themselves; unresolved relative

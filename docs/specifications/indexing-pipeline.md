@@ -76,14 +76,15 @@ parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
 bindings and file conventions match the adapter registry: Express app/router
 calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
 context, Fastify factory receivers plus shorthand routes or full `app.route`
-declarations with literal method and literal `url`/`path`, local
+declarations with literal method, literal `url`/`path`, and an exact `handler`
+field, local
 `new PrismaClient()` clients, and Drizzle table/db/query bindings. Exact local
 Next dynamic segments, route
 groups, and parallel routes are retained as context assumptions on page/layout
 and route-handler anchors; middleware, server actions, re-exports, and
 server/client semantics remain unsupported. Dynamic receivers, custom wrappers,
 dynamic methods, conditional imports, Fastify plugin prefixes, Fastify full
-routes without literal `url`/`path`, Prisma
+routes without literal `url`/`path` or handler fields, Prisma
 bulk/raw/injected clients, and Drizzle raw/dynamic builders emit typed
 `UNKNOWN` for the affected claim instead of support. The application layer
 promotes accepted anchors to `DATAFLOW_DERIVED` support facts with engine

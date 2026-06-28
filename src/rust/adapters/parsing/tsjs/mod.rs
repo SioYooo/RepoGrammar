@@ -152,14 +152,34 @@ fn anchor_fact(
 
 pub(super) fn object_literal_string_field(slice: &str, field: &str) -> Option<String> {
     for (field_index, _) in slice.match_indices(field) {
-        if !field_has_identifier_boundaries(slice, field_index, field.len()) {
-            continue;
+        if let Some(after_colon) = object_literal_field_after_colon(slice, field, field_index) {
+            if let Some(value) = first_quoted(after_colon) {
+                return Some(value);
+            }
         }
-        let after_field = &slice[field_index + field.len()..];
-        let after_colon = after_field.trim_start().strip_prefix(':')?.trim_start();
-        return first_quoted(after_colon);
     }
     None
+}
+
+pub(super) fn object_literal_has_field(slice: &str, field: &str) -> bool {
+    slice.match_indices(field).any(|(field_index, _)| {
+        object_literal_field_after_colon(slice, field, field_index).is_some()
+    })
+}
+
+fn object_literal_field_after_colon<'a>(
+    slice: &'a str,
+    field: &str,
+    field_index: usize,
+) -> Option<&'a str> {
+    if !field_has_identifier_boundaries(slice, field_index, field.len()) {
+        return None;
+    }
+    let after_field = &slice[field_index + field.len()..];
+    after_field
+        .trim_start()
+        .strip_prefix(':')
+        .map(str::trim_start)
 }
 
 fn field_has_identifier_boundaries(text: &str, offset: usize, len: usize) -> bool {
@@ -728,6 +748,19 @@ app.route({ method: "GET", handler: async (request, reply) => reply.send({}) });
         assert_eq!(
             unknown_kinds("src/fastify_missing_path.ts", text),
             vec!["fastify_missing_literal_path".to_string()]
+        );
+    }
+
+    #[test]
+    fn fastify_full_route_requires_handler_field() {
+        let text = r#"import fastify from "fastify";
+const app = fastify();
+app.route({ method: "GET", url: "/users" });
+"#;
+        assert!(targets("src/fastify_missing_handler.ts", text).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify_missing_handler.ts", text),
+            vec!["fastify_missing_handler".to_string()]
         );
     }
 
