@@ -2628,6 +2628,26 @@ mod tests {
             .collect()
     }
 
+    fn assert_tsjs_unknown(
+        facts: &IndexedSemanticFactsReport,
+        path: &str,
+        reason: &str,
+        unknown_kind: &str,
+    ) {
+        assert!(
+            facts.facts.iter().any(|fact| {
+                fact.kind == "UNKNOWN"
+                    && fact.path == path
+                    && fact.target.as_deref() == Some(reason)
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == &format!("tsjs_unknown_kind={unknown_kind}")
+                    })
+            }),
+            "missing TS/JS UNKNOWN {reason}/{unknown_kind} for {path}: {:?}",
+            facts.facts
+        );
+    }
+
     fn index_rust_release_v0_2_fixture(
         fixture: &str,
         prefix: &str,
@@ -2933,6 +2953,51 @@ mod tests {
             &runtime,
         );
         let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn rust_cargo_build_script_unknown_blocks_repository_family_claim() {
+        let (workspace, runtime) = index_rust_release_v0_2_fixture(
+            "cargo_build_blocked_family",
+            "rust-release-cargo-build-blocked",
+        );
+
+        assert!(
+            !workspace.path().join("build-script-ran.txt").exists(),
+            "indexing must not execute Cargo build scripts"
+        );
+
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        let family_gate_support = derived
+            .iter()
+            .filter(|(_, target, _)| target == "repogrammar.rust.family_gate")
+            .count();
+        assert!(
+            family_gate_support >= 3,
+            "build-script fixture should still derive structural anchors before repository blocking: {derived:?}"
+        );
+
+        let facts = rust_semantic_facts(&runtime, &workspace);
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("BuildVariantAmbiguity")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_build_variant")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_unknown_kind=build_script")
+        }));
+
+        let families_json = rust_family_json(&runtime, &workspace);
         assert!(families_json["families"]
             .as_array()
             .expect("families")
@@ -3650,7 +3715,7 @@ mod tests {
         let derived = tsjs_derived_support_facts(&runtime, &workspace);
         assert_eq!(
             derived.len(),
-            15,
+            16,
             "Next fixture should derive all exact anchors: {derived:?}"
         );
         assert!(derived
@@ -3662,6 +3727,9 @@ mod tests {
         assert!(derived
             .iter()
             .any(|(_, target, _)| target == "next.route.GET"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.route.POST"));
         assert!(derived
             .iter()
             .any(|(_, target, _)| target == "next.pages.api_route"));
@@ -3694,6 +3762,9 @@ mod tests {
         assert!(derived
             .iter()
             .all(|(_, target, _)| target.starts_with("fastify.route.")));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "fastify.route.route"));
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
             &runtime,
@@ -3750,7 +3821,7 @@ mod tests {
         let derived = tsjs_derived_support_facts(&runtime, &workspace);
         assert_eq!(
             derived.len(),
-            7,
+            9,
             "Drizzle fixture should derive schema and queries"
         );
         assert_eq!(
@@ -3767,6 +3838,12 @@ mod tests {
                 .count(),
             3
         );
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "drizzle.query.query_findMany"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "drizzle.query.query_findFirst"));
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
             &runtime,
@@ -3792,6 +3869,80 @@ mod tests {
                 "DATAFLOW_DERIVED".to_string()
             )],
             "negative fixture should only derive the exact schema table, not route/query support"
+        );
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert_tsjs_unknown(
+            &facts,
+            "src/express_shadow.ts",
+            "ConflictingFacts",
+            "unsafe_receiver_binding",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/fastify_dynamic.ts",
+            "FrameworkMagic",
+            "fastify_dynamic_route_call",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/fastify_shadow.ts",
+            "ConflictingFacts",
+            "fastify_receiver_reassigned",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/prisma_dynamic.ts",
+            "UnresolvedImport",
+            "prisma_injected_client",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/prisma_shadow.ts",
+            "UnresolvedImport",
+            "prisma_injected_client",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/prisma_raw.ts",
+            "FrameworkMagic",
+            "prisma_raw_query",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/prisma_bulk.ts",
+            "FrameworkMagic",
+            "prisma_dynamic_model_or_operation",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/drizzle_raw.ts",
+            "FrameworkMagic",
+            "drizzle_raw_sql",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/drizzle_shadow.ts",
+            "UnresolvedImport",
+            "drizzle_db_binding_unresolved",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/drizzle_raw_execute.ts",
+            "FrameworkMagic",
+            "drizzle_raw_sql",
+        );
+        assert_tsjs_unknown(
+            &facts,
+            "src/jest_shadow.test.ts",
+            "ConflictingFacts",
+            "unsafe_test_runner_binding",
         );
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),

@@ -19,6 +19,14 @@ export async function listOrders() {
   return db.select().from(orders).where(eq(orders.id, 1));
 }
 
+export async function findUsers() {
+  return db.query.users.findMany({ where: eq(users.id, 1) });
+}
+
+export async function findAccount() {
+  return db.query.accounts.findFirst({ where: eq(accounts.id, 1) });
+}
+
 export async function createUser(values) {
   return db.insert(users).values(values).returning();
 }

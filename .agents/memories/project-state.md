@@ -59,7 +59,8 @@
   procedural macros, or general Rust semantic analysis. The v0.2 Rust fixture
   suite now includes family gates, parser adapters, installer actions, product
   tests, low-support abstention, macro/cfg blockers, trait-dispatch blockers,
-  and bounded module-resolution/Cargo target-dependency inventory.
+  Cargo build-script non-execution/blocking, and bounded module-resolution/Cargo
+  target-dependency inventory.
   `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full
@@ -392,11 +393,14 @@ unresolved or conflicting aliases, and star re-exports stay typed `UNKNOWN`.
 Ambient Jest/Vitest globals require package/config test-runner context rather
 than test-file path alone. Reassigned/shadowed/dynamic/lookalike Express or
 Fastify receivers, dynamic route methods, custom Jest/Vitest wrappers,
-ambiguous non-test-file globals, Next route magic, Prisma raw/injected/dynamic
-clients, Drizzle raw/dynamic builders, and all React components/hooks stay
-`UNKNOWN` or non-supporting context. React-shaped TypeScript semantic-worker
-support facts are also blocked from public-preview family claims; React remains
-unsupported until a later ADR changes the support matrix. Jest/Vitest script
+ambiguous non-test-file globals, Next middleware/server actions/re-exports,
+Prisma bulk/raw/injected/dynamic clients, Drizzle raw/dynamic builders, and all
+React components/hooks stay `UNKNOWN` or non-supporting context. Exact local
+Next dynamic segments, route groups, and parallel routes are retained as
+context assumptions on page/layout/route anchors. React-shaped TypeScript
+semantic-worker support facts are also blocked from public-preview family
+claims; React remains unsupported until a later ADR changes the support matrix.
+Jest/Vitest script
 configs (`jest.config.ts`, `vitest.config.js`, and similar) are metadata/typed
 `UNKNOWN` only; package dependencies and JSON config files provide the current
 ambient runner context.

@@ -76,19 +76,24 @@ parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
 bindings and file conventions match the adapter registry: Express app/router
 calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
 context, Fastify factory receivers, local `new PrismaClient()` clients, and
-Drizzle table/db/query bindings. Dynamic receivers, custom wrappers, dynamic
-methods, conditional imports, Next route magic, Fastify plugin prefixes, Prisma
-raw/injected clients, and Drizzle raw/dynamic builders emit typed `UNKNOWN` for
-the affected claim instead of support. The application layer promotes accepted
-anchors to `DATAFLOW_DERIVED` support facts with engine
+Drizzle table/db/query bindings. Exact local Next dynamic segments, route
+groups, and parallel routes are retained as context assumptions on page/layout
+and route-handler anchors; middleware, server actions, re-exports, and
+server/client semantics remain unsupported. Dynamic receivers, custom wrappers,
+dynamic methods, conditional imports, Fastify plugin prefixes, Prisma
+bulk/raw/injected clients, and Drizzle raw/dynamic builders emit typed
+`UNKNOWN` for the affected claim instead of support. The application layer
+promotes accepted anchors to `DATAFLOW_DERIVED` support facts with engine
 `repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
 `provider_resolved=false`, `derived_from=tsjs_structural_anchors`, a
 framework-specific `derived_from=tsjs_<framework>_structural_anchors`,
 `framework_role=<role>`, and `tsjs_anchor_kind=<kind>` assumptions. The
 family-support gate accepts only exact recognized targets (for example
 `express.route.get`, `jest_vitest.describe`, `next.route.GET`,
-`fastify.route.get`, `prisma.query.findMany`, `drizzle.query.select`) under a
-safe origin; it must not infer support from fact text that merely contains a
+`fastify.route.route`, `prisma.query.findMany`, `drizzle.query.select`,
+`drizzle.query.query_findMany`, or `drizzle.query.query_findFirst`) under the
+`repogrammar-tsjs-derived` safe origin; it must not infer support from package
+metadata, TypeScript semantic-worker facts, or fact text that merely contains a
 framework name. TS/JS families require at least three compatible exact-anchor
 support facts and use complete-link compatibility over route, runner,
 component, response, query, and schema profiles. Bounded project inventory for
@@ -111,9 +116,11 @@ family support. Ambient Jest/Vitest globals require bounded project test-runner
 context from package or config inventory; otherwise they emit
 `MissingProjectConfig` instead of support. React components and hooks remain
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
-emits React-shaped semantic support. This is a token-saving foundation, not full
-TS/JS semantic analysis, and TS/JS remains a transitional substrate rather than
-the official v0.1 target.
+emits React-shaped semantic support. TypeScript worker facts are stored as
+bounded semantic context only unless a later ADR defines a role-specific support
+promotion path. This is a token-saving foundation, not full TS/JS semantic
+analysis, and TS/JS remains a transitional substrate rather than the official
+v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -275,8 +282,9 @@ membership by themselves; only the application-layer `repogrammar-tsjs-derived`
 promotion can turn them into `DATAFLOW_DERIVED` support. It also emits typed
 TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express or
 Fastify receivers, unsafe or unresolved Jest/Vitest runner bindings, unsupported
-Next route magic, Prisma dynamic/raw/injected clients, Drizzle dynamic/raw or
-unresolved table/db bindings, and bounded config parse/execution ambiguity. The
+Next middleware/server action/re-export semantics, Prisma bulk, dynamic, raw,
+or injected clients, Drizzle dynamic/raw or unresolved table/db bindings, and
+bounded config parse/execution ambiguity. The
 bounded import resolver additionally emits
 structural repo-local import facts or typed `UNKNOWN` records for dynamic
 imports, conditional or non-literal `require`, unresolved/conflicting
@@ -455,7 +463,10 @@ framework adapters; the application layer may derive `DATAFLOW_DERIVED` support
 from those exact anchors. It still does not perform TypeScript compiler-backed
 binding/export propagation, React runtime behavior, Next server/client or
 middleware semantics, Fastify plugin-prefix resolution, Prisma/Drizzle runtime
-extensions, dependency injection, or lifecycle semantics.
+extensions, dependency injection, or lifecycle semantics. Exact local Next
+dynamic segments, route groups, and parallel routes remain context assumptions
+on accepted file-convention anchors rather than blocking those anchors by
+themselves.
 
 The current Rust adapter maps only RepoGrammar's own repository structure into
 internal self-dogfood roles. It records structural anchors and typed UNKNOWNs
@@ -464,7 +475,10 @@ bounded Cargo dependency inventory, safe repo-relative module declarations,
 Cargo/build variants, unresolved or conflicting external modules,
 macro/proc-macro expansion, and trait-object dispatch. Those facts are bounded
 evidence for RepoGrammar self-dogfood only; they are not provider-backed Rust
-semantics and do not imply general Rust target-language support.
+semantics and do not imply general Rust target-language support. Cargo build
+scripts and target-specific manifest sections are repository build-variant
+UNKNOWNs that block affected Rust self-dogfood family claims until resolved;
+the indexer records them without executing Cargo or the build script.
 
 ## Classification
 

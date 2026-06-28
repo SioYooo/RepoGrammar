@@ -116,8 +116,11 @@ from public family claims even if an explicit TypeScript semantic-worker fact
 names `react`. Production-quality TS/JS semantic analysis, React family support,
 TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
 Fastify plugin-prefix resolution, Prisma/Drizzle runtime extensions, Next
-server/client semantics, and dynamic-wrapper support remain deferred unless a
-later ADR changes the sequence again.
+server/client semantics, middleware, server actions, re-export semantics, and
+dynamic-wrapper support remain deferred unless a later ADR changes the sequence
+again. Exact local Next dynamic segments, route groups, and parallel routes may
+be recorded as context assumptions on supported page/layout/route anchors; they
+are not independent support evidence.
 
 Rust support in the v0.2 preview is limited to RepoGrammar self-dogfooding. It
 uses Tree-sitter Rust for structural code-unit extraction and RepoGrammar-owned
@@ -127,7 +130,9 @@ handlers, installer actions, storage validation, source-span renderers, and
 product tests when support is sufficient and no Rust-specific `UNKNOWN` blocks
 the claim. It must not be described as general Rust semantic analysis: the
 indexer does not run Cargo, rustc, build scripts, procedural macros, or
-whole-program trait/call resolution.
+whole-program trait/call resolution. Cargo build scripts and target-specific
+manifest sections are typed build-variant `UNKNOWN`s that block affected Rust
+self-dogfood families until resolved.
 
 ## Public-preview support matrix
 
@@ -139,10 +144,10 @@ whole-program trait/call resolution.
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |
 | JS/TS Express | Conservative v0.2 preview | Exact import/require plus direct literal route calls; support>=3 and complete-link compatibility required. |
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
-| JS/TS Next.js | Structural v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; route groups, dynamic segments, middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Next.js | Structural v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; dynamic segments, route groups, and parallel routes are context assumptions on exact anchors, while middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
 | JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
-| JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings plus whitelisted model operations and array `$transaction`; injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
-| JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, and whitelisted query builders; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
+| JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
