@@ -42,21 +42,64 @@ emits a confident family claim. Low-support, dynamic, stale, or unresolved cases
 remain `UNKNOWN`.
 
 TypeScript and JavaScript are not official v0.1 support targets. A conservative
-v0.2 token-saving foundation adds exact-anchor family support for Express route
-handlers and Jest/Vitest suites/tests only: a family is claimed solely when an
-exact import/require binding and literal call shape resolve, while lookalikes,
-reassigned or shadowed bindings, dynamic receivers, custom test wrappers, and
-React components/hooks stay `UNKNOWN`. This is not full TypeScript/JavaScript
-semantic analysis.
+v0.2 token-saving foundation adds exact-anchor family support for Express
+routes, Jest/Vitest suites/tests, and structural-preview Next.js, Fastify,
+Prisma, and Drizzle adapters: a family is claimed solely when an exact local
+anchor is promoted to application-layer `DATAFLOW_DERIVED` support. Lookalikes,
+package-only evidence, reassigned or shadowed bindings, dynamic receivers or
+methods, custom test wrappers, React components/hooks, Next route magic,
+Fastify plugin prefixes, Prisma injected/raw clients, and Drizzle raw/dynamic
+builders stay `UNKNOWN`. TS/JS family claims require at least three compatible
+exact-anchor support facts and use conservative complete-link clustering so
+incompatible handler/test/component/query shapes do not single-link into one
+family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
+Jest/Vitest config inventory is stored as structural context only. A bounded
+repo-local static import resolver can record relative/path-alias imports as
+structural context, while dynamic imports, conditional `require`, unresolved
+aliases, and star re-exports remain typed `UNKNOWN`. This is not full
+TypeScript/JavaScript semantic analysis.
+For Jest/Vitest, package dependencies and JSON config files can provide ambient
+runner context; script configs such as `jest.config.ts` or `vitest.config.js`
+are recorded only as metadata/typed `UNKNOWN` and are not executed.
+
+Rust is currently used only for RepoGrammar self-dogfooding. The v0.2 preview
+can index `.rs` files with Tree-sitter Rust and form conservative internal
+RepoGrammar implementation families such as indexing phases, family gates,
+parser adapters, CLI/MCP handlers, installer actions, storage validation, and
+product tests. This path is structural only: it does not run Cargo, rustc,
+build scripts, or procedural macros, and it is not general-purpose Rust semantic
+analysis.
+
+## Public Preview Support Matrix
+
+| Area | Public-preview status | Boundary |
+|---|---|---|
+| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence only; dynamic decorators, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
+| Python pytest | Supported | Bounded test/fixture family evidence; ambiguous fixture injection and dynamic plugin behavior produce `UNKNOWN`. |
+| Python Pydantic | Supported | Bounded model/settings family evidence; dynamic model factories and unresolved bases produce `UNKNOWN`. |
+| Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |
+| JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls only; support requires at least three complete-link-compatible examples. |
+| JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
+| JS/TS Next.js | v0.2 structural preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; route groups, dynamic segments, middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Prisma | v0.2 structural preview | Exact local `new PrismaClient()` bindings plus whitelisted model operations and array `$transaction`; injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Drizzle | v0.2 structural preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, and whitelisted query builders; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
+| JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
+| Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
+| Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
+| Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
+| Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
+| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |
 
 ## Install
 
 Once a public-preview prerelease has been published, install the prebuilt CLI
-binary first:
+binary first. During preview, use the exact prerelease tag rather than GitHub's
+`latest` redirect:
 
 ```text
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh
-bash install.sh
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh
+bash install.sh --version v0.2.0-preview.0
 ```
 
 After the npm package is published, users with Node/npm can use the wrapper to
@@ -73,20 +116,21 @@ npm install -g @sioyooo/repogrammar
 repogrammar install
 ```
 
-The installer downloads the matching macOS or Linux release artifact, verifies
-its checksum, installs `repogrammar` into a user-writable command directory, and
-then can launch the agent setup wizard. It does not require Rust, Cargo,
-Node.js, Docker, a local LLM, an embedding model, or a cloud API key. The
-current Python preview still requires a `python3` interpreter at indexing time
-to run RepoGrammar's bundled CPython AST worker; it does not require a Python
-virtualenv or project dependency installation.
+The installer downloads the matching macOS/Linux release artifact, verifies its
+checksum, installs `repogrammar` into a user-writable command directory, and
+then can launch the agent setup wizard. Windows preview builds use the
+PowerShell installer below. Neither path requires Rust, Cargo, Node.js, Docker,
+a local LLM, an embedding model, or a cloud API key. The current Python preview
+still requires a `python3` interpreter at indexing time to run RepoGrammar's
+bundled CPython AST worker; it does not require a Python virtualenv or project
+dependency installation.
 
 The `npx` / npm path requires Node/npm by definition, but still does not require
 Rust or Cargo. On Windows preview builds, use PowerShell:
 
 ```text
-Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File install.ps1
+Invoke-WebRequest https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1 -Version v0.2.0-preview.0
 ```
 
 Agent integration requires the native CLI for the agent you choose: `codex` for
@@ -119,7 +163,9 @@ bash src/install/repogrammar-install.sh --install-and-configure --from-source --
 
 The source path installs the built binary into RepoGrammar-managed user state
 and refreshes the user-writable `repogrammar` command without requiring a
-GitHub Release asset or published npm package.
+GitHub Release asset or published npm package. If that command path already
+contains an older unmanaged `repogrammar`, the installer backs it up before
+replacing it with the managed command.
 
 Before the npm package is published, local npm dogfood can bypass release
 downloads with an already built binary:
@@ -155,6 +201,7 @@ From a repository you want to analyze:
 repogrammar install
 repogrammar init
 repogrammar index
+repogrammar autosync start
 repogrammar status
 repogrammar families
 repogrammar find --project . --token-budget 8000 <target>
@@ -170,6 +217,18 @@ index or family claim exists.
 `repogrammar index` shows progress automatically in an interactive terminal.
 Use `repogrammar index --progress always` to force progress output, or
 `repogrammar index --progress never` for quiet scripts.
+
+`repogrammar autosync start` is optional but recommended for dogfooding. It
+enables repository-local auto-sync and starts a background worker that watches
+for file changes, debounces saves, and reuses the existing `sync` path. It does
+not run from `install`, does not initialize other repositories, and can be
+managed with:
+
+```text
+repogrammar autosync status
+repogrammar autosync stop
+repogrammar autosync disable
+```
 
 ## Agent Integration
 
@@ -236,6 +295,11 @@ analyzer. In this preview:
 
 - Python support is limited to bounded framework-family evidence.
 - Dynamic Python behavior often produces typed `UNKNOWN`.
+- JS/TS preview support is limited to exact-anchor Express, Jest/Vitest,
+  Next.js, Fastify, Prisma, and Drizzle families. Full JS/TS semantics, React,
+  dynamic wrappers, executable Jest/Vitest/Next config semantics, Fastify plugin
+  prefix resolution, Prisma/Drizzle runtime extensions, and complete
+  alias/re-export resolution are deferred.
 - Source snippets are not returned by default.
 - Full Python semantic providers, runtime observation, and broader language
   support are deferred.

@@ -45,6 +45,18 @@ Public-preview release artifacts use these platform targets:
 Every release artifact must include the `repogrammar` executable and the
 bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
+The published `install.sh` and `install.ps1` assets must also have matching
+`.sha256` checksum assets. Installers must fail instead of silently installing
+an artifact that omits the bundled Python worker.
+Public preview documentation must use an explicit preview tag such as
+`v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect, because
+preview releases may be marked prerelease. When a `latest` or explicit artifact
+lookup fails, installers must report that the release artifact was not found,
+suggest `--version` / `-Version <preview-tag>`, and mention
+`REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
+Installers must validate archive entry names before extraction: absolute paths,
+Windows absolute paths, traversal components, URI-like names, backslashes, and
+unexpected files are rejected even when the archive checksum matches.
 
 Source checkouts may provide a dependency-light wrapper script at
 `src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
@@ -68,11 +80,15 @@ but it must install the built binary into RepoGrammar-managed user state before
 refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
-It must not directly create a foreign unmanaged command path that later causes
-the Rust installer to refuse ownership. If no release artifact is available and
-the script is not running from a source checkout with `--from-source`, it must
-fail with actionable guidance, including `REPOGRAMMAR_RELEASE_DIR` for local
-artifact tests.
+If the user-writable command path already contains an unmanaged
+`repogrammar`, the wrapper may back it up and replace it with the managed
+command because the user explicitly invoked CLI installation. It must not
+silently delete the old file, and it must still refuse unsafe paths such as
+directories. It must not directly create a foreign unmanaged command path that
+later causes the Rust installer to refuse ownership. If no release artifact is
+available and the script is not running from a source checkout with
+`--from-source`, it must fail with actionable guidance, including
+`REPOGRAMMAR_RELEASE_DIR` for local artifact tests.
 
 Windows public-preview source checkouts may provide `src/install/install.ps1`
 with the same binary-download and checksum-verification boundary. Windows
@@ -262,14 +278,14 @@ noninteractive live writes, and a dependency-light text wizard:
   source-checkout dogfood remains the supported pre-release path;
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
   default it downloads a prebuilt release artifact instead of requiring Cargo,
-  verifies the checksum, installs the CLI and bundled worker asset, and can then
-  launch agent wiring or uninstall flows. In a source checkout, its interactive
-  menu makes the contributor source-build path first-class, and its
-  noninteractive `--from-source` mode supports dogfood before release artifacts
-  exist;
+  verifies the checksum, validates archive entry names before extraction,
+  installs the bundled worker asset plus CLI, and can then launch agent wiring
+  or uninstall flows. In a source checkout, its interactive menu makes the
+  contributor source-build path first-class, and its noninteractive
+  `--from-source` mode supports dogfood before release artifacts exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
-  Windows x86_64 artifact. Windows source-checkout dogfood builds remain
-  deferred;
+  Windows x86_64 artifact. It verifies checksums and validates zip entry names
+  before extraction. Windows source-checkout dogfood builds remain deferred;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,

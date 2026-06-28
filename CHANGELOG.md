@@ -2,23 +2,98 @@
 
 ## Unreleased
 
+### Changed
+
+- Public-preview hardening now blocks React-shaped TypeScript semantic-worker
+  facts from forming unsupported JS/TS family claims, applies safe
+  `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,
+  documents that Jest/Vitest script configs are metadata/typed `UNKNOWN` only,
+  and recommends explicit preview tags instead of GitHub's `latest` redirect for
+  prerelease installer usage.
+- Installer launchers now validate release archive entry names before
+  extraction and reject unsafe or unexpected paths even when the checksum
+  matches. The npm launcher also validates release tags/cache containment and
+  stages binary+worker cache updates before swapping them into place.
+
 ### Added
 
-- Conservative TS/JS exact-anchor family support for Express route handlers and
-  Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL` anchors only
-  for exact import/require bindings, app/router factories, and literal methods
-  (Express) or imported/ambient-in-test-file runners (Jest/Vitest); reassigned,
-  shadowed, dynamic-receiver, custom-wrapper, conditional-import, and
-  object-literal lookalikes stay `UNKNOWN`. The application layer promotes those
-  anchors to `DATAFLOW_DERIVED` support facts (engine `repogrammar-tsjs-derived`,
-  method `bounded_exact_anchor_v1`), and the loose substring compatibility gate
-  is replaced by an exact target whitelist plus a safe-origin check. React
-  components/hooks remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the
-  source-span renderer work for JS/TS fixtures; default output stays source-free
-  and `--include-source-spans` / `include_source_spans=true` returns bounded
+- Conservative TS/JS structural-preview adapters for Next.js, Fastify, Prisma,
+  and Drizzle. The new adapter registry adds role-compatible exact-anchor
+  promotion with framework-specific `derived_from=tsjs_<framework>_structural_anchors`
+  provenance, bounded Next App/Pages conventions, Fastify shorthand/full route
+  declarations, Prisma model operations and array transactions, and Drizzle
+  table/query anchors. Package-only evidence, framework-role heuristics, React
+  components/hooks, Next route magic, Fastify plugin prefixes, Prisma injected/raw
+  clients, and Drizzle raw/dynamic builders remain `UNKNOWN` or non-supporting
+  context. New v0.2 fixtures cover positive Next/Fastify/Prisma/Drizzle families
+  and negative package/dynamic/raw cases.
+- Rust structural self-dogfood indexing for RepoGrammar's own implementation
+  families. The new Tree-sitter Rust adapter discovers `.rs` files and
+  `Cargo.toml`, extracts structural Rust units, emits typed UNKNOWNs for
+  cfg/build variants, macro/proc-macro syntax, unresolved modules, and
+  trait-object dispatch, and derives bounded internal `DATAFLOW_DERIVED`
+  support only for RepoGrammar-owned roles. Product fixtures under
+  `src/fixtures/rust/release/v0_2` prove support>=3 positive families across
+  family gates, parser adapters, installer actions, and product tests;
+  low-support, macro/cfg, trait-dispatch, conflicting-module, and unsafe-path
+  abstention; bounded Cargo target-dependency inventory; metadata-only default
+  output; stale source refusal; and explicit source-span opt-in. This is not
+  general Rust semantic analysis.
+- CLI family query output, MCP `repogrammar_context` family responses, and
+  `repogrammar stats` now surface `estimated_potential_token_savings` as an
+  `ESTIMATED` local potential-read-displacement diagnostic. Successful family
+  context responses update a repo-local aggregate under
+  `.repogrammar/telemetry/local-metrics/` without adding anonymous upload queue
+  entries, source text, paths, hashes, prompts, query text, or evidence text.
+- `repogrammar autosync` now provides optional repository-local automatic sync
+  management. `autosync start` enables and starts a background worker that
+  polls the existing discovery fingerprint, debounces file saves, and reuses the
+  existing full `sync` path; `status`, `stop`, `disable`, and foreground `run`
+  manage the worker. The feature is explicit per repository and is not started
+  by MCP serving, agent installation, or queries.
+- Public-preview readiness documentation now includes an explicit support matrix
+  for Python v0.1, conservative JS/TS v0.2 exact-anchor support, unsupported
+  React/broad TS/JS semantics, source-span opt-in, token-saving claim limits, and
+  installer platform boundaries. A readiness report and real-repo dogfood
+  protocol were added under `docs/reports/` and `docs/experiments/`.
+- Release/install readiness tests now verify npm platform-to-artifact mappings
+  for macOS, Linux, and Windows preview targets, unsupported npm platform/arch
+  rejection, required bundled Python worker assets, Bash installer state-boundary
+  behavior, release workflow artifact names, and installer script checksum
+  publication.
+- Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support,
+  exact Next/Fastify/Prisma/Drizzle positives, and React/package-only/dynamic/raw
+  lookalikes that must not form public family rows.
+- Conservative TS/JS exact-anchor family support for Express route handlers,
+  Jest/Vitest suites/tests, and structural-preview Next.js, Fastify, Prisma, and
+  Drizzle adapters. The syntax parser emits `STRUCTURAL` anchors only for exact
+  local framework bindings and file conventions; reassigned, shadowed,
+  dynamic-receiver or dynamic-method, custom-wrapper, conditional-import, raw,
+  object-literal, and framework-magic lookalikes stay `UNKNOWN`. The application
+  layer promotes those anchors to `DATAFLOW_DERIVED` support facts (engine
+  `repogrammar-tsjs-derived`, method `bounded_exact_anchor_v1`), and the loose
+  substring compatibility gate is replaced by an exact target whitelist plus a
+  safe-origin check. TS/JS family construction now requires at least three
+  compatible support facts, uses complete-link clustering over conservative
+  route/test/component/query feature profiles, records variation slots, and
+  keeps project-config inventory
+  (`package.json`, `tsconfig.json`, `jsconfig.json`, Jest/Vitest config files)
+  as structural context or typed config `UNKNOWN` only. React components/hooks
+  remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the source-span renderer
+  work for JS/TS fixtures; default output stays source-free and
+  `--include-source-spans` / `include_source_spans=true` returns bounded
   hash-checked line-numbered spans. New fixtures live under
   `src/fixtures/typescript/release/v0_2`. This is a token-saving foundation, not
   full TS/JS semantic analysis or an official v0.1 target change.
+- Bounded TS/JS project context now feeds parser-mode indexing: discovered
+  TS/JS module paths, JSON `tsconfig.json`/`jsconfig.json` path aliases, and
+  package/config Jest/Vitest context are passed into the syntax parser. Unique
+  literal relative imports and unique path-alias imports can be persisted as
+  `STRUCTURAL` `RESOLVED_IMPORT` context facts, while dynamic imports,
+  non-literal or conditional `require`, unresolved or conflicting aliases, and
+  star re-exports persist typed `UNKNOWN`s. Ambient Jest/Vitest globals now
+  require package/config test-runner context; test-file location alone is not
+  enough to form support.
 - The installer target registry is now exposed through a per-target adapter
   contract (`TargetAdapter`) that consolidates scope support, live-writer
   status, the no-write config preview, and `describe_paths` planning. Dry-run
@@ -49,7 +124,8 @@
   or npm publication exist. The Bash wrapper can install the built contributor
   binary through explicit `--from-source` flows, writes the command through the
   same managed install layout used by the Rust installer, delegates agent
-  wiring to `repogrammar install`, refuses foreign command paths, and reports
+  wiring to `repogrammar install`, backs up and replaces older unmanaged
+  `repogrammar` command files during explicit CLI installation, and reports
   actionable missing-release guidance. The npm launcher now has a tested
   `REPOGRAMMAR_BINARY` local dogfood bypass while keeping release artifacts as
   the published default.

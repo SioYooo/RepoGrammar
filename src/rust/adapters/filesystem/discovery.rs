@@ -3,6 +3,7 @@
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
 use crate::adapters::languages::python::PythonLanguageAdapter;
+use crate::adapters::languages::rust::RustLanguageAdapter;
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -387,6 +388,12 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
     if path == "pyproject.toml" {
         return Some(DiscoveredLanguage::PythonConfig);
     }
+    if path == "Cargo.toml" || path.ends_with("/Cargo.toml") {
+        return Some(DiscoveredLanguage::RustConfig);
+    }
+    if is_tsjs_project_config_path(path) {
+        return Some(DiscoveredLanguage::TsJsConfig);
+    }
     let extension = Path::new(path).extension()?.to_str()?;
     match extension {
         "ts" => Some(DiscoveredLanguage::TypeScript),
@@ -396,8 +403,34 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
         extension if PythonLanguageAdapter::supports_extension(extension) => {
             Some(DiscoveredLanguage::Python)
         }
+        extension if RustLanguageAdapter::supports_extension(extension) => {
+            Some(DiscoveredLanguage::Rust)
+        }
         _ => None,
     }
+}
+
+fn is_tsjs_project_config_path(path: &str) -> bool {
+    matches!(
+        path,
+        "package.json"
+            | "tsconfig.json"
+            | "jsconfig.json"
+            | "jest.config.json"
+            | "jest.config.js"
+            | "jest.config.cjs"
+            | "jest.config.mjs"
+            | "jest.config.ts"
+            | "vitest.config.json"
+            | "vitest.config.js"
+            | "vitest.config.cjs"
+            | "vitest.config.mjs"
+            | "vitest.config.ts"
+            | "next.config.js"
+            | "next.config.cjs"
+            | "next.config.mjs"
+            | "next.config.ts"
+    )
 }
 
 fn repo_relative_string(path: &Path) -> Option<String> {
@@ -460,6 +493,92 @@ mod tests {
         assert!(report.files[0].content_hash.as_str().starts_with("sha256:"));
         assert_eq!(report.files[1].path, "src/b.js");
         assert_eq!(report.git_ignore_status, GitIgnoreStatus::NotRepository);
+    }
+
+    #[test]
+    fn discovers_tsjs_project_configs_as_metadata() {
+        let workspace = TempWorkspace::new("discovery-tsjs-configs");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"express":"latest"}}
+"#,
+        )
+        .expect("write package");
+        fs::write(
+            workspace.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["src/*"]}}}
+"#,
+        )
+        .expect("write tsconfig");
+        fs::write(
+            workspace.path().join("jest.config.ts"),
+            "export default {};\n",
+        )
+        .expect("write jest config");
+        fs::write(
+            workspace.path().join("next.config.js"),
+            "module.exports = {};\n",
+        )
+        .expect("write next config");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("jest.config.ts", DiscoveredLanguage::TsJsConfig),
+                ("next.config.js", DiscoveredLanguage::TsJsConfig),
+                ("package.json", DiscoveredLanguage::TsJsConfig),
+                ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovers_rust_sources_and_cargo_manifest_without_target_output() {
+        let workspace = TempWorkspace::new("discovery-rust");
+        fs::create_dir_all(workspace.path().join("src")).expect("create src");
+        fs::create_dir_all(workspace.path().join("target/debug")).expect("create target");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .expect("write cargo");
+        fs::write(workspace.path().join("src/lib.rs"), "pub fn demo() {}\n").expect("write rust");
+        fs::write(
+            workspace.path().join("target/debug/generated.rs"),
+            "pub fn generated() {}\n",
+        )
+        .expect("write target rust");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Cargo.toml", DiscoveredLanguage::RustConfig),
+                ("src/lib.rs", DiscoveredLanguage::Rust),
+            ]
+        );
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "target" && skipped.reason == SkippedReason::DefaultExcludedDirectory
+        }));
     }
 
     #[test]

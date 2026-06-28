@@ -4,12 +4,14 @@ use crate::core::model::{
     CodeUnit, CodeUnitKind, Evidence, FactCertainty, FactOrigin, SemanticFact, SemanticFactKind,
     SymbolId,
 };
+use crate::core::policy::rust_self_dogfood::rust_self_dogfood_role_for_unit;
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 
 pub mod express;
 pub mod jest;
 pub mod nestjs;
 pub mod react;
+pub mod tsjs;
 pub mod vitest;
 
 pub trait FrameworkAdapter {
@@ -37,32 +39,15 @@ struct FrameworkRole<'a> {
 }
 
 fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
+    if let Some(role) = tsjs::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
     let (target, note, assumption) = match &unit.kind {
-        CodeUnitKind::ExpressRoute => (
-            "framework:express.route_handler",
-            "syntax code unit indicates Express route handler role",
-            "handler binding unresolved",
-        ),
-        CodeUnitKind::ReactComponent => (
-            "framework:react.component",
-            "syntax code unit indicates React component role",
-            "component runtime behavior unresolved",
-        ),
-        CodeUnitKind::ReactHook => (
-            "framework:react.hook",
-            "syntax code unit indicates React hook role",
-            "hook lifecycle behavior unresolved",
-        ),
-        CodeUnitKind::TestSuite => (
-            "framework:jest_vitest.suite",
-            "syntax code unit indicates Jest or Vitest suite role",
-            "test runner binding unresolved",
-        ),
-        CodeUnitKind::TestCase => (
-            "framework:jest_vitest.test",
-            "syntax code unit indicates Jest or Vitest test role",
-            "test runner binding unresolved",
-        ),
         CodeUnitKind::FastApiRoute => (
             "framework:fastapi.route",
             "CPython ast code unit indicates FastAPI route role",
@@ -93,7 +78,18 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             "CPython ast code unit indicates SQLAlchemy repository method role",
             "SQLAlchemy transaction behavior unresolved",
         ),
-        _ => return None,
+        _ => {
+            let rust_role = rust_self_dogfood_role_for_unit(
+                unit.provenance.path.as_str(),
+                unit.kind.as_str(),
+                unit.id.as_str(),
+            )?;
+            (
+                rust_role.framework_role,
+                rust_role.note,
+                rust_role.unresolved_assumption,
+            )
+        }
     };
     Some(FrameworkRole {
         unit,
@@ -158,6 +154,17 @@ mod tests {
                 unit(CodeUnitKind::ExpressRoute, "express"),
                 unit(CodeUnitKind::ReactComponent, "component"),
                 unit(CodeUnitKind::ReactHook, "hook"),
+                unit(CodeUnitKind::NextAppPage, "next-app-page"),
+                unit(CodeUnitKind::NextAppLayout, "next-app-layout"),
+                unit(CodeUnitKind::NextRouteHandler, "next-route"),
+                unit(CodeUnitKind::NextPagesApiRoute, "next-api"),
+                unit(CodeUnitKind::NextPagesPage, "next-page"),
+                unit(CodeUnitKind::FastifyRoute, "fastify"),
+                unit(CodeUnitKind::PrismaQuery, "prisma-query"),
+                unit(CodeUnitKind::PrismaTransaction, "prisma-transaction"),
+                unit(CodeUnitKind::DrizzleSchemaTable, "drizzle-schema"),
+                unit(CodeUnitKind::DrizzleQuery, "drizzle-query"),
+                unit(CodeUnitKind::DrizzleTransaction, "drizzle-transaction"),
                 unit(CodeUnitKind::TestSuite, "suite"),
                 unit(CodeUnitKind::TestCase, "test"),
                 unit(CodeUnitKind::FastApiRoute, "fastapi"),
@@ -169,10 +176,20 @@ mod tests {
                     CodeUnitKind::SqlAlchemyRepositoryMethod,
                     "sqlalchemy-repository",
                 ),
+                rust_unit(
+                    CodeUnitKind::RustFunction,
+                    "src/rust/application/indexing.rs",
+                    "index_repository",
+                ),
+                rust_unit(
+                    CodeUnitKind::RustTestFunction,
+                    "src/rust/bin/repogrammar.rs",
+                    "product_runtime",
+                ),
             ])
             .expect("detect roles");
 
-        assert_eq!(facts.len(), 11);
+        assert_eq!(facts.len(), 24);
         let forbidden_fragments = [
             "/tmp/secret",
             "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE",
@@ -188,7 +205,8 @@ mod tests {
                 && fact.certainty == FactCertainty::FrameworkHeuristic
                 && fact.origin.engine == "repogrammar-frameworks"
                 && fact.origin.method == "syntax_code_unit_kind"
-                && fact.evidence.provenance.path == "src/app.ts"
+                && !fact.evidence.provenance.path.starts_with('/')
+                && !fact.evidence.provenance.path.contains("..")
                 && forbidden_fragments.iter().all(|fragment| {
                     !fact.subject.contains(fragment)
                         && fact
@@ -213,6 +231,17 @@ mod tests {
                 "framework:express.route_handler",
                 "framework:react.component",
                 "framework:react.hook",
+                "framework:next.app.page",
+                "framework:next.app.layout",
+                "framework:next.route.handler",
+                "framework:next.pages.api_route",
+                "framework:next.pages.page",
+                "framework:fastify.route_handler",
+                "framework:prisma.query",
+                "framework:prisma.transaction",
+                "framework:drizzle.schema.table",
+                "framework:drizzle.query",
+                "framework:drizzle.transaction",
                 "framework:jest_vitest.suite",
                 "framework:jest_vitest.test",
                 "framework:fastapi.route",
@@ -220,7 +249,9 @@ mod tests {
                 "framework:pytest.fixture",
                 "framework:pydantic.model",
                 "framework:sqlalchemy.model",
-                "framework:sqlalchemy.repository_method"
+                "framework:sqlalchemy.repository_method",
+                "framework:repogrammar.rust_indexing_phase",
+                "framework:repogrammar.rust_product_test"
             ]
         );
     }
@@ -235,10 +266,30 @@ mod tests {
                 unit(CodeUnitKind::ArrowFunction, "arrow"),
                 unit(CodeUnitKind::Class, "class"),
                 unit(CodeUnitKind::Method, "method"),
+                unit(CodeUnitKind::RustFunction, "rust-helper"),
                 unit(CodeUnitKind::Unknown, "unknown"),
             ])
             .expect("detect roles");
 
         assert!(facts.is_empty());
+    }
+
+    fn rust_unit(kind: CodeUnitKind, path: &str, name: &str) -> CodeUnit {
+        CodeUnit {
+            id: CodeUnitId::new(format!("unit:{path}#{}:{name}:0-10:0", kind.as_str()))
+                .expect("valid id"),
+            language: Language::Rust,
+            kind,
+            range: SourceRange::new(0, 10).expect("valid range"),
+            provenance: Provenance::new(
+                path,
+                ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            )
+            .expect("valid provenance"),
+        }
     }
 }

@@ -1,7 +1,10 @@
 # Project State
 
-- Status: Bootstrap plus syntax-only TS/JS indexing substrate, Python `.py`
-  discovery, CPython AST structural indexing slice, persisted internal Python
+- Status: Bootstrap plus conservative v0.2 TS/JS exact-anchor family substrate
+  for Express, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle, internal v0.2
+  Rust structural self-dogfood indexing for RepoGrammar-owned implementation
+  families, Python `.py` discovery, CPython AST structural
+  indexing slice, persisted internal Python
   structural anchors, path-derived module-name anchors, CPython `symtable`
   structural scope anchors, FastAPI dependency/error/request-shape anchors,
   pytest parametrize argument anchors, Pydantic field/config/member anchors, typed
@@ -50,7 +53,20 @@
   risk, and reports measured token savings only when local paired
   baseline/treatment experiment records are comparable. `index` and `sync` emit
   typed stage progress to stderr while running, with exact counts when known
-  and NDJSON progress available through `--json --progress always`. Anonymous telemetry
+  and NDJSON progress available through `--json --progress always`.
+  Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
+  extraction and typed UNKNOWNs; it does not run Cargo, rustc, build scripts,
+  procedural macros, or general Rust semantic analysis. The v0.2 Rust fixture
+  suite now includes family gates, parser adapters, installer actions, product
+  tests, low-support abstention, macro/cfg blockers, trait-dispatch blockers,
+  and bounded module-resolution/Cargo target-dependency inventory.
+  `repogrammar autosync` now provides optional repo-local automatic sync:
+  `autosync start` enables and launches a background worker that polls the
+  existing discovery fingerprint, debounces saves, and reuses the current full
+  `sync` path, while `status`, `stop`, `disable`, and foreground `run` manage
+  the worker. The foreground worker inherits strict-gitignore and semantic
+  worker environment settings. It is explicit per repository and is not started
+  by MCP serving, queries, or agent installation. Anonymous telemetry
   upload is explicit opt-in, enabled `stats --json` writes only an allowlisted
   local rollup without queue creation or network upload, does not include a
   repository instance id, reports rollup counts / upload-open-network status,
@@ -87,8 +103,10 @@
   `repogrammar install`. The managed layout places bundled Python workers under
   install state discoverable from the managed executable, and refresh rollback
   restores the previous managed executable/command copy if self-test or native
-  agent configuration fails. It refuses foreign command paths rather than
-  adopting arbitrary existing binaries. The optional npm package
+  agent configuration fails. It backs up older unmanaged command files before
+  replacing them from the source-checkout installer, while native agent
+  configuration still refuses missing or foreign managed receipts. The optional
+  npm package
   `@sioyooo/repogrammar` is a thin npx launcher over those same release
   artifacts, not a JavaScript implementation; local npm dogfood can use
   `REPOGRAMMAR_BINARY` to execute an already built binary without release
@@ -167,8 +185,11 @@
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
 - Related canonical docs: `README.md`, `docs/roadmap.md`,
-  `docs/specifications/cli.md`, `docs/specifications/storage.md`,
-  `docs/specifications/indexing-pipeline.md`,
+  `docs/specifications/cli.md`, `docs/specifications/mcp-api.md`,
+  `docs/specifications/storage.md`, `docs/specifications/indexing-pipeline.md`,
+  `docs/specifications/unknowns.md`, `docs/specifications/product.md`,
+  `docs/specifications/installation.md`, `docs/development/testing.md`,
+  `docs/plans/v0.2-agent-adoption-read-displacement-plan.md`,
   `docs/specifications/python-analysis.md`,
   `docs/decisions/ADR-0011-python-first-v0-1.md`,
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
@@ -350,20 +371,51 @@ framework-role facts use `FRAMEWORK_HEURISTIC` certainty and remain blocked
 from family-claim input as insufficient support without stronger compatible
 evidence. A conservative TS/JS exact-anchor path now exists alongside the Python
 one: the syntax parser emits `STRUCTURAL` anchors (engine
-`repogrammar-tsjs-syntax`, method `exact_anchor_v1`) only for exact Express
-import/app/router/literal-method shapes and imported or ambient-in-test-file
-Jest/Vitest runners, and the application layer promotes them to
-`DATAFLOW_DERIVED` support (engine `repogrammar-tsjs-derived`, method
-`bounded_exact_anchor_v1`, assumptions `provider_resolved=false`,
-`derived_from=tsjs_structural_anchors`, `framework_role=<role>`,
-`tsjs_anchor_kind=<kind>`). The family gate now matches exact TS/JS targets plus
-a safe origin instead of substring text. Reassigned/shadowed/dynamic/lookalike
-Express receivers, custom Jest/Vitest wrappers, ambiguous non-test-file globals,
-and all React components/hooks stay `UNKNOWN`. `src/fixtures/typescript/release/
-v0_2/express_exact_routes` and `jest_vitest_exact_tests` exercise the positive
-and negative product paths, and the v0.1 `jest-vitest-basic` fixture now forms
-ambient suite/test families. TS/JS remains a transitional substrate, not the
-official Python-first v0.1 target, and this is not full TS/JS semantic analysis.
+`repogrammar-tsjs-syntax`, method `exact_anchor_v1`) for exact Express,
+Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle shapes, and the application
+layer promotes them to `DATAFLOW_DERIVED` support (engine
+`repogrammar-tsjs-derived`, method `bounded_exact_anchor_v1`, assumptions
+`provider_resolved=false`, `derived_from=tsjs_structural_anchors`,
+framework-specific `derived_from=tsjs_<framework>_structural_anchors`,
+`framework_role=<role>`, `tsjs_anchor_kind=<kind>`). The family gate matches
+exact TS/JS targets plus a safe origin instead of substring text, requires at
+least three compatible TS/JS support facts, and applies complete-link
+compatibility over conservative route/test/component/query feature profiles so
+bridge members cannot single-link incompatible families. Bounded `package.json`,
+`tsconfig.json`, `jsconfig.json`, and Jest/Vitest config inventory is stored only
+as structural context or typed config `UNKNOWN`. Parser-mode TS/JS indexing also
+passes discovered TS/JS module paths, JSON path aliases, package dependencies,
+and bounded test-runner package/config context into the syntax parser. Unique
+literal relative and path-alias imports can be persisted as structural
+repo-local import context; dynamic imports, non-literal/conditional `require`,
+unresolved or conflicting aliases, and star re-exports stay typed `UNKNOWN`.
+Ambient Jest/Vitest globals require package/config test-runner context rather
+than test-file path alone. Reassigned/shadowed/dynamic/lookalike Express or
+Fastify receivers, dynamic route methods, custom Jest/Vitest wrappers,
+ambiguous non-test-file globals, Next route magic, Prisma raw/injected/dynamic
+clients, Drizzle raw/dynamic builders, and all React components/hooks stay
+`UNKNOWN` or non-supporting context. React-shaped TypeScript semantic-worker
+support facts are also blocked from public-preview family claims; React remains
+unsupported until a later ADR changes the support matrix. Jest/Vitest script
+configs (`jest.config.ts`, `vitest.config.js`, and similar) are metadata/typed
+`UNKNOWN` only; package dependencies and JSON config files provide the current
+ambient runner context.
+`src/fixtures/typescript/release/v0_2/express_exact_routes`,
+`jest_vitest_exact_tests`, `next_exact_routes`, `fastify_exact_routes`,
+`prisma_exact_repositories`, `drizzle_exact_repositories`,
+`framework_adapter_negative_cases`, and `unsupported_framework_lookalikes`
+exercise the positive and negative product paths; the v0.1 `jest-vitest-basic`
+fixture remains below the conservative TS/JS support threshold and returns
+`UNKNOWN` rather than forming ambient suite/test families. TS/JS remains a
+transitional substrate, not the official Python-first v0.1 target, and this is
+not full TS/JS semantic analysis.
+
+Family query output, MCP `repogrammar_context` family responses, and
+`repogrammar stats` now expose `estimated_potential_token_savings` as an
+`ESTIMATED` local potential-read-displacement diagnostic. Successful family
+context responses update only a repo-local aggregate under
+`.repogrammar/telemetry/local-metrics/`; this is not measured token savings,
+not causal evidence, and not part of anonymous telemetry upload payloads.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright

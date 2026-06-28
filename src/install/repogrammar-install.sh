@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 REPOGRAMMAR_REPO="${REPOGRAMMAR_REPO:-SioYooo/RepoGrammar}"
 REPOGRAMMAR_VERSION="${REPOGRAMMAR_VERSION:-latest}"
+PREVIEW_VERSION_HINT="${REPOGRAMMAR_PREVIEW_VERSION_HINT:-v0.2.0-preview.0}"
 REPOGRAMMAR_BIN="${REPOGRAMMAR_SOURCE_BINARY:-${REPO_ROOT}/target/release/repogrammar}"
 COMMAND_DIR="${REPOGRAMMAR_COMMAND_DIR:-${HOME:-}/.local/bin}"
 COMMAND_PATH="${COMMAND_DIR}/repogrammar"
@@ -196,6 +197,7 @@ fetch_asset() {
 release_asset_not_found() {
   local url="$1"
   printf "error: release artifact was not found: %s\n" "$url" >&2
+  printf "For preview prereleases, rerun with --version <preview-tag> (for example: --version %s).\n" "$PREVIEW_VERSION_HINT" >&2
   if has_source_checkout; then
     printf "This looks like a RepoGrammar source checkout; rerun with --from-source to build and install locally.\n" >&2
   fi
@@ -239,11 +241,24 @@ command_path_is_managed() {
   [[ -f "$COMMAND_PATH" && -f "$INSTALLED_EXECUTABLE" ]] && cmp -s "$COMMAND_PATH" "$INSTALLED_EXECUTABLE"
 }
 
+prepare_command_path_for_install() {
+  if command_path_is_managed; then
+    return 0
+  fi
+  if [[ -d "$COMMAND_PATH" && ! -L "$COMMAND_PATH" ]]; then
+    die "repogrammar command path is a directory and cannot be replaced automatically; choose --command-dir"
+  fi
+  local backup="${COMMAND_PATH}.unmanaged-backup"
+  if [[ -e "$backup" || -L "$backup" ]]; then
+    backup="${backup}.$(date +%Y%m%d%H%M%S).$$"
+  fi
+  mv "$COMMAND_PATH" "$backup"
+  printf "Backed up existing unmanaged repogrammar command to %s\n" "$backup"
+}
+
 install_managed_cli_binary() {
   local source="$1"
-  if ! command_path_is_managed; then
-    die "repogrammar command path already exists and is not managed by RepoGrammar; move it aside or choose --command-dir"
-  fi
+  prepare_command_path_for_install
   mkdir -p "$DATA_BIN_DIR"
   local tmp_executable="${INSTALLED_EXECUTABLE}.tmp.$$"
   cp "$source" "$tmp_executable"
@@ -277,7 +292,7 @@ command_worker_root() {
 install_worker_asset() {
   local worker_source="$1"
   if [[ ! -f "$worker_source" ]]; then
-    return
+    die "release artifact did not contain bundled Python worker at workers/python/worker.py"
   fi
   local worker_dest_root
   worker_dest_root="$(default_worker_root)"
@@ -291,6 +306,53 @@ install_worker_asset() {
       cp "$worker_source" "${command_dest_root}/python/worker.py"
     fi
   fi
+}
+
+normalize_release_archive_entry() {
+  local entry="$1"
+  entry="${entry#./}"
+  while [[ "$entry" == */ ]]; do
+    entry="${entry%/}"
+  done
+  printf "%s" "$entry"
+}
+
+release_archive_entry_is_safe() {
+  local entry
+  entry="$(normalize_release_archive_entry "$1")"
+  [[ -n "$entry" ]] || return 1
+  [[ "$entry" != /* ]] || return 1
+  [[ "$entry" != *\\* ]] || return 1
+  [[ "$entry" != *"://"* ]] || return 1
+  [[ ! "$entry" =~ ^[A-Za-z]: ]] || return 1
+  local part
+  local parts=()
+  IFS='/' read -ra parts <<< "$entry"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" && "$part" != "." && "$part" != ".." ]] || return 1
+  done
+  case "$entry" in
+    repogrammar|workers|workers/python|workers/python/worker.py) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_release_archive_entries() {
+  local archive="$1"
+  local has_binary=0
+  local has_worker=0
+  local raw_entry
+  local entry
+  while IFS= read -r raw_entry; do
+    if ! release_archive_entry_is_safe "$raw_entry"; then
+      die "release artifact contains unsafe or unexpected path: ${raw_entry}"
+    fi
+    entry="$(normalize_release_archive_entry "$raw_entry")"
+    [[ "$entry" != "repogrammar" ]] || has_binary=1
+    [[ "$entry" != "workers/python/worker.py" ]] || has_worker=1
+  done < <(tar -tzf "$archive")
+  [[ "$has_binary" -eq 1 ]] || die "release artifact did not contain executable repogrammar"
+  [[ "$has_worker" -eq 1 ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
 }
 
 has_source_checkout() {
@@ -310,10 +372,12 @@ install_cli_from_release() {
   fetch_asset "$artifact" "${tmpdir}/${artifact}"
   fetch_asset "${artifact}.sha256" "${tmpdir}/${artifact}.sha256"
   verify_checksum "${tmpdir}/${artifact}" "${tmpdir}/${artifact}.sha256"
+  validate_release_archive_entries "${tmpdir}/${artifact}"
   tar -xzf "${tmpdir}/${artifact}" -C "$tmpdir"
   [[ -x "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
-  install_managed_cli_binary "${tmpdir}/repogrammar"
+  [[ -f "${tmpdir}/workers/python/worker.py" ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
   install_worker_asset "${tmpdir}/workers/python/worker.py"
+  install_managed_cli_binary "${tmpdir}/repogrammar"
   printf "Installed %s\n" "$COMMAND_PATH"
 }
 
@@ -329,8 +393,8 @@ install_cli_from_source() {
     fi
     (cd "$REPO_ROOT" && cargo build --release)
   fi
-  install_managed_cli_binary "$REPOGRAMMAR_BIN"
   install_worker_asset "${REPO_ROOT}/src/workers/python/worker.py"
+  install_managed_cli_binary "$REPOGRAMMAR_BIN"
   printf "Installed %s from source build\n" "$COMMAND_PATH"
 }
 

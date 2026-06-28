@@ -37,8 +37,9 @@ absolute paths, symbol names, query text, repository names, repository root
 hashes, content hashes, byte ranges, raw targets, credentials, raw environment
 variables, or raw error messages. They may use typed event names, coarse
 buckets, schema versions, anonymous machine id, external-dependency risk
-buckets, typed error codes, and bucketed/category experiment aggregates for
-local paired token measurements.
+buckets, typed error codes, bucketed/category experiment aggregates for local
+paired token measurements, and local-only aggregate estimated token counts for
+`estimated_potential_token_savings`.
 
 Global state must not contain repository-specific SQLite indexes or
 source-derived family/evidence facts.
@@ -85,6 +86,12 @@ upload would open a network connection.
 telemetry is effectively enabled it may update one allowlisted bucketed rollup
 under `.repogrammar/telemetry/rollups/` without creating an upload queue or
 opening a network connection.
+Successful family query and MCP context responses may update
+`.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`
+even when anonymous telemetry is disabled. This file is not an anonymous upload
+payload and must store only aggregate event count, estimated baseline/returned
+token totals, aggregate `estimated_potential_token_savings`, `ESTIMATED`
+measurement kind, and caveat text.
 Local experiment recording remains separate from anonymous telemetry consent.
 `experiment-start --yes` is the non-interactive confirmation path; interactive
 product runs without `--yes` prompt with default-no `[y/N]`, and the

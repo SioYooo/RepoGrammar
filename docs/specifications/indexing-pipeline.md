@@ -33,6 +33,12 @@ semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
 code-unit evidence; they are candidate grouping facts, not family evidence by
 themselves.
+The current CLI can also discover `.rs` files and `Cargo.toml` manifests for
+RepoGrammar self-dogfooding. Rust parsing uses Tree-sitter Rust to extract
+structural modules, use items, structs, enums, traits, impl blocks, functions,
+methods, test functions, and macro syntax. Cargo manifests are bounded
+structural inventory only. This Rust path never runs Cargo, rustc, build
+scripts, proc macros, or project code.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index` and `sync` can also ask that worker for facts about the discovered
 repo-relative TS/JS file set. Optional worker arguments come from
@@ -40,35 +46,74 @@ repo-relative TS/JS file set. Optional worker arguments come from
 command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
 
-This slice does not use Tree-sitter, call a TypeScript compiler, perform full
-multi-view alignment, or anti-unify templates. It does include
+Outside the internal Rust self-dogfood extractor, this slice does not use
+Tree-sitter, call a TypeScript compiler, perform full multi-view alignment, or
+anti-unify templates. It does include
 a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, then applies a bounded
-Python complete-link clustering pass over internal support-family feature
-vectors so bridge members cannot single-link incompatible Python evidence into
-one claim. It writes family rows only when each supporting member also has
-compatible same-generation `SEMANTIC` or `DATAFLOW_DERIVED` non-framework
-evidence. The current
+role-specific complete-link clustering pass over internal support-family
+feature vectors so bridge members cannot single-link incompatible Python or
+TS/JS evidence into one claim. It writes family rows only when each supporting
+member also has compatible same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
+non-framework evidence. The current
 Python path can synthesize `DATAFLOW_DERIVED` support facts in the application
 layer from exact CPython structural anchors plus a single syntax-origin Python
 framework role; raw parser facts and framework heuristics remain insufficient by
 themselves.
-A parallel, deliberately conservative TS/JS path exists for Express route
-handlers and Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL`
-exact-anchor facts only when an exact import/require binding, app/router factory,
-and literal method (Express) or an imported/ambient-in-test-file runner
-(Jest/Vitest) resolve without reassignment, shadowing, dynamic receivers, custom
-wrappers, or conditional imports; otherwise the unit stays `UNKNOWN`. The
-application layer promotes those anchors to `DATAFLOW_DERIVED` support facts with
-engine `repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
-`provider_resolved=false`, `derived_from=tsjs_structural_anchors`,
+A parallel internal Rust self-dogfood path can synthesize
+`DATAFLOW_DERIVED` support facts from Tree-sitter Rust structural anchors only
+for RepoGrammar-owned roles such as family gates, indexing phases, parser
+adapters, CLI/MCP handlers, installer actions, storage validation, source-span
+renderers, and product tests. Rust families require sufficient compatible
+support, complete-link-compatible structural features, fresh same-generation
+evidence, and no claim-relevant Rust `UNKNOWN`. Structural anchors alone,
+generic Rust functions, unresolved module links, build-variant ambiguity,
+macro/proc-macro expansion, trait-object dispatch, and stale evidence must not
+be upgraded into confident family claims.
+A parallel, deliberately conservative TS/JS path exists for Express,
+Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
+parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
+bindings and file conventions match the adapter registry: Express app/router
+calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
+context, Fastify factory receivers, local `new PrismaClient()` clients, and
+Drizzle table/db/query bindings. Dynamic receivers, custom wrappers, dynamic
+methods, conditional imports, Next route magic, Fastify plugin prefixes, Prisma
+raw/injected clients, and Drizzle raw/dynamic builders emit typed `UNKNOWN` for
+the affected claim instead of support. The application layer promotes accepted
+anchors to `DATAFLOW_DERIVED` support facts with engine
+`repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
+`provider_resolved=false`, `derived_from=tsjs_structural_anchors`, a
+framework-specific `derived_from=tsjs_<framework>_structural_anchors`,
 `framework_role=<role>`, and `tsjs_anchor_kind=<kind>` assumptions. The
 family-support gate accepts only exact recognized targets (for example
-`express.route.get`, `jest_vitest.describe`) under a safe origin; it must not
-infer support from fact text that merely contains a framework name. React
-components and hooks remain `UNKNOWN` in this slice. This is a token-saving
-foundation, not full TS/JS semantic analysis, and TS/JS remains a transitional
-substrate rather than the official v0.1 target.
+`express.route.get`, `jest_vitest.describe`, `next.route.GET`,
+`fastify.route.get`, `prisma.query.findMany`, `drizzle.query.select`) under a
+safe origin; it must not infer support from fact text that merely contains a
+framework name. TS/JS families require at least three compatible exact-anchor
+support facts and use complete-link compatibility over route, runner,
+component, response, query, and schema profiles. Bounded project inventory for
+`package.json`,
+`tsconfig.json`, `jsconfig.json`, and Jest/Vitest config files is structural
+context only. Package dependencies and JSON `jest.config.json` /
+`vitest.config.json` files can provide ambient test-runner context; script
+configs such as `jest.config.ts` or `vitest.config.js` are not executed and
+remain metadata/typed `UNKNOWN` only. The parser project context also builds a
+bounded repo-local TS/JS module inventory plus JSON `paths` aliases from
+`tsconfig.json`/`jsconfig.json`; safe `baseUrl` prefixes are applied
+conservatively to alias targets before resolving against discovered repo files.
+It can persist `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique literal
+relative imports or unique path-alias imports that resolve to discovered repo
+files. Dynamic
+`import(...)`, non-literal `require(...)`, conditional `require(...)`,
+unresolved aliases/imports, conflicting alias candidates, and `export *` stay
+typed `UNKNOWN`; those facts are context/abstention evidence and do not become
+family support. Ambient Jest/Vitest globals require bounded project test-runner
+context from package or config inventory; otherwise they emit
+`MissingProjectConfig` instead of support. React components and hooks remain
+`UNKNOWN` in this slice, including when an external TypeScript semantic worker
+emits React-shaped semantic support. This is a token-saving foundation, not full
+TS/JS semantic analysis, and TS/JS remains a transitional substrate rather than
+the official v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from modules to contained
 units and classes to methods. That IR is structural only: it has empty payloads,
@@ -106,8 +151,10 @@ coverage, virtual environment, and generated output directories. Files larger
 than the configured size limit are skipped, with 1 MB as the default inclusive
 limit.
 
-The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, and
-`.py`.
+The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, `.py`,
+Python `pyproject.toml`, and bounded TS/JS project-config files such as
+`package.json`, `tsconfig.json`, `jsconfig.json`, `jest.config.*`, and
+`vitest.config.*`.
 Module-specific extensions such as `.mjs`, `.cjs`, `.mts`, and `.cts` remain
 deferred until language-mode policy is defined. Discovery reports contain
 repository-relative paths, language classification, strict
@@ -152,13 +199,15 @@ roots and parent-worktree subdirectory projects.
 
 ## Tree-sitter parsing
 
-Tree-sitter will be used in parsing and language adapters. AST nodes must be
+Tree-sitter may be used in parsing and language adapters. AST nodes must be
 converted into `CodeUnit` and unified IR types before entering `core`.
 
 The current implementation uses dependency-free syntax-only extractor adapters
 as bootstrap parser boundaries. The TS/JS extractor recognizes modules,
 functions, assigned arrow functions, classes, methods, React function
-components, custom hooks, Express route calls, and Jest/Vitest
+components, custom hooks, Express route calls, Next.js route/page conventions,
+Fastify routes, Prisma queries/transactions, Drizzle schema/query/transaction
+anchors, and Jest/Vitest
 `describe`/`it`/`test` blocks by structural syntax only. The Python extractor
 uses a checked-in CPython `ast` worker and recognizes modules, functions,
 async functions, classes, methods, FastAPI route-shaped functions, pytest tests
@@ -166,7 +215,9 @@ and fixtures, Pydantic model-shaped classes, SQLAlchemy model-shaped classes,
 and SQLAlchemy repository method-shaped functions. Both extractors preserve
 byte ranges, return diagnostics for parser errors, and store RepoGrammar-owned
 `CodeUnit` metadata plus CodeUnit-derived IR nodes and conservative containment
-edges. Tree-sitter integration remains planned.
+edges. The Rust self-dogfood extractor uses Tree-sitter Rust for tolerant
+structural extraction and typed UNKNOWN generation. No Tree-sitter node type is
+stored in core, persistence, CLI, or MCP output.
 
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
@@ -221,7 +272,17 @@ with stronger compatible evidence. The TS/JS syntax parser additionally emits
 `STRUCTURAL` exact-anchor facts (engine `repogrammar-tsjs-syntax`, method
 `exact_anchor_v1`) that, like the Python structural anchors, cannot support
 membership by themselves; only the application-layer `repogrammar-tsjs-derived`
-promotion can turn them into `DATAFLOW_DERIVED` support.
+promotion can turn them into `DATAFLOW_DERIVED` support. It also emits typed
+TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express or
+Fastify receivers, unsafe or unresolved Jest/Vitest runner bindings, unsupported
+Next route magic, Prisma dynamic/raw/injected clients, Drizzle dynamic/raw or
+unresolved table/db bindings, and bounded config parse/execution ambiguity. The
+bounded import resolver additionally emits
+structural repo-local import facts or typed `UNKNOWN` records for dynamic
+imports, conditional or non-literal `require`, unresolved/conflicting
+path-alias resolution, and ambiguous star re-exports. These facts remain blocked
+from support and may only affect claim abstention, compatibility, or read-plan
+guidance.
 
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
@@ -317,7 +378,9 @@ classes, methods, decorators, imports, assignments, calls, annotations, class
 bases, FastAPI route/dependency roles, pytest tests/fixtures, Pydantic models,
 and SQLAlchemy model/session roles. Current stored TS/JS unit kinds are
 syntax-only and include module, function, arrow function, class, method, React
-component, React hook, Express route, test suite, and test case.
+component, React hook, Express route, Next.js App/Pages route/page/layout units,
+Fastify route, Prisma query/transaction, Drizzle schema/query/transaction, test
+suite, and test case.
 
 ## Normalization and fingerprinting
 
@@ -382,11 +445,26 @@ compatible same-generation semantic/dataflow support before storing a Python
 family; framework heuristics alone stay `UNKNOWN`.
 
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
-Express routes, React components, React hooks, Jest/Vitest suites, and
-Jest/Vitest tests into syntax-origin `FRAMEWORK_ROLE` fact records. It records
-repo-relative evidence and unresolved-binding assumptions, but it does not
-resolve handlers, runner identity, React runtime behavior, dependency
-injection, or lifecycle semantics.
+Express routes, React components, React hooks, Jest/Vitest suites/tests,
+Next.js conventions, Fastify routes, Prisma queries/transactions, and Drizzle
+schema/query/transaction anchors into syntax-origin `FRAMEWORK_ROLE` fact
+records. It records
+repo-relative evidence and unresolved-binding assumptions. For the conservative
+v0.2 path, the parser also emits structural exact-anchor facts for those
+framework adapters; the application layer may derive `DATAFLOW_DERIVED` support
+from those exact anchors. It still does not perform TypeScript compiler-backed
+binding/export propagation, React runtime behavior, Next server/client or
+middleware semantics, Fastify plugin-prefix resolution, Prisma/Drizzle runtime
+extensions, dependency injection, or lifecycle semantics.
+
+The current Rust adapter maps only RepoGrammar's own repository structure into
+internal self-dogfood roles. It records structural anchors and typed UNKNOWNs
+for signature shape, visibility, arity, return kind, attributes, test shape,
+bounded Cargo dependency inventory, safe repo-relative module declarations,
+Cargo/build variants, unresolved or conflicting external modules,
+macro/proc-macro expansion, and trait-object dispatch. Those facts are bounded
+evidence for RepoGrammar self-dogfood only; they are not provider-backed Rust
+semantics and do not imply general Rust target-language support.
 
 ## Classification
 
@@ -428,10 +506,14 @@ remain visible to query and MCP callers.
 
 ## Sync and freshness
 
-The v0.1 indexing model is manual: `init`, `index`, `sync`, freshness warnings
-in `status`, and freshness checks before query or MCP claims. A daemon or
-watcher is optional and must not be required for correctness.
+The baseline indexing model remains explicit: `init`, `index`, `sync`,
+freshness warnings in `status`, and freshness checks before query or MCP
+claims. Optional repository-local auto-sync can be enabled with
+`repogrammar autosync start`. Auto-sync is not required for correctness, is not
+started by MCP serving or agent installation, and does not scan repositories
+that have not explicitly initialized RepoGrammar state.
 
-If a future watcher is implemented, it should reparse changed units, mark
-affected families stale, and lazily recompute on query. It should not eagerly
-recompute the whole repository by default.
+The current auto-sync worker is conservative and reuses the existing full
+`sync` path after detecting a changed discovery fingerprint and debouncing file
+changes. Incremental changed-unit reparsing, affected-family stale marking, and
+lazy query-time recomputation remain future work.

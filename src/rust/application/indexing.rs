@@ -1,11 +1,13 @@
 //! Indexing use-case boundary.
 
+use crate::adapters::frameworks::tsjs;
+use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs_anchors::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
     python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
-    tsjs_support_target_is_role_compatible, TSJS_DERIVED_SUPPORT_ENGINE,
-    TSJS_DERIVED_SUPPORT_METHOD,
+    tsjs_support_target_is_role_compatible, RUST_DERIVED_SUPPORT_ENGINE,
+    RUST_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::core::model::{
@@ -14,6 +16,7 @@ use crate::core::model::{
     SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
+use crate::core::policy::rust_self_dogfood::rust_support_target_is_role_compatible;
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::FamilyStore;
 use crate::ports::file_discovery::{
@@ -26,8 +29,8 @@ use crate::ports::index_store::{
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, SourceDocument,
-    SourceParser,
+    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
+    SourceDocument, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -523,10 +526,26 @@ fn index_repository_with_optional_semantic_worker(
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
         &derived_tsjs_support_facts,
     )?;
+    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_rust_support_facts);
+    let derived_rust_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count,
+        &derived_rust_support_facts,
+    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count;
+        + derived_tsjs_support_fact_count
+        + derived_rust_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -580,12 +599,14 @@ fn index_repository_with_optional_semantic_worker(
                 + framework_role_facts.len()
                 + derived_python_support_facts.len()
                 + derived_tsjs_support_facts.len()
+                + derived_rust_support_facts.len()
                 + worker_facts.len(),
         );
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(derived_tsjs_support_facts);
+        family_facts.extend(derived_rust_support_facts);
         family_facts.extend(worker_facts);
         record_family_claims(
             family_store,
@@ -679,6 +700,31 @@ fn parser_project_context(
         .collect();
     let python_source_roots =
         python_source_roots_from_project_config(request, report, source_store, parser)?;
+    let tsjs_module_paths = tsjs_module_paths(report);
+    let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
+    let tsjs_package_dependencies =
+        tsjs_package_dependencies_from_project_config(request, report, source_store)?;
+    let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
+    let rust_module_paths = rust_module_paths(report);
+    let mut rust_cargo_files = Vec::new();
+    for file in &report.files {
+        if file.language != DiscoveredLanguage::RustConfig {
+            continue;
+        }
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        rust_cargo_files.push(ParserProjectFileContext {
+            path: source.path,
+            text: source.text,
+        });
+    }
+    rust_cargo_files.sort_by(|left, right| left.path.cmp(&right.path));
     let mut python_conftest_files = Vec::new();
     for file in &report.files {
         if file.language != DiscoveredLanguage::Python || !is_python_conftest_path(&file.path) {
@@ -702,7 +748,212 @@ fn parser_project_context(
         python_module_paths,
         python_source_roots,
         python_conftest_files,
+        tsjs_module_paths,
+        tsjs_path_aliases,
+        tsjs_package_dependencies,
+        tsjs_has_test_runner_context,
+        rust_module_paths,
+        rust_cargo_files,
     })
+}
+
+fn tsjs_package_dependencies_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<Vec<String>, RepoGrammarError> {
+    let Some(package_file) = report.files.iter().find(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig && file.path == "package.json"
+    }) else {
+        return Ok(Vec::new());
+    };
+    let source = source_store
+        .read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: package_file.path.clone(),
+            expected_content_hash: package_file.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        })
+        .map_err(source_store_error)?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+        return Ok(Vec::new());
+    };
+    let mut dependencies = BTreeSet::new();
+    for field in ["dependencies", "devDependencies", "peerDependencies"] {
+        let Some(object) = value.get(field).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        dependencies.extend(object.keys().cloned());
+    }
+    Ok(dependencies.into_iter().collect())
+}
+
+fn tsjs_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
+    report
+        .files
+        .iter()
+        .filter(|file| is_tsjs_source_language(file.language))
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn rust_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
+    report
+        .files
+        .iter()
+        .filter(|file| file.language == DiscoveredLanguage::Rust)
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn is_tsjs_source_language(language: DiscoveredLanguage) -> bool {
+    matches!(
+        language,
+        DiscoveredLanguage::TypeScript
+            | DiscoveredLanguage::TypeScriptReact
+            | DiscoveredLanguage::JavaScript
+            | DiscoveredLanguage::JavaScriptReact
+    )
+}
+
+fn tsjs_path_aliases_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<Vec<ParserTsJsPathAlias>, RepoGrammarError> {
+    let mut aliases = Vec::new();
+    for config_path in ["tsconfig.json", "jsconfig.json"] {
+        let Some(file) = report.files.iter().find(|file| {
+            file.language == DiscoveredLanguage::TsJsConfig && file.path == config_path
+        }) else {
+            continue;
+        };
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+            continue;
+        };
+        let Some(compiler_options) = value
+            .get("compilerOptions")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        let base_url = tsjs_project_config_base_url(compiler_options.get("baseUrl"));
+        let Some(paths) = compiler_options
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        for (alias_pattern, target_patterns) in paths {
+            let targets = target_patterns
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(|target| {
+                    tsjs_project_config_target_pattern(base_url.as_deref(), target)
+                })
+                .collect::<Vec<_>>();
+            if !targets.is_empty() {
+                aliases.push(ParserTsJsPathAlias {
+                    alias_pattern: alias_pattern.clone(),
+                    target_patterns: targets,
+                });
+            }
+        }
+    }
+    aliases.sort_by(|left, right| {
+        left.alias_pattern
+            .cmp(&right.alias_pattern)
+            .then_with(|| left.target_patterns.cmp(&right.target_patterns))
+    });
+    aliases.dedup();
+    Ok(aliases)
+}
+
+fn tsjs_project_config_base_url(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value.and_then(serde_json::Value::as_str)?.trim();
+    if value.is_empty() || value == "." || value == "./" {
+        return None;
+    }
+    let normalized = value.trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty() || validate_repo_relative_path(normalized).is_err() {
+        return None;
+    }
+    Some(normalized.to_string())
+}
+
+fn tsjs_project_config_target_pattern(base_url: Option<&str>, target: &str) -> Option<String> {
+    let normalized = target.trim().trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty() {
+        return None;
+    }
+    let candidate = match base_url {
+        Some(base_url) => format!("{base_url}/{normalized}"),
+        None => normalized.to_string(),
+    };
+    if validate_repo_relative_path(&candidate).is_err() {
+        return None;
+    }
+    Some(candidate)
+}
+
+fn tsjs_has_test_runner_context(
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+    request: &IndexingRequest,
+) -> Result<bool, RepoGrammarError> {
+    if report.files.iter().any(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig
+            && matches!(
+                file.path.as_str(),
+                "jest.config.json" | "vitest.config.json"
+            )
+    }) {
+        return Ok(true);
+    }
+    let Some(package_file) = report.files.iter().find(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig && file.path == "package.json"
+    }) else {
+        return Ok(false);
+    };
+    let source = source_store
+        .read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: package_file.path.clone(),
+            expected_content_hash: package_file.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        })
+        .map_err(source_store_error)?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+        return Ok(false);
+    };
+    for field in ["dependencies", "devDependencies", "peerDependencies"] {
+        if value
+            .get(field)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|dependencies| {
+                dependencies.contains_key("vitest")
+                    || dependencies.contains_key("@jest/globals")
+                    || dependencies.contains_key("jest")
+            })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn is_python_conftest_path(path: &str) -> bool {
@@ -1359,6 +1610,7 @@ fn derive_tsjs_framework_support_facts(
             target,
             framework_role,
             &fact.evidence.provenance.repository_revision,
+            fact,
         )?);
     }
 
@@ -1388,7 +1640,30 @@ fn derived_tsjs_framework_support_fact(
     target: &str,
     framework_role: &str,
     repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
 ) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=tsjs_structural_anchors".to_string(),
+    ];
+    if let Some(derived_from) = tsjs::derived_from_for_target(target) {
+        assumptions.push(format!("derived_from={derived_from}"));
+    }
+    assumptions.push(format!("framework_role={framework_role}"));
+    for assumption in &source_fact.assumptions {
+        if !assumptions.iter().any(|existing| existing == assumption)
+            && !assumption.starts_with("provider_resolved=")
+            && !assumption.starts_with("framework_role=")
+        {
+            assumptions.push(assumption.clone());
+        }
+    }
+    if !assumptions
+        .iter()
+        .any(|assumption| assumption.starts_with("tsjs_anchor_kind="))
+    {
+        assumptions.push(format!("tsjs_anchor_kind={}", unit.kind));
+    }
     Ok(SemanticFact {
         kind,
         subject: unit.id.clone(),
@@ -1412,12 +1687,191 @@ fn derived_tsjs_framework_support_fact(
             "bounded TS/JS framework anchor support",
         )
         .map_err(RepoGrammarError::InvalidInput)?,
-        assumptions: vec![
-            "provider_resolved=false".to_string(),
-            "derived_from=tsjs_structural_anchors".to_string(),
-            format!("framework_role={framework_role}"),
-            format!("tsjs_anchor_kind={}", unit.kind),
-        ],
+        assumptions,
+    })
+}
+
+fn derive_rust_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units = rust_framework_support_blocked_units(code_units, parser_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_rust_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "rust" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if rust_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_rust_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+            fact,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn rust_framework_support_blocked_units(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+) -> BTreeSet<String> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocked = BTreeSet::new();
+    for fact in parser_facts {
+        if !rust_framework_support_blocking_unknown(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language == "rust" && parser_fact_evidence_is_within_unit(fact, unit) {
+            blocked.insert(code_unit_id.to_string());
+        }
+    }
+    blocked
+}
+
+fn rust_framework_support_blocking_unknown(fact: &SemanticFact) -> bool {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != RUST_ANCHOR_ENGINE
+        || fact.origin.method != RUST_ANCHOR_METHOD
+    {
+        return false;
+    }
+    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
+        return false;
+    };
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("rust_family_membership");
+    match reason {
+        "MacroOrPreprocessor"
+        | "BuildVariantAmbiguity"
+        | "ConflictingFacts"
+        | "StaleEvidence"
+        | "UnresolvedImport"
+        | "FrameworkMagic" => matches!(
+            affected_claim,
+            "rust_family_membership"
+                | "rust_macro_expansion"
+                | "rust_build_variant"
+                | "rust_trait_dispatch"
+                | "rust_module_resolution"
+        ),
+        _ => false,
+    }
+}
+
+fn is_rust_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall
+            | SemanticFactKind::ResolvedImport
+            | SemanticFactKind::Symbol
+            | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == RUST_ANCHOR_ENGINE
+        && fact.origin.method == RUST_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_rust_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=tree_sitter_rust_structural_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+    ];
+    assumptions.extend(
+        source_fact
+            .assumptions
+            .iter()
+            .filter(|assumption| {
+                assumption.starts_with("rust_anchor_kind=")
+                    || assumption.starts_with("rust_signature_shape=")
+                    || assumption.starts_with("rust_error_shape=")
+                    || assumption.starts_with("rust_call_shape=")
+                    || assumption.starts_with("rust_control_shape=")
+                    || assumption.starts_with("rust_path_context=")
+            })
+            .cloned(),
+    );
+    assumptions.sort();
+    assumptions.dedup();
+
+    Ok(SemanticFact {
+        kind,
+        subject: unit.id.clone(),
+        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
+        origin: FactOrigin {
+            engine: RUST_DERIVED_SUPPORT_ENGINE.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            method: RUST_DERIVED_SUPPORT_METHOD.to_string(),
+        },
+        certainty: FactCertainty::DataflowDerived,
+        evidence: Evidence::new(
+            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(unit.start_byte, unit.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &unit.path,
+                unit.content_hash.clone(),
+                repository_revision.clone(),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            "bounded Rust structural role support",
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions,
     })
 }
 
@@ -1757,6 +2211,9 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         }
         DiscoveredLanguage::Python => Language::Python,
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
+        DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+        DiscoveredLanguage::Rust => Language::Rust,
+        DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
 }
 
@@ -2095,13 +2552,14 @@ mod tests {
         path: &str,
         end_byte: usize,
     ) -> SemanticFact {
-        semantic_fact_for_unit_with_target(content_hash, code_unit_id, path, end_byte, None)
+        semantic_fact_for_unit_with_target(content_hash, code_unit_id, path, 0, end_byte, None)
     }
 
     fn semantic_fact_for_unit_with_target(
         content_hash: ContentHash,
         code_unit_id: &str,
         path: &str,
+        start_byte: usize,
         end_byte: usize,
         target: Option<&str>,
     ) -> SemanticFact {
@@ -2117,7 +2575,7 @@ mod tests {
             certainty: FactCertainty::Semantic,
             evidence: Evidence::new(
                 CodeUnitId::new(code_unit_id).expect("valid code unit id"),
-                SourceRange::new(0, end_byte).expect("valid range"),
+                SourceRange::new(start_byte, end_byte).expect("valid range"),
                 Provenance::new(
                     path,
                     content_hash,
@@ -2262,10 +2720,12 @@ mod tests {
     fn exact_express_route_anchors_derive_family_support() {
         let first = indexed_tsjs_unit("src/a.ts", "express_route", 0);
         let second = indexed_tsjs_unit("src/b.ts", "express_route", 1);
-        let units = vec![first.clone(), second.clone()];
+        let third = indexed_tsjs_unit("src/c.ts", "express_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
         let parser_facts = vec![
             tsjs_structural_anchor_fact(&first, "express.route.get"),
             tsjs_structural_anchor_fact(&second, "express.route.post"),
+            tsjs_structural_anchor_fact(&third, "express.route.delete"),
         ];
         let role_facts = units
             .iter()
@@ -2275,7 +2735,7 @@ mod tests {
         let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
             .expect("derive exact express support");
 
-        assert_eq!(derived.len(), 2);
+        assert_eq!(derived.len(), 3);
         assert!(derived.iter().all(|fact| {
             fact.certainty == FactCertainty::DataflowDerived
                 && fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
@@ -2294,7 +2754,107 @@ mod tests {
             report.claims[0].framework_role,
             "framework:express.route_handler"
         );
-        assert_eq!(report.claims[0].support, 2);
+        assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn tsjs_framework_adapter_exact_anchors_derive_role_compatible_support() {
+        for (kind, role, target, derived_from) in [
+            (
+                "next_app_page",
+                "framework:next.app.page",
+                "next.app.page",
+                "tsjs_next_structural_anchors",
+            ),
+            (
+                "next_route_handler",
+                "framework:next.route.handler",
+                "next.route.GET",
+                "tsjs_next_structural_anchors",
+            ),
+            (
+                "fastify_route",
+                "framework:fastify.route_handler",
+                "fastify.route.get",
+                "tsjs_fastify_structural_anchors",
+            ),
+            (
+                "prisma_query",
+                "framework:prisma.query",
+                "prisma.query.findMany",
+                "tsjs_prisma_structural_anchors",
+            ),
+            (
+                "drizzle_query",
+                "framework:drizzle.query",
+                "drizzle.query.select",
+                "tsjs_drizzle_structural_anchors",
+            ),
+        ] {
+            let first = indexed_tsjs_unit("src/a.ts", kind, 0);
+            let second = indexed_tsjs_unit("src/b.ts", kind, 1);
+            let third = indexed_tsjs_unit("src/c.ts", kind, 2);
+            let units = vec![first.clone(), second.clone(), third.clone()];
+            let parser_facts = vec![
+                tsjs_structural_anchor_fact(&first, target),
+                tsjs_structural_anchor_fact(&second, target),
+                tsjs_structural_anchor_fact(&third, target),
+            ];
+            let role_facts = units
+                .iter()
+                .map(|unit| framework_role_fact_for_unit(unit, role))
+                .collect::<Vec<_>>();
+
+            let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
+                .expect("derive exact adapter support");
+
+            assert_eq!(derived.len(), 3, "{role} should derive support");
+            assert!(derived.iter().all(|fact| fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == &format!("derived_from={derived_from}"))));
+            let mut family_facts = role_facts;
+            family_facts.extend(derived);
+            let report = build_family_claims(&units, &family_facts);
+            assert_eq!(report.claims.len(), 1, "{role} should form a family");
+            assert_eq!(report.claims[0].framework_role, role);
+            assert_eq!(report.claims[0].support, 3);
+        }
+    }
+
+    #[test]
+    fn tsjs_package_config_facts_do_not_derive_framework_support() {
+        let unit = indexed_tsjs_unit("src/a.ts", "next_app_page", 0);
+        let package_fact = SemanticFact {
+            kind: SemanticFactKind::ProjectConfig,
+            subject: "unit:package.json#project_config".to_string(),
+            target: Some(SymbolId::new("package:next").expect("valid target")),
+            origin: FactOrigin {
+                engine: TSJS_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: "bounded_project_inventory_v1".to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded package dependency metadata",
+            )
+            .expect("valid evidence"),
+            assumptions: vec!["tsjs_project_config=package_json".to_string()],
+        };
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:next.app.page");
+
+        let derived = derive_tsjs_framework_support_facts(&[unit], &[package_fact], &[role_fact])
+            .expect("derive from package config");
+
+        assert!(derived.is_empty());
     }
 
     #[test]
@@ -2418,6 +2978,7 @@ mod tests {
                     unit.provenance.content_hash,
                     unit.id.as_str(),
                     &unit.provenance.path,
+                    unit.range.start_byte,
                     unit.range.end_byte,
                     Some("package:express"),
                 ));
@@ -4396,7 +4957,7 @@ mod tests {
 
         assert_eq!(outcome.discovered_files, 2);
         assert_eq!(outcome.indexed_units, 7);
-        assert_eq!(outcome.semantic_facts, 5);
+        assert_eq!(outcome.semantic_facts, 8);
         assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Deferred);
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
 
@@ -4404,8 +4965,20 @@ mod tests {
             .list_active_semantic_facts()
             .expect("list semantic facts");
         assert_eq!(facts.generation_id, "gen-000001");
-        assert_eq!(facts.facts.len(), 5);
-        assert!(facts.facts.iter().all(|fact| {
+        assert_eq!(facts.facts.len(), 8);
+        let role_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "FRAMEWORK_ROLE")
+            .collect::<Vec<_>>();
+        let unknown_facts = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "UNKNOWN")
+            .collect::<Vec<_>>();
+        assert_eq!(role_facts.len(), 5);
+        assert_eq!(unknown_facts.len(), 3);
+        assert!(role_facts.iter().all(|fact| {
             fact.kind == "FRAMEWORK_ROLE"
                 && fact.certainty == "FRAMEWORK_HEURISTIC"
                 && fact.origin_engine == "repogrammar-frameworks"
@@ -4420,8 +4993,21 @@ mod tests {
                     .contains(workspace.path().to_string_lossy().as_ref())
                 && fact.content_hash.as_str().starts_with("sha256:")
         }));
-        let targets = facts
-            .facts
+        assert!(unknown_facts.iter().all(|fact| {
+            fact.certainty == "UNKNOWN"
+                && fact.origin_engine == "repogrammar-tsjs-syntax"
+                && fact.origin_method == "exact_anchor_v1"
+                && fact.path != sentinel
+                && !fact
+                    .path
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && !fact.note.contains(sentinel)
+                && !fact
+                    .note
+                    .contains(workspace.path().to_string_lossy().as_ref())
+                && fact.content_hash.as_str().starts_with("sha256:")
+        }));
+        let targets = role_facts
             .iter()
             .map(|fact| fact.target.as_deref().expect("framework role target"))
             .collect::<Vec<_>>();
@@ -4482,7 +5068,7 @@ mod tests {
             &FilesystemSourceStore,
         )
         .expect("assess framework fact readiness");
-        assert_eq!(readiness.facts.len(), 5);
+        assert_eq!(readiness.facts.len(), 8);
         for fact in readiness.facts {
             let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
                 panic!("framework heuristic facts must not become family claim input");
@@ -4496,20 +5082,31 @@ mod tests {
         let workspace = TempWorkspace::new("indexing-family-builder");
         fs::write(
             workspace.path().join("users.ts"),
-            "app.get('/users', (req, res) => { res.json([]); });\n",
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/users', (req, res) => { res.json([]); });\n",
         )
         .expect("write users route");
         fs::write(
             workspace.path().join("accounts.ts"),
-            "app.get('/accounts', (req, res) => { res.json([]); });\n",
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/accounts', (req, res) => { res.json([]); });\n",
         )
         .expect("write accounts route");
+        fs::write(
+            workspace.path().join("orders.ts"),
+            "import express from 'express';\n\
+             const app = express();\n\
+             app.get('/orders', (req, res) => { res.json([]); });\n",
+        )
+        .expect("write orders route");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let detector = SyntaxFrameworkRoleDetector;
         let (expected_files, facts) = semantic_support_facts_for_express_routes(&workspace);
-        assert_eq!(facts.len(), 2);
+        assert_eq!(facts.len(), 3);
         let worker = StaticSemanticWorker {
             expected_files,
             result: Ok(facts),
@@ -4528,7 +5125,10 @@ mod tests {
             .expect("index semantic-supported family");
 
         assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
-        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(
+            outcome.semantic_facts as u32,
+            semantic_fact_count(&state, "gen-000001")
+        );
         let families = store.list_active_families().expect("list families");
         assert_eq!(families.generation_id, "gen-000001");
         assert_eq!(families.families.len(), 1);
@@ -4537,8 +5137,8 @@ mod tests {
             .show_family(&families.families[0].family_id)
             .expect("show family")
             .expect("family exists");
-        assert_eq!(family.members.len(), 2);
-        assert_eq!(family.evidence.len(), 2);
+        assert_eq!(family.members.len(), 3);
+        assert_eq!(family.evidence.len(), 3);
         assert!(family
             .members
             .iter()
@@ -4560,7 +5160,8 @@ mod tests {
             "import express from 'express';\n\
              const app = express();\n\
              app.get('/users', (req, res) => { res.json([]); });\n\
-             app.post('/users', (req, res) => { res.json({}); });\n",
+             app.post('/users', (req, res) => { res.json({}); });\n\
+             app.delete('/users/:id', (req, res) => { res.json({}); });\n",
         )
         .expect("write resolved express server");
         let state = workspace.path().join(".repogrammar");
@@ -4873,6 +5474,85 @@ extraPaths = ["src/lib", "C:/secret"]
                     && !Path::new(path).is_absolute()
                     && !path.contains("..")
                     && !path.contains(workspace.path().to_string_lossy().as_ref())));
+        }
+    }
+
+    #[test]
+    fn parser_context_receives_deterministic_tsjs_inventory_aliases_and_test_runner_context() {
+        let workspace = TempWorkspace::new("indexing-tsjs-parser-context");
+        fs::create_dir_all(workspace.path().join("src/lib")).expect("create src/lib");
+        fs::create_dir_all(workspace.path().join("tests")).expect("create tests");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"devDependencies":{"vitest":"^1.0.0"}}"#,
+        )
+        .expect("write package");
+        fs::write(
+            workspace.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app":["app.ts"],"@lib/*":["lib/*"],"@unsafe/*":["../outside/*"]}}}"#,
+        )
+        .expect("write tsconfig");
+        fs::write(
+            workspace.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@shared/*":["src/shared/*"],"@test/*":["tests/*"]}}}"#,
+        )
+        .expect("write jsconfig");
+        fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const app = 1;\n",
+        )
+        .expect("write app");
+        fs::write(
+            workspace.path().join("src/lib/client.js"),
+            "export const client = 1;\n",
+        )
+        .expect("write client");
+        fs::write(
+            workspace.path().join("tests/app.test.ts"),
+            "describe('app', () => { it('works', () => {}); });\n",
+        )
+        .expect("write test");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RecordingContextParser::new();
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &store,
+        )
+        .expect("index with TS/JS recording parser");
+
+        assert_eq!(outcome.discovered_files, 6);
+        let contexts = parser.contexts.lock().expect("recorded contexts");
+        assert_eq!(contexts.len(), 6);
+        for context in contexts.iter() {
+            assert_eq!(
+                context.tsjs_module_paths,
+                ["src/app.ts", "src/lib/client.js", "tests/app.test.ts"]
+            );
+            assert_eq!(context.tsjs_path_aliases.len(), 4);
+            assert_eq!(context.tsjs_path_aliases[0].alias_pattern, "@app");
+            assert_eq!(context.tsjs_path_aliases[0].target_patterns, ["src/app.ts"]);
+            assert_eq!(context.tsjs_path_aliases[1].alias_pattern, "@lib/*");
+            assert_eq!(context.tsjs_path_aliases[1].target_patterns, ["src/lib/*"]);
+            assert_eq!(context.tsjs_path_aliases[2].alias_pattern, "@shared/*");
+            assert_eq!(
+                context.tsjs_path_aliases[2].target_patterns,
+                ["src/shared/*"]
+            );
+            assert_eq!(context.tsjs_path_aliases[3].alias_pattern, "@test/*");
+            assert_eq!(context.tsjs_path_aliases[3].target_patterns, ["tests/*"]);
+            assert!(context.tsjs_has_test_runner_context);
+            assert!(context.tsjs_module_paths.iter().all(|path| {
+                (path.ends_with(".ts") || path.ends_with(".js"))
+                    && !Path::new(path).is_absolute()
+                    && !path.contains("..")
+                    && !path.contains(workspace.path().to_string_lossy().as_ref())
+            }));
         }
     }
 

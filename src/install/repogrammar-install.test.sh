@@ -58,6 +58,20 @@ test -f "${TMP_ROOT}/share/repogrammar/workers/python/worker.py"
 test -f "${COMMAND_DIR}/repogrammar-workers/python/worker.py"
 test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
 
+STATE_REPO="${TMP_ROOT}/state-boundary-repo"
+STATE_COMMAND_DIR="${TMP_ROOT}/state-boundary-bin"
+STATE_INSTALL_DIR="${TMP_ROOT}/state-boundary-data"
+mkdir -p "${STATE_REPO}/.repogrammar"
+printf 'keep\n' > "${STATE_REPO}/.repogrammar/sentinel"
+(
+  cd "$STATE_REPO"
+  REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$STATE_COMMAND_DIR" \
+  REPOGRAMMAR_INSTALL_DIR="$STATE_INSTALL_DIR" \
+  "$INSTALLER" --install-cli-only --yes >/dev/null
+)
+grep -q "keep" "${STATE_REPO}/.repogrammar/sentinel"
+
 REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
 REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
@@ -145,20 +159,19 @@ FOREIGN_INSTALL_DIR="${TMP_ROOT}/foreign-data"
 mkdir -p "$FOREIGN_COMMAND_DIR"
 printf 'foreign\n' > "${FOREIGN_COMMAND_DIR}/repogrammar"
 chmod +x "${FOREIGN_COMMAND_DIR}/repogrammar"
-FOREIGN_ERR="${TMP_ROOT}/foreign.err"
-set +e
 REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$FOREIGN_COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$FOREIGN_INSTALL_DIR" \
-"$INSTALLER" --install-cli-only --from-source --yes >"${TMP_ROOT}/foreign.out" 2>"$FOREIGN_ERR"
-FOREIGN_STATUS=$?
-set -e
-if [[ "$FOREIGN_STATUS" -eq 0 ]]; then
-  echo "foreign command path unexpectedly succeeded" >&2
+"$INSTALLER" --install-cli-only --from-source --yes >"${TMP_ROOT}/foreign.out"
+"${FOREIGN_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
+shopt -s nullglob
+FOREIGN_BACKUPS=("${FOREIGN_COMMAND_DIR}"/repogrammar.unmanaged-backup*)
+shopt -u nullglob
+if [[ "${#FOREIGN_BACKUPS[@]}" -ne 1 ]]; then
+  echo "expected one unmanaged command backup" >&2
   exit 1
 fi
-grep -q "not managed by RepoGrammar" "$FOREIGN_ERR"
-grep -q "foreign" "${FOREIGN_COMMAND_DIR}/repogrammar"
+grep -q "foreign" "${FOREIGN_BACKUPS[0]}"
 
 FAKE_PATH="${TMP_ROOT}/fake-path"
 mkdir -p "$FAKE_PATH"
@@ -181,5 +194,82 @@ if [[ "$NO_RELEASE_STATUS" -eq 0 ]]; then
   exit 1
 fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
+grep -q -- "--version v0.2.0-preview.0" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
+
+UNEXPECTED_RELEASE="${TMP_ROOT}/unexpected-release"
+UNEXPECTED_PACKAGE="${TMP_ROOT}/unexpected-package"
+mkdir -p "$UNEXPECTED_RELEASE" "$UNEXPECTED_PACKAGE/workers/python"
+cp "${PACKAGE_DIR}/repogrammar" "${UNEXPECTED_PACKAGE}/repogrammar"
+cp "${PACKAGE_DIR}/workers/python/worker.py" "${UNEXPECTED_PACKAGE}/workers/python/worker.py"
+printf 'unexpected\n' > "${UNEXPECTED_PACKAGE}/unexpected.txt"
+tar -czf "${UNEXPECTED_RELEASE}/${ARTIFACT}" -C "$UNEXPECTED_PACKAGE" repogrammar workers unexpected.txt
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$UNEXPECTED_RELEASE" && sha256sum "$ARTIFACT" > "${ARTIFACT}.sha256")
+else
+  (cd "$UNEXPECTED_RELEASE" && shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256")
+fi
+UNEXPECTED_ERR="${TMP_ROOT}/unexpected.err"
+set +e
+REPOGRAMMAR_RELEASE_DIR="$UNEXPECTED_RELEASE" \
+REPOGRAMMAR_COMMAND_DIR="${TMP_ROOT}/unexpected-bin" \
+REPOGRAMMAR_INSTALL_DIR="${TMP_ROOT}/unexpected-data" \
+"$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/unexpected.out" 2>"$UNEXPECTED_ERR"
+UNEXPECTED_STATUS=$?
+set -e
+if [[ "$UNEXPECTED_STATUS" -eq 0 ]]; then
+  echo "unexpected release path unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "unsafe or unexpected path" "$UNEXPECTED_ERR"
+if [[ -e "${TMP_ROOT}/unexpected-bin/repogrammar" || -e "${TMP_ROOT}/unexpected-data/bin/repogrammar" ]]; then
+  echo "unexpected release left a partial command install" >&2
+  exit 1
+fi
+
+MISSING_WORKER_RELEASE="${TMP_ROOT}/missing-worker-release"
+MISSING_WORKER_PACKAGE="${TMP_ROOT}/missing-worker-package"
+mkdir -p "$MISSING_WORKER_RELEASE" "$MISSING_WORKER_PACKAGE"
+cp "${PACKAGE_DIR}/repogrammar" "${MISSING_WORKER_PACKAGE}/repogrammar"
+tar -czf "${MISSING_WORKER_RELEASE}/${ARTIFACT}" -C "$MISSING_WORKER_PACKAGE" repogrammar
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$MISSING_WORKER_RELEASE" && sha256sum "$ARTIFACT" > "${ARTIFACT}.sha256")
+else
+  (cd "$MISSING_WORKER_RELEASE" && shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256")
+fi
+MISSING_WORKER_ERR="${TMP_ROOT}/missing-worker.err"
+set +e
+REPOGRAMMAR_RELEASE_DIR="$MISSING_WORKER_RELEASE" \
+REPOGRAMMAR_COMMAND_DIR="${TMP_ROOT}/missing-worker-bin" \
+REPOGRAMMAR_INSTALL_DIR="${TMP_ROOT}/missing-worker-data" \
+"$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/missing-worker.out" 2>"$MISSING_WORKER_ERR"
+MISSING_WORKER_STATUS=$?
+set -e
+if [[ "$MISSING_WORKER_STATUS" -eq 0 ]]; then
+  echo "missing worker release unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "bundled Python worker" "$MISSING_WORKER_ERR"
+if [[ -e "${TMP_ROOT}/missing-worker-bin/repogrammar" || -e "${TMP_ROOT}/missing-worker-data/bin/repogrammar" ]]; then
+  echo "missing worker release left a partial command install" >&2
+  exit 1
+fi
+
+RELEASE_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/release.yml"
+grep -q "repogrammar-x86_64-unknown-linux-gnu.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-aarch64-unknown-linux-gnu.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-x86_64-apple-darwin.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-aarch64-apple-darwin.tar.gz" "$RELEASE_WORKFLOW"
+grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$RELEASE_WORKFLOW"
+grep -q "src/workers/python/worker.py" "$RELEASE_WORKFLOW"
+grep -q "install.sh" "$RELEASE_WORKFLOW"
+grep -q "install.ps1" "$RELEASE_WORKFLOW"
+grep -q ".sha256" "$RELEASE_WORKFLOW"
+
+WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
+grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
+grep -q "Get-FileHash -Algorithm SHA256" "$WINDOWS_INSTALLER"
+grep -q "Assert-SafeArchiveEntries" "$WINDOWS_INSTALLER"
+grep -q "release artifact was not found" "$WINDOWS_INSTALLER"
+grep -q "v0.2.0-preview.0" "$WINDOWS_INSTALLER"

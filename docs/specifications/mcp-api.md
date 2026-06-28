@@ -1,8 +1,8 @@
 # MCP API Specification
 
 The MCP interface is implemented as a minimal pre-alpha read-only stdio server.
-This file records the concrete v0.1 bootstrap tool boundary without claiming a
-final stable API or installer integration.
+This file records the concrete bootstrap tool boundary and the current
+Codex/Claude Code installer wiring without claiming a final stable API.
 
 ## Default tool surface
 
@@ -129,8 +129,11 @@ validation, fills line ranges for rendered spans, and returns line-numbered
 text under a separate `source_spans` object. The read plan never includes
 absolute paths and does not imply source edits are safe outside listed ranges.
 Output metadata includes the selection strategy, estimated evidence tokens,
-estimated read-plan tokens, covered claim labels, missing claim labels, and
-whether the rough budget was satisfied.
+estimated read-plan tokens, `estimated_potential_token_savings` with
+`measurement_kind: ESTIMATED`, covered claim labels, missing claim labels, and
+whether the rough budget was satisfied. `estimated_potential_token_savings` is
+a potential read-displacement estimate for the returned RepoGrammar metadata
+shape; it is not measured token savings and must carry a caveat saying so.
 Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
 `support`, `variation`, and `exception`; selectors must consume those labels
@@ -153,10 +156,13 @@ use normal Read/Grep for the affected case.
 
 `repogrammar serve` runs a newline-delimited JSON-RPC stdio loop for
 `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, and
-`shutdown`. v0.1 serving behavior defaults to read-only and must not modify
-business code from pattern-family results. MCP serving uses a read-only runtime
-facade that can only request repository status and pattern-family lookup.
-Indexing remains the only writer.
+`shutdown`. v0.1 serving behavior defaults to read-only for source, index,
+family, and business-code state and must not modify business code from
+pattern-family results. MCP serving uses a read-only analysis runtime facade
+that can only request repository status and pattern-family lookup. Indexing
+remains the only writer for repository analysis state. The only allowed MCP
+side effect is the local aggregate metric described below; it is not source,
+index, family, or agent configuration state.
 
 `tools/list` returns exactly one default tool, `repogrammar_context`.
 `tools/call` wraps the RepoGrammar JSON payload in a standard MCP text content
@@ -182,6 +188,11 @@ budgets, and malformed argument types are transport/schema errors.
 MCP calls must not wait on telemetry network activity and must not trigger
 telemetry upload. Anonymous telemetry upload is only attempted by explicit
 `repogrammar telemetry upload` after consent and endpoint validation.
+Successful family-context MCP calls may best-effort update the repo-local
+aggregate `.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`.
+That local file stores only aggregate estimated token counts, event count,
+`ESTIMATED` kind, and caveat text; it must not store operation targets, paths,
+content hashes, prompts, source, evidence text, symbols, or raw errors.
 Claude Code and Codex integrations both point at this same read-only MCP server;
 agent installation and uninstallation are machine-level configuration workflows
 and must not change MCP tool semantics, initialize a repository, index code,
@@ -200,6 +211,12 @@ grep/find/manual reads for implementation-pattern analogues, family
 conformance, deviations, or repeated framework behavior. Agents must fall back
 to normal Read/Grep when RepoGrammar returns `UNKNOWN`, stale/omitted spans, or
 insufficient support.
+When Rust self-dogfood families or conservative TS/JS
+Express/Jest/Vitest/Next/Fastify/Prisma/Drizzle families are present, MCP
+returns them through the same metadata-only/read-plan contract as Python
+families. The MCP surface does not expose Tree-sitter nodes, Cargo output, rustc
+output, TypeScript compiler output, source text by default, or additional
+language-specific tools.
 
 ## Boundary rules
 

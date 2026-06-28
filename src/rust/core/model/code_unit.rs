@@ -45,6 +45,9 @@ pub enum Language {
     JavaScript,
     Python,
     PythonConfig,
+    TsJsConfig,
+    Rust,
+    RustConfig,
     Unknown(String),
 }
 
@@ -55,6 +58,9 @@ impl Language {
             Self::JavaScript => "javascript",
             Self::Python => "python",
             Self::PythonConfig => "python-config",
+            Self::TsJsConfig => "tsjs-config",
+            Self::Rust => "rust",
+            Self::RustConfig => "rust-config",
             Self::Unknown(value) => value.as_str(),
         }
     }
@@ -71,6 +77,17 @@ pub enum CodeUnitKind {
     ReactComponent,
     ReactHook,
     ExpressRoute,
+    NextAppPage,
+    NextAppLayout,
+    NextRouteHandler,
+    NextPagesApiRoute,
+    NextPagesPage,
+    FastifyRoute,
+    PrismaQuery,
+    PrismaTransaction,
+    DrizzleSchemaTable,
+    DrizzleQuery,
+    DrizzleTransaction,
     TestSuite,
     TestCase,
     FastApiRoute,
@@ -79,6 +96,20 @@ pub enum CodeUnitKind {
     PydanticModel,
     SqlAlchemyModel,
     SqlAlchemyRepositoryMethod,
+    RustModule,
+    RustInlineModule,
+    RustExternalModule,
+    RustUseItem,
+    RustStruct,
+    RustEnum,
+    RustTrait,
+    RustImplBlock,
+    RustFunction,
+    RustMethod,
+    RustTraitMethod,
+    RustAssociatedFunction,
+    RustMacroInvocation,
+    RustTestFunction,
     ProjectConfig,
     Unknown,
 }
@@ -95,6 +126,17 @@ impl CodeUnitKind {
             Self::ReactComponent => "react_component",
             Self::ReactHook => "react_hook",
             Self::ExpressRoute => "express_route",
+            Self::NextAppPage => "next_app_page",
+            Self::NextAppLayout => "next_app_layout",
+            Self::NextRouteHandler => "next_route_handler",
+            Self::NextPagesApiRoute => "next_pages_api_route",
+            Self::NextPagesPage => "next_pages_page",
+            Self::FastifyRoute => "fastify_route",
+            Self::PrismaQuery => "prisma_query",
+            Self::PrismaTransaction => "prisma_transaction",
+            Self::DrizzleSchemaTable => "drizzle_schema_table",
+            Self::DrizzleQuery => "drizzle_query",
+            Self::DrizzleTransaction => "drizzle_transaction",
             Self::TestSuite => "test_suite",
             Self::TestCase => "test_case",
             Self::FastApiRoute => "fastapi_route",
@@ -103,6 +145,20 @@ impl CodeUnitKind {
             Self::PydanticModel => "pydantic_model",
             Self::SqlAlchemyModel => "sqlalchemy_model",
             Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
+            Self::RustModule => "rust_module",
+            Self::RustInlineModule => "rust_inline_module",
+            Self::RustExternalModule => "rust_external_module",
+            Self::RustUseItem => "rust_use_item",
+            Self::RustStruct => "rust_struct",
+            Self::RustEnum => "rust_enum",
+            Self::RustTrait => "rust_trait",
+            Self::RustImplBlock => "rust_impl_block",
+            Self::RustFunction => "rust_function",
+            Self::RustMethod => "rust_method",
+            Self::RustTraitMethod => "rust_trait_method",
+            Self::RustAssociatedFunction => "rust_associated_function",
+            Self::RustMacroInvocation => "rust_macro_invocation",
+            Self::RustTestFunction => "rust_test_function",
             Self::ProjectConfig => "project_config",
             Self::Unknown => "unknown",
         }
@@ -158,6 +214,9 @@ mod tests {
     fn python_language_and_unit_kinds_use_stable_tokens() {
         assert_eq!(Language::Python.as_str(), "python");
         assert_eq!(Language::PythonConfig.as_str(), "python-config");
+        assert_eq!(Language::TsJsConfig.as_str(), "tsjs-config");
+        assert_eq!(Language::Rust.as_str(), "rust");
+        assert_eq!(Language::RustConfig.as_str(), "rust-config");
         assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");
         assert_eq!(CodeUnitKind::FastApiRoute.as_str(), "fastapi_route");
         assert_eq!(CodeUnitKind::PytestTest.as_str(), "pytest_test");
@@ -167,6 +226,35 @@ mod tests {
         assert_eq!(
             CodeUnitKind::SqlAlchemyRepositoryMethod.as_str(),
             "sqlalchemy_repository_method"
+        );
+        assert_eq!(CodeUnitKind::RustModule.as_str(), "rust_module");
+        assert_eq!(
+            CodeUnitKind::RustInlineModule.as_str(),
+            "rust_inline_module"
+        );
+        assert_eq!(
+            CodeUnitKind::RustExternalModule.as_str(),
+            "rust_external_module"
+        );
+        assert_eq!(CodeUnitKind::RustUseItem.as_str(), "rust_use_item");
+        assert_eq!(CodeUnitKind::RustStruct.as_str(), "rust_struct");
+        assert_eq!(CodeUnitKind::RustEnum.as_str(), "rust_enum");
+        assert_eq!(CodeUnitKind::RustTrait.as_str(), "rust_trait");
+        assert_eq!(CodeUnitKind::RustImplBlock.as_str(), "rust_impl_block");
+        assert_eq!(CodeUnitKind::RustFunction.as_str(), "rust_function");
+        assert_eq!(CodeUnitKind::RustMethod.as_str(), "rust_method");
+        assert_eq!(CodeUnitKind::RustTraitMethod.as_str(), "rust_trait_method");
+        assert_eq!(
+            CodeUnitKind::RustAssociatedFunction.as_str(),
+            "rust_associated_function"
+        );
+        assert_eq!(
+            CodeUnitKind::RustMacroInvocation.as_str(),
+            "rust_macro_invocation"
+        );
+        assert_eq!(
+            CodeUnitKind::RustTestFunction.as_str(),
+            "rust_test_function"
         );
         assert_eq!(CodeUnitKind::ProjectConfig.as_str(), "project_config");
     }

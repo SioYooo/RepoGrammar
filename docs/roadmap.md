@@ -34,8 +34,9 @@
   structural code units in active SQLite generations without source snippets,
   absolute paths, or family evidence.
 - Lightweight TS/JS framework-role fact storage for syntax-origin Express,
-  React, and Jest/Vitest code-unit shapes, using `FRAMEWORK_HEURISTIC`
-  certainty and unresolved-binding assumptions without enabling family claims.
+  React, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle code-unit shapes,
+  using `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions
+  without enabling family claims by themselves.
 - Lightweight Python framework-role fact storage for CPython AST-origin
   FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
@@ -45,6 +46,12 @@
   pattern-family questions, and CLI/MCP expose explicit bounded source-span
   opt-in over hash-checked read-plan spans while keeping metadata-only output as
   the default.
+- v0.2 conservative TS/JS exact-anchor family support for Express route
+  handlers, Jest/Vitest suites/tests, and structural-preview Next.js, Fastify,
+  Prisma, and Drizzle adapters. Support is derived only from exact structural
+  anchors, requires at least three complete-link-compatible members, and blocks
+  dynamic, unsafe, unresolved, stale, raw, or insufficient evidence with typed
+  `UNKNOWN`.
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.
@@ -158,7 +165,11 @@ derivation, bounded same-function FastAPI service-call context anchors, plus an
 internal semantic-fact file-hash freshness and claim-input
 readiness gate, and read-only MCP serving through the
 same query layer, narrow global Codex/Claude MCP installer writes, and the
-v0.1 TS/JS and Python release fixture smoke gates. The Rust ports layer now also
+v0.1 TS/JS and Python release fixture smoke gates. A v0.2 internal Rust
+self-dogfood slice now discovers `.rs`/`Cargo.toml`, uses Tree-sitter Rust for
+structural code units and typed UNKNOWNs, and can form conservative
+RepoGrammar-owned implementation families without running Cargo, rustc, build
+scripts, or macros. The Rust ports layer now also
 has a future Python semantic-provider contract for candidate-scoped requests,
 provider provenance assumptions, cache-key dimensions, and recoverable
 provider-unavailable `UNKNOWN`s, plus an internal planner for future Pyrefly
@@ -245,8 +256,14 @@ evidence contracts remain validated together.
 
 - Existing TS/JS discovery, syntax extraction, framework-role facts, worker
   protocol scaffolding, and fixtures remain transitional substrate.
-- Production-quality TS/JS family evidence is deferred until after Python v0.1
-  unless a later ADR changes scope again.
+- A conservative v0.2 token-saving path exists for Express, Jest/Vitest,
+  Next.js, Fastify, Prisma, and Drizzle under exact-anchor evidence only. It is
+  not compiler-backed TypeScript analysis, does not support React family claims,
+  and does not perform binding/export propagation beyond the bounded structural
+  project-context resolver.
+- Production-quality broad TS/JS family evidence remains deferred until after
+  the Python-first path validates the product surface, unless a later ADR
+  changes scope again.
 
 ## CodeGraph provider path
 
@@ -293,8 +310,9 @@ evidence contracts remain validated together.
 - Optional watcher/daemon support that marks affected families stale and lazily
   recomputes instead of eagerly rebuilding the whole repository.
 - MCP transport implementation for planned tools.
-- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first;
-  Express, NestJS, React, Jest, and Vitest move to the TS/JS follow-up path.
+- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first; broad
+  TS/JS semantics, NestJS, React family support, and richer TS/JS providers move
+  to the TS/JS follow-up path.
 
 ## Open design areas
 

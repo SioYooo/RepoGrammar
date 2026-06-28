@@ -14,6 +14,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$PreviewVersionHint = $(if ($env:REPOGRAMMAR_PREVIEW_VERSION_HINT) { $env:REPOGRAMMAR_PREVIEW_VERSION_HINT } else { "v0.2.0-preview.0" })
 
 function Show-Usage {
     Write-Output @"
@@ -54,6 +55,77 @@ function Get-ReleaseBase {
     return "https://github.com/$Repo/releases/download/$Version"
 }
 
+function Copy-ReleaseAsset([string]$Name, [string]$Destination) {
+    if ($env:REPOGRAMMAR_RELEASE_DIR) {
+        $localAsset = Join-Path $env:REPOGRAMMAR_RELEASE_DIR $Name
+        if (!(Test-Path $localAsset)) {
+            throw "release artifact not found in REPOGRAMMAR_RELEASE_DIR: $Name"
+        }
+        Copy-Item $localAsset $Destination
+        return
+    }
+    $base = Get-ReleaseBase
+    $url = "$base/$Name"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $Destination -ErrorAction Stop
+    } catch {
+        throw "release artifact was not found: $url. For preview prereleases, rerun with -Version <preview-tag> (for example: -Version $PreviewVersionHint). For local artifact testing, set REPOGRAMMAR_RELEASE_DIR to a directory containing the zip and .sha256 file."
+    }
+}
+
+function Normalize-ArchiveEntry([string]$Entry) {
+    $normalized = $Entry.Trim()
+    if ($normalized.StartsWith("./")) {
+        $normalized = $normalized.Substring(2)
+    }
+    while ($normalized.EndsWith("/")) {
+        $normalized = $normalized.Substring(0, $normalized.Length - 1)
+    }
+    return $normalized
+}
+
+function Assert-SafeArchiveEntries([string]$Archive) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $allowed = @(
+        "repogrammar.exe",
+        "workers",
+        "workers/python",
+        "workers/python/worker.py"
+    )
+    $hasBinary = $false
+    $hasWorker = $false
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $name = Normalize-ArchiveEntry ($entry.FullName)
+            if ([string]::IsNullOrWhiteSpace($name) -or
+                $name.StartsWith("/") -or
+                $name.Contains("\") -or
+                $name.Contains("://") -or
+                $name -match "^[A-Za-z]:" -or
+                ($name -split "/") -contains "." -or
+                ($name -split "/") -contains ".." -or
+                !($allowed -contains $name)) {
+                throw "release artifact contains unsafe or unexpected path: $($entry.FullName)"
+            }
+            if ($name -eq "repogrammar.exe") {
+                $hasBinary = $true
+            }
+            if ($name -eq "workers/python/worker.py") {
+                $hasWorker = $true
+            }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+    if (!$hasBinary) {
+        throw "release artifact did not contain repogrammar.exe"
+    }
+    if (!$hasWorker) {
+        throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
+    }
+}
+
 function Install-Cli {
     $artifact = "repogrammar-x86_64-pc-windows-msvc.zip"
     $installedBinary = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
@@ -65,40 +137,36 @@ function Install-Cli {
     try {
         $archive = Join-Path $temp.FullName $artifact
         $checksum = Join-Path $temp.FullName "$artifact.sha256"
-        if ($env:REPOGRAMMAR_RELEASE_DIR) {
-            Copy-Item (Join-Path $env:REPOGRAMMAR_RELEASE_DIR $artifact) $archive
-            Copy-Item (Join-Path $env:REPOGRAMMAR_RELEASE_DIR "$artifact.sha256") $checksum
-        } else {
-            $base = Get-ReleaseBase
-            Invoke-WebRequest -Uri "$base/$artifact" -OutFile $archive
-            Invoke-WebRequest -Uri "$base/$artifact.sha256" -OutFile $checksum
-        }
+        Copy-ReleaseAsset $artifact $archive
+        Copy-ReleaseAsset "$artifact.sha256" $checksum
         $expected = ((Get-Content $checksum -Raw) -split "\s+")[0].ToLowerInvariant()
         $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
         if ($expected -ne $actual) {
             throw "checksum verification failed for $artifact"
         }
+        Assert-SafeArchiveEntries $archive
         Expand-Archive -Path $archive -DestinationPath $temp.FullName -Force
         $binary = Join-Path $temp.FullName "repogrammar.exe"
         if (!(Test-Path $binary)) {
             throw "release artifact did not contain repogrammar.exe"
         }
+        $worker = Join-Path $temp.FullName "workers\python\worker.py"
+        if (!(Test-Path $worker)) {
+            throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
+        }
+        $workerRoots = @($WorkerRoot)
+        if (!$env:REPOGRAMMAR_WORKER_ROOT) {
+            $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
+        }
+        foreach ($root in ($workerRoots | Select-Object -Unique)) {
+            $workerDest = Join-Path $root "python"
+            New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
+            Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
+        }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
         Copy-Item $binary $installedBinary -Force
         New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
         Copy-Item $installedBinary $commandPath -Force
-        $worker = Join-Path $temp.FullName "workers\python\worker.py"
-        if (Test-Path $worker) {
-            $workerRoots = @($WorkerRoot)
-            if (!$env:REPOGRAMMAR_WORKER_ROOT) {
-                $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
-            }
-            foreach ($root in ($workerRoots | Select-Object -Unique)) {
-                $workerDest = Join-Path $root "python"
-                New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
-                Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
-            }
-        }
         Write-Output "Installed $commandPath"
     } finally {
         Remove-Item -Recurse -Force $temp.FullName -ErrorAction SilentlyContinue

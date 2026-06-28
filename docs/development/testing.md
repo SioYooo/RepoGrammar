@@ -36,7 +36,9 @@ allowed.
   and `receipts/init.json`,
   `uninit --yes`, unlock inspection without `--force --yes`, confirmed stale
   `index.lock` removal with `--force --yes`, active/unknown/invalid lock
-  refusal, daemon/SQLite lock preservation, and redacted logs metadata.
+  refusal, daemon/SQLite lock preservation, repo-local autosync
+  enable/status/disable config behavior, autosync daemon-lock inspection, and
+  redacted logs metadata.
 - File discovery tests must use temporary workspaces and cover TS/JS inclusion,
   Python `.py` inclusion, unsupported module extensions,
   default dependency/build/generated/state-dir
@@ -82,6 +84,14 @@ allowed.
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
   snippets or absolute paths in CLI output and stored metadata.
+- Auto-sync CLI tests must cover `autosync` defaulting to `status`,
+  `enable/start/status/stop/disable/run` routing, `--poll-ms` and
+  `--debounce-ms` validation, `--progress` compatibility, strict-gitignore
+  propagation, semantic worker environment inheritance, human and JSON output,
+  and no source snippets or absolute paths. Default tests must not start or kill
+  real user background services;
+  product-runtime background behavior may be covered through
+  temporary-repository smoke tests or ignored/manual tests.
 - Family storage tests must cover generation-scoped family records, members,
   variation slots, family-bound evidence, building-only writes, non-`UNKNOWN`
   family validation requiring evidence, active-generation list/show reads,
@@ -102,6 +112,16 @@ allowed.
   hash-mismatched span omission with Read/Grep fallback guidance, missing
   variation/exception coverage reporting, JSON/human CLI output, advisory
   `check` behavior, and absence of source snippets unless explicitly requested.
+- Rust self-dogfood tests must cover `.rs` and `Cargo.toml` discovery,
+  Tree-sitter Rust code-unit extraction, structural Rust anchors, typed
+  `MacroOrPreprocessor`, `BuildVariantAmbiguity`, `FrameworkMagic`, and
+  `UnresolvedImport` UNKNOWN boundaries, support>=3 for internal Rust families,
+  low-support abstention, default source-free CLI/MCP output, explicit
+  source-span opt-in, safe and unsafe module resolution, target-specific Cargo
+  dependency inventory, and fixtures under `src/fixtures/rust/release/v0_2/`
+  including `internal_family_gates`, `parser_adapters`, `installer_actions`,
+  `product_tests`, `low_support_family`, `macro_cfg_unknowns`,
+  `trait_dispatch_unknowns`, and `module_resolution`.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
@@ -144,16 +164,19 @@ allowed.
   installation, delegated
   `repogrammar install` / `repogrammar uninstall` invocation through a fake
   binary, source-checkout `--from-source` install/configure dogfood without
-  network access, actionable no-release failure text, refusal of foreign
-  command paths, target/scope pass-through for comma-separated, `none`, and
-  local-scope install requests, and command removal. Default tests must not use
-  wrapper scripts to call real `codex` or `claude` binaries.
+  network access, actionable no-release failure text, backup/replacement of
+  older unmanaged command files, missing-worker artifact rejection,
+  release-workflow artifact and installer-script checksum contract checks,
+  target/scope pass-through for comma-separated, `none`, and local-scope
+  install requests, and command removal. Default tests must not use wrapper
+  scripts to call real `codex` or `claude` binaries.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
-  cover target selection, checksum rejection, binary/worker cache installation,
-  `REPOGRAMMAR_BINARY` local dogfood bypass, argument forwarding including
-  target lists, local scope, and `--print-config`, and npm package shape via
-  `npm pack --dry-run`.
+  cover the full public-preview platform/artifact matrix, unsupported
+  platform/arch rejection, checksum rejection, binary/worker cache
+  installation, missing-worker artifact rejection, `REPOGRAMMAR_BINARY` local
+  dogfood bypass, argument forwarding including target lists, local scope, and
+  `--print-config`, and npm package shape via `npm pack --dry-run`.
 - Telemetry and metrics tests must cover default anonymous telemetry disabled,
   anonymous telemetry and research trace consent as separate state,
   `REPOGRAMMAR_TELEMETRY=0` and `DO_NOT_TRACK=1` forcing effective telemetry
@@ -164,7 +187,10 @@ allowed.
   payloads, explicit upload receipt behavior with fake transports, inspect-only
   telemetry export without queue/rollup creation, enabled `stats --json`
   writing only a bucketed local rollup and disabled stats writing no telemetry
-  state, redacted research export,
+  state, local-only `estimated_potential_token_savings` aggregate recording
+  without upload queue entries or source/path/hash/query fields, stats reporting
+  that aggregate as `ESTIMATED` while leaving measured `token_savings` null
+  without paired measurements, redacted research export,
   redacted experiment export without raw names/session ids/token counts, paired
   baseline/treatment token experiment recording, default-no experiment prompts,
   record-existing prompt no-extra-session wording, controlled-pair
@@ -239,11 +265,13 @@ allowed.
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, and absence of source snippets, absolute paths, or unsafe
   dynamic-import literal targets.
-- Transitional release fixture smoke tests currently copy committed TS/JS source
-  fixtures from `src/fixtures/typescript/release/v0_1/` and Python source
-  fixtures from `src/fixtures/python/release/v0_1/` into temporary workspaces and
-  run the product CLI through `init`, `index`, `files`, `units`, `families`,
-  `family`, `member`, `find`, `explain`, `check`, and `doctor` JSON paths.
+- Release fixture smoke tests currently copy committed TS/JS source fixtures
+  from both the legacy transitional `src/fixtures/typescript/release/v0_1/`
+  corpus and the conservative exact-anchor `src/fixtures/typescript/release/v0_2/`
+  corpus, plus Python source fixtures from `src/fixtures/python/release/v0_1/`,
+  into temporary workspaces and run the product CLI through `init`, `index`,
+  `files`, `units`, `families`, `family`, `member`, `find`, `explain`, `check`,
+  and `doctor` JSON paths.
   Default smoke expectations must remain conservative: syntax-only indexing
   succeeds, machine output is parseable and does not leak source snippets,
   parser/provider internals, or absolute paths, low-support and dynamic cases
@@ -263,15 +291,30 @@ allowed.
   (`src/rust/application/family.rs`), the derivation pass
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
-  object-literal/dynamic/reassigned/shadowed negatives, Jest/Vitest imported and
-  ambient-in-test-file positives, custom-wrapper and foreign-import negatives,
-  that `FRAMEWORK_HEURISTIC` facts never derive support, that only
+  Next.js App/Pages file-convention positives, Fastify shorthand/full route
+  positives, Prisma client/query/transaction positives, Drizzle schema/query
+  positives, object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed
+  negatives, typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver, runner,
+  route, client, and query boundaries, bounded
+  `package.json`/`tsconfig.json`/`jsconfig.json` project-config context, bounded
+  static relative/path-alias import resolution, typed `UNKNOWN` for dynamic
+  import, non-literal or conditional `require`, unresolved/conflicting aliases,
+  ambiguous star re-exports, Jest/Vitest imported positives,
+  ambient-in-test-file positives only with package/config test-runner context,
+  custom-wrapper and foreign-import negatives, that
+  `FRAMEWORK_HEURISTIC` facts never derive support, that only
   `repogrammar-tsjs-derived` `DATAFLOW_DERIVED` facts with exact whitelisted
-  targets form families, and that default JS/TS query output stays source-free
-  while `--include-source-spans` / `include_source_spans=true` returns bounded
+  targets form families, that TS/JS families require at least three compatible
+  support facts, that complete-link clustering rejects single-link bridge
+  members, that route/test/component/query variation slots are recorded from
+  context profiles, and that default JS/TS query output stays source-free while
+  `--include-source-spans` / `include_source_spans=true` returns bounded
   hash-checked line-numbered spans. Positive TS/JS family fixtures live under
-  `src/fixtures/typescript/release/v0_2/express_exact_routes` and
-  `jest_vitest_exact_tests`.
+  `src/fixtures/typescript/release/v0_2/express_exact_routes`,
+  `jest_vitest_exact_tests`, `next_exact_routes`, `fastify_exact_routes`,
+  `prisma_exact_repositories`, and `drizzle_exact_repositories`; package-only,
+  raw, dynamic, and unsupported lookalikes live under
+  `framework_adapter_negative_cases` and `unsupported_framework_lookalikes`.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,

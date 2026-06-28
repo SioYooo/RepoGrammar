@@ -94,7 +94,45 @@ Some unknowns block only specific claims:
   remain non-supporting external context;
 - dynamic FastAPI dependency target expressions may block the dependency-target
   sub-claim while still allowing a route family when route membership has enough
-  independent exact-anchor support.
+  independent exact-anchor support;
+- dynamic TS/JS route methods, unsafe or unresolved Express/Fastify receivers,
+  unsafe or unresolved Jest/Vitest runner bindings, Next.js route-convention
+  magic, Prisma injected/raw/dynamic clients, and Drizzle unresolved/raw/dynamic
+  builders may block the affected `tsjs_receiver_binding`,
+  `tsjs_runner_binding`, `tsjs_support_target`, or adapter-specific claim while
+  other exact-anchor units in the same repository can still form a family when
+  they have enough independent compatible support.
+- TS/JS dynamic imports, conditional or non-literal `require`, unresolved
+  repo-local imports, unresolved or conflicting path aliases, ambiguous star
+  re-exports, and missing ambient test-runner project context must remain typed
+  `UNKNOWN`. These unknowns may be blocking only when they affect framework
+  identity, runner/receiver binding, support target, or another emitted family
+  claim; otherwise they remain context/read-plan guard evidence and must not be
+  guessed away.
+- The TS/JS parser maps granular v0.2 cases onto the stable reason-code set:
+  dynamic `import(...)` is `DynamicImport`; non-literal or conditional
+  `require`, dynamic route/test calls, Next route group/server-client/middleware
+  magic, Fastify dynamic route options, Prisma callback/raw/dynamic operations,
+  and Drizzle raw/dynamic builders are `FrameworkMagic` or
+  `BuildVariantAmbiguity`; unresolved relative imports, unresolved path aliases,
+  unresolved Express/Fastify receivers, unresolved Prisma clients, unresolved
+  Drizzle db/table bindings, and missing ambient runner or Next package context
+  are `UnresolvedImport` or `MissingProjectConfig` as applicable; reassigned or
+  shadowed receivers, unsafe test runner bindings, conflicting path aliases, and
+  ambiguous star re-exports are `ConflictingFacts`. These mappings are
+  intentionally conservative and do not create new public reason codes for every
+  syntax shape.
+- Rust self-dogfood maps unresolved external modules to `UnresolvedImport`,
+  `#[cfg]` / `#[cfg_attr]` and target-specific Cargo sections to
+  `BuildVariantAmbiguity`, macro/proc-macro syntax to `MacroOrPreprocessor`,
+  trait-object dispatch to `FrameworkMagic`, and stale Rust source evidence to
+  `StaleEvidence`.
+- Rust UNKNOWNs block only the affected claim. `rust_build_variant`,
+  `rust_macro_expansion`, `rust_trait_dispatch`, `rust_module_resolution`, and
+  `rust_family_membership` block the relevant internal RepoGrammar family
+  claim; unrelated optional call-shape details may remain non-blocking
+  metadata. Rust UNKNOWNs must not be guessed away by naming convention or path
+  similarity.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

@@ -11,8 +11,10 @@ provenance. It must not contain Tree-sitter nodes or transport-specific types.
 
 Current syntax-only indexing can persist transitional TS/JS `CodeUnit` records
 for modules, functions, assigned arrow functions, classes, methods, React
-function components, custom hooks, Express route calls, and Jest/Vitest suite or
-test blocks. The first Python v0.1 slice can also persist CPython
+function components, custom hooks, Express route calls, Next.js App/Pages
+Router conventions, Fastify route declarations, Prisma query/transaction calls,
+Drizzle schema/query/transaction anchors, and Jest/Vitest suite or test blocks.
+The first Python v0.1 slice can also persist CPython
 `ast`-derived records for modules, functions, async functions, classes, methods,
 FastAPI route-shaped functions, pytest tests and fixtures, Pydantic model-shaped
 classes, SQLAlchemy model-shaped classes, and SQLAlchemy repository
@@ -55,10 +57,22 @@ while stale evidence, conflicting facts, structural certainty, framework
 heuristics, unknown certainty, and `UNKNOWN` fact kind are blocked with typed
 `UNKNOWN`. Readiness is not itself a family classification.
 Current default TS/JS indexing can store syntax-origin `FRAMEWORK_ROLE` facts
-for recognized Express, React, and Jest/Vitest code-unit shapes. These facts
-carry repo-relative code-unit evidence, `FRAMEWORK_HEURISTIC` certainty, and
-explicit unresolved-binding assumptions; they do not resolve TypeScript symbols,
-framework runtime behavior, or family membership.
+for recognized Express, React, Jest/Vitest, Next.js, Fastify, Prisma, and
+Drizzle code-unit shapes. These facts carry repo-relative code-unit evidence,
+`FRAMEWORK_HEURISTIC` certainty, and explicit unresolved-binding assumptions;
+they do not resolve TypeScript symbols, framework runtime behavior, or family
+membership.
+The TS/JS syntax parser can also persist `STRUCTURAL` exact-anchor facts for
+bounded Express, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle shapes,
+typed `UNKNOWN` facts for dynamic, unsafe, or unresolved
+receiver/runner/support-target/framework-magic boundaries, and structural
+project-config facts for bounded `package.json`, `tsconfig.json`,
+`jsconfig.json`, Jest config, and Vitest config inventory. Project-config facts
+remain context only. Only application-layer `repogrammar-tsjs-derived`
+`DATAFLOW_DERIVED` facts with exact whitelisted targets and framework-specific
+`derived_from=tsjs_<framework>_structural_anchors` assumptions can support
+conservative TS/JS families, and those families require repeated compatible
+support rather than a single syntax match.
 Current default Python indexing can store syntax-origin `FRAMEWORK_ROLE` facts
 for FastAPI route-shaped units, pytest tests/fixtures, Pydantic models,
 SQLAlchemy models, and SQLAlchemy repository methods. These facts also use
@@ -163,6 +177,17 @@ violates a meaningful rule. Counterexample storage is deferred.
 
 Compatibility expresses whether a target can be compared to a family:
 compatible, incompatible with reason, or unknown with reason.
+
+## Measurement
+
+Measurement kinds are `MEASURED`, `DERIVED`, `ESTIMATED`, and
+`CAUSAL_EXPERIMENT`. `EstimatedPotentialTokenSavings` is a core `ESTIMATED`
+measurement for the metric named `estimated_potential_token_savings`. It
+records aggregate-compatible estimated baseline tokens, estimated returned
+tokens, saturating potential savings, and a caveat that the value is not
+measured token savings. Actual `token_savings` remains a separate metric that
+requires comparable baseline/treatment session token counts and a measurement
+source.
 
 ## AbstentionReason
 

@@ -19,3 +19,17 @@ function buildApp() {
 buildApp().post("/dynamic", (req, res) => {
   res.end();
 });
+
+// Dynamic method: exact-anchor support requires a literal direct route method.
+const method = "get";
+app[method]("/dynamic-method", (req, res) => {
+  res.end();
+});
+
+// Reassigned receiver: even if the name started as an Express app, later writes
+// make the binding unsafe for family support.
+let unsafeApp = express();
+unsafeApp = buildApp();
+unsafeApp.get("/unsafe", (req, res) => {
+  res.end();
+});

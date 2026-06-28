@@ -4,7 +4,12 @@ use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
+use repogrammar::application::autosync::{
+    acquire_autosync_daemon, autosync_status, daemon_log_path, disable_autosync, enable_autosync,
+    stop_autosync, AutosyncReport, AutosyncRequest, AutosyncSettings,
+};
 use repogrammar::application::indexing::{
+    discover_repository_files,
     index_repository_with_discovery_parser_frameworks_families_and_store_with_progress,
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
@@ -30,17 +35,18 @@ use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
 #[cfg(test)]
 use repogrammar::interfaces::cli::run_with_runtime;
-#[cfg(test)]
-use repogrammar::interfaces::cli::ProgressMode;
 use repogrammar::interfaces::cli::{
     parse_serve_options, render_index_progress_event, repository_root,
-    run_with_runtime_and_install_prompt, should_emit_progress, state_dir_override, CliIndexRequest,
-    CliRuntime, InstallTelemetryPrompt,
+    run_with_runtime_and_install_prompt, semantic_worker_args_from_env_lookup,
+    should_emit_progress, state_dir_override, AutosyncCommand, CliAutosyncRequest, CliIndexRequest,
+    CliRuntime, InstallTelemetryPrompt, ProgressMode,
 };
 use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
+use sha2::{Digest, Sha256};
+use std::fs;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -105,6 +111,164 @@ impl ProductCliRuntime {
     ) -> Result<SqliteIndexStore, RepoGrammarError> {
         let location = repository_state_location(request.clone())?;
         Ok(SqliteIndexStore::new(location.state_dir))
+    }
+
+    fn autosync_request(&self, request: &CliAutosyncRequest) -> AutosyncRequest {
+        AutosyncRequest {
+            path: request.repository_root.clone(),
+            state_dir_override: request.state_dir_override.clone(),
+        }
+    }
+
+    fn autosync_settings(&self, request: &CliAutosyncRequest) -> AutosyncSettings {
+        AutosyncSettings {
+            poll_ms: request.poll_ms,
+            debounce_ms: request.debounce_ms,
+        }
+    }
+
+    fn repository_fingerprint(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<String, RepoGrammarError> {
+        let report = discover_repository_files(
+            IndexingRequest {
+                repository_root: request.repository_root.clone(),
+                state_dir_override: request.state_dir_override.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                strict_gitignore: request.strict_gitignore,
+            },
+            &FilesystemFileDiscovery,
+        )?;
+        let mut hasher = Sha256::new();
+        for file in report.files {
+            hasher.update(file.path.as_bytes());
+            hasher.update([0]);
+            hasher.update(file.content_hash.as_str().as_bytes());
+            hasher.update([0]);
+            hasher.update(file.size_bytes.to_string().as_bytes());
+            hasher.update([0]);
+            hasher.update(file.language.as_str().as_bytes());
+            hasher.update([0xff]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    fn run_autosync_loop(
+        &self,
+        request: CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(&request);
+        let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let semantic_worker_executable =
+            env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
+        let semantic_worker_args = semantic_worker_args_from_env_lookup(&env_lookup)
+            .map_err(RepoGrammarError::InvalidInput)?;
+        if semantic_worker_executable.is_none() && !semantic_worker_args.is_empty() {
+            return Err(RepoGrammarError::InvalidInput(
+                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON requires REPOGRAMMAR_TYPESCRIPT_WORKER"
+                    .to_string(),
+            ));
+        }
+        let mut current = self.repository_fingerprint(&request)?;
+        if !request.quiet {
+            eprintln!("autosync: watching repository for changes");
+        }
+        loop {
+            std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            let next = self.repository_fingerprint(&request)?;
+            if next == current {
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(settings.debounce_ms));
+            let stable = self.repository_fingerprint(&request)?;
+            if stable == current {
+                continue;
+            }
+            current = stable;
+            if !request.quiet {
+                eprintln!("autosync: change detected; running sync");
+            }
+            let sync_request = CliIndexRequest {
+                repository_root: root.display().to_string(),
+                state_dir_override: request.state_dir_override.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+                strict_gitignore: request.strict_gitignore,
+                semantic_worker_executable: semantic_worker_executable.clone(),
+                semantic_worker_args: semantic_worker_args.clone(),
+                progress: ProgressMode::Never,
+                json: false,
+                quiet: true,
+                stderr_is_terminal: false,
+            };
+            match self.index_repository("sync", sync_request) {
+                Ok(_) if !request.quiet => eprintln!("autosync: sync complete"),
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("autosync: sync failed: {error}");
+                }
+            }
+        }
+    }
+
+    fn start_autosync_process(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(request);
+        let settings = self.autosync_settings(request);
+        enable_autosync(autosync_request.clone(), settings)?;
+        let status = autosync_status(autosync_request.clone())?;
+        if status.running {
+            return Ok(AutosyncReport {
+                message: "auto-sync is already running".to_string(),
+                ..status
+            });
+        }
+        let log_path = daemon_log_path(&autosync_request)?;
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .map_err(|_| {
+                RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
+            })?;
+        let log_err = log.try_clone().map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
+        })?;
+        let mut command = Command::new(std::env::current_exe().map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+        })?);
+        command
+            .arg("autosync")
+            .arg("run")
+            .arg("--path")
+            .arg(&request.repository_root)
+            .arg("--poll-ms")
+            .arg(request.poll_ms.to_string())
+            .arg("--debounce-ms")
+            .arg(request.debounce_ms.to_string())
+            .arg("--quiet")
+            .current_dir(&request.repository_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err));
+        if let Some(state_dir) = &request.state_dir_override {
+            command.env("REPOGRAMMAR_DIR", state_dir);
+        }
+        let child = command
+            .spawn()
+            .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))?;
+        Ok(AutosyncReport {
+            state_dir: status.state_dir,
+            enabled: true,
+            running: true,
+            pid: Some(child.id()),
+            poll_ms: request.poll_ms,
+            debounce_ms: request.debounce_ms,
+            message: "auto-sync started".to_string(),
+        })
     }
 }
 
@@ -212,6 +376,23 @@ impl CliRuntime for ProductCliRuntime {
         };
         let store = self.store_for_status_request(&status_request)?;
         repository_doctor_with_storage(request, &store)
+    }
+
+    fn autosync(
+        &self,
+        command: AutosyncCommand,
+        request: CliAutosyncRequest,
+    ) -> Result<AutosyncReport, RepoGrammarError> {
+        let autosync_request = self.autosync_request(&request);
+        let settings = self.autosync_settings(&request);
+        match command {
+            AutosyncCommand::Enable => enable_autosync(autosync_request, settings),
+            AutosyncCommand::Disable => disable_autosync(autosync_request),
+            AutosyncCommand::Start => self.start_autosync_process(&request),
+            AutosyncCommand::Stop => stop_autosync(autosync_request),
+            AutosyncCommand::Status => autosync_status(autosync_request),
+            AutosyncCommand::Run => self.run_autosync_loop(request),
+        }
     }
 
     fn indexed_files(
@@ -724,7 +905,8 @@ fn run_native_agent_command(
 mod tests {
     use super::*;
     use repogrammar::application::query::{
-        assess_semantic_fact_readiness, list_semantic_facts, SemanticFactReadinessRequest,
+        assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
+        SemanticFactReadinessRequest,
     };
     use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision, UnknownReasonCode};
     use repogrammar::core::policy::freshness::ClaimInputReadiness;
@@ -811,12 +993,25 @@ mod tests {
             .join("v0_2")
     }
 
+    fn rust_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("rust")
+            .join("release")
+            .join("v0_2")
+    }
+
     fn copy_release_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_root().join(name), destination);
     }
 
     fn copy_release_v0_2_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
+    }
+
+    fn copy_rust_release_v0_2_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&rust_release_fixture_v0_2_root().join(name), destination);
     }
 
     fn copy_python_release_fixture(name: &str, destination: &Path) {
@@ -874,8 +1069,19 @@ mod tests {
             !output.contains(release_fixture_v0_2_root().to_string_lossy().as_ref()),
             "{command} leaked absolute v0.2 fixture path: {output}"
         );
+        assert!(
+            !output.contains(rust_release_fixture_v0_2_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute Rust v0.2 fixture path: {output}"
+        );
         for snippet in [
             "app.get(",
+            "app.route(",
+            "NextResponse",
+            "Response.json",
+            "PrismaClient",
+            "pgTable",
+            "drizzle(",
+            "db.select",
             "export function",
             "describe(",
             "expect(",
@@ -915,6 +1121,10 @@ mod tests {
             "python-fixture-provider",
             "release_fixture_semantic_support",
             "origin_engine",
+            "pub fn support_",
+            "fn validate_family",
+            "#[cfg(",
+            "macro_rules!",
         ] {
             assert!(
                 !output.contains(snippet),
@@ -1432,6 +1642,9 @@ mod tests {
             }
             DiscoveredLanguage::Python => Language::Python,
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
+            DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+            DiscoveredLanguage::Rust => Language::Rust,
+            DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
     }
 
@@ -2010,14 +2223,19 @@ mod tests {
         let workspace = TempWorkspace::new("product-runtime-positive-family");
         fs::write(
             workspace.path().join("users.ts"),
-            "app.get('/users', function listUsers(req, res) { res.json([]); });\n",
+            "import express from 'express';\nconst app = express();\napp.get('/users', function listUsers(req, res) { res.json([]); });\n",
         )
         .expect("write users route");
         fs::write(
             workspace.path().join("accounts.ts"),
-            "app.get('/accounts', function listAccounts(req, res) { res.json([]); });\n",
+            "import express from 'express';\nconst app = express();\napp.get('/accounts', function listAccounts(req, res) { res.json([]); });\n",
         )
         .expect("write accounts route");
+        fs::write(
+            workspace.path().join("orders.ts"),
+            "import express from 'express';\nconst app = express();\napp.get('/orders', function listOrders(req, res) { res.json([]); });\n",
+        )
+        .expect("write orders route");
         let worker_script = semantic_support_worker_script(&workspace);
         let runtime = ProductCliRuntime;
         let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
@@ -2044,7 +2262,7 @@ mod tests {
             outcome.semantic_worker,
             repogrammar::application::indexing::SemanticWorkerRunStatus::Complete
         );
-        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(outcome.semantic_facts, 12);
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2410,6 +2628,400 @@ mod tests {
             .collect()
     }
 
+    fn index_rust_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_rust_release_v0_2_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "Rust fixture should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    fn rust_derived_support_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<(String, String, String)> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.certainty == "DATAFLOW_DERIVED"
+                && fact.origin_engine == "repogrammar-frameworks")
+        }));
+        facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-rust-derived"
+                    && fact.origin_method == "bounded_tree_sitter_anchor_v1"
+            })
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                (
+                    fact.path.clone(),
+                    fact.target.clone().unwrap_or_default(),
+                    fact.certainty.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn rust_semantic_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> IndexedSemanticFactsReport {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store).expect("list semantic facts")
+    }
+
+    fn rust_family_json(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> Value {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        parse_machine_output("families", &families, workspace)
+    }
+
+    fn assert_rust_family_role(value: &Value, role_token: &str, min_support: u64) {
+        assert!(
+            value["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(role_token))
+                    && family["support"].as_u64().unwrap_or_default() >= min_support),
+            "missing Rust family role {role_token} with support >= {min_support}: {value}"
+        );
+    }
+
+    #[test]
+    fn rust_structural_self_dogfood_forms_internal_family_without_source_snippets() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("internal_family_gates", "rust-release-family-gates");
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let rust_functions = units_json["units"]
+            .as_array()
+            .expect("units")
+            .iter()
+            .filter(|unit| {
+                unit["language"] == "rust"
+                    && unit["kind"] == "rust_function"
+                    && unit["path"] == "src/rust/application/family.rs"
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            rust_functions.len() >= 4,
+            "expected Rust functions, got {units_json}"
+        );
+
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        let family_gate_support = derived
+            .iter()
+            .filter(|(path, target, certainty)| {
+                path == "src/rust/application/family.rs"
+                    && target == "repogrammar.rust.family_gate"
+                    && certainty == "DATAFLOW_DERIVED"
+            })
+            .count();
+        assert!(
+            family_gate_support >= 4,
+            "Rust structural anchors should derive bounded support: {derived:?}"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        let family = &family_array[0];
+        assert_eq!(family["classification"], "DOMINANT_PATTERN");
+        assert_eq!(family["support"], 3);
+        let family_id = family["family_id"].as_str().expect("family id");
+        assert!(
+            family_id
+                .starts_with("family:rust:rust_function:framework_repogrammar_rust_family_gate"),
+            "unexpected Rust family id: {family_id}"
+        );
+
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
+        assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
+        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+
+        let spanned = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(spanned.status, 0, "stderr: {}", spanned.stderr);
+        assert!(!spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let spanned_json: Value =
+            serde_json::from_str(spanned.stdout.trim()).expect("span json parses");
+        assert_eq!(spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        assert!(spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| span["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("pub fn support_"))));
+
+        fs::write(
+            workspace.path().join("src/rust/application/family.rs"),
+            "pub fn support_route_family(value: usize) -> Result<usize, String> { Ok(value) }\n",
+        )
+        .expect("mutate Rust family fixture");
+        let stale = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_python_stale_unknown("family", &stale_json, family_id);
+        assert!(stale_json.get("source_spans").is_none());
+    }
+
+    #[test]
+    fn rust_release_fixtures_form_required_internal_role_families() {
+        for (fixture, role_token, support) in [
+            (
+                "parser_adapters",
+                "framework_repogrammar_rust_parser_adapter",
+                2,
+            ),
+            (
+                "installer_actions",
+                "framework_repogrammar_rust_installer_action",
+                3,
+            ),
+            (
+                "product_tests",
+                "framework_repogrammar_rust_product_test",
+                3,
+            ),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-required-{fixture}"),
+            );
+            let derived = rust_derived_support_facts(&runtime, &workspace);
+            assert!(
+                derived
+                    .iter()
+                    .filter(|(_, target, _)| target.starts_with("repogrammar.rust."))
+                    .count()
+                    >= support as usize,
+                "{fixture} should derive Rust support facts: {derived:?}"
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert_eq!(families_json["status"], "ok");
+            assert_rust_family_role(&families_json, role_token, support);
+        }
+    }
+
+    #[test]
+    fn rust_low_support_stays_unknown_without_family_rows() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("low_support_family", "rust-release-low-support");
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        let family_gate_support_count = derived
+            .iter()
+            .filter(|(_, target, _)| target == "repogrammar.rust.family_gate")
+            .count();
+        assert!(
+            family_gate_support_count >= 2,
+            "low-support fixture should derive family-gate support facts before clustering: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn rust_cfg_unknown_blocks_structural_family_claim() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("cfg_blocked_family", "rust-release-cfg-blocked");
+
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "repogrammar.rust.family_gate")
+                .count(),
+            1,
+            "cfg-gated units must not derive claim support; only the un-gated helper may remain: {derived:?}"
+        );
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.path == "src/rust/application/family.rs"
+                && fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("BuildVariantAmbiguity")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_build_variant")
+        }));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn rust_macro_cfg_and_trait_dispatch_unknowns_block_claims() {
+        for (fixture, expected_reason) in [
+            ("macro_cfg_unknowns", "MacroOrPreprocessor"),
+            ("trait_dispatch_unknowns", "FrameworkMagic"),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-unknown-{fixture}"),
+            );
+            let facts = rust_semantic_facts(&runtime, &workspace);
+            assert!(
+                facts.facts.iter().any(|fact| {
+                    fact.kind == "UNKNOWN" && fact.target.as_deref() == Some(expected_reason)
+                }),
+                "{fixture} should emit {expected_reason}: {:?}",
+                facts.facts
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert!(families_json["families"]
+                .as_array()
+                .expect("families")
+                .is_empty());
+            assert_no_claim_payload("families", &families_json);
+        }
+    }
+
+    #[test]
+    fn rust_module_resolution_records_bounded_context_and_unknowns() {
+        let (workspace, runtime) =
+            index_rust_release_v0_2_fixture("module_resolution", "rust-release-module-resolution");
+        let facts = rust_semantic_facts(&runtime, &workspace);
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.workspace:members")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.dependency:libc")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("BuildVariantAmbiguity")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "SYMBOL"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact
+                    .target
+                    .as_deref()
+                    .is_some_and(|target| target == "module:src/rust/adapters/parsing/resolved.rs")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "SYMBOL"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref().is_some_and(|target| {
+                    target == "module:src/rust/adapters/parsing/custom_alias.rs"
+                })
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_module_resolution")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/rust/adapters/parsing/mod.rs"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=rust_module_resolution")
+        }));
+    }
+
     #[test]
     fn tsjs_express_exact_routes_form_family_without_worker() {
         let (workspace, runtime) =
@@ -2422,6 +3034,88 @@ mod tests {
             .all(|(_, target, _)| target.starts_with("express.route.")));
         // The object-literal lookalike and dynamic receiver never derive support.
         assert!(derived.iter().all(|(path, _, _)| path != "lookalikes.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:express")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "tsconfig.json"
+                && fact
+                    .target
+                    .as_deref()
+                    .is_some_and(|target| target.starts_with("tsconfig.path_alias:"))
+        }));
+        let resolved_imports = facts
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "RESOLVED_IMPORT")
+            .filter_map(|fact| fact.target.as_deref())
+            .collect::<Vec<_>>();
+        assert!(resolved_imports.contains(&"module:src/lib/client.ts"));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_path_alias")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("DynamicImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=dynamic_import")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/import_context.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=ambiguous_reexport")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=dynamic_route_call")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_express_receiver")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "lookalikes.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unsafe_receiver_binding")
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2536,6 +3230,78 @@ mod tests {
             .as_array()
             .expect("mcp spans")
             .is_empty());
+
+        // find also honors the explicit source-span opt-in on the product path.
+        let find_spanned = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["app.ts", "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(find_spanned.status, 0, "stderr: {}", find_spanned.stderr);
+        assert!(!find_spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let find_spanned_json: Value =
+            serde_json::from_str(find_spanned.stdout.trim()).expect("find span json parses");
+        assert_eq!(find_spanned_json["status"], "ok");
+        assert_eq!(find_spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            find_spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        assert!(find_spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("find spans")
+            .iter()
+            .any(|span| span["text"]
+                .as_str()
+                .is_some_and(|text| { text.contains('\t') && text.contains("app.get(") })));
+
+        let mcp_find_spanned = handle_context_call(
+            &runtime,
+            &context,
+            &serde_json::json!({
+                "operation": "find_analogues",
+                "target": "app.ts",
+                "include_source_spans": true,
+            }),
+        )
+        .expect("mcp find source-span payload");
+        assert_eq!(mcp_find_spanned["source_spans"]["requested"], true);
+        assert!(!mcp_find_spanned
+            .to_string()
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "import express from \"express\";\nconst app = express();\napp.get(\"/users\", (req, res) => res.json([\"changed\"]));\n",
+        )
+        .expect("mutate express fixture");
+        let stale = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[&family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("family", &stale, &workspace);
+        assert_python_stale_unknown("family", &stale_json, &family_id);
+        assert!(stale_json.get("source_spans").is_none());
+
+        let mcp_stale = mcp_context_payload(
+            &runtime,
+            &workspace,
+            serde_json::json!({
+                "operation": "show_family",
+                "target": family_id,
+                "include_source_spans": true,
+            }),
+        );
+        assert_python_stale_unknown("family", &mcp_stale, &family_id);
     }
 
     #[test]
@@ -2552,10 +3318,33 @@ mod tests {
             .iter()
             .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
             .count();
-        assert_eq!(suites, 2, "two imported-runner describe suites");
-        assert_eq!(cases, 4, "four imported-runner test cases");
+        assert_eq!(
+            suites, 3,
+            "three imported-runner describe suites, including aliases"
+        );
+        assert_eq!(
+            cases, 6,
+            "six imported-runner test cases, including aliases"
+        );
         // The custom-wrapper test file derives no support.
         assert!(derived.iter().all(|(path, _, _)| path != "wrapper.test.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "wrapper.test.ts"
+                && fact.target.as_deref() == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unsafe_test_runner_binding")
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2563,7 +3352,7 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         let family_array = families_json["families"].as_array().expect("families");
-        assert_eq!(family_array.len(), 2);
+        assert_eq!(family_array.len(), 3);
         let family_ids = family_array
             .iter()
             .map(|family| family["family_id"].as_str().expect("family id").to_string())
@@ -2571,9 +3360,13 @@ mod tests {
         assert!(family_ids
             .iter()
             .any(|id| id.starts_with("family:typescript:test_suite:")));
-        assert!(family_ids
-            .iter()
-            .any(|id| id.starts_with("family:typescript:test_case:")));
+        assert_eq!(
+            family_ids
+                .iter()
+                .filter(|id| id.starts_with("family:typescript:test_case:"))
+                .count(),
+            2
+        );
 
         for family in family_array {
             let family_id = family["family_id"].as_str().expect("family id");
@@ -2585,10 +3378,434 @@ mod tests {
             assert_eq!(detail_json["status"], "ok");
             assert_eq!(detail_json["output"]["source_snippets_included"], false);
         }
+
+        let case_family_id = family_ids
+            .iter()
+            .find(|id| id.starts_with("family:typescript:test_case:"))
+            .expect("test case family id");
+        let spanned = run_with_runtime(
+            cli_args(
+                "family",
+                workspace.path(),
+                &[case_family_id, "--include-source-spans", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(spanned.status, 0, "stderr: {}", spanned.stderr);
+        assert!(!spanned
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let spanned_json: Value =
+            serde_json::from_str(spanned.stdout.trim()).expect("Jest/Vitest span json parses");
+        assert_eq!(spanned_json["source_spans"]["requested"], true);
+        assert_eq!(
+            spanned_json["source_spans"]["source_snippets_included"],
+            true
+        );
+        let spans = spanned_json["source_spans"]["spans"]
+            .as_array()
+            .expect("Jest/Vitest spans");
+        assert!(!spans.is_empty());
+        assert!(spans.iter().all(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains('\t') && !text.contains("wrapper.test.ts")
+        }));
+        assert!(spans.iter().any(|span| {
+            let text = span["text"].as_str().expect("span text");
+            text.contains("it(") || text.contains("test(") || text.contains("case_(")
+        }));
     }
 
     #[test]
-    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_form_families() {
+    fn tsjs_jest_vitest_ambient_project_context_forms_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "jest_vitest_ambient_context_tests",
+            "tsjs-release-jest-vitest-ambient-context",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        let suites = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.describe")
+            .count();
+        let cases = derived
+            .iter()
+            .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+            .count();
+        assert_eq!(
+            suites, 3,
+            "ambient describe in test files with package context derives support"
+        );
+        assert_eq!(
+            cases, 6,
+            "ambient it/test in test files with package context derives support"
+        );
+        assert!(derived
+            .iter()
+            .all(|(path, _, _)| path != "src/not_a_test.ts"));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "src/not_a_test.ts"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=unresolved_test_runner")
+        }));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 3);
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:typescript:test_suite:"))
+                && family["support"] == 3
+        }));
+        assert_eq!(
+            family_array
+                .iter()
+                .filter(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("family:typescript:test_case:"))
+                    && family["support"] == 3)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn tsjs_javascript_exact_routes_form_family_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "javascript_exact_routes",
+            "tsjs-release-javascript-exact-routes",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(derived.len(), 3);
+        assert!(derived
+            .iter()
+            .all(|(path, target, _)| path == "app.js" && target.starts_with("express.route.")));
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        let family_id = family_array[0]["family_id"].as_str().expect("family id");
+        assert!(family_id.starts_with("family:javascript:express_route:"));
+        assert_eq!(family_array[0]["support"], 3);
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
+    }
+
+    #[test]
+    fn tsjs_javascript_jest_vitest_exact_tests_form_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "javascript_jest_vitest_exact_tests",
+            "tsjs-release-javascript-jest-vitest-exact",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "jest_vitest.describe")
+                .count(),
+            3
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
+                .count(),
+            6
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert!(family_array.iter().all(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_"))
+        }));
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_suite:"))
+                && family["support"] == 3
+        }));
+        assert!(family_array.iter().any(|family| {
+            family["family_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("family:javascript:test_case:"))
+                && family["support"]
+                    .as_u64()
+                    .is_some_and(|support| support >= 3)
+        }));
+    }
+
+    #[test]
+    fn tsjs_unsupported_framework_lookalikes_do_not_form_public_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "unsupported_framework_lookalikes",
+            "tsjs-release-unsupported-framework-lookalikes",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert!(
+            derived.is_empty(),
+            "React/Next/Fastify/Prisma/Drizzle lookalikes must not derive JS/TS support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:react")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.path == "package.json"
+                && fact.target.as_deref() == Some("package:next")
+        }));
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.path == "fastify_route.ts"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+        }));
+    }
+
+    fn assert_family_role(value: &Value, role: &str) {
+        let role_token = role
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        assert!(
+            value["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|family_id| family_id.contains(&role_token))
+                        && family["support"]
+                            .as_u64()
+                            .is_some_and(|support| support >= 3)
+                }),
+            "missing family role {role}: {value}"
+        );
+    }
+
+    #[test]
+    fn tsjs_next_exact_routes_form_preview_families_without_worker() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("next_exact_routes", "tsjs-release-next-exact-routes");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            15,
+            "Next fixture should derive all exact anchors: {derived:?}"
+        );
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.app.page"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.app.layout"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.route.GET"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.pages.api_route"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.pages.page"));
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:next.app.page");
+        assert_family_role(&families_json, "framework:next.app.layout");
+        assert_family_role(&families_json, "framework:next.route.handler");
+        assert_family_role(&families_json, "framework:next.pages.api_route");
+        assert_family_role(&families_json, "framework:next.pages.page");
+    }
+
+    #[test]
+    fn tsjs_fastify_exact_routes_form_preview_family_without_worker() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("fastify_exact_routes", "tsjs-release-fastify-exact-routes");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            6,
+            "Fastify fixture should derive exact routes"
+        );
+        assert!(derived
+            .iter()
+            .all(|(_, target, _)| target.starts_with("fastify.route.")));
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:fastify.route_handler");
+    }
+
+    #[test]
+    fn tsjs_prisma_exact_repositories_form_preview_family_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "prisma_exact_repositories",
+            "tsjs-release-prisma-exact-repositories",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            6,
+            "Prisma fixture should derive queries and transaction"
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "prisma.query.findMany")
+                .count(),
+            3
+        );
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "prisma.transaction"));
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "prisma.query.create")
+                .count(),
+            2
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:prisma.query");
+    }
+
+    #[test]
+    fn tsjs_drizzle_exact_repositories_form_preview_families_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "drizzle_exact_repositories",
+            "tsjs-release-drizzle-exact-repositories",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            7,
+            "Drizzle fixture should derive schema and queries"
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "drizzle.schema.table")
+                .count(),
+            3
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "drizzle.query.select")
+                .count(),
+            3
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:drizzle.schema.table");
+        assert_family_role(&families_json, "framework:drizzle.query");
+    }
+
+    #[test]
+    fn tsjs_framework_adapter_negative_cases_do_not_form_public_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "framework_adapter_negative_cases",
+            "tsjs-release-framework-adapter-negative-cases",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived,
+            vec![(
+                "src/drizzle_raw.ts".to_string(),
+                "drizzle.schema.table".to_string(),
+                "DATAFLOW_DERIVED".to_string()
+            )],
+            "negative fixture should only derive the exact schema table, not route/query support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+    }
+
+    #[test]
+    fn tsjs_v0_1_jest_vitest_basic_ambient_tests_require_project_context() {
         let workspace = TempWorkspace::new("tsjs-v0-1-jest-vitest-basic-ambient");
         copy_release_fixture("jest-vitest-basic", workspace.path());
         let runtime = ProductCliRuntime;
@@ -2619,8 +3836,29 @@ mod tests {
             .iter()
             .filter(|(_, target, _)| target == "jest_vitest.it" || target == "jest_vitest.test")
             .count();
-        assert_eq!(suites, 2, "ambient describe in two test files");
-        assert_eq!(cases, 2, "ambient it/test in two test files");
+        assert_eq!(
+            suites, 0,
+            "ambient describe without package/config context must not support a family"
+        );
+        assert_eq!(
+            cases, 0,
+            "ambient it/test without package/config context must not support a family"
+        );
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("MissingProjectConfig")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "tsjs_unknown_kind=ambient_runner_without_project_context"
+                })
+        }));
 
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -2628,10 +3866,10 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         let family_array = families_json["families"].as_array().expect("families");
-        assert_eq!(family_array.len(), 2);
-        assert!(family_array
-            .iter()
-            .all(|family| family["classification"] == "DOMINANT_PATTERN"));
+        assert!(
+            family_array.is_empty(),
+            "ambient suites/tests without project context must stay UNKNOWN"
+        );
     }
 
     #[test]
