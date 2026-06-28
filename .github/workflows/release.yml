@@ -20,23 +20,18 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: repogrammar-x86_64-unknown-linux-gnu.tar.gz
-            shell: bash
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: repogrammar-aarch64-unknown-linux-gnu.tar.gz
-            shell: bash
           - os: macos-13
             target: x86_64-apple-darwin
             archive: repogrammar-x86_64-apple-darwin.tar.gz
-            shell: bash
           - os: macos-14
             target: aarch64-apple-darwin
             archive: repogrammar-aarch64-apple-darwin.tar.gz
-            shell: bash
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: repogrammar-x86_64-pc-windows-msvc.zip
-            shell: pwsh
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -44,7 +39,6 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build release binary
         run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
-        shell: ${{ matrix.shell }}
       - name: Package Unix binary
         if: runner.os != 'Windows'
         run: |
