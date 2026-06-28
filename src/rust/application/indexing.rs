@@ -1,8 +1,8 @@
 //! Indexing use-case boundary.
 
 use crate::adapters::frameworks::tsjs;
-use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
-use crate::adapters::parsing::tsjs_anchors::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
+use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
     python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
@@ -10,6 +10,7 @@ use crate::application::family::{
     RUST_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
+use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
 use crate::core::model::{
     CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
     Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
@@ -1534,35 +1535,22 @@ fn derived_python_framework_support_fact(
     framework_role: &str,
     repository_revision: &RepositoryRevision,
 ) -> Result<SemanticFact, RepoGrammarError> {
-    Ok(SemanticFact {
+    derived_support_fact(
+        unit,
         kind,
-        subject: unit.id.clone(),
-        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
-        origin: FactOrigin {
-            engine: "repogrammar-python-derived".to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: "bounded_ast_anchor_v1".to_string(),
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: "repogrammar-python-derived",
+            method: "bounded_ast_anchor_v1",
+            note: "bounded Python framework anchor support",
+            assumptions: vec![
+                "provider_resolved=false".to_string(),
+                "derived_from=cpython_ast_structural_anchors".to_string(),
+                format!("framework_role={framework_role}"),
+            ],
         },
-        certainty: FactCertainty::DataflowDerived,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
-            SourceRange::new(unit.start_byte, unit.end_byte)
-                .map_err(RepoGrammarError::InvalidInput)?,
-            Provenance::new(
-                &unit.path,
-                unit.content_hash.clone(),
-                repository_revision.clone(),
-            )
-            .map_err(RepoGrammarError::InvalidInput)?,
-            "bounded Python framework anchor support",
-        )
-        .map_err(RepoGrammarError::InvalidInput)?,
-        assumptions: vec![
-            "provider_resolved=false".to_string(),
-            "derived_from=cpython_ast_structural_anchors".to_string(),
-            format!("framework_role={framework_role}"),
-        ],
-    })
+    )
 }
 
 fn derive_tsjs_framework_support_facts(
@@ -1664,31 +1652,18 @@ fn derived_tsjs_framework_support_fact(
     {
         assumptions.push(format!("tsjs_anchor_kind={}", unit.kind));
     }
-    Ok(SemanticFact {
+    derived_support_fact(
+        unit,
         kind,
-        subject: unit.id.clone(),
-        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
-        origin: FactOrigin {
-            engine: TSJS_DERIVED_SUPPORT_ENGINE.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: TSJS_DERIVED_SUPPORT_METHOD.to_string(),
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: TSJS_DERIVED_SUPPORT_ENGINE,
+            method: TSJS_DERIVED_SUPPORT_METHOD,
+            note: "bounded TS/JS framework anchor support",
+            assumptions,
         },
-        certainty: FactCertainty::DataflowDerived,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
-            SourceRange::new(unit.start_byte, unit.end_byte)
-                .map_err(RepoGrammarError::InvalidInput)?,
-            Provenance::new(
-                &unit.path,
-                unit.content_hash.clone(),
-                repository_revision.clone(),
-            )
-            .map_err(RepoGrammarError::InvalidInput)?,
-            "bounded TS/JS framework anchor support",
-        )
-        .map_err(RepoGrammarError::InvalidInput)?,
-        assumptions,
-    })
+    )
 }
 
 fn derive_rust_framework_support_facts(
@@ -1848,31 +1823,18 @@ fn derived_rust_framework_support_fact(
     assumptions.sort();
     assumptions.dedup();
 
-    Ok(SemanticFact {
+    derived_support_fact(
+        unit,
         kind,
-        subject: unit.id.clone(),
-        target: Some(SymbolId::new(target).map_err(RepoGrammarError::InvalidInput)?),
-        origin: FactOrigin {
-            engine: RUST_DERIVED_SUPPORT_ENGINE.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: RUST_DERIVED_SUPPORT_METHOD.to_string(),
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: RUST_DERIVED_SUPPORT_ENGINE,
+            method: RUST_DERIVED_SUPPORT_METHOD,
+            note: "bounded Rust structural role support",
+            assumptions,
         },
-        certainty: FactCertainty::DataflowDerived,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
-            SourceRange::new(unit.start_byte, unit.end_byte)
-                .map_err(RepoGrammarError::InvalidInput)?,
-            Provenance::new(
-                &unit.path,
-                unit.content_hash.clone(),
-                repository_revision.clone(),
-            )
-            .map_err(RepoGrammarError::InvalidInput)?,
-            "bounded Rust structural role support",
-        )
-        .map_err(RepoGrammarError::InvalidInput)?,
-        assumptions,
-    })
+    )
 }
 
 fn record_semantic_worker_facts(

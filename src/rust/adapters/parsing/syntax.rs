@@ -3,7 +3,7 @@
 //! This adapter is a bootstrap parser boundary. It emits structural code-unit
 //! candidates and diagnostics only; it does not provide semantic certainty.
 
-use super::{ir_edges_for_units, ir_nodes_for_units, tsjs_anchors::TSJS_ANCHOR_ENGINE};
+use super::{ir_edges_for_units, ir_nodes_for_units, tsjs::TSJS_ANCHOR_ENGINE};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
@@ -850,11 +850,8 @@ impl<'a> SyntaxScanner<'a> {
         });
         let ir_nodes = ir_nodes_for_units(&self.units).map_err(ParseError::Internal)?;
         let ir_edges = ir_edges_for_units(&self.units).map_err(ParseError::Internal)?;
-        let mut semantic_facts = super::tsjs_anchors::exact_framework_anchors(
-            &self.document,
-            &self.units,
-            self.context,
-        )?;
+        let mut semantic_facts =
+            super::tsjs::exact_framework_anchors(&self.document, &self.units, self.context)?;
         if let Some(context) = self.context {
             semantic_facts.extend(tsjs_import_resolution_facts(
                 &self.document,
@@ -913,8 +910,7 @@ impl<'a> SyntaxScanner<'a> {
         lines: &[(usize, &str)],
         class_ranges: &[(usize, usize)],
     ) -> Result<(), ParseError> {
-        let test_runner_names =
-            super::tsjs_anchors::exact_test_runner_call_names(self.document.text);
+        let test_runner_names = super::tsjs::exact_test_runner_call_names(self.document.text);
         let fastify_receivers = fastify_receivers_for_scan(self.document.text);
         for (line_start, line) in lines {
             let line_end = line_start + line.len();

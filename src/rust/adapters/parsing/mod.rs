@@ -7,16 +7,16 @@ use crate::ports::parser::{
 use std::collections::BTreeSet;
 
 pub mod python;
-pub mod rust_syntax;
+pub mod rust;
 pub mod syntax;
 pub mod tree_sitter;
-pub mod tsjs_anchors;
+pub mod tsjs;
 
 #[derive(Debug, Default)]
 pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
-    rust: rust_syntax::RustSyntaxParser,
+    rust: rust::RustSyntaxParser,
 }
 
 impl SourceParser for RepoGrammarSourceParser {

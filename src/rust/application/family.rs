@@ -1,7 +1,10 @@
 //! Application-layer EC-MVFI-lite family claim construction.
 
 use crate::adapters::frameworks::tsjs;
-use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::application::proof_lattice::{
+    add_variation_features_from_assumptions, derived_support_has_safe_origin,
+};
 use crate::core::model::{
     FactCertainty, SemanticFact, SemanticFactKind, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
@@ -910,8 +913,10 @@ fn add_tsjs_family_features(
     {
         entry.insert(format!("anchor_kind:{}", stable_token(anchor_kind)));
     }
-    for assumption in &fact.assumptions {
-        for (prefix, feature_prefix) in [
+    add_variation_features_from_assumptions(
+        entry,
+        &fact.assumptions,
+        &[
             ("route_method=", "route_method:"),
             ("route_path_shape=", "route_path_shape:"),
             ("handler_shape=", "handler_shape:"),
@@ -942,12 +947,9 @@ fn add_tsjs_family_features(
             ("returning_shape=", "returning_shape:"),
             ("join_shape=", "join_shape:"),
             ("sql_template_present=", "sql_template_present:"),
-        ] {
-            if let Some(value) = assumption.strip_prefix(prefix) {
-                entry.insert(format!("{feature_prefix}{}", stable_token(value)));
-            }
-        }
-    }
+        ],
+        stable_token,
+    );
 
     if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
         entry.insert(format!("framework_api_anchor:{}", stable_token(target)));
@@ -1024,8 +1026,10 @@ fn add_rust_family_features(
     support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
 ) {
     let code_unit_id = fact.evidence.code_unit_id.as_str();
-    for assumption in &fact.assumptions {
-        for (prefix, feature_prefix) in [
+    add_variation_features_from_assumptions(
+        entry,
+        &fact.assumptions,
+        &[
             ("rust_anchor_kind=", "anchor_kind:"),
             ("rust_signature_shape=", "signature_shape:"),
             ("rust_visibility_shape=", "visibility_shape:"),
@@ -1038,12 +1042,9 @@ fn add_rust_family_features(
             ("rust_test_shape=", "test_shape:"),
             ("rust_path_context=", "path_context:"),
             ("rust_module_resolution=", "import_context:"),
-        ] {
-            if let Some(value) = assumption.strip_prefix(prefix) {
-                entry.insert(format!("{feature_prefix}{}", stable_token(value)));
-            }
-        }
-    }
+        ],
+        stable_token,
+    );
     if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
         let is_support_target = support_targets_by_unit
             .get(code_unit_id)
@@ -2059,16 +2060,13 @@ fn rust_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &st
 }
 
 fn rust_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
-    match fact.certainty {
-        FactCertainty::DataflowDerived => {
-            fact.origin.engine == RUST_DERIVED_SUPPORT_ENGINE
-                && fact.origin.method == RUST_DERIVED_SUPPORT_METHOD
-                && fact_has_assumption(fact, "provider_resolved=false")
-                && fact_has_assumption(fact, "derived_from=tree_sitter_rust_structural_anchors")
-                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
-        }
-        _ => false,
-    }
+    derived_support_has_safe_origin(
+        fact,
+        RUST_DERIVED_SUPPORT_ENGINE,
+        RUST_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=tree_sitter_rust_structural_anchors".to_string()],
+    )
 }
 
 fn tsjs_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -2078,19 +2076,17 @@ fn tsjs_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &st
 }
 
 fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
-    match fact.certainty {
-        FactCertainty::DataflowDerived => {
-            fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
-                && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
-                && fact_has_assumption(fact, "provider_resolved=false")
-                && fact_has_assumption(fact, "derived_from=tsjs_structural_anchors")
-                && tsjs::expected_derived_from(framework_role).is_none_or(|derived_from| {
-                    fact_has_assumption(fact, &format!("derived_from={derived_from}"))
-                })
-                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
-        }
-        _ => false,
+    let mut required = vec!["derived_from=tsjs_structural_anchors".to_string()];
+    if let Some(derived_from) = tsjs::expected_derived_from(framework_role) {
+        required.push(format!("derived_from={derived_from}"));
     }
+    derived_support_has_safe_origin(
+        fact,
+        TSJS_DERIVED_SUPPORT_ENGINE,
+        TSJS_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &required,
+    )
 }
 
 /// Exact target whitelist per TS/JS framework role. Mirrors the Python whitelist:
@@ -2118,13 +2114,13 @@ fn python_support_fact_is_role_compatible(
 
 fn python_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
     match fact.certainty {
-        FactCertainty::DataflowDerived => {
-            fact.origin.engine == PYTHON_DERIVED_SUPPORT_ENGINE
-                && fact.origin.method == PYTHON_DERIVED_SUPPORT_METHOD
-                && fact_has_assumption(fact, "provider_resolved=false")
-                && fact_has_assumption(fact, "derived_from=cpython_ast_structural_anchors")
-                && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
-        }
+        FactCertainty::DataflowDerived => derived_support_has_safe_origin(
+            fact,
+            PYTHON_DERIVED_SUPPORT_ENGINE,
+            PYTHON_DERIVED_SUPPORT_METHOD,
+            framework_role,
+            &["derived_from=cpython_ast_structural_anchors".to_string()],
+        ),
         FactCertainty::Semantic => {
             python_fixture_provider_support_fact(fact)
                 || python_provider_resolved_support_fact(fact)
@@ -2915,6 +2911,77 @@ mod tests {
             .expect("valid evidence"),
             assumptions: vec![format!("affected_claim={affected_claim}")],
         }
+    }
+
+    fn rust_unknown_fact(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: format!("{}#rust_unknown", unit.id),
+            target: Some(
+                SymbolId::new(reason.as_protocol_str()).expect("valid UNKNOWN reason target"),
+            ),
+            origin: FactOrigin {
+                engine: RUST_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: RUST_ANCHOR_METHOD.to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "typed Rust UNKNOWN",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("affected_claim={affected_claim}")],
+        }
+    }
+
+    #[test]
+    fn rust_build_variant_repository_blocker_is_rust_manifest_only() {
+        let tsjs_manifest = unit("Cargo.toml", "project_config", 0);
+        let rust_source = unit_with_language("src/rust/lib.rs", "rust", "rust_module", 0);
+        let rust_manifest = unit_with_language("Cargo.toml", "rust_config", "cargo_manifest", 1);
+
+        let tsjs_unknown = tsjs_unknown_fact(
+            &tsjs_manifest,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "rust_build_variant",
+        );
+        assert!(rust_repository_blocking_unknowns(&[tsjs_unknown]).is_empty());
+
+        let source_unknown = rust_unknown_fact(
+            &rust_source,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "rust_build_variant",
+        );
+        assert!(rust_repository_blocking_unknowns(&[source_unknown]).is_empty());
+
+        let unrelated_claim_unknown = rust_unknown_fact(
+            &rust_manifest,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "tsjs_receiver_binding",
+        );
+        assert!(rust_repository_blocking_unknowns(&[unrelated_claim_unknown]).is_empty());
+
+        let manifest_unknown = rust_unknown_fact(
+            &rust_manifest,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "rust_build_variant",
+        );
+        let blockers = rust_repository_blocking_unknowns(&[manifest_unknown]);
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].reason, UnknownReasonCode::BuildVariantAmbiguity);
+        assert_eq!(blockers[0].affected_claim, "rust_build_variant");
     }
 
     #[test]
