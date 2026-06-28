@@ -1,4 +1,7 @@
-//! Shared helpers for promoting structural evidence into bounded support facts.
+//! Shared support-promotion helpers.
+//!
+//! This module currently validates bounded derived-support contracts and is the
+//! insertion point for future explicit evidence levels.
 
 use crate::core::model::{
     CodeUnitId, Evidence, FactCertainty, FactOrigin, Provenance, RepositoryRevision, SemanticFact,

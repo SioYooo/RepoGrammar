@@ -112,8 +112,9 @@ Some unknowns block only specific claims:
 - The TS/JS parser maps granular v0.2 cases onto the stable reason-code set:
   dynamic `import(...)` is `DynamicImport`; non-literal or conditional
   `require`, dynamic route/test calls, Next server-client/middleware/server
-  action/re-export magic, Fastify dynamic route options, Prisma callback, raw,
-  bulk, or dynamic operations, and Drizzle raw/dynamic builders are
+  action/re-export magic, Fastify dynamic route options or full routes without
+  literal `url`/`path`, Prisma callback, raw, bulk, or dynamic operations, and
+  Drizzle raw/dynamic builders are
   `FrameworkMagic` or `BuildVariantAmbiguity`; exact local Next dynamic
   segments, route groups, and parallel routes are stored as context assumptions
   on accepted anchors rather than UNKNOWNs by themselves; unresolved relative

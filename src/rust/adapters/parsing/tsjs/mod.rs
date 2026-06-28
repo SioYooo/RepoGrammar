@@ -151,10 +151,24 @@ fn anchor_fact(
 }
 
 pub(super) fn object_literal_string_field(slice: &str, field: &str) -> Option<String> {
-    let field_index = slice.find(field)?;
-    let after_field = &slice[field_index + field.len()..];
-    let after_colon = after_field.trim_start().strip_prefix(':')?.trim_start();
-    first_quoted(after_colon)
+    for (field_index, _) in slice.match_indices(field) {
+        if !field_has_identifier_boundaries(slice, field_index, field.len()) {
+            continue;
+        }
+        let after_field = &slice[field_index + field.len()..];
+        let after_colon = after_field.trim_start().strip_prefix(':')?.trim_start();
+        return first_quoted(after_colon);
+    }
+    None
+}
+
+fn field_has_identifier_boundaries(text: &str, offset: usize, len: usize) -> bool {
+    let before = offset
+        .checked_sub(1)
+        .and_then(|index| text.as_bytes().get(index))
+        .copied();
+    let after = text.as_bytes().get(offset + len).copied();
+    !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
 }
 
 pub(super) fn object_clause_shape(slice: &str, field: &str) -> &'static str {
@@ -705,6 +719,32 @@ app.route({ method: "POST", url: "/users", handler: async (request, reply) => re
     }
 
     #[test]
+    fn fastify_full_route_requires_literal_path() {
+        let text = r#"import fastify from "fastify";
+const app = fastify();
+app.route({ method: "GET", handler: async (request, reply) => reply.send({}) });
+"#;
+        assert!(targets("src/fastify_missing_path.ts", text).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify_missing_path.ts", text),
+            vec!["fastify_missing_literal_path".to_string()]
+        );
+    }
+
+    #[test]
+    fn fastify_full_route_method_field_requires_identifier_boundary() {
+        let text = r#"import fastify from "fastify";
+const app = fastify();
+app.route({ methodology: "GET", url: "/x", handler() {} });
+"#;
+        assert!(targets("src/fastify_methodology.ts", text).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify_methodology.ts", text),
+            vec!["fastify_dynamic_method".to_string()]
+        );
+    }
+
+    #[test]
     fn top_level_app_support_survives_unrelated_nested_app_parameter() {
         let text = r#"import express from "express";
 const app = express();
@@ -722,6 +762,44 @@ export function register(app) {
             unknown_kinds("src/top_level_app.ts", text),
             vec!["unsafe_receiver_binding".to_string()]
         );
+    }
+
+    #[test]
+    fn multiline_function_parameter_shadow_blocks_exact_tsjs_anchor() {
+        let text = r#"import express from "express";
+const app = express();
+
+function wrapper(
+  app
+) {
+  app.get("/fake", () => {});
+}
+"#;
+        assert!(targets("src/multiline_shadow.ts", text).is_empty());
+        assert_eq!(
+            unknown_kinds("src/multiline_shadow.ts", text),
+            vec!["unsafe_receiver_binding".to_string()]
+        );
+    }
+
+    #[test]
+    fn sibling_function_shadow_does_not_poison_later_exact_tsjs_anchor() {
+        let text = r#"import express from "express";
+const app = express();
+
+function f() {
+  const app = fake();
+}
+
+function g() {
+  app.get("/ok", handler);
+}
+"#;
+        assert_eq!(
+            targets("src/sibling_shadow.ts", text),
+            vec!["express.route.get".to_string()]
+        );
+        assert!(unknown_kinds("src/sibling_shadow.ts", text).is_empty());
     }
 
     #[test]

@@ -750,7 +750,9 @@ fn slug(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{ContentHash, FactCertainty, RepositoryRevision, SemanticFactKind};
+    use crate::core::model::{
+        ContentHash, FactCertainty, IrEdgeLabel, IrNodeId, RepositoryRevision, SemanticFactKind,
+    };
     use std::collections::BTreeSet;
 
     fn document<'a>(path: &'a str, text: &'a str, language: Language) -> SourceDocument<'a> {
@@ -809,6 +811,36 @@ fn product_runtime_smoke() {
                     .as_ref()
                     .is_some_and(|target| target.as_str() == "repogrammar.rust.parser_adapter")
         }));
+    }
+
+    #[test]
+    fn rust_module_contains_rust_children() {
+        let text = r#"
+pub struct ParserState;
+
+pub fn parse_top_level() {}
+
+impl ParserState {
+    pub fn parse_method(&self) {}
+}
+"#;
+        let report = RustSyntaxParser
+            .parse(document(
+                "src/rust/adapters/parsing/rust/mod.rs",
+                text,
+                Language::Rust,
+            ))
+            .expect("parse Rust");
+        let root = unit_by_kind(&report, CodeUnitKind::RustModule);
+        let function = unit_by_kind(&report, CodeUnitKind::RustFunction);
+        let structure = unit_by_kind(&report, CodeUnitKind::RustStruct);
+        let impl_block = unit_by_kind(&report, CodeUnitKind::RustImplBlock);
+        let method = unit_by_kind(&report, CodeUnitKind::RustMethod);
+
+        assert!(ir_contains(&report, root, function));
+        assert!(ir_contains(&report, root, structure));
+        assert!(ir_contains(&report, root, impl_block));
+        assert!(ir_contains(&report, impl_block, method));
     }
 
     #[test]
@@ -952,5 +984,23 @@ preview = []
                     .target
                     .as_ref()
                     .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")));
+    }
+
+    fn unit_by_kind(report: &ParseReport, kind: CodeUnitKind) -> &CodeUnit {
+        report
+            .units
+            .iter()
+            .find(|unit| unit.kind == kind)
+            .expect("unit kind exists")
+    }
+
+    fn ir_contains(report: &ParseReport, parent: &CodeUnit, child: &CodeUnit) -> bool {
+        let from_node_id = IrNodeId::for_code_unit(&parent.id).expect("parent IR node id");
+        let to_node_id = IrNodeId::for_code_unit(&child.id).expect("child IR node id");
+        report.ir_edges.iter().any(|edge| {
+            edge.from_node_id == from_node_id
+                && edge.to_node_id == to_node_id
+                && edge.label == IrEdgeLabel::Contains
+        })
     }
 }

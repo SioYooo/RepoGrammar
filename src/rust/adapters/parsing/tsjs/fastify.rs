@@ -84,9 +84,17 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
             note: "Fastify full route method is not in the exact allowlist",
         });
     }
-    let path_shape = object_literal_string_field(slice, "url")
+    let Some(path_shape) = object_literal_string_field(slice, "url")
         .or_else(|| object_literal_string_field(slice, "path"))
-        .map(|path| normalize_route_path(&path));
+        .map(|path| normalize_route_path(&path))
+    else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "fastify_route_shape",
+            kind: "fastify_missing_literal_path",
+            note: "Fastify full route path/url is not a literal string",
+        });
+    };
     let mut assumptions = vec![
         "tsjs_anchor_kind=fastify_route".to_string(),
         format!("route_method={method}"),
@@ -98,9 +106,7 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
         "plugin_context=none".to_string(),
         "prefix_unknown=false".to_string(),
     ];
-    if let Some(path_shape) = path_shape {
-        assumptions.push(format!("route_path_shape={path_shape}"));
-    }
+    assumptions.push(format!("route_path_shape={path_shape}"));
     AnchorOutcome::Anchor(Anchor {
         target: "fastify.route.route".to_string(),
         fact_kind: SemanticFactKind::ResolvedCall,

@@ -26,7 +26,7 @@ pub(super) struct ScopeGraphLite {
     pub(super) local_decls: BTreeSet<String>,
     pub(super) unsafe_names: BTreeSet<String>,
     unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>>,
-    line_depths: Vec<(usize, usize)>,
+    scope_intervals: Vec<ScopeInterval>,
     pub(super) express_receivers: BTreeMap<String, ExpressReceiver>,
     pub(super) fastify_receivers: BTreeSet<String>,
     pub(super) prisma_clients: BTreeSet<String>,
@@ -38,14 +38,21 @@ pub(super) struct ScopeGraphLite {
 #[derive(Debug, Clone, Copy)]
 struct UnsafeNameEvent {
     byte: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScopeInterval {
+    start_byte: usize,
+    end_byte: usize,
     depth: usize,
+    local_decls: BTreeSet<String>,
+    params: BTreeSet<String>,
 }
 
 impl ScopeGraphLite {
     pub(super) fn analyze(text: &str) -> Self {
         let mut declared_counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>> = BTreeMap::new();
-        let mut line_depths = Vec::new();
         let mut imports: BTreeMap<String, ImportBinding> = BTreeMap::new();
         let mut local_decls: BTreeSet<String> = BTreeSet::new();
         let mut top_level_lines: Vec<String> = Vec::new();
@@ -53,18 +60,10 @@ impl ScopeGraphLite {
         let mut depth: i64 = 0;
         for (line_start, raw_line) in lines_with_offsets(text) {
             let at_top_level = depth == 0;
-            let line_depth = depth.max(0) as usize;
-            line_depths.push((line_start, line_depth));
-            if let Some(name) = bare_assignment_name(raw_line) {
-                push_unsafe_event(&mut unsafe_events, name, line_start, line_depth);
-            }
-            let parameter_depth = if at_top_level && raw_line.contains("function") {
-                1
-            } else {
-                line_depth
-            };
-            for name in parameter_identifiers_from_line(raw_line) {
-                push_unsafe_event(&mut unsafe_events, &name, line_start, parameter_depth);
+            if at_top_level {
+                if let Some(name) = bare_assignment_name(raw_line) {
+                    push_unsafe_event(&mut unsafe_events, name, line_start);
+                }
             }
             if at_top_level {
                 let import_bindings = parse_import_line(raw_line);
@@ -82,10 +81,6 @@ impl ScopeGraphLite {
                     }
                 }
                 top_level_lines.push(raw_line.to_string());
-            } else {
-                for name in declared_identifiers(raw_line) {
-                    push_unsafe_event(&mut unsafe_events, &name, line_start, line_depth);
-                }
             }
             depth += brace_delta(raw_line);
             if depth < 0 {
@@ -99,6 +94,7 @@ impl ScopeGraphLite {
                 unsafe_names.insert(name.clone());
             }
         }
+        let scope_intervals = scope_intervals(text);
 
         let mut express_receivers: BTreeMap<String, ExpressReceiver> = BTreeMap::new();
         let mut fastify_receivers = BTreeSet::new();
@@ -149,7 +145,7 @@ impl ScopeGraphLite {
             local_decls,
             unsafe_names,
             unsafe_events,
-            line_depths,
+            scope_intervals,
             express_receivers,
             fastify_receivers,
             prisma_clients,
@@ -179,37 +175,216 @@ impl ScopeGraphLite {
         if self.unsafe_names.contains(name) {
             return true;
         }
-        let unit_depth = self.depth_at(byte);
-        self.unsafe_events.get(name).is_some_and(|events| {
-            events
-                .iter()
-                .any(|event| event.byte <= byte && unsafe_event_applies(*event, unit_depth))
-        })
-    }
-
-    fn depth_at(&self, byte: usize) -> usize {
-        self.line_depths
-            .iter()
-            .rev()
-            .find_map(|(start, depth)| (*start <= byte).then_some(*depth))
-            .unwrap_or(0)
+        if self.scope_intervals.iter().any(|scope| {
+            scope.contains(byte)
+                && (scope.local_decls.contains(name) || scope.params.contains(name))
+        }) {
+            return true;
+        }
+        self.unsafe_events
+            .get(name)
+            .is_some_and(|events| events.iter().any(|event| event.byte <= byte))
     }
 }
 
-fn unsafe_event_applies(event: UnsafeNameEvent, unit_depth: usize) -> bool {
-    event.depth == 0 || (unit_depth > 0 && event.depth <= unit_depth)
+impl ScopeInterval {
+    fn contains(&self, byte: usize) -> bool {
+        self.start_byte <= byte && byte < self.end_byte
+    }
 }
 
 fn push_unsafe_event(
     unsafe_events: &mut BTreeMap<String, Vec<UnsafeNameEvent>>,
     name: &str,
     byte: usize,
-    depth: usize,
 ) {
     unsafe_events
         .entry(name.to_string())
         .or_default()
-        .push(UnsafeNameEvent { byte, depth });
+        .push(UnsafeNameEvent { byte });
+}
+
+fn scope_intervals(text: &str) -> Vec<ScopeInterval> {
+    let mut intervals = block_scope_intervals(text);
+    add_function_parameters_to_intervals(text, &mut intervals);
+    add_arrow_parameters_to_intervals(text, &mut intervals);
+    add_local_declarations_to_intervals(text, &mut intervals);
+    intervals.sort_by_key(|interval| (interval.start_byte, interval.end_byte, interval.depth));
+    intervals
+}
+
+fn block_scope_intervals(text: &str) -> Vec<ScopeInterval> {
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let mut intervals = Vec::new();
+    for (index, byte) in text.bytes().enumerate() {
+        match byte {
+            b'{' => {
+                let depth = stack.len() + 1;
+                stack.push((index, depth));
+            }
+            b'}' => {
+                if let Some((start_byte, depth)) = stack.pop() {
+                    intervals.push(ScopeInterval {
+                        start_byte,
+                        end_byte: index + 1,
+                        depth,
+                        local_decls: BTreeSet::new(),
+                        params: BTreeSet::new(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    for (start_byte, depth) in stack {
+        intervals.push(ScopeInterval {
+            start_byte,
+            end_byte: text.len(),
+            depth,
+            local_decls: BTreeSet::new(),
+            params: BTreeSet::new(),
+        });
+    }
+    intervals
+}
+
+fn add_function_parameters_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
+    let mut search_start = 0usize;
+    while let Some(relative) = text[search_start..].find("function") {
+        let function_offset = search_start + relative;
+        search_start = function_offset + "function".len();
+        if !has_identifier_boundaries(text, function_offset, "function".len()) {
+            continue;
+        }
+        let Some(open_relative) = text[search_start..].find('(') else {
+            continue;
+        };
+        let open = search_start + open_relative;
+        let Some(close) = matching_forward_delimiter(text, open, b'(', b')') else {
+            continue;
+        };
+        let Some(body_open_relative) = text[close + 1..].find('{') else {
+            continue;
+        };
+        let body_open = close + 1 + body_open_relative;
+        let params = parameter_identifiers(&text[open + 1..close]);
+        add_params_to_interval(intervals, body_open, params);
+    }
+}
+
+fn add_arrow_parameters_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
+    let mut search_start = 0usize;
+    while let Some(relative) = text[search_start..].find("=>") {
+        let arrow = search_start + relative;
+        search_start = arrow + "=>".len();
+        let after_arrow = &text[search_start..];
+        let body_open_relative = after_arrow
+            .bytes()
+            .position(|byte| !byte.is_ascii_whitespace());
+        let Some(body_open_relative) = body_open_relative else {
+            continue;
+        };
+        if after_arrow.as_bytes().get(body_open_relative) != Some(&b'{') {
+            continue;
+        }
+        let body_open = search_start + body_open_relative;
+        let params = arrow_parameter_identifiers_before(text, arrow);
+        add_params_to_interval(intervals, body_open, params);
+    }
+}
+
+fn arrow_parameter_identifiers_before(text: &str, arrow: usize) -> Vec<String> {
+    let before_arrow = text[..arrow].trim_end();
+    if before_arrow.ends_with(')') {
+        let close = before_arrow.len() - 1;
+        let Some(open) = matching_backward_delimiter(text, close, b'(', b')') else {
+            return Vec::new();
+        };
+        return parameter_identifiers(&text[open + 1..close]);
+    }
+    identifier_before_arrow(before_arrow)
+        .map(|identifier| vec![identifier.to_string()])
+        .unwrap_or_default()
+}
+
+fn add_params_to_interval(intervals: &mut [ScopeInterval], body_open: usize, params: Vec<String>) {
+    if params.is_empty() {
+        return;
+    }
+    if let Some(interval) = intervals
+        .iter_mut()
+        .find(|interval| interval.start_byte == body_open)
+    {
+        interval.params.extend(params);
+    }
+}
+
+fn add_local_declarations_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
+    for (line_start, line) in lines_with_offsets(text) {
+        let line_end = line_start + line.len();
+        let mut names = declared_identifiers(line);
+        if let Some(name) = bare_assignment_name(line) {
+            names.push(name.to_string());
+        }
+        if names.is_empty() {
+            continue;
+        }
+        names.sort();
+        names.dedup();
+        for interval in intervals
+            .iter_mut()
+            .filter(|interval| line_start < interval.end_byte && line_end > interval.start_byte)
+        {
+            interval.local_decls.extend(names.iter().cloned());
+        }
+    }
+}
+
+fn matching_forward_delimiter(
+    text: &str,
+    open: usize,
+    open_byte: u8,
+    close_byte: u8,
+) -> Option<usize> {
+    if text.as_bytes().get(open) != Some(&open_byte) {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (offset, byte) in text.as_bytes()[open..].iter().enumerate() {
+        if *byte == open_byte {
+            depth += 1;
+        } else if *byte == close_byte {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(open + offset);
+            }
+        }
+    }
+    None
+}
+
+fn matching_backward_delimiter(
+    text: &str,
+    close: usize,
+    open_byte: u8,
+    close_byte: u8,
+) -> Option<usize> {
+    if text.as_bytes().get(close) != Some(&close_byte) {
+        return None;
+    }
+    let mut depth = 0usize;
+    for index in (0..=close).rev() {
+        let byte = text.as_bytes()[index];
+        if byte == close_byte {
+            depth += 1;
+        } else if byte == open_byte {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
 }
 
 fn lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
@@ -433,31 +608,6 @@ fn declared_identifiers(line: &str) -> Vec<String> {
     Vec::new()
 }
 
-fn parameter_identifiers_from_line(line: &str) -> Vec<String> {
-    let mut identifiers = function_parameter_identifiers(line);
-    identifiers.extend(arrow_parameter_identifiers(line));
-    identifiers.sort();
-    identifiers.dedup();
-    identifiers
-}
-
-fn function_parameter_identifiers(line: &str) -> Vec<String> {
-    let Some(function_offset) = line.find("function") else {
-        return Vec::new();
-    };
-    if !has_identifier_boundaries(line, function_offset, "function".len()) {
-        return Vec::new();
-    }
-    let after_function = &line[function_offset + "function".len()..];
-    let Some(open) = after_function.find('(') else {
-        return Vec::new();
-    };
-    let Some(close) = after_function[open + 1..].find(')') else {
-        return Vec::new();
-    };
-    parameter_identifiers(&after_function[open + 1..open + 1 + close])
-}
-
 fn has_identifier_boundaries(line: &str, offset: usize, len: usize) -> bool {
     let before = offset
         .checked_sub(1)
@@ -465,22 +615,6 @@ fn has_identifier_boundaries(line: &str, offset: usize, len: usize) -> bool {
         .copied();
     let after = line.as_bytes().get(offset + len).copied();
     !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
-}
-
-fn arrow_parameter_identifiers(line: &str) -> Vec<String> {
-    let Some(arrow_offset) = line.find("=>") else {
-        return Vec::new();
-    };
-    let before_arrow = line[..arrow_offset].trim_end();
-    if before_arrow.ends_with(')') {
-        let Some(open) = before_arrow.rfind('(') else {
-            return Vec::new();
-        };
-        return parameter_identifiers(&before_arrow[open + 1..before_arrow.len() - 1]);
-    }
-    identifier_before_arrow(before_arrow)
-        .map(|identifier| vec![identifier.to_string()])
-        .unwrap_or_default()
 }
 
 fn identifier_before_arrow(text: &str) -> Option<&str> {
