@@ -7,16 +7,16 @@ use crate::ports::parser::{
 use std::collections::BTreeSet;
 
 pub mod python;
-pub mod rust_syntax;
+pub mod rust;
 pub mod syntax;
 pub mod tree_sitter;
-pub mod tsjs_anchors;
+pub mod tsjs;
 
 #[derive(Debug, Default)]
 pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
-    rust: rust_syntax::RustSyntaxParser,
+    rust: rust::RustSyntaxParser,
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -70,7 +70,7 @@ pub(crate) fn ir_edges_for_units(units: &[CodeUnit]) -> Result<Vec<IrEdge>, Stri
     let mut edge_keys = BTreeSet::new();
     let module_units = units
         .iter()
-        .filter(|unit| unit.kind == CodeUnitKind::Module)
+        .filter(|unit| is_module_like(&unit.kind))
         .collect::<Vec<_>>();
     let class_units = units
         .iter()
@@ -78,7 +78,7 @@ pub(crate) fn ir_edges_for_units(units: &[CodeUnit]) -> Result<Vec<IrEdge>, Stri
         .collect::<Vec<_>>();
 
     for unit in units {
-        if unit.kind == CodeUnitKind::Module {
+        if is_module_like(&unit.kind) {
             continue;
         }
         for module in &module_units {
@@ -124,6 +124,13 @@ fn same_file(left: &CodeUnit, right: &CodeUnit) -> bool {
 fn range_contains(parent: &CodeUnit, child: &CodeUnit) -> bool {
     parent.range.start_byte <= child.range.start_byte
         && child.range.end_byte <= parent.range.end_byte
+}
+
+fn is_module_like(kind: &CodeUnitKind) -> bool {
+    matches!(
+        kind,
+        CodeUnitKind::Module | CodeUnitKind::RustModule | CodeUnitKind::RustInlineModule
+    )
 }
 
 fn is_class_like(kind: &str) -> bool {

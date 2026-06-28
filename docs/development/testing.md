@@ -289,7 +289,7 @@ allowed.
   explicit `variation` evidence metadata only after the family is already
   ready, while exception coverage remains missing.
 - Conservative TS/JS exact-anchor tests live alongside the parser
-  (`src/rust/adapters/parsing/tsjs_anchors.rs`), the family gate
+  (`src/rust/adapters/parsing/tsjs/`), the family gate
   (`src/rust/application/family.rs`), the derivation pass
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,

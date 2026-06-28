@@ -230,9 +230,9 @@ mod tests {
                 "framework:repogrammar.rust_family_gate",
             ),
             (
-                "src/rust/adapters/parsing/rust_syntax.rs",
+                "src/rust/adapters/parsing/rust/mod.rs",
                 "rust_method",
-                "unit:src/rust/adapters/parsing/rust_syntax.rs#rust_method:parse:0-10:0",
+                "unit:src/rust/adapters/parsing/rust/mod.rs#rust_method:parse:0-10:0",
                 "framework:repogrammar.rust_parser_adapter",
             ),
             (

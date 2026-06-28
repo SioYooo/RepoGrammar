@@ -75,12 +75,16 @@ Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
 parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
 bindings and file conventions match the adapter registry: Express app/router
 calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
-context, Fastify factory receivers, local `new PrismaClient()` clients, and
-Drizzle table/db/query bindings. Exact local Next dynamic segments, route
+context, Fastify factory receivers plus shorthand routes or full `app.route`
+declarations with literal method, literal `url`/`path`, and an exact `handler`
+field, local
+`new PrismaClient()` clients, and Drizzle table/db/query bindings. Exact local
+Next dynamic segments, route
 groups, and parallel routes are retained as context assumptions on page/layout
 and route-handler anchors; middleware, server actions, re-exports, and
 server/client semantics remain unsupported. Dynamic receivers, custom wrappers,
-dynamic methods, conditional imports, Fastify plugin prefixes, Prisma
+dynamic methods, conditional imports, Fastify plugin prefixes, Fastify full
+routes without literal `url`/`path` or handler fields, Prisma
 bulk/raw/injected clients, and Drizzle raw/dynamic builders emit typed
 `UNKNOWN` for the affected claim instead of support. The application layer
 promotes accepted anchors to `DATAFLOW_DERIVED` support facts with engine
@@ -122,9 +126,11 @@ promotion path. This is a token-saving foundation, not full TS/JS semantic
 analysis, and TS/JS remains a transitional substrate rather than the official
 v0.1 target.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
-node per code unit and conservative `contains` edges from modules to contained
-units and classes to methods. That IR is structural only: it has empty payloads,
-does not infer calls or dataflow, and cannot prove semantic or family claims.
+node per code unit and conservative `contains` edges from module-like units to
+contained units and classes/impls/traits to methods. Module-like units include
+TS/JS modules, Rust file modules, and Rust inline modules. That IR is structural
+only: it has empty payloads, does not infer calls or dataflow, and cannot prove
+semantic or family claims.
 Stored semantic facts, whether syntax-origin framework-role facts or explicitly
 configured worker facts accepted by the storage gate, must still pass the claim
 builder's support and compatibility rules before they become family evidence.

@@ -4,17 +4,21 @@
 //! binaries. It emits structural code units, structural anchors, and typed
 //! UNKNOWN facts only.
 
+mod anchors;
+mod cargo_manifest;
+mod cfg_lattice;
+mod module_graph;
+mod unknown;
+
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, CodeUnitKind, Language, Provenance, SemanticFact, SourceRange, SymbolId,
 };
 use crate::core::policy::rust_self_dogfood::rust_self_dogfood_role_for_unit;
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParser,
 };
-use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser};
 
 pub(crate) const RUST_ANCHOR_ENGINE: &str = "repogrammar-rust-syntax";
@@ -34,7 +38,7 @@ impl SourceParser for RustSyntaxParser {
         context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
         if document.language == Language::RustConfig {
-            return rust_project_config_report(document);
+            return cargo_manifest::project_config_report(document);
         }
         if document.language != Language::Rust {
             return Err(ParseError::UnsupportedLanguage);
@@ -171,17 +175,12 @@ impl<'a> RustTreeScanner<'a> {
                     node.start_byte(),
                     node.end_byte(),
                 )?;
-                self.semantic_facts.push(rust_unknown_fact(
+                self.semantic_facts.push(cfg_lattice::macro_unknown_fact(
                     &self.document,
                     &unit,
                     node.start_byte(),
                     node.end_byte(),
-                    RustUnknownSpec {
-                        reason: "MacroOrPreprocessor",
-                        affected_claim: "rust_macro_expansion",
-                        kind: node.kind(),
-                        note: "Rust macro syntax is not expanded",
-                    },
+                    node.kind(),
                 )?);
             }
             _ => {}
@@ -211,7 +210,7 @@ impl<'a> RustTreeScanner<'a> {
         };
         let unit = self.add_unit(kind, &name, start_byte, node.end_byte())?;
         if is_external {
-            self.semantic_facts.extend(rust_module_resolution_facts(
+            self.semantic_facts.extend(module_graph::resolution_facts(
                 &self.document,
                 &unit,
                 self.context,
@@ -314,7 +313,7 @@ impl<'a> RustTreeScanner<'a> {
             unit.kind.as_str(),
             unit.id.as_str(),
         ) {
-            facts.push(rust_structural_anchor_fact(
+            facts.push(anchors::structural_anchor_fact(
                 &self.document,
                 unit,
                 role.support_target,
@@ -338,51 +337,7 @@ impl<'a> RustTreeScanner<'a> {
                 "bounded Rust structural role anchor",
             )?);
         }
-        if slice.contains("#[cfg(") || slice.contains("#[cfg_attr(") {
-            facts.push(rust_unknown_fact(
-                &self.document,
-                unit,
-                unit.range.start_byte,
-                unit.range.end_byte,
-                RustUnknownSpec {
-                    reason: "BuildVariantAmbiguity",
-                    affected_claim: "rust_build_variant",
-                    kind: "cfg_attribute",
-                    note: "Rust cfg/cfg_attr build variant is not evaluated",
-                },
-            )?);
-        }
-        if slice.contains("#[proc_macro")
-            || slice.contains("#[proc_macro_attribute")
-            || slice.contains("#[proc_macro_derive")
-        {
-            facts.push(rust_unknown_fact(
-                &self.document,
-                unit,
-                unit.range.start_byte,
-                unit.range.end_byte,
-                RustUnknownSpec {
-                    reason: "MacroOrPreprocessor",
-                    affected_claim: "rust_macro_expansion",
-                    kind: "proc_macro_attribute",
-                    note: "Rust procedural macro attribute is not expanded",
-                },
-            )?);
-        }
-        if slice.contains("dyn ") || slice.contains("Box<dyn") || slice.contains("Arc<dyn") {
-            facts.push(rust_unknown_fact(
-                &self.document,
-                unit,
-                unit.range.start_byte,
-                unit.range.end_byte,
-                RustUnknownSpec {
-                    reason: "FrameworkMagic",
-                    affected_claim: "rust_trait_dispatch",
-                    kind: "trait_dispatch",
-                    note: "Rust trait object dispatch is not resolved",
-                },
-            )?);
-        }
+        facts.extend(cfg_lattice::unit_unknowns(&self.document, unit, slice)?);
         Ok(facts)
     }
 
@@ -427,398 +382,6 @@ impl<'a> RustTreeScanner<'a> {
             diagnostics: self.diagnostics,
         })
     }
-}
-
-fn rust_project_config_report(document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::RustConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
-    let mut facts = rust_cargo_toml_facts(&document, &unit)?;
-    facts.sort_by(|left, right| {
-        (
-            left.target.as_ref().map(SymbolId::as_str),
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-        )
-            .cmp(&(
-                right.target.as_ref().map(SymbolId::as_str),
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-            ))
-    });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    Ok(ParseReport {
-        units,
-        ir_nodes,
-        ir_edges,
-        semantic_facts: facts,
-        diagnostics: Vec::new(),
-    })
-}
-
-fn rust_cargo_toml_facts(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-) -> Result<Vec<SemanticFact>, ParseError> {
-    let mut facts = Vec::new();
-    let mut section = "";
-    facts.push(rust_project_config_fact(
-        document,
-        unit,
-        "cargo.toml",
-        vec!["rust_project_config=cargo_toml".to_string()],
-        "bounded Cargo.toml metadata",
-    )?);
-    for (start, line) in lines_with_offsets(document.text) {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = trimmed.trim_matches(['[', ']']);
-            if section.starts_with("target.") {
-                facts.push(rust_project_config_unknown_fact(
-                    document,
-                    unit,
-                    start,
-                    start + line.len(),
-                    RustUnknownSpec {
-                        reason: "BuildVariantAmbiguity",
-                        affected_claim: "rust_build_variant",
-                        kind: "target_specific_config",
-                        note: "target-specific Cargo config is not evaluated",
-                    },
-                )?);
-            }
-            continue;
-        }
-        if trimmed.starts_with("build") && trimmed.contains('=') && section == "package" {
-            facts.push(rust_project_config_unknown_fact(
-                document,
-                unit,
-                start,
-                start + line.len(),
-                RustUnknownSpec {
-                    reason: "BuildVariantAmbiguity",
-                    affected_claim: "rust_build_variant",
-                    kind: "build_script",
-                    note: "Cargo build script is not executed",
-                },
-            )?);
-        }
-        let Some((key, value)) = toml_key_value(trimmed) else {
-            continue;
-        };
-        match section {
-            "package" if key == "name" => {
-                if let Some(name) = toml_string(value) {
-                    facts.push(rust_project_config_fact(
-                        document,
-                        unit,
-                        &format!("cargo.package:{name}"),
-                        vec!["rust_project_config=package".to_string()],
-                        "bounded Cargo package metadata",
-                    )?);
-                }
-            }
-            _ if is_cargo_dependency_section(section) => {
-                facts.push(rust_project_config_fact(
-                    document,
-                    unit,
-                    &format!("cargo.dependency:{key}"),
-                    vec![
-                        "rust_project_config=dependency".to_string(),
-                        format!("dependency_section={section}"),
-                    ],
-                    "bounded Cargo dependency metadata",
-                )?);
-            }
-            "features" => facts.push(rust_project_config_fact(
-                document,
-                unit,
-                &format!("cargo.feature:{key}"),
-                vec!["rust_project_config=feature".to_string()],
-                "bounded Cargo feature metadata",
-            )?),
-            "workspace" if key == "members" => facts.push(rust_project_config_fact(
-                document,
-                unit,
-                "cargo.workspace:members",
-                vec!["rust_project_config=workspace_members".to_string()],
-                "bounded Cargo workspace metadata",
-            )?),
-            _ => {}
-        }
-    }
-    Ok(facts)
-}
-
-fn is_cargo_dependency_section(section: &str) -> bool {
-    matches!(
-        section,
-        "dependencies" | "dev-dependencies" | "build-dependencies"
-    ) || section.ends_with(".dependencies")
-        || section.ends_with(".dev-dependencies")
-        || section.ends_with(".build-dependencies")
-}
-
-fn rust_module_resolution_facts(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-    context: &ParserProjectContext,
-    module_name: &str,
-    node: Node<'_>,
-) -> Result<Vec<SemanticFact>, ParseError> {
-    let mod_text = document
-        .text
-        .get(unit.range.start_byte..node.end_byte())
-        .unwrap_or_else(|| node_text(document.text, node));
-    let Some(base) = module_base_path(document.path, module_name, mod_text) else {
-        return Ok(vec![rust_unknown_fact(
-            document,
-            unit,
-            node.start_byte(),
-            node.end_byte(),
-            RustUnknownSpec {
-                reason: "UnresolvedImport",
-                affected_claim: "rust_module_resolution",
-                kind: "unsafe_path_attribute",
-                note: "Rust path attribute is outside bounded repo-relative resolution",
-            },
-        )?]);
-    };
-    let module_paths = context
-        .rust_module_paths
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut matches = BTreeSet::new();
-    for candidate in [format!("{base}.rs"), format!("{base}/mod.rs")] {
-        if module_paths.contains(&candidate) {
-            matches.insert(candidate);
-        }
-    }
-    match matches.len() {
-        0 => Ok(vec![rust_unknown_fact(
-            document,
-            unit,
-            node.start_byte(),
-            node.end_byte(),
-            RustUnknownSpec {
-                reason: "UnresolvedImport",
-                affected_claim: "rust_module_resolution",
-                kind: "unresolved_mod_decl",
-                note: "Rust external mod declaration did not resolve to a unique repo-local file",
-            },
-        )?]),
-        1 => {
-            let path = matches.into_iter().next().expect("one Rust module match");
-            Ok(vec![rust_structural_anchor_fact(
-                document,
-                unit,
-                &format!("module:{path}"),
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "rust_anchor_kind=module_resolution".to_string(),
-                    "rust_module_resolution=external_mod".to_string(),
-                ],
-                "bounded Rust module resolution target",
-            )?])
-        }
-        _ => Ok(vec![rust_unknown_fact(
-            document,
-            unit,
-            node.start_byte(),
-            node.end_byte(),
-            RustUnknownSpec {
-                reason: "ConflictingFacts",
-                affected_claim: "rust_module_resolution",
-                kind: "ambiguous_mod_decl",
-                note: "Rust external mod declaration has multiple repo-local candidates",
-            },
-        )?]),
-    }
-}
-
-fn module_base_path(current_path: &str, module_name: &str, mod_text: &str) -> Option<String> {
-    if let Some(path_value) = path_attribute_value(mod_text) {
-        return safe_relative_module_path(current_path, &path_value);
-    }
-    let directory = if current_path.ends_with("/mod.rs") {
-        current_path.trim_end_matches("/mod.rs").to_string()
-    } else if let Some((directory, _)) = current_path.rsplit_once('/') {
-        directory.to_string()
-    } else {
-        String::new()
-    };
-    Some(if directory.is_empty() {
-        module_name.to_string()
-    } else {
-        format!("{directory}/{module_name}")
-    })
-}
-
-fn path_attribute_value(text: &str) -> Option<String> {
-    let marker = "path";
-    let index = text.find(marker)?;
-    let after = &text[index + marker.len()..];
-    let equals = after.find('=')?;
-    first_quoted(&after[equals + 1..])
-}
-
-fn safe_relative_module_path(current_path: &str, value: &str) -> Option<String> {
-    if value.starts_with('/')
-        || value.contains('\\')
-        || value.contains(':')
-        || value.split('/').any(|part| part == ".." || part.is_empty())
-    {
-        return None;
-    }
-    let directory = current_path
-        .rsplit_once('/')
-        .map(|(directory, _)| directory)
-        .unwrap_or("");
-    let path = if directory.is_empty() {
-        value.to_string()
-    } else {
-        format!("{directory}/{value}")
-    };
-    Some(path.trim_end_matches(".rs").to_string())
-}
-
-fn rust_structural_anchor_fact(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-    target: &str,
-    assumptions: Vec<String>,
-    note: &str,
-) -> Result<SemanticFact, ParseError> {
-    Ok(SemanticFact {
-        kind: SemanticFactKind::Symbol,
-        subject: unit.id.as_str().to_string(),
-        target: Some(SymbolId::new(target.to_string()).map_err(ParseError::Internal)?),
-        origin: FactOrigin {
-            engine: RUST_ANCHOR_ENGINE.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: RUST_ANCHOR_METHOD.to_string(),
-        },
-        certainty: FactCertainty::Structural,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
-            unit.range.clone(),
-            Provenance::new(
-                document.path,
-                document.content_hash.clone(),
-                document.repository_revision.clone(),
-            )
-            .map_err(ParseError::Internal)?,
-            note,
-        )
-        .map_err(ParseError::Internal)?,
-        assumptions,
-    })
-}
-
-fn rust_project_config_fact(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-    target: &str,
-    assumptions: Vec<String>,
-    note: &str,
-) -> Result<SemanticFact, ParseError> {
-    Ok(SemanticFact {
-        kind: SemanticFactKind::ProjectConfig,
-        subject: unit.id.as_str().to_string(),
-        target: Some(SymbolId::new(target.to_string()).map_err(ParseError::Internal)?),
-        origin: FactOrigin {
-            engine: RUST_ANCHOR_ENGINE.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: "bounded_cargo_toml_inventory_v1".to_string(),
-        },
-        certainty: FactCertainty::Structural,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
-            unit.range.clone(),
-            Provenance::new(
-                document.path,
-                document.content_hash.clone(),
-                document.repository_revision.clone(),
-            )
-            .map_err(ParseError::Internal)?,
-            note,
-        )
-        .map_err(ParseError::Internal)?,
-        assumptions,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RustUnknownSpec {
-    reason: &'static str,
-    affected_claim: &'static str,
-    kind: &'static str,
-    note: &'static str,
-}
-
-fn rust_unknown_fact(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-    start_byte: usize,
-    end_byte: usize,
-    spec: RustUnknownSpec,
-) -> Result<SemanticFact, ParseError> {
-    Ok(SemanticFact {
-        kind: SemanticFactKind::Unknown,
-        subject: unit.id.as_str().to_string(),
-        target: Some(SymbolId::new(spec.reason.to_string()).map_err(ParseError::Internal)?),
-        origin: FactOrigin {
-            engine: RUST_ANCHOR_ENGINE.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            method: RUST_ANCHOR_METHOD.to_string(),
-        },
-        certainty: FactCertainty::Unknown,
-        evidence: Evidence::new(
-            CodeUnitId::new(unit.id.as_str().to_string()).map_err(ParseError::Internal)?,
-            SourceRange::new(start_byte, end_byte).map_err(ParseError::Internal)?,
-            Provenance::new(
-                document.path,
-                document.content_hash.clone(),
-                document.repository_revision.clone(),
-            )
-            .map_err(ParseError::Internal)?,
-            spec.note,
-        )
-        .map_err(ParseError::Internal)?,
-        assumptions: vec![
-            format!("affected_claim={}", spec.affected_claim),
-            format!("rust_unknown_kind={}", spec.kind),
-        ],
-    })
-}
-
-fn rust_project_config_unknown_fact(
-    document: &SourceDocument<'_>,
-    unit: &CodeUnit,
-    start_byte: usize,
-    end_byte: usize,
-    spec: RustUnknownSpec,
-) -> Result<SemanticFact, ParseError> {
-    rust_unknown_fact(document, unit, start_byte, end_byte, spec)
 }
 
 fn node_text<'a>(source: &'a str, node: Node<'_>) -> &'a str {
@@ -1187,7 +750,10 @@ fn slug(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{ContentHash, RepositoryRevision};
+    use crate::core::model::{
+        ContentHash, FactCertainty, IrEdgeLabel, IrNodeId, RepositoryRevision, SemanticFactKind,
+    };
+    use std::collections::BTreeSet;
 
     fn document<'a>(path: &'a str, text: &'a str, language: Language) -> SourceDocument<'a> {
         SourceDocument {
@@ -1223,7 +789,7 @@ fn product_runtime_smoke() {
 "#;
         let report = RustSyntaxParser
             .parse(document(
-                "src/rust/adapters/parsing/rust_syntax.rs",
+                "src/rust/adapters/parsing/rust/mod.rs",
                 text,
                 Language::Rust,
             ))
@@ -1245,6 +811,36 @@ fn product_runtime_smoke() {
                     .as_ref()
                     .is_some_and(|target| target.as_str() == "repogrammar.rust.parser_adapter")
         }));
+    }
+
+    #[test]
+    fn rust_module_contains_rust_children() {
+        let text = r#"
+pub struct ParserState;
+
+pub fn parse_top_level() {}
+
+impl ParserState {
+    pub fn parse_method(&self) {}
+}
+"#;
+        let report = RustSyntaxParser
+            .parse(document(
+                "src/rust/adapters/parsing/rust/mod.rs",
+                text,
+                Language::Rust,
+            ))
+            .expect("parse Rust");
+        let root = unit_by_kind(&report, CodeUnitKind::RustModule);
+        let function = unit_by_kind(&report, CodeUnitKind::RustFunction);
+        let structure = unit_by_kind(&report, CodeUnitKind::RustStruct);
+        let impl_block = unit_by_kind(&report, CodeUnitKind::RustImplBlock);
+        let method = unit_by_kind(&report, CodeUnitKind::RustMethod);
+
+        assert!(ir_contains(&report, root, function));
+        assert!(ir_contains(&report, root, structure));
+        assert!(ir_contains(&report, root, impl_block));
+        assert!(ir_contains(&report, impl_block, method));
     }
 
     #[test]
@@ -1301,7 +897,7 @@ parse_macro!(ParserState);
 "#;
         let report = RustSyntaxParser
             .parse(document(
-                "src/rust/adapters/parsing/rust_syntax.rs",
+                "src/rust/adapters/parsing/rust/mod.rs",
                 text,
                 Language::Rust,
             ))
@@ -1388,5 +984,23 @@ preview = []
                     .target
                     .as_ref()
                     .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")));
+    }
+
+    fn unit_by_kind(report: &ParseReport, kind: CodeUnitKind) -> &CodeUnit {
+        report
+            .units
+            .iter()
+            .find(|unit| unit.kind == kind)
+            .expect("unit kind exists")
+    }
+
+    fn ir_contains(report: &ParseReport, parent: &CodeUnit, child: &CodeUnit) -> bool {
+        let from_node_id = IrNodeId::for_code_unit(&parent.id).expect("parent IR node id");
+        let to_node_id = IrNodeId::for_code_unit(&child.id).expect("child IR node id");
+        report.ir_edges.iter().any(|edge| {
+            edge.from_node_id == from_node_id
+                && edge.to_node_id == to_node_id
+                && edge.label == IrEdgeLabel::Contains
+        })
     }
 }
