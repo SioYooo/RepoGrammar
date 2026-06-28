@@ -1,3 +1,1 @@
-export default function UserPage() {
-  return <main>User</main>;
-}
+export { UserPage as default } from "./UserPage";

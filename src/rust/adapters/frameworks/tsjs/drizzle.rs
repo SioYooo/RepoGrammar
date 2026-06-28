@@ -10,4 +10,6 @@ pub(crate) const QUERY_TARGETS: &[&str] = &[
     "drizzle.query.insert",
     "drizzle.query.update",
     "drizzle.query.delete",
+    "drizzle.query.query_findMany",
+    "drizzle.query.query_findFirst",
 ];

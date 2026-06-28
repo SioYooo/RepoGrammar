@@ -1,6 +1,7 @@
 //! Application-layer EC-MVFI-lite family claim construction.
 
 use crate::adapters::frameworks::tsjs;
+use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::core::model::{
     FactCertainty, SemanticFact, SemanticFactKind, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
@@ -25,8 +26,6 @@ const PYTHON_FIXTURE_PROVIDER_METHOD: &str = "release_fixture_semantic_support";
 /// Engine/method that mint conservative TS/JS exact-anchor support facts.
 pub(crate) const TSJS_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-tsjs-derived";
 pub(crate) const TSJS_DERIVED_SUPPORT_METHOD: &str = "bounded_exact_anchor_v1";
-/// Pinned TS/JS semantic worker engine identity accepted as a safe support origin.
-const TSJS_WORKER_ENGINE: &str = "typescript";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
 pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
 
@@ -170,6 +169,8 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         eligible_support_by_unit(input.units, &input.support_facts, &role_by_unit);
     let blocking_unknowns =
         family_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
+    let rust_repository_blocking_unknowns = rust_repository_blocking_unknowns(&input.unknown_facts);
+    let has_rust_repository_blocking_unknown = !rust_repository_blocking_unknowns.is_empty();
     let non_blocking_unknowns =
         family_non_blocking_unknowns_by_unit(input.units, &input.unknown_facts, &role_by_unit);
     let mut all_facts = Vec::with_capacity(
@@ -193,6 +194,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         .values()
         .flat_map(|unknowns| unknowns.iter().cloned())
         .collect::<Vec<_>>();
+    unknowns.extend(rust_repository_blocking_unknowns);
 
     for unit in input.units {
         if !family_eligible_kind(&unit.kind) {
@@ -221,7 +223,9 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             content_hash: unit.content_hash.clone(),
             start_byte: unit.start_byte,
             end_byte: unit.end_byte,
-            support_targets: if blocking_unknowns.contains_key(&unit.id) {
+            support_targets: if blocking_unknowns.contains_key(&unit.id)
+                || (unit.language == "rust" && has_rust_repository_blocking_unknown)
+            {
                 Vec::new()
             } else {
                 support_targets_by_unit
@@ -1118,6 +1122,58 @@ fn family_blocking_unknowns_by_unit(
     }
 
     blocking
+}
+
+fn rust_repository_blocking_unknowns(facts: &[SemanticFact]) -> Vec<ClaimUnknown> {
+    let mut unknowns = facts
+        .iter()
+        .filter_map(rust_repository_blocking_unknown)
+        .collect::<Vec<_>>();
+    unknowns.sort_by(|left, right| {
+        (
+            left.affected_claim.as_str(),
+            left.class.as_protocol_str(),
+            left.reason.as_protocol_str(),
+        )
+            .cmp(&(
+                right.affected_claim.as_str(),
+                right.class.as_protocol_str(),
+                right.reason.as_protocol_str(),
+            ))
+    });
+    unknowns.dedup();
+    unknowns
+}
+
+fn rust_repository_blocking_unknown(fact: &SemanticFact) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != RUST_ANCHOR_ENGINE
+        || fact.origin.method != RUST_ANCHOR_METHOD
+    {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("rust_family_membership");
+    if reason != UnknownReasonCode::BuildVariantAmbiguity
+        || affected_claim != "rust_build_variant"
+        || !fact.evidence.provenance.path.ends_with("Cargo.toml")
+    {
+        return None;
+    }
+    Some(ClaimUnknown {
+        class: UnknownClass::Blocking,
+        reason,
+        affected_claim: "rust_build_variant".to_string(),
+        recovery: Some("remove or resolve Cargo build/target variant ambiguity".to_string()),
+    })
 }
 
 fn family_non_blocking_unknowns_by_unit(
@@ -2033,7 +2089,6 @@ fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) 
                 })
                 && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
         }
-        FactCertainty::Semantic => fact.origin.engine == TSJS_WORKER_ENGINE,
         _ => false,
     }
 }
@@ -2348,10 +2403,6 @@ mod tests {
         }
     }
 
-    fn semantic_support_fact(unit: &IndexedCodeUnitRecord) -> SemanticFact {
-        semantic_support_fact_with_target(unit, "package:express")
-    }
-
     fn semantic_support_fact_with_target(
         unit: &IndexedCodeUnitRecord,
         target: &str,
@@ -2611,7 +2662,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_family_only_with_repeated_compatible_semantic_support() {
+    fn tsjs_type_worker_package_facts_do_not_prove_framework_family() {
         let first = unit("src/a.ts", "express_route", 0);
         let second = unit("src/b.ts", "express_route", 1);
         let third = unit("src/c.ts", "express_route", 2);
@@ -2621,19 +2672,17 @@ mod tests {
                 role_fact(&first, "framework:express.route_handler"),
                 role_fact(&second, "framework:express.route_handler"),
                 role_fact(&third, "framework:express.route_handler"),
-                semantic_support_fact(&first),
-                semantic_support_fact(&second),
-                semantic_support_fact(&third),
+                semantic_support_fact_with_target(&first, "package:express"),
+                semantic_support_fact_with_target(&second, "package:express"),
+                semantic_support_fact_with_target(&third, "package:express"),
             ],
         );
 
-        assert_eq!(report.claims.len(), 1);
-        let claim = &report.claims[0];
-        assert_eq!(claim.classification, "DOMINANT_PATTERN");
-        assert_eq!(claim.support, 3);
-        assert_eq!(claim.evidence.len(), 3);
-        assert_eq!(claim.unknowns[0].class, UnknownClass::NonBlocking);
-        assert_eq!(claim.unknowns[0].reason, UnknownReasonCode::FrameworkMagic);
+        assert!(report.claims.is_empty());
+        assert!(report
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.reason == UnknownReasonCode::InsufficientSupport));
     }
 
     #[test]
@@ -4075,9 +4124,9 @@ mod tests {
                 role_fact(&first, "framework:jest_vitest.test"),
                 role_fact(&second, "framework:jest_vitest.test"),
                 role_fact(&third, "framework:jest_vitest.test"),
-                semantic_support_fact_with_target(&first, "package:vitest"),
-                semantic_support_fact_with_target(&second, "package:vitest"),
-                semantic_support_fact_with_target(&third, "package:vitest"),
+                tsjs_derived_fact(&first, "jest_vitest.it", "framework:jest_vitest.test"),
+                tsjs_derived_fact(&second, "jest_vitest.it", "framework:jest_vitest.test"),
+                tsjs_derived_fact(&third, "jest_vitest.it", "framework:jest_vitest.test"),
             ],
         );
         let records = family_storage_records(&report.claims[0]);

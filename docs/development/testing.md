@@ -118,10 +118,12 @@ allowed.
   `UnresolvedImport` UNKNOWN boundaries, support>=3 for internal Rust families,
   low-support abstention, default source-free CLI/MCP output, explicit
   source-span opt-in, safe and unsafe module resolution, target-specific Cargo
-  dependency inventory, and fixtures under `src/fixtures/rust/release/v0_2/`
-  including `internal_family_gates`, `parser_adapters`, `installer_actions`,
-  `product_tests`, `low_support_family`, `macro_cfg_unknowns`,
-  `trait_dispatch_unknowns`, and `module_resolution`.
+  dependency inventory, Cargo build-script non-execution with a sentinel file,
+  repository-level build-variant blocking, and fixtures under
+  `src/fixtures/rust/release/v0_2/` including `internal_family_gates`,
+  `parser_adapters`, `installer_actions`, `product_tests`, `low_support_family`,
+  `macro_cfg_unknowns`, `trait_dispatch_unknowns`, `module_resolution`, and
+  `cargo_build_blocked_family`.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
@@ -291,9 +293,11 @@ allowed.
   (`src/rust/application/family.rs`), the derivation pass
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
-  Next.js App/Pages file-convention positives, Fastify shorthand/full route
-  positives, Prisma client/query/transaction positives, Drizzle schema/query
-  positives, object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed
+  Next.js App/Pages file-convention positives including async const route
+  handlers, Fastify shorthand/full route positives, Prisma client/query/
+  transaction positives, Drizzle schema/query positives including
+  `db.query.<table>.findMany/findFirst`, object-literal/dynamic-receiver/
+  dynamic-method/reassigned/shadowed negatives, raw and unsupported bulk query
   negatives, typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver, runner,
   route, client, and query boundaries, bounded
   `package.json`/`tsconfig.json`/`jsconfig.json` project-config context, bounded

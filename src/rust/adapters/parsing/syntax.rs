@@ -916,9 +916,6 @@ impl<'a> SyntaxScanner<'a> {
         let test_runner_names =
             super::tsjs_anchors::exact_test_runner_call_names(self.document.text);
         let fastify_receivers = fastify_receivers_for_scan(self.document.text);
-        let prisma_clients = prisma_clients_for_scan(self.document.text);
-        let drizzle_tables = drizzle_tables_for_scan(self.document.text);
-        let drizzle_dbs = drizzle_dbs_for_scan(self.document.text);
         for (line_start, line) in lines {
             let line_end = line_start + line.len();
             if let Some((kind, name, offset)) = next_default_export_unit(self.document.path, line) {
@@ -945,17 +942,22 @@ impl<'a> SyntaxScanner<'a> {
                     let end = declaration_extent(self.document.text, start, line_end);
                     self.add_unit(CodeUnitKind::FastifyRoute, "route", start, end)?;
                 }
-            } else if let Some(offset) = dynamic_route_call(line) {
+            } else if let Some((receiver, offset)) = dynamic_route_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
-                self.add_unit(CodeUnitKind::ExpressRoute, "dynamic_route", start, end)?;
+                let kind = if fastify_receivers.contains(receiver) {
+                    CodeUnitKind::FastifyRoute
+                } else {
+                    CodeUnitKind::ExpressRoute
+                };
+                self.add_unit(kind, "dynamic_route", start, end)?;
             }
-            if let Some((name, offset)) = prisma_query_call(line, &prisma_clients) {
+            if let Some((name, offset)) = prisma_query_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::PrismaQuery, name, start, end)?;
             }
-            if let Some(offset) = prisma_transaction_call(line, &prisma_clients) {
+            if let Some(offset) = prisma_transaction_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::PrismaTransaction, "transaction", start, end)?;
@@ -965,14 +967,12 @@ impl<'a> SyntaxScanner<'a> {
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::DrizzleSchemaTable, name, start, end)?;
             }
-            if let Some((operation, offset)) =
-                drizzle_query_call(line, &drizzle_dbs, &drizzle_tables)
-            {
+            if let Some((operation, offset)) = drizzle_query_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::DrizzleQuery, operation, start, end)?;
             }
-            if let Some(offset) = drizzle_transaction_call(line, &drizzle_dbs) {
+            if let Some(offset) = drizzle_transaction_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::DrizzleTransaction, "transaction", start, end)?;
@@ -1244,7 +1244,7 @@ fn fastify_full_route_call(line: &str) -> Option<(&str, usize)> {
     (!receiver.is_empty()).then_some((receiver, start))
 }
 
-fn dynamic_route_call(line: &str) -> Option<usize> {
+fn dynamic_route_call(line: &str) -> Option<(&str, usize)> {
     let bracket = line.find('[')?;
     let close = line[bracket + 1..].find(']')? + bracket + 1;
     if !line[close + 1..].trim_start().starts_with('(') {
@@ -1258,11 +1258,14 @@ fn dynamic_route_call(line: &str) -> Option<usize> {
         .map(|offset| offset + 1)
         .unwrap_or(0);
     let receiver = line[start..bracket].trim();
-    (!receiver.is_empty()
-        && receiver.chars().next().is_some_and(|character| {
+    if receiver.is_empty()
+        || !receiver.chars().next().is_some_and(|character| {
             character.is_ascii_alphabetic() || character == '_' || character == '$'
-        }))
-    .then_some(start)
+        })
+    {
+        return None;
+    }
+    Some((receiver, start))
 }
 
 fn fastify_receivers_for_scan(text: &str) -> BTreeSet<String> {
@@ -1293,42 +1296,6 @@ fn fastify_receivers_for_scan(text: &str) -> BTreeSet<String> {
         }
     }
     receivers
-}
-
-fn prisma_clients_for_scan(text: &str) -> BTreeSet<String> {
-    let mut clients = BTreeSet::new();
-    for line in top_level_lines(text) {
-        let Some((name, rhs)) = declaration_assignment(line) else {
-            continue;
-        };
-        if rhs.trim_start().starts_with("new PrismaClient(") {
-            clients.insert(name.to_string());
-        }
-    }
-    clients
-}
-
-fn drizzle_tables_for_scan(text: &str) -> BTreeSet<String> {
-    let mut tables = BTreeSet::new();
-    for line in top_level_lines(text) {
-        if let Some((name, _)) = drizzle_schema_table_declaration(line) {
-            tables.insert(name.to_string());
-        }
-    }
-    tables
-}
-
-fn drizzle_dbs_for_scan(text: &str) -> BTreeSet<String> {
-    let mut dbs = BTreeSet::new();
-    for line in top_level_lines(text) {
-        let Some((name, rhs)) = declaration_assignment(line) else {
-            continue;
-        };
-        if exact_call_head(rhs, "drizzle") {
-            dbs.insert(name.to_string());
-        }
-    }
-    dbs
 }
 
 fn next_default_export_unit(path: &str, line: &str) -> Option<(CodeUnitKind, &'static str, usize)> {
@@ -1365,8 +1332,35 @@ fn next_route_handler_export(path: &str, line: &str) -> Option<(&'static str, us
         if trimmed.contains(&function_pattern) {
             return Some((method, offset));
         }
+        if exported_const_async_route_handler(trimmed, method) {
+            return Some((method, offset));
+        }
     }
     None
+}
+
+fn exported_const_async_route_handler(line: &str, method: &str) -> bool {
+    let Some(after_export) = line.trim_start().strip_prefix("export ") else {
+        return false;
+    };
+    let Some(after_const) = after_export.trim_start().strip_prefix("const ") else {
+        return false;
+    };
+    let Some((name, name_offset)) = parse_identifier_after(after_const, 0) else {
+        return false;
+    };
+    if name != method {
+        return false;
+    }
+    let after_name = name_offset + name.len();
+    let Some(rhs) = after_const[after_name..]
+        .trim_start()
+        .strip_prefix('=')
+        .map(str::trim_start)
+    else {
+        return false;
+    };
+    rhs.starts_with("async ") && rhs.contains("=>")
 }
 
 fn next_file_convention_kind(path: &str) -> Option<CodeUnitKind> {
@@ -1377,13 +1371,13 @@ fn next_file_convention_kind(path: &str) -> Option<CodeUnitKind> {
     if !extension_ok {
         return None;
     }
-    if path.starts_with("app/") && is_named_file(path, "page") {
+    if (path.starts_with("app/") || path.starts_with("src/app/")) && is_named_file(path, "page") {
         return Some(CodeUnitKind::NextAppPage);
     }
-    if path.starts_with("app/") && is_named_file(path, "layout") {
+    if (path.starts_with("app/") || path.starts_with("src/app/")) && is_named_file(path, "layout") {
         return Some(CodeUnitKind::NextAppLayout);
     }
-    if path.starts_with("app/") && is_named_file(path, "route") {
+    if (path.starts_with("app/") || path.starts_with("src/app/")) && is_named_file(path, "route") {
         return Some(CodeUnitKind::NextRouteHandler);
     }
     if path.starts_with("pages/api/") && !path.ends_with(".tsx") && !path.ends_with(".jsx") {
@@ -1401,45 +1395,41 @@ fn is_named_file(path: &str, stem: &str) -> bool {
         .any(|extension| path.ends_with(&format!("/{stem}{extension}")))
 }
 
-fn prisma_query_call(line: &str, clients: &BTreeSet<String>) -> Option<(&'static str, usize)> {
-    for client in clients {
-        let client_pattern = format!("{client}.");
-        let Some(client_offset) = line.find(&client_pattern) else {
-            continue;
-        };
-        let model_start = client_offset + client_pattern.len();
-        let (model_name, model_name_offset) = parse_identifier_after(line, model_start)?;
-        let after_model = model_name_offset + model_name.len();
-        let rest = line[after_model..].trim_start().strip_prefix('.')?;
-        for operation in [
-            "findMany",
-            "findUnique",
-            "findFirst",
-            "create",
-            "createMany",
-            "update",
-            "updateMany",
-            "upsert",
-            "delete",
-            "deleteMany",
-            "count",
-            "aggregate",
-            "groupBy",
-        ] {
-            if rest.starts_with(operation) && rest[operation.len()..].trim_start().starts_with('(')
-            {
-                return Some((operation, client_offset));
-            }
+fn prisma_query_call(line: &str) -> Option<(&'static str, usize)> {
+    for pattern in [
+        ".$queryRaw(",
+        ".$executeRaw(",
+        ".$queryRawUnsafe(",
+        ".$executeRawUnsafe(",
+    ] {
+        if let Some(offset) = receiver_offset_before_pattern(line, pattern) {
+            return Some(("raw", offset));
+        }
+    }
+    for operation in [
+        "findMany",
+        "findUnique",
+        "findFirst",
+        "create",
+        "createMany",
+        "update",
+        "updateMany",
+        "upsert",
+        "delete",
+        "deleteMany",
+        "count",
+        "aggregate",
+        "groupBy",
+    ] {
+        if let Some(offset) = model_operation_receiver_offset(line, operation) {
+            return Some((operation, offset));
         }
     }
     None
 }
 
-fn prisma_transaction_call(line: &str, clients: &BTreeSet<String>) -> Option<usize> {
-    clients.iter().find_map(|client| {
-        let pattern = format!("{client}.$transaction(");
-        line.find(&pattern)
-    })
+fn prisma_transaction_call(line: &str) -> Option<usize> {
+    receiver_offset_before_pattern(line, ".$transaction(")
 }
 
 fn drizzle_schema_table_declaration(line: &str) -> Option<(&str, usize)> {
@@ -1454,39 +1444,127 @@ fn drizzle_schema_table_declaration(line: &str) -> Option<(&str, usize)> {
     }
 }
 
-fn drizzle_query_call(
-    line: &str,
-    dbs: &BTreeSet<String>,
-    tables: &BTreeSet<String>,
-) -> Option<(&'static str, usize)> {
-    for db in dbs {
-        for operation in ["select", "insert", "update", "delete"] {
-            let pattern = format!("{db}.{operation}(");
-            let Some(offset) = line.find(&pattern) else {
+fn drizzle_query_call(line: &str) -> Option<(&'static str, usize)> {
+    for (operation, target) in [
+        ("findMany", "query_findMany"),
+        ("findFirst", "query_findFirst"),
+    ] {
+        if let Some(offset) = drizzle_query_relation_offset(line, operation) {
+            return Some((target, offset));
+        }
+    }
+    if let Some(offset) = receiver_offset_before_pattern(line, ".execute(") {
+        if !receiver_is_chained(line, offset) {
+            return Some(("execute", offset));
+        }
+    }
+    for operation in ["select", "insert", "update", "delete"] {
+        let pattern = format!(".{operation}(");
+        let Some(offset) = receiver_offset_before_pattern(line, &pattern) else {
+            continue;
+        };
+        if receiver_is_chained(line, offset) {
+            continue;
+        }
+        if operation != "select" || line[offset..].contains(".from(") {
+            if operation != "select" && call_first_argument_starts_with_quote(&line[offset..]) {
                 continue;
-            };
-            if operation == "select" {
-                if line[offset..].contains(".from(")
-                    && tables.iter().any(|table| line[offset..].contains(table))
-                {
-                    return Some((operation, offset));
-                }
-            } else if tables
-                .iter()
-                .any(|table| line[offset..].contains(&format!("({table}")))
-            {
-                return Some((operation, offset));
             }
+            return Some((operation, offset));
         }
     }
     None
 }
 
-fn drizzle_transaction_call(line: &str, dbs: &BTreeSet<String>) -> Option<usize> {
-    dbs.iter().find_map(|db| {
-        let pattern = format!("{db}.transaction(");
-        line.find(&pattern)
-    })
+fn drizzle_transaction_call(line: &str) -> Option<usize> {
+    receiver_offset_before_pattern(line, ".transaction(")
+}
+
+fn drizzle_query_relation_offset(line: &str, operation: &str) -> Option<usize> {
+    let mut search_offset = 0usize;
+    while search_offset < line.len() {
+        let relative = line[search_offset..].find(".query.")?;
+        let query_dot = search_offset + relative;
+        let (_, db_start) = identifier_before_dot(line, query_dot)?;
+        let after_query = &line[query_dot + ".query.".len()..];
+        let (table, table_offset) = parse_identifier_after(after_query, 0)?;
+        let after_table = table_offset + table.len();
+        let Some(rest) = after_query[after_table..].trim_start().strip_prefix('.') else {
+            search_offset = query_dot + ".query.".len();
+            continue;
+        };
+        if rest.starts_with(operation) && rest[operation.len()..].trim_start().starts_with('(') {
+            return Some(db_start);
+        }
+        search_offset = query_dot + ".query.".len();
+    }
+    None
+}
+
+fn model_operation_receiver_offset(line: &str, operation: &str) -> Option<usize> {
+    let pattern = format!(".{operation}(");
+    let mut search_offset = 0usize;
+    while search_offset < line.len() {
+        let relative = line[search_offset..].find(&pattern)?;
+        let operation_dot = search_offset + relative;
+        let (_, model_start) = identifier_before_dot(line, operation_dot)?;
+        let model_prefix_end = line[..model_start].trim_end().len();
+        if model_prefix_end == 0 || line.as_bytes()[model_prefix_end - 1] != b'.' {
+            search_offset = operation_dot + pattern.len();
+            continue;
+        }
+        let client_dot = model_prefix_end - 1;
+        if let Some((_, client_start)) = identifier_before_dot(line, client_dot) {
+            return Some(client_start);
+        }
+        search_offset = operation_dot + pattern.len();
+    }
+    None
+}
+
+fn receiver_offset_before_pattern(line: &str, pattern: &str) -> Option<usize> {
+    let mut search_offset = 0usize;
+    while search_offset < line.len() {
+        let relative = line[search_offset..].find(pattern)?;
+        let dot_offset = search_offset + relative;
+        if let Some((_, receiver_start)) = identifier_before_dot(line, dot_offset) {
+            return Some(receiver_start);
+        }
+        search_offset = dot_offset + pattern.len();
+    }
+    None
+}
+
+fn receiver_is_chained(line: &str, receiver_start: usize) -> bool {
+    let prefix_end = line[..receiver_start].trim_end().len();
+    prefix_end > 0 && line.as_bytes()[prefix_end - 1] == b'.'
+}
+
+fn call_first_argument_starts_with_quote(call: &str) -> bool {
+    let Some(open) = call.find('(') else {
+        return false;
+    };
+    let after_open = call[open + 1..].trim_start();
+    after_open.starts_with('"') || after_open.starts_with('\'')
+}
+
+fn identifier_before_dot(line: &str, dot_offset: usize) -> Option<(&str, usize)> {
+    if line.as_bytes().get(dot_offset) != Some(&b'.') {
+        return None;
+    }
+    let mut end = dot_offset;
+    let bytes = line.as_bytes();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_identifier_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    if start == end || !is_identifier_start(bytes[start]) {
+        return None;
+    }
+    Some((&line[start..end], start))
 }
 
 fn top_level_lines(text: &str) -> Vec<&str> {

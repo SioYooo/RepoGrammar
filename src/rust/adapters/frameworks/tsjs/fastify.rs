@@ -9,5 +9,5 @@ pub(crate) const SUPPORT_TARGETS: &[&str] = &[
     "fastify.route.options",
     "fastify.route.patch",
     "fastify.route.all",
-    "fastify.route.full_declaration",
+    "fastify.route.route",
 ];

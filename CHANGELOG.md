@@ -20,13 +20,16 @@
 - Conservative TS/JS structural-preview adapters for Next.js, Fastify, Prisma,
   and Drizzle. The new adapter registry adds role-compatible exact-anchor
   promotion with framework-specific `derived_from=tsjs_<framework>_structural_anchors`
-  provenance, bounded Next App/Pages conventions, Fastify shorthand/full route
-  declarations, Prisma model operations and array transactions, and Drizzle
-  table/query anchors. Package-only evidence, framework-role heuristics, React
-  components/hooks, Next route magic, Fastify plugin prefixes, Prisma injected/raw
-  clients, and Drizzle raw/dynamic builders remain `UNKNOWN` or non-supporting
-  context. New v0.2 fixtures cover positive Next/Fastify/Prisma/Drizzle families
-  and negative package/dynamic/raw cases.
+  provenance, bounded Next App/Pages conventions including async const route
+  handlers with dynamic segment/route-group context assumptions, Fastify
+  shorthand and `fastify.route.route` full declarations, Prisma allowlisted
+  model operations and array transactions, and Drizzle table/query anchors
+  including `db.query.<table>.findMany/findFirst`. Package-only evidence,
+  framework-role heuristics, React components/hooks, Next middleware/server
+  actions/re-exports, Fastify plugin prefixes, Prisma bulk/injected/raw clients,
+  and Drizzle raw/dynamic builders remain `UNKNOWN` or non-supporting context.
+  New v0.2 fixtures cover positive Next/Fastify/Prisma/Drizzle families and
+  negative package/dynamic/raw/bulk/shadowed cases.
 - Rust structural self-dogfood indexing for RepoGrammar's own implementation
   families. The new Tree-sitter Rust adapter discovers `.rs` files and
   `Cargo.toml`, extracts structural Rust units, emits typed UNKNOWNs for
@@ -35,10 +38,10 @@
   support only for RepoGrammar-owned roles. Product fixtures under
   `src/fixtures/rust/release/v0_2` prove support>=3 positive families across
   family gates, parser adapters, installer actions, and product tests;
-  low-support, macro/cfg, trait-dispatch, conflicting-module, and unsafe-path
-  abstention; bounded Cargo target-dependency inventory; metadata-only default
-  output; stale source refusal; and explicit source-span opt-in. This is not
-  general Rust semantic analysis.
+  low-support, macro/cfg, trait-dispatch, conflicting-module, Cargo build-script,
+  and unsafe-path abstention; bounded Cargo target-dependency inventory;
+  metadata-only default output; stale source refusal; build-script non-execution;
+  and explicit source-span opt-in. This is not general Rust semantic analysis.
 - CLI family query output, MCP `repogrammar_context` family responses, and
   `repogrammar stats` now surface `estimated_potential_token_savings` as an
   `ESTIMATED` local potential-read-displacement diagnostic. Successful family

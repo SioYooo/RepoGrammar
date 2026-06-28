@@ -25,17 +25,14 @@ const FASTIFY_HTTP_METHODS: [&str; 8] = [
     "get", "head", "post", "put", "delete", "options", "patch", "all",
 ];
 const NEXT_HTTP_METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-const PRISMA_OPERATIONS: [&str; 13] = [
+const PRISMA_OPERATIONS: [&str; 10] = [
     "findMany",
     "findUnique",
     "findFirst",
     "create",
-    "createMany",
     "update",
-    "updateMany",
     "upsert",
     "delete",
-    "deleteMany",
     "count",
     "aggregate",
     "groupBy",
@@ -220,9 +217,6 @@ fn next_anchor(
             note: "Next.js file convention requires package context",
         });
     }
-    if let Some(unknown) = next_path_unknown(document.path) {
-        return AnchorOutcome::Unknown(unknown);
-    }
     match unit.kind {
         CodeUnitKind::NextAppPage => next_component_anchor(
             "next.app.page",
@@ -285,14 +279,18 @@ fn next_component_anchor(
     AnchorOutcome::Anchor(Anchor {
         target: target.to_string(),
         fact_kind: SemanticFactKind::Symbol,
-        assumptions: vec![
-            format!("tsjs_anchor_kind={anchor_kind}"),
-            format!("router_kind={router_kind}"),
-            format!("file_convention={file_convention}"),
-            format!("route_path_shape={}", next_route_path_shape(path)),
-            format!("component_shape={component_shape}"),
-            "server_client_directive=unknown".to_string(),
-        ],
+        assumptions: {
+            let mut assumptions = vec![
+                format!("tsjs_anchor_kind={anchor_kind}"),
+                format!("router_kind={router_kind}"),
+                format!("file_convention={file_convention}"),
+                format!("route_path_shape={}", next_route_path_shape(path)),
+                format!("component_shape={component_shape}"),
+                "server_client_directive=unknown".to_string(),
+            ];
+            assumptions.extend(next_route_context_assumptions(path));
+            assumptions
+        },
     })
 }
 
@@ -308,14 +306,18 @@ fn next_pages_api_route_anchor(slice: &str, path: &str) -> AnchorOutcome {
     AnchorOutcome::Anchor(Anchor {
         target: "next.pages.api_route".to_string(),
         fact_kind: SemanticFactKind::ResolvedCall,
-        assumptions: vec![
-            "tsjs_anchor_kind=next_pages_api_route".to_string(),
-            "router_kind=pages".to_string(),
-            "file_convention=api_route".to_string(),
-            format!("route_path_shape={}", next_route_path_shape(path)),
-            format!("response_shape={}", response_shape(slice)),
-            format!("async_shape={}", async_shape(slice)),
-        ],
+        assumptions: {
+            let mut assumptions = vec![
+                "tsjs_anchor_kind=next_pages_api_route".to_string(),
+                "router_kind=pages".to_string(),
+                "file_convention=api_route".to_string(),
+                format!("route_path_shape={}", next_route_path_shape(path)),
+                format!("response_shape={}", response_shape(slice)),
+                format!("async_shape={}", async_shape(slice)),
+            ];
+            assumptions.extend(next_route_context_assumptions(path));
+            assumptions
+        },
     })
 }
 
@@ -331,17 +333,21 @@ fn next_route_handler_anchor(slice: &str, path: &str) -> AnchorOutcome {
     AnchorOutcome::Anchor(Anchor {
         target: format!("next.route.{method}"),
         fact_kind: SemanticFactKind::ResolvedCall,
-        assumptions: vec![
-            "tsjs_anchor_kind=next_route_handler".to_string(),
-            "router_kind=app".to_string(),
-            "file_convention=route".to_string(),
-            format!("http_method={method}"),
-            format!("route_path_shape={}", next_route_path_shape(path)),
-            format!("response_shape={}", response_shape(slice)),
-            format!("fetch_shape={}", fetch_shape(slice)),
-            format!("async_shape={}", async_shape(slice)),
-            "server_client_directive=server_assumed".to_string(),
-        ],
+        assumptions: {
+            let mut assumptions = vec![
+                "tsjs_anchor_kind=next_route_handler".to_string(),
+                "router_kind=app".to_string(),
+                "file_convention=route".to_string(),
+                format!("http_method={method}"),
+                format!("route_path_shape={}", next_route_path_shape(path)),
+                format!("response_shape={}", response_shape(slice)),
+                format!("fetch_shape={}", fetch_shape(slice)),
+                format!("async_shape={}", async_shape(slice)),
+                "server_client_directive=server_assumed".to_string(),
+            ];
+            assumptions.extend(next_route_context_assumptions(path));
+            assumptions
+        },
     })
 }
 
@@ -438,7 +444,7 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
         assumptions.push(format!("route_path_shape={path_shape}"));
     }
     AnchorOutcome::Anchor(Anchor {
-        target: "fastify.route.full_declaration".to_string(),
+        target: "fastify.route.route".to_string(),
         fact_kind: SemanticFactKind::ResolvedCall,
         assumptions,
     })
@@ -493,6 +499,14 @@ fn prisma_query_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome 
 }
 
 fn prisma_transaction_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    if raw_sql_present(slice) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_transaction_shape",
+            kind: "prisma_raw_query",
+            note: "Prisma raw SQL transaction is not support evidence",
+        });
+    }
     let Some(client) = prisma_transaction_client(slice) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
@@ -538,6 +552,14 @@ fn drizzle_schema_table_anchor(bindings: &ModuleBindings, slice: &str) -> Anchor
             note: "Drizzle schema table declaration is dynamic",
         });
     };
+    if bindings.unsafe_names.contains(table_name) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::ConflictingFacts,
+            affected_claim: "drizzle_table_binding",
+            kind: "drizzle_table_unresolved",
+            note: "Drizzle table binding is reassigned or redeclared",
+        });
+    }
     if !bindings.drizzle_table_factories.contains(factory) {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::UnresolvedImport,
@@ -611,6 +633,14 @@ fn drizzle_query_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome
 }
 
 fn drizzle_transaction_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    if raw_sql_present(slice) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "drizzle_transaction_shape",
+            kind: "drizzle_raw_sql",
+            note: "Drizzle raw SQL transaction is not support evidence",
+        });
+    }
     let Some(db) = drizzle_transaction_db(slice) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
@@ -765,25 +795,12 @@ fn tsjs_context_has_package(context: &ParserProjectContext, package: &str) -> bo
         .any(|dependency| dependency == package)
 }
 
-fn next_path_unknown(path: &str) -> Option<UnknownAnchor> {
-    if path.contains("/(") || path.contains("/@") {
-        Some(UnknownAnchor {
-            reason: UnknownReasonCode::FrameworkMagic,
-            affected_claim: "next_route_convention",
-            kind: "next_route_group_semantics_unknown",
-            note: "Next.js route group or parallel route semantics are not modeled",
-        })
-    } else if path.contains("/[") {
-        Some(UnknownAnchor {
-            reason: UnknownReasonCode::BuildVariantAmbiguity,
-            affected_claim: "next_route_convention",
-            kind: "next_dynamic_segment_unknown",
-            note:
-                "Next.js dynamic segment semantics are not modeled beyond normalized path metadata",
-        })
-    } else {
-        None
-    }
+fn next_route_context_assumptions(path: &str) -> Vec<String> {
+    vec![
+        format!("dynamic_segment_present={}", path.contains("/[")),
+        format!("route_group_present={}", path.contains("/(")),
+        format!("parallel_route_present={}", path.contains("/@")),
+    ]
 }
 
 fn next_route_path_shape(path: &str) -> String {
@@ -802,6 +819,8 @@ fn next_route_path_shape(path: &str) -> String {
     }
     if let Some(rest) = path.strip_prefix("app/") {
         normalize_route_path(&format!("/{rest}"))
+    } else if let Some(rest) = path.strip_prefix("src/app/") {
+        normalize_route_path(&format!("/{rest}"))
     } else if let Some(rest) = path.strip_prefix("pages/api/") {
         normalize_route_path(&format!("/api/{rest}"))
     } else if let Some(rest) = path.strip_prefix("pages/") {
@@ -812,10 +831,34 @@ fn next_route_path_shape(path: &str) -> String {
 }
 
 fn next_route_method(slice: &str) -> Option<&'static str> {
-    NEXT_HTTP_METHODS
-        .iter()
-        .copied()
-        .find(|method| slice.contains(&format!("function {method}")))
+    NEXT_HTTP_METHODS.iter().copied().find(|method| {
+        slice.contains(&format!("function {method}"))
+            || exported_const_async_route_handler(slice, method)
+    })
+}
+
+fn exported_const_async_route_handler(slice: &str, method: &str) -> bool {
+    let trimmed = slice.trim_start();
+    let Some(after_export) = trimmed.strip_prefix("export ") else {
+        return false;
+    };
+    let Some(after_const) = after_export.trim_start().strip_prefix("const ") else {
+        return false;
+    };
+    let Some((name, after_name)) = leading_identifier(after_const) else {
+        return false;
+    };
+    if name != method {
+        return false;
+    }
+    let Some(rhs) = after_const[after_name..]
+        .trim_start()
+        .strip_prefix('=')
+        .map(str::trim_start)
+    else {
+        return false;
+    };
+    rhs.starts_with("async ") && rhs.contains("=>")
 }
 
 fn contains_jsx_like(slice: &str) -> bool {
@@ -888,6 +931,12 @@ fn select_include_shape(slice: &str) -> &'static str {
 
 fn raw_sql_present(slice: &str) -> bool {
     slice.contains("sql`")
+        || slice.contains("sql.raw")
+        || slice.contains("sql.fromList")
+        || slice.contains("sql.join")
+        || slice.contains("sql.append")
+        || slice.contains("sql.empty")
+        || slice.contains(".execute(")
         || slice.contains("$queryRaw")
         || slice.contains("$executeRaw")
         || slice.contains("queryRaw")
@@ -937,6 +986,26 @@ fn drizzle_query_parts(slice: &str) -> Option<(&str, &str, &str)> {
     let (db, after_db) = leading_identifier(slice)?;
     let rest = slice[after_db..].trim_start().strip_prefix('.')?;
     let (operation, after_operation) = leading_identifier(rest)?;
+    if operation == "query" {
+        let rest = rest[after_operation..].trim_start().strip_prefix('.')?;
+        let (table, after_table) = leading_identifier(rest)?;
+        let rest = rest[after_table..].trim_start().strip_prefix('.')?;
+        let (query_operation, after_query_operation) = leading_identifier(rest)?;
+        if matches!(query_operation, "findMany" | "findFirst")
+            && rest[after_query_operation..].trim_start().starts_with('(')
+        {
+            return Some((
+                db,
+                if query_operation == "findMany" {
+                    "query_findMany"
+                } else {
+                    "query_findFirst"
+                },
+                table,
+            ));
+        }
+        return None;
+    }
     if !matches!(operation, "select" | "insert" | "update" | "delete")
         || !rest[after_operation..].trim_start().starts_with('(')
     {
@@ -1088,6 +1157,9 @@ impl ModuleBindings {
             if let Some(name) = bare_assignment_name(raw_line) {
                 reassigned.insert(name.to_string());
             }
+            for name in parameter_identifiers_from_line(raw_line) {
+                reassigned.insert(name);
+            }
             if at_top_level {
                 let import_bindings = parse_import_line(raw_line);
                 let produced_imports = !import_bindings.is_empty();
@@ -1104,6 +1176,10 @@ impl ModuleBindings {
                     }
                 }
                 top_level_lines.push(raw_line.to_string());
+            } else {
+                for name in declared_identifiers(raw_line) {
+                    reassigned.insert(name);
+                }
             }
             depth += brace_delta(raw_line);
             if depth < 0 {
@@ -1396,6 +1472,87 @@ fn declared_identifiers(line: &str) -> Vec<String> {
         }
     }
     Vec::new()
+}
+
+fn parameter_identifiers_from_line(line: &str) -> Vec<String> {
+    let mut identifiers = function_parameter_identifiers(line);
+    identifiers.extend(arrow_parameter_identifiers(line));
+    identifiers.sort();
+    identifiers.dedup();
+    identifiers
+}
+
+fn function_parameter_identifiers(line: &str) -> Vec<String> {
+    let Some(function_offset) = line.find("function") else {
+        return Vec::new();
+    };
+    if !has_identifier_boundaries(line, function_offset, "function".len()) {
+        return Vec::new();
+    }
+    let after_function = &line[function_offset + "function".len()..];
+    let Some(open) = after_function.find('(') else {
+        return Vec::new();
+    };
+    let Some(close) = after_function[open + 1..].find(')') else {
+        return Vec::new();
+    };
+    parameter_identifiers(&after_function[open + 1..open + 1 + close])
+}
+
+fn has_identifier_boundaries(line: &str, offset: usize, len: usize) -> bool {
+    let before = offset
+        .checked_sub(1)
+        .and_then(|index| line.as_bytes().get(index))
+        .copied();
+    let after = line.as_bytes().get(offset + len).copied();
+    !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
+}
+
+fn arrow_parameter_identifiers(line: &str) -> Vec<String> {
+    let Some(arrow_offset) = line.find("=>") else {
+        return Vec::new();
+    };
+    let before_arrow = line[..arrow_offset].trim_end();
+    if before_arrow.ends_with(')') {
+        let Some(open) = before_arrow.rfind('(') else {
+            return Vec::new();
+        };
+        return parameter_identifiers(&before_arrow[open + 1..before_arrow.len() - 1]);
+    }
+    identifier_before_arrow(before_arrow)
+        .map(|identifier| vec![identifier.to_string()])
+        .unwrap_or_default()
+}
+
+fn identifier_before_arrow(text: &str) -> Option<&str> {
+    let mut end = text.len();
+    let bytes = text.as_bytes();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_identifier_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    if start == end || !is_identifier_start(bytes[start]) {
+        return None;
+    }
+    Some(&text[start..end])
+}
+
+fn parameter_identifiers(parameters: &str) -> Vec<String> {
+    parameters
+        .split(',')
+        .filter_map(|parameter| {
+            let trimmed = parameter.trim();
+            if trimmed.is_empty() || trimmed.starts_with("...") || trimmed.starts_with('{') {
+                return None;
+            }
+            let before_type = trimmed.split(':').next().unwrap_or(trimmed).trim();
+            let before_default = before_type.split('=').next().unwrap_or(before_type).trim();
+            leading_identifier(before_default).map(|(name, _)| name.to_string())
+        })
+        .collect()
 }
 
 fn express_receiver_declaration(
@@ -1994,6 +2151,29 @@ describe("accounts", () => {
             .iter()
             .any(|assumption| assumption == "http_method=GET"));
 
+        let const_route = r#"export const POST = async (request: Request) => {
+  return Response.json({ ok: true });
+}
+"#;
+        let const_route_facts =
+            parse_facts_with_packages("src/app/users/route.ts", const_route, &["next"]);
+        assert_eq!(
+            targets_from_facts(const_route_facts.clone()),
+            vec!["next.route.POST".to_string()]
+        );
+        let const_route_fact = const_route_facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "next.route.POST")
+            })
+            .expect("next const route fact");
+        assert!(const_route_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "async_shape=async"));
+
         assert!(targets("app/users/page.tsx", page).is_empty());
         assert_eq!(
             unknown_kinds("app/users/page.tsx", page),
@@ -2002,20 +2182,29 @@ describe("accounts", () => {
     }
 
     #[test]
-    fn next_dynamic_segments_are_unknown_not_support() {
+    fn next_dynamic_segments_are_context_not_membership_blockers() {
         let page = r#"export default function Page() {
   return <main>User</main>;
 }
 "#;
-        assert!(targets_with_packages("app/users/[id]/page.tsx", page, &["next"]).is_empty());
+        let facts = parse_facts_with_packages("app/users/[id]/page.tsx", page, &["next"]);
         assert_eq!(
-            unknown_kinds_from_facts(parse_facts_with_packages(
-                "app/users/[id]/page.tsx",
-                page,
-                &["next"],
-            )),
-            vec!["next_dynamic_segment_unknown".to_string()]
+            targets_from_facts(facts.clone()),
+            vec!["next.app.page".to_string()]
         );
+        let fact = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "next.app.page")
+            })
+            .expect("dynamic route page fact");
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "dynamic_segment_present=true"));
+        assert!(unknown_kinds_from_facts(facts).is_empty());
     }
 
     #[test]
@@ -2028,9 +2217,83 @@ app.route({ method: "POST", url: "/users", handler: async (request, reply) => re
         assert_eq!(
             targets("src/server.ts", text),
             vec![
-                "fastify.route.full_declaration".to_string(),
-                "fastify.route.get".to_string()
+                "fastify.route.get".to_string(),
+                "fastify.route.route".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn nested_local_shadowing_blocks_exact_tsjs_anchors() {
+        let express = r#"import express from "express";
+const app = express();
+export function register() {
+  const app = makeFake();
+  app.get("/users", (req, res) => res.json([]));
+}
+"#;
+        assert!(targets("src/express_shadow.ts", express).is_empty());
+        assert_eq!(
+            unknown_kinds("src/express_shadow.ts", express),
+            vec!["unsafe_receiver_binding".to_string()]
+        );
+
+        let fastify = r#"import fastify from "fastify";
+const app = fastify();
+export function register() {
+  const app = makeFake();
+  app.get("/users", async () => []);
+}
+"#;
+        assert!(targets("src/fastify_shadow.ts", fastify).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify_shadow.ts", fastify),
+            vec!["fastify_receiver_reassigned".to_string()]
+        );
+
+        let prisma = r#"import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+export async function listUsers() {
+  const prisma = getInjectedClient();
+  return prisma.user.findMany();
+}
+"#;
+        assert!(targets("src/prisma_shadow.ts", prisma).is_empty());
+        assert_eq!(
+            unknown_kinds("src/prisma_shadow.ts", prisma),
+            vec!["prisma_injected_client".to_string()]
+        );
+
+        let drizzle = r#"import { drizzle } from "drizzle-orm/node-postgres";
+import { pgTable } from "drizzle-orm/pg-core";
+export const users = pgTable("users", {});
+const db = drizzle(pool);
+export async function listUsers() {
+  const db = getInjectedDb();
+  return db.select().from(users);
+}
+"#;
+        assert!(!targets("src/drizzle_shadow.ts", drizzle)
+            .iter()
+            .any(|target| target == "drizzle.query.select"));
+        assert_eq!(
+            unknown_kinds("src/drizzle_shadow.ts", drizzle),
+            vec!["drizzle_db_binding_unresolved".to_string()]
+        );
+
+        let jest = r#"import { describe, it } from "vitest";
+describe("users", () => {
+  const it = makeWrapper();
+  it("loads", () => {});
+});
+"#;
+        assert_eq!(
+            targets("src/jest_shadow.test.ts", jest),
+            vec!["jest_vitest.describe".to_string()]
+        );
+        assert_eq!(
+            unknown_kinds("src/jest_shadow.test.ts", jest),
+            vec!["unsafe_test_runner_binding".to_string()]
         );
     }
 
@@ -2048,6 +2311,7 @@ export async function saveMany() {
         assert_eq!(
             targets("src/repository.ts", text),
             vec![
+                "prisma.query.create".to_string(),
                 "prisma.query.findMany".to_string(),
                 "prisma.transaction".to_string()
             ]
@@ -2061,6 +2325,25 @@ prisma.user.findMany({ where: sql`unsafe` });
         assert_eq!(
             unknown_kinds("src/raw.ts", raw),
             vec!["prisma_raw_query".to_string()]
+        );
+
+        let raw_transaction = r#"import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+prisma.$transaction([prisma.$executeRaw("DELETE FROM users")]);
+"#;
+        assert!(targets("src/raw-transaction.ts", raw_transaction).is_empty());
+        assert!(unknown_kinds("src/raw-transaction.ts", raw_transaction)
+            .iter()
+            .all(|kind| kind == "prisma_raw_query"));
+
+        let bulk = r#"import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+prisma.user.createMany({ data: [] });
+"#;
+        assert!(targets("src/bulk.ts", bulk).is_empty());
+        assert_eq!(
+            unknown_kinds("src/bulk.ts", bulk),
+            vec!["prisma_dynamic_model_or_operation".to_string()]
         );
     }
 
@@ -2076,10 +2359,14 @@ export async function listUsers() {
 export async function inTx() {
   return db.transaction(async (tx) => tx.select().from(users));
 }
+export async function queryUsers() {
+  return db.query.users.findMany({ where: eq(users.id, 1) });
+}
 "#;
         assert_eq!(
             targets("src/drizzle.ts", text),
             vec![
+                "drizzle.query.query_findMany".to_string(),
                 "drizzle.query.select".to_string(),
                 "drizzle.schema.table".to_string(),
                 "drizzle.transaction".to_string()

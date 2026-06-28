@@ -2779,6 +2779,12 @@ mod tests {
                 "tsjs_fastify_structural_anchors",
             ),
             (
+                "fastify_route",
+                "framework:fastify.route_handler",
+                "fastify.route.route",
+                "tsjs_fastify_structural_anchors",
+            ),
+            (
                 "prisma_query",
                 "framework:prisma.query",
                 "prisma.query.findMany",
