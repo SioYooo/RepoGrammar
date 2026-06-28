@@ -12,7 +12,7 @@ use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
 };
-use crate::ports::parser::{ParseError, SourceDocument};
+use crate::ports::parser::{ParseError, ParserProjectContext, SourceDocument};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Engine identity for parser-emitted TS/JS structural anchors.
@@ -20,7 +20,27 @@ pub const TSJS_ANCHOR_ENGINE: &str = "repogrammar-tsjs-syntax";
 /// Method identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_METHOD: &str = "exact_anchor_v1";
 
-const HTTP_METHODS: [&str; 6] = ["get", "post", "put", "patch", "delete", "use"];
+const EXPRESS_HTTP_METHODS: [&str; 6] = ["get", "post", "put", "patch", "delete", "use"];
+const FASTIFY_HTTP_METHODS: [&str; 8] = [
+    "get", "head", "post", "put", "delete", "options", "patch", "all",
+];
+const NEXT_HTTP_METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+const PRISMA_OPERATIONS: [&str; 13] = [
+    "findMany",
+    "findUnique",
+    "findFirst",
+    "create",
+    "createMany",
+    "update",
+    "updateMany",
+    "upsert",
+    "delete",
+    "deleteMany",
+    "count",
+    "aggregate",
+    "groupBy",
+];
+const DRIZZLE_TABLE_FACTORIES: [&str; 3] = ["pgTable", "mysqlTable", "sqliteTable"];
 const RUNNER_MODULES: [&str; 2] = ["vitest", "@jest/globals"];
 
 /// Extract exact framework anchors for the given units. Returns `STRUCTURAL`
@@ -28,12 +48,12 @@ const RUNNER_MODULES: [&str; 2] = ["vitest", "@jest/globals"];
 pub fn exact_framework_anchors(
     document: &SourceDocument<'_>,
     units: &[CodeUnit],
-    ambient_runner_allowed: bool,
+    context: Option<&ParserProjectContext>,
 ) -> Result<Vec<SemanticFact>, ParseError> {
     let bindings = ModuleBindings::analyze(document.text);
     let mut facts = Vec::new();
     for unit in units {
-        match anchor_for_unit(document, &bindings, unit, ambient_runner_allowed) {
+        match anchor_for_unit(document, context, &bindings, unit) {
             AnchorOutcome::Anchor(anchor) => facts.push(anchor_fact(document, unit, anchor)?),
             AnchorOutcome::Unknown(unknown) => facts.push(unknown_fact(document, unit, unknown)?),
             AnchorOutcome::None => {}
@@ -96,9 +116,9 @@ enum AnchorOutcome {
 
 fn anchor_for_unit(
     document: &SourceDocument<'_>,
+    context: Option<&ParserProjectContext>,
     bindings: &ModuleBindings,
     unit: &CodeUnit,
-    ambient_runner_allowed: bool,
 ) -> AnchorOutcome {
     let Some(slice) = document
         .text
@@ -108,12 +128,31 @@ fn anchor_for_unit(
     };
     match unit.kind {
         CodeUnitKind::ExpressRoute => express_route_anchor(bindings, slice),
-        CodeUnitKind::TestSuite => {
-            test_anchor(document, bindings, slice, true, ambient_runner_allowed)
-        }
-        CodeUnitKind::TestCase => {
-            test_anchor(document, bindings, slice, false, ambient_runner_allowed)
-        }
+        CodeUnitKind::NextAppPage
+        | CodeUnitKind::NextAppLayout
+        | CodeUnitKind::NextRouteHandler
+        | CodeUnitKind::NextPagesApiRoute
+        | CodeUnitKind::NextPagesPage => next_anchor(document, context, unit, slice),
+        CodeUnitKind::FastifyRoute => fastify_route_anchor(bindings, slice),
+        CodeUnitKind::PrismaQuery => prisma_query_anchor(bindings, slice),
+        CodeUnitKind::PrismaTransaction => prisma_transaction_anchor(bindings, slice),
+        CodeUnitKind::DrizzleSchemaTable => drizzle_schema_table_anchor(bindings, slice),
+        CodeUnitKind::DrizzleQuery => drizzle_query_anchor(bindings, slice),
+        CodeUnitKind::DrizzleTransaction => drizzle_transaction_anchor(bindings, slice),
+        CodeUnitKind::TestSuite => test_anchor(
+            document,
+            bindings,
+            slice,
+            true,
+            context.is_some_and(|context| context.tsjs_has_test_runner_context),
+        ),
+        CodeUnitKind::TestCase => test_anchor(
+            document,
+            bindings,
+            slice,
+            false,
+            context.is_some_and(|context| context.tsjs_has_test_runner_context),
+        ),
         _ => AnchorOutcome::None,
     }
 }
@@ -127,7 +166,7 @@ fn express_route_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome
             note: "TS/JS route call shape is dynamic",
         });
     };
-    if !HTTP_METHODS.contains(&method) {
+    if !EXPRESS_HTTP_METHODS.contains(&method) {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::BuildVariantAmbiguity,
             affected_claim: "tsjs_support_target",
@@ -164,6 +203,439 @@ fn express_route_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome
         target: format!("express.route.{method}"),
         fact_kind: SemanticFactKind::ResolvedCall,
         assumptions,
+    })
+}
+
+fn next_anchor(
+    document: &SourceDocument<'_>,
+    context: Option<&ParserProjectContext>,
+    unit: &CodeUnit,
+    slice: &str,
+) -> AnchorOutcome {
+    if !context.is_some_and(|context| tsjs_context_has_package(context, "next")) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::MissingProjectConfig,
+            affected_claim: "next_project_context",
+            kind: "next_missing_package_context",
+            note: "Next.js file convention requires package context",
+        });
+    }
+    if let Some(unknown) = next_path_unknown(document.path) {
+        return AnchorOutcome::Unknown(unknown);
+    }
+    match unit.kind {
+        CodeUnitKind::NextAppPage => next_component_anchor(
+            "next.app.page",
+            "next_app_page",
+            "app",
+            "page",
+            slice,
+            document.path,
+        ),
+        CodeUnitKind::NextAppLayout => next_component_anchor(
+            "next.app.layout",
+            "next_app_layout",
+            "app",
+            "layout",
+            slice,
+            document.path,
+        ),
+        CodeUnitKind::NextPagesPage => next_component_anchor(
+            "next.pages.page",
+            "next_pages_page",
+            "pages",
+            "page",
+            slice,
+            document.path,
+        ),
+        CodeUnitKind::NextPagesApiRoute => next_pages_api_route_anchor(slice, document.path),
+        CodeUnitKind::NextRouteHandler => next_route_handler_anchor(slice, document.path),
+        _ => AnchorOutcome::None,
+    }
+}
+
+fn next_component_anchor(
+    target: &'static str,
+    anchor_kind: &'static str,
+    router_kind: &'static str,
+    file_convention: &'static str,
+    slice: &str,
+    path: &str,
+) -> AnchorOutcome {
+    if !slice.contains("export default") {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "next_default_export",
+            kind: "next_reexported_page_unknown",
+            note: "Next.js page/layout default export is not exact and local",
+        });
+    }
+    let component_shape = if contains_jsx_like(slice) {
+        "jsx_component"
+    } else if slice.contains("createElement") {
+        "create_element_component"
+    } else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "next_component_shape",
+            kind: "next_component_body_unknown",
+            note: "Next.js page/layout component body is not an exact JSX/createElement anchor",
+        });
+    };
+    AnchorOutcome::Anchor(Anchor {
+        target: target.to_string(),
+        fact_kind: SemanticFactKind::Symbol,
+        assumptions: vec![
+            format!("tsjs_anchor_kind={anchor_kind}"),
+            format!("router_kind={router_kind}"),
+            format!("file_convention={file_convention}"),
+            format!("route_path_shape={}", next_route_path_shape(path)),
+            format!("component_shape={component_shape}"),
+            "server_client_directive=unknown".to_string(),
+        ],
+    })
+}
+
+fn next_pages_api_route_anchor(slice: &str, path: &str) -> AnchorOutcome {
+    if !slice.contains("export default") {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "next_pages_api_export",
+            kind: "next_reexported_page_unknown",
+            note: "Next.js Pages API route export is not exact and local",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: "next.pages.api_route".to_string(),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=next_pages_api_route".to_string(),
+            "router_kind=pages".to_string(),
+            "file_convention=api_route".to_string(),
+            format!("route_path_shape={}", next_route_path_shape(path)),
+            format!("response_shape={}", response_shape(slice)),
+            format!("async_shape={}", async_shape(slice)),
+        ],
+    })
+}
+
+fn next_route_handler_anchor(slice: &str, path: &str) -> AnchorOutcome {
+    let Some(method) = next_route_method(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "next_route_handler_export",
+            kind: "next_route_handler_export_unknown",
+            note: "Next.js route handler export is not an exact HTTP method function",
+        });
+    };
+    AnchorOutcome::Anchor(Anchor {
+        target: format!("next.route.{method}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=next_route_handler".to_string(),
+            "router_kind=app".to_string(),
+            "file_convention=route".to_string(),
+            format!("http_method={method}"),
+            format!("route_path_shape={}", next_route_path_shape(path)),
+            format!("response_shape={}", response_shape(slice)),
+            format!("fetch_shape={}", fetch_shape(slice)),
+            format!("async_shape={}", async_shape(slice)),
+            "server_client_directive=server_assumed".to_string(),
+        ],
+    })
+}
+
+fn fastify_route_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    let Some((receiver, method)) = route_call_parts(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "fastify_route_shape",
+            kind: "fastify_dynamic_route_call",
+            note: "Fastify route call shape is dynamic",
+        });
+    };
+    if bindings.unsafe_names.contains(receiver) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::ConflictingFacts,
+            affected_claim: "fastify_receiver_binding",
+            kind: "fastify_receiver_reassigned",
+            note: "Fastify receiver is reassigned or redeclared",
+        });
+    }
+    if !bindings.fastify_receivers.contains(receiver) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "fastify_receiver_binding",
+            kind: "fastify_receiver_unresolved",
+            note: "Fastify route receiver is not an exact Fastify binding",
+        });
+    }
+    if method == "route" {
+        return fastify_full_route_anchor(slice);
+    }
+    if !FASTIFY_HTTP_METHODS.contains(&method) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "fastify_route_method",
+            kind: "fastify_dynamic_method",
+            note: "Fastify route method is not in the exact allowlist",
+        });
+    }
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=fastify_route".to_string(),
+        format!("route_method={method}"),
+        format!("handler_shape={}", handler_shape(slice)),
+        format!("async_shape={}", async_shape(slice)),
+        format!("schema_present={}", slice.contains("schema")),
+        format!("opts_handler_present={}", slice.contains("handler")),
+        format!("reply_shape={}", reply_shape(slice)),
+        "plugin_context=none".to_string(),
+        "prefix_unknown=false".to_string(),
+    ];
+    if let Some(path_shape) = route_path_shape(slice) {
+        assumptions.push(format!("route_path_shape={path_shape}"));
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: format!("fastify.route.{method}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions,
+    })
+}
+
+fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
+    let Some(method) = object_literal_string_field(slice, "method") else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "fastify_route_method",
+            kind: "fastify_dynamic_method",
+            note: "Fastify full route method is not a literal string",
+        });
+    };
+    let method = method.to_ascii_lowercase();
+    if !FASTIFY_HTTP_METHODS.contains(&method.as_str()) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "fastify_route_method",
+            kind: "fastify_dynamic_method",
+            note: "Fastify full route method is not in the exact allowlist",
+        });
+    }
+    let path_shape = object_literal_string_field(slice, "url")
+        .or_else(|| object_literal_string_field(slice, "path"))
+        .map(|path| normalize_route_path(&path));
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=fastify_route".to_string(),
+        format!("route_method={method}"),
+        format!("handler_shape={}", handler_shape(slice)),
+        format!("async_shape={}", async_shape(slice)),
+        format!("schema_present={}", slice.contains("schema")),
+        "opts_handler_present=true".to_string(),
+        format!("reply_shape={}", reply_shape(slice)),
+        "plugin_context=none".to_string(),
+        "prefix_unknown=false".to_string(),
+    ];
+    if let Some(path_shape) = path_shape {
+        assumptions.push(format!("route_path_shape={path_shape}"));
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: "fastify.route.full_declaration".to_string(),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions,
+    })
+}
+
+fn prisma_query_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    if raw_sql_present(slice) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_query_shape",
+            kind: "prisma_raw_query",
+            note: "Prisma raw SQL query is not support evidence",
+        });
+    }
+    let Some((client, model, operation)) = prisma_query_parts(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_query_shape",
+            kind: "prisma_dynamic_model_or_operation",
+            note: "Prisma query model or operation is dynamic",
+        });
+    };
+    if bindings.unsafe_names.contains(client) || !bindings.prisma_clients.contains(client) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "prisma_client_binding",
+            kind: "prisma_injected_client",
+            note: "Prisma client is not an exact local PrismaClient binding",
+        });
+    }
+    if !PRISMA_OPERATIONS.contains(&operation) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_query_shape",
+            kind: "prisma_dynamic_model_or_operation",
+            note: "Prisma operation is not in the exact allowlist",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: format!("prisma.query.{operation}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=prisma_query".to_string(),
+            format!("model_name={model}"),
+            format!("operation={operation}"),
+            format!("where_shape={}", object_clause_shape(slice, "where")),
+            format!("select_include_shape={}", select_include_shape(slice)),
+            "transaction_shape=none".to_string(),
+            format!("raw_sql_present={}", raw_sql_present(slice)),
+        ],
+    })
+}
+
+fn prisma_transaction_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    let Some(client) = prisma_transaction_client(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_transaction_shape",
+            kind: "prisma_transaction_callback",
+            note: "Prisma transaction shape is not exact",
+        });
+    };
+    if bindings.unsafe_names.contains(client) || !bindings.prisma_clients.contains(client) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "prisma_client_binding",
+            kind: "prisma_injected_client",
+            note: "Prisma transaction client is not an exact local PrismaClient binding",
+        });
+    }
+    if !slice.contains("$transaction([") {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "prisma_transaction_shape",
+            kind: "prisma_transaction_callback",
+            note: "Prisma callback transaction is not a safe exact anchor",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: "prisma.transaction".to_string(),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=prisma_transaction".to_string(),
+            "operation=transaction".to_string(),
+            "transaction_shape=array".to_string(),
+            format!("raw_sql_present={}", raw_sql_present(slice)),
+        ],
+    })
+}
+
+fn drizzle_schema_table_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    let Some((table_name, factory)) = drizzle_table_declaration_parts(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "drizzle_schema_table",
+            kind: "drizzle_dynamic_table",
+            note: "Drizzle schema table declaration is dynamic",
+        });
+    };
+    if !bindings.drizzle_table_factories.contains(factory) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "drizzle_table_binding",
+            kind: "drizzle_ambiguous_table_import",
+            note: "Drizzle table factory is not an exact Drizzle import",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: "drizzle.schema.table".to_string(),
+        fact_kind: SemanticFactKind::Symbol,
+        assumptions: vec![
+            "tsjs_anchor_kind=drizzle_schema_table".to_string(),
+            "operation=schema_table".to_string(),
+            format!("table_name={table_name}"),
+            "where_shape=none".to_string(),
+            "returning_shape=none".to_string(),
+            "join_shape=none".to_string(),
+            format!("sql_template_present={}", raw_sql_present(slice)),
+        ],
+    })
+}
+
+fn drizzle_query_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    if raw_sql_present(slice) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "drizzle_query_shape",
+            kind: "drizzle_raw_sql",
+            note: "Drizzle raw SQL template is not support evidence",
+        });
+    }
+    let Some((db, operation, table)) = drizzle_query_parts(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "drizzle_query_shape",
+            kind: "drizzle_dynamic_query_builder",
+            note: "Drizzle query builder shape is dynamic",
+        });
+    };
+    if !bindings.drizzle_dbs.contains(db) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "drizzle_db_binding",
+            kind: "drizzle_db_binding_unresolved",
+            note: "Drizzle db binding is not exact",
+        });
+    }
+    if !bindings.drizzle_tables.contains(table) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "drizzle_table_binding",
+            kind: "drizzle_table_unresolved",
+            note: "Drizzle query table is not an exact table declaration",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: format!("drizzle.query.{operation}"),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=drizzle_query".to_string(),
+            format!("operation={operation}"),
+            format!("table_name={table}"),
+            format!("where_shape={}", object_clause_shape(slice, "where")),
+            format!("returning_shape={}", slice.contains(".returning(")),
+            format!("join_shape={}", drizzle_join_shape(slice)),
+            format!("transaction_shape={}", slice.contains(".transaction(")),
+            format!("sql_template_present={}", raw_sql_present(slice)),
+        ],
+    })
+}
+
+fn drizzle_transaction_anchor(bindings: &ModuleBindings, slice: &str) -> AnchorOutcome {
+    let Some(db) = drizzle_transaction_db(slice) else {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "drizzle_transaction_shape",
+            kind: "drizzle_dynamic_query_builder",
+            note: "Drizzle transaction shape is dynamic",
+        });
+    };
+    if !bindings.drizzle_dbs.contains(db) {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "drizzle_db_binding",
+            kind: "drizzle_db_binding_unresolved",
+            note: "Drizzle transaction db binding is not exact",
+        });
+    }
+    AnchorOutcome::Anchor(Anchor {
+        target: "drizzle.transaction".to_string(),
+        fact_kind: SemanticFactKind::ResolvedCall,
+        assumptions: vec![
+            "tsjs_anchor_kind=drizzle_transaction".to_string(),
+            "operation=transaction".to_string(),
+            "transaction_shape=callback".to_string(),
+            format!("sql_template_present={}", raw_sql_present(slice)),
+        ],
     })
 }
 
@@ -286,6 +758,217 @@ fn is_test_file(path: &str) -> bool {
     SUFFIXES.iter().any(|suffix| path.ends_with(suffix))
 }
 
+fn tsjs_context_has_package(context: &ParserProjectContext, package: &str) -> bool {
+    context
+        .tsjs_package_dependencies
+        .iter()
+        .any(|dependency| dependency == package)
+}
+
+fn next_path_unknown(path: &str) -> Option<UnknownAnchor> {
+    if path.contains("/(") || path.contains("/@") {
+        Some(UnknownAnchor {
+            reason: UnknownReasonCode::FrameworkMagic,
+            affected_claim: "next_route_convention",
+            kind: "next_route_group_semantics_unknown",
+            note: "Next.js route group or parallel route semantics are not modeled",
+        })
+    } else if path.contains("/[") {
+        Some(UnknownAnchor {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "next_route_convention",
+            kind: "next_dynamic_segment_unknown",
+            note:
+                "Next.js dynamic segment semantics are not modeled beyond normalized path metadata",
+        })
+    } else {
+        None
+    }
+}
+
+fn next_route_path_shape(path: &str) -> String {
+    let mut path = path.trim_start_matches("./").to_string();
+    for extension in [".tsx", ".jsx", ".ts", ".js"] {
+        if path.ends_with(extension) {
+            path.truncate(path.len() - extension.len());
+            break;
+        }
+    }
+    for suffix in ["/page", "/layout", "/route"] {
+        if path.ends_with(suffix) {
+            path.truncate(path.len() - suffix.len());
+            break;
+        }
+    }
+    if let Some(rest) = path.strip_prefix("app/") {
+        normalize_route_path(&format!("/{rest}"))
+    } else if let Some(rest) = path.strip_prefix("pages/api/") {
+        normalize_route_path(&format!("/api/{rest}"))
+    } else if let Some(rest) = path.strip_prefix("pages/") {
+        normalize_route_path(&format!("/{rest}"))
+    } else {
+        normalize_route_path(&format!("/{path}"))
+    }
+}
+
+fn next_route_method(slice: &str) -> Option<&'static str> {
+    NEXT_HTTP_METHODS
+        .iter()
+        .copied()
+        .find(|method| slice.contains(&format!("function {method}")))
+}
+
+fn contains_jsx_like(slice: &str) -> bool {
+    slice.contains("return <")
+        || slice.contains("</")
+        || slice.contains("/>")
+        || slice.contains("jsx(")
+}
+
+fn response_shape(slice: &str) -> &'static str {
+    if slice.contains("NextResponse.json") || slice.contains("Response.json") {
+        "response_json"
+    } else if slice.contains("new Response") {
+        "response_object"
+    } else if slice.contains(".json(") {
+        "res_json"
+    } else if slice.contains(".send(") {
+        "res_send"
+    } else if slice.contains(".end(") {
+        "res_end"
+    } else {
+        "response_unknown"
+    }
+}
+
+fn fetch_shape(slice: &str) -> &'static str {
+    if slice.contains("request.json(") {
+        "request_json"
+    } else if slice.contains("request.nextUrl") {
+        "next_url"
+    } else {
+        "none"
+    }
+}
+
+fn reply_shape(slice: &str) -> &'static str {
+    if slice.contains(".send(") {
+        "reply_send"
+    } else if slice.contains(".code(") || slice.contains(".status(") {
+        "reply_status"
+    } else {
+        "reply_unknown"
+    }
+}
+
+fn object_literal_string_field(slice: &str, field: &str) -> Option<String> {
+    let field_index = slice.find(field)?;
+    let after_field = &slice[field_index + field.len()..];
+    let after_colon = after_field.trim_start().strip_prefix(':')?.trim_start();
+    first_quoted(after_colon)
+}
+
+fn object_clause_shape(slice: &str, field: &str) -> &'static str {
+    let pattern = format!("{field}:");
+    if slice.contains(&pattern) {
+        "object_literal"
+    } else {
+        "none"
+    }
+}
+
+fn select_include_shape(slice: &str) -> &'static str {
+    match (slice.contains("select:"), slice.contains("include:")) {
+        (true, true) => "select_include",
+        (true, false) => "select",
+        (false, true) => "include",
+        (false, false) => "none",
+    }
+}
+
+fn raw_sql_present(slice: &str) -> bool {
+    slice.contains("sql`")
+        || slice.contains("$queryRaw")
+        || slice.contains("$executeRaw")
+        || slice.contains("queryRaw")
+        || slice.contains("executeRaw")
+}
+
+fn prisma_query_parts(slice: &str) -> Option<(&str, &str, &str)> {
+    let (client, after_client) = leading_identifier(slice)?;
+    let rest = slice[after_client..].trim_start().strip_prefix('.')?;
+    let (model, after_model) = leading_identifier(rest)?;
+    let rest = rest[after_model..].trim_start().strip_prefix('.')?;
+    let (operation, after_operation) = leading_identifier(rest)?;
+    if !rest[after_operation..].trim_start().starts_with('(') {
+        return None;
+    }
+    Some((client, model, operation))
+}
+
+fn prisma_transaction_client(slice: &str) -> Option<&str> {
+    let (client, after_client) = leading_identifier(slice)?;
+    slice[after_client..]
+        .trim_start()
+        .strip_prefix(".$transaction(")?;
+    Some(client)
+}
+
+fn drizzle_table_declaration_parts(slice: &str) -> Option<(&str, &str)> {
+    let trimmed = strip_export_prefix(slice.trim_start());
+    let rest = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
+    let (name, after_name) = leading_identifier(rest)?;
+    let rhs = rest[after_name..]
+        .trim_start()
+        .strip_prefix('=')?
+        .trim_start();
+    let (factory, after_factory) = leading_identifier(rhs)?;
+    if !DRIZZLE_TABLE_FACTORIES.contains(&factory)
+        || !rhs[after_factory..].trim_start().starts_with('(')
+    {
+        return None;
+    }
+    Some((name, factory))
+}
+
+fn drizzle_query_parts(slice: &str) -> Option<(&str, &str, &str)> {
+    let (db, after_db) = leading_identifier(slice)?;
+    let rest = slice[after_db..].trim_start().strip_prefix('.')?;
+    let (operation, after_operation) = leading_identifier(rest)?;
+    if !matches!(operation, "select" | "insert" | "update" | "delete")
+        || !rest[after_operation..].trim_start().starts_with('(')
+    {
+        return None;
+    }
+    if operation == "select" {
+        let from_index = slice.find(".from(")?;
+        let from_arg = &slice[from_index + ".from(".len()..];
+        let (table, _) = leading_identifier(from_arg)?;
+        return Some((db, operation, table));
+    }
+    let arg = &rest[after_operation..].trim_start()["(".len()..];
+    let (table, _) = leading_identifier(arg)?;
+    Some((db, operation, table))
+}
+
+fn drizzle_transaction_db(slice: &str) -> Option<&str> {
+    let (db, after_db) = leading_identifier(slice)?;
+    slice[after_db..]
+        .trim_start()
+        .strip_prefix(".transaction(")?;
+    Some(db)
+}
+
+fn drizzle_join_shape(slice: &str) -> &'static str {
+    if slice.contains("Join(") {
+        "join"
+    } else {
+        "none"
+    }
+}
+
 fn anchor_fact(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
@@ -384,6 +1067,11 @@ struct ModuleBindings {
     local_decls: BTreeSet<String>,
     unsafe_names: BTreeSet<String>,
     express_receivers: BTreeMap<String, ExpressReceiver>,
+    fastify_receivers: BTreeSet<String>,
+    prisma_clients: BTreeSet<String>,
+    drizzle_table_factories: BTreeSet<String>,
+    drizzle_tables: BTreeSet<String>,
+    drizzle_dbs: BTreeSet<String>,
 }
 
 impl ModuleBindings {
@@ -431,12 +1119,45 @@ impl ModuleBindings {
         }
 
         let mut express_receivers: BTreeMap<String, ExpressReceiver> = BTreeMap::new();
+        let mut fastify_receivers = BTreeSet::new();
+        let mut prisma_clients = BTreeSet::new();
+        let mut drizzle_table_factories = BTreeSet::new();
+        let mut drizzle_tables = BTreeSet::new();
+        let mut drizzle_dbs = BTreeSet::new();
+        for (local, binding) in &imports {
+            if binding.module.starts_with("drizzle-orm")
+                && matches!(&binding.kind, ImportKind::Named(original) if DRIZZLE_TABLE_FACTORIES.contains(&original.as_str()))
+                && !unsafe_names.contains(local)
+            {
+                drizzle_table_factories.insert(local.clone());
+            }
+        }
         for line in &top_level_lines {
             if let Some((name, receiver)) =
                 express_receiver_declaration(line, &imports, &unsafe_names)
             {
                 if !unsafe_names.contains(&name) {
                     express_receivers.insert(name, receiver);
+                }
+            }
+            if let Some(name) = fastify_receiver_declaration(line, &imports, &unsafe_names) {
+                if !unsafe_names.contains(&name) {
+                    fastify_receivers.insert(name);
+                }
+            }
+            if let Some(name) = prisma_client_declaration(line, &imports, &unsafe_names) {
+                if !unsafe_names.contains(&name) {
+                    prisma_clients.insert(name);
+                }
+            }
+            if let Some((table, factory)) = drizzle_table_declaration_parts(line) {
+                if drizzle_table_factories.contains(factory) && !unsafe_names.contains(table) {
+                    drizzle_tables.insert(table.to_string());
+                }
+            }
+            if let Some(name) = drizzle_db_declaration(line, &imports, &unsafe_names) {
+                if !unsafe_names.contains(&name) {
+                    drizzle_dbs.insert(name);
                 }
             }
         }
@@ -446,6 +1167,11 @@ impl ModuleBindings {
             local_decls,
             unsafe_names,
             express_receivers,
+            fastify_receivers,
+            prisma_clients,
+            drizzle_table_factories,
+            drizzle_tables,
+            drizzle_dbs,
         }
     }
 
@@ -725,6 +1451,83 @@ fn express_receiver_from_rhs(
     }
 }
 
+fn fastify_receiver_declaration(
+    line: &str,
+    imports: &BTreeMap<String, ImportBinding>,
+    unsafe_names: &BTreeSet<String>,
+) -> Option<String> {
+    let (name, rhs) = top_level_declaration_assignment(line)?;
+    let (head, after_head) = leading_identifier(rhs)?;
+    if unsafe_names.contains(head) || !rhs[after_head..].trim_start().starts_with('(') {
+        return None;
+    }
+    let binding = imports.get(head)?;
+    if binding.module != "fastify" {
+        return None;
+    }
+    match &binding.kind {
+        ImportKind::Default | ImportKind::Namespace => Some(name.to_string()),
+        ImportKind::Named(original) if matches!(original.as_str(), "fastify" | "Fastify") => {
+            Some(name.to_string())
+        }
+        ImportKind::Named(_) => None,
+    }
+}
+
+fn prisma_client_declaration(
+    line: &str,
+    imports: &BTreeMap<String, ImportBinding>,
+    unsafe_names: &BTreeSet<String>,
+) -> Option<String> {
+    let (name, rhs) = top_level_declaration_assignment(line)?;
+    let rhs = rhs.trim().trim_end_matches(';').trim();
+    let after_new = rhs.strip_prefix("new ")?;
+    let (constructor, after_constructor) = leading_identifier(after_new)?;
+    if unsafe_names.contains(constructor)
+        || !after_new[after_constructor..].trim_start().starts_with('(')
+    {
+        return None;
+    }
+    let binding = imports.get(constructor)?;
+    if binding.module == "@prisma/client"
+        && matches!(&binding.kind, ImportKind::Named(original) if original == "PrismaClient")
+    {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+fn drizzle_db_declaration(
+    line: &str,
+    imports: &BTreeMap<String, ImportBinding>,
+    unsafe_names: &BTreeSet<String>,
+) -> Option<String> {
+    let (name, rhs) = top_level_declaration_assignment(line)?;
+    let (factory, after_factory) = leading_identifier(rhs)?;
+    if unsafe_names.contains(factory) || !rhs[after_factory..].trim_start().starts_with('(') {
+        return None;
+    }
+    let binding = imports.get(factory)?;
+    if binding.module.starts_with("drizzle-orm")
+        && matches!(&binding.kind, ImportKind::Named(original) if original == "drizzle")
+    {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+fn top_level_declaration_assignment(line: &str) -> Option<(&str, &str)> {
+    let trimmed = strip_export_prefix(line.trim());
+    let rest = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
+    let (name, after_name) = leading_identifier(rest)?;
+    let rhs = rest[after_name..].trim_start().strip_prefix('=')?.trim();
+    Some((name, rhs))
+}
+
 fn bare_assignment_name(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
     for keyword in [
@@ -882,6 +1685,20 @@ mod tests {
         )
     }
 
+    fn parse_facts_with_packages(path: &str, text: &str, packages: &[&str]) -> Vec<SemanticFact> {
+        parse_facts_with_context(
+            path,
+            text,
+            Some(ParserProjectContext {
+                tsjs_package_dependencies: packages
+                    .iter()
+                    .map(|package| package.to_string())
+                    .collect(),
+                ..ParserProjectContext::default()
+            }),
+        )
+    }
+
     fn parse_facts_with_context(
         path: &str,
         text: &str,
@@ -942,6 +1759,10 @@ mod tests {
 
     fn unknown_kinds_with_test_context(path: &str, text: &str) -> Vec<String> {
         unknown_kinds_from_facts(parse_facts_with_test_context(path, text))
+    }
+
+    fn targets_with_packages(path: &str, text: &str, packages: &[&str]) -> Vec<String> {
+        targets_from_facts(parse_facts_with_packages(path, text, packages))
     }
 
     fn unknown_kinds_from_facts(facts: Vec<SemanticFact>) -> Vec<String> {
@@ -1137,6 +1958,146 @@ describe("accounts", () => {
                 "jest_vitest.describe".to_string(),
                 "jest_vitest.it".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn next_exact_file_conventions_anchor_with_package_context() {
+        let page = r#"export default function Page() {
+  return <main>Users</main>;
+}
+"#;
+        assert_eq!(
+            targets_with_packages("app/users/page.tsx", page, &["next"]),
+            vec!["next.app.page".to_string()]
+        );
+
+        let route = r#"export async function GET(request: Request) {
+  return Response.json({ ok: true });
+}
+"#;
+        let facts = parse_facts_with_packages("app/users/route.ts", route, &["next"]);
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            vec!["next.route.GET".to_string()]
+        );
+        let route_fact = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "next.route.GET")
+            })
+            .expect("next route fact");
+        assert!(route_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "http_method=GET"));
+
+        assert!(targets("app/users/page.tsx", page).is_empty());
+        assert_eq!(
+            unknown_kinds("app/users/page.tsx", page),
+            vec!["next_missing_package_context".to_string()]
+        );
+    }
+
+    #[test]
+    fn next_dynamic_segments_are_unknown_not_support() {
+        let page = r#"export default function Page() {
+  return <main>User</main>;
+}
+"#;
+        assert!(targets_with_packages("app/users/[id]/page.tsx", page, &["next"]).is_empty());
+        assert_eq!(
+            unknown_kinds_from_facts(parse_facts_with_packages(
+                "app/users/[id]/page.tsx",
+                page,
+                &["next"],
+            )),
+            vec!["next_dynamic_segment_unknown".to_string()]
+        );
+    }
+
+    #[test]
+    fn fastify_exact_routes_anchor_shorthand_and_full_declarations() {
+        let text = r#"import fastify from "fastify";
+const app = fastify();
+app.get("/users", async (request, reply) => { return reply.send([]); });
+app.route({ method: "POST", url: "/users", handler: async (request, reply) => reply.send({}) });
+"#;
+        assert_eq!(
+            targets("src/server.ts", text),
+            vec![
+                "fastify.route.full_declaration".to_string(),
+                "fastify.route.get".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn prisma_exact_client_operations_and_transactions_anchor() {
+        let text = r#"import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+export async function listUsers() {
+  return prisma.user.findMany({ where: { active: true }, select: { id: true } });
+}
+export async function saveMany() {
+  return prisma.$transaction([prisma.user.create({ data: { name: "Ada" } })]);
+}
+"#;
+        assert_eq!(
+            targets("src/repository.ts", text),
+            vec![
+                "prisma.query.findMany".to_string(),
+                "prisma.transaction".to_string()
+            ]
+        );
+
+        let raw = r#"import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+prisma.user.findMany({ where: sql`unsafe` });
+"#;
+        assert!(targets("src/raw.ts", raw).is_empty());
+        assert_eq!(
+            unknown_kinds("src/raw.ts", raw),
+            vec!["prisma_raw_query".to_string()]
+        );
+    }
+
+    #[test]
+    fn drizzle_exact_schema_queries_and_transactions_anchor() {
+        let text = r#"import { drizzle } from "drizzle-orm/node-postgres";
+import { pgTable } from "drizzle-orm/pg-core";
+export const users = pgTable("users", {});
+const db = drizzle(pool);
+export async function listUsers() {
+  return db.select().from(users).where(eq(users.id, 1));
+}
+export async function inTx() {
+  return db.transaction(async (tx) => tx.select().from(users));
+}
+"#;
+        assert_eq!(
+            targets("src/drizzle.ts", text),
+            vec![
+                "drizzle.query.select".to_string(),
+                "drizzle.schema.table".to_string(),
+                "drizzle.transaction".to_string()
+            ]
+        );
+
+        let raw = r#"import { drizzle, sql } from "drizzle-orm/node-postgres";
+import { pgTable } from "drizzle-orm/pg-core";
+export const users = pgTable("users", {});
+const db = drizzle(pool);
+db.select({ unsafe: sql`raw` }).from(users);
+"#;
+        assert!(!targets("src/drizzle_raw.ts", raw)
+            .iter()
+            .any(|target| target == "drizzle.query.select"));
+        assert_eq!(
+            unknown_kinds("src/drizzle_raw.ts", raw),
+            vec!["drizzle_raw_sql".to_string()]
         );
     }
 

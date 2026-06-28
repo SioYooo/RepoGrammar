@@ -11,6 +11,7 @@ pub mod express;
 pub mod jest;
 pub mod nestjs;
 pub mod react;
+pub mod tsjs;
 pub mod vitest;
 
 pub trait FrameworkAdapter {
@@ -38,32 +39,15 @@ struct FrameworkRole<'a> {
 }
 
 fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
+    if let Some(role) = tsjs::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
     let (target, note, assumption) = match &unit.kind {
-        CodeUnitKind::ExpressRoute => (
-            "framework:express.route_handler",
-            "syntax code unit indicates Express route handler role",
-            "handler binding unresolved",
-        ),
-        CodeUnitKind::ReactComponent => (
-            "framework:react.component",
-            "syntax code unit indicates React component role",
-            "component runtime behavior unresolved",
-        ),
-        CodeUnitKind::ReactHook => (
-            "framework:react.hook",
-            "syntax code unit indicates React hook role",
-            "hook lifecycle behavior unresolved",
-        ),
-        CodeUnitKind::TestSuite => (
-            "framework:jest_vitest.suite",
-            "syntax code unit indicates Jest or Vitest suite role",
-            "test runner binding unresolved",
-        ),
-        CodeUnitKind::TestCase => (
-            "framework:jest_vitest.test",
-            "syntax code unit indicates Jest or Vitest test role",
-            "test runner binding unresolved",
-        ),
         CodeUnitKind::FastApiRoute => (
             "framework:fastapi.route",
             "CPython ast code unit indicates FastAPI route role",
@@ -170,6 +154,17 @@ mod tests {
                 unit(CodeUnitKind::ExpressRoute, "express"),
                 unit(CodeUnitKind::ReactComponent, "component"),
                 unit(CodeUnitKind::ReactHook, "hook"),
+                unit(CodeUnitKind::NextAppPage, "next-app-page"),
+                unit(CodeUnitKind::NextAppLayout, "next-app-layout"),
+                unit(CodeUnitKind::NextRouteHandler, "next-route"),
+                unit(CodeUnitKind::NextPagesApiRoute, "next-api"),
+                unit(CodeUnitKind::NextPagesPage, "next-page"),
+                unit(CodeUnitKind::FastifyRoute, "fastify"),
+                unit(CodeUnitKind::PrismaQuery, "prisma-query"),
+                unit(CodeUnitKind::PrismaTransaction, "prisma-transaction"),
+                unit(CodeUnitKind::DrizzleSchemaTable, "drizzle-schema"),
+                unit(CodeUnitKind::DrizzleQuery, "drizzle-query"),
+                unit(CodeUnitKind::DrizzleTransaction, "drizzle-transaction"),
                 unit(CodeUnitKind::TestSuite, "suite"),
                 unit(CodeUnitKind::TestCase, "test"),
                 unit(CodeUnitKind::FastApiRoute, "fastapi"),
@@ -194,7 +189,7 @@ mod tests {
             ])
             .expect("detect roles");
 
-        assert_eq!(facts.len(), 13);
+        assert_eq!(facts.len(), 24);
         let forbidden_fragments = [
             "/tmp/secret",
             "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE",
@@ -236,6 +231,17 @@ mod tests {
                 "framework:express.route_handler",
                 "framework:react.component",
                 "framework:react.hook",
+                "framework:next.app.page",
+                "framework:next.app.layout",
+                "framework:next.route.handler",
+                "framework:next.pages.api_route",
+                "framework:next.pages.page",
+                "framework:fastify.route_handler",
+                "framework:prisma.query",
+                "framework:prisma.transaction",
+                "framework:drizzle.schema.table",
+                "framework:drizzle.query",
+                "framework:drizzle.transaction",
                 "framework:jest_vitest.suite",
                 "framework:jest_vitest.test",
                 "framework:fastapi.route",

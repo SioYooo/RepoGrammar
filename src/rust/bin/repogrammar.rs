@@ -1075,6 +1075,13 @@ mod tests {
         );
         for snippet in [
             "app.get(",
+            "app.route(",
+            "NextResponse",
+            "Response.json",
+            "PrismaClient",
+            "pgTable",
+            "drizzle(",
+            "db.select",
             "export function",
             "describe(",
             "expect(",
@@ -3603,8 +3610,198 @@ mod tests {
         assert!(facts.facts.iter().any(|fact| {
             fact.kind == "UNKNOWN"
                 && fact.path == "fastify_route.ts"
-                && fact.target.as_deref() == Some("UnresolvedImport")
+                && fact.target.as_deref() == Some("FrameworkMagic")
         }));
+    }
+
+    fn assert_family_role(value: &Value, role: &str) {
+        let role_token = role
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        assert!(
+            value["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|family_id| family_id.contains(&role_token))
+                        && family["support"]
+                            .as_u64()
+                            .is_some_and(|support| support >= 3)
+                }),
+            "missing family role {role}: {value}"
+        );
+    }
+
+    #[test]
+    fn tsjs_next_exact_routes_form_preview_families_without_worker() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("next_exact_routes", "tsjs-release-next-exact-routes");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            15,
+            "Next fixture should derive all exact anchors: {derived:?}"
+        );
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.app.page"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.app.layout"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.route.GET"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.pages.api_route"));
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "next.pages.page"));
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:next.app.page");
+        assert_family_role(&families_json, "framework:next.app.layout");
+        assert_family_role(&families_json, "framework:next.route.handler");
+        assert_family_role(&families_json, "framework:next.pages.api_route");
+        assert_family_role(&families_json, "framework:next.pages.page");
+    }
+
+    #[test]
+    fn tsjs_fastify_exact_routes_form_preview_family_without_worker() {
+        let (workspace, runtime) =
+            index_release_v0_2_fixture("fastify_exact_routes", "tsjs-release-fastify-exact-routes");
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            6,
+            "Fastify fixture should derive exact routes"
+        );
+        assert!(derived
+            .iter()
+            .all(|(_, target, _)| target.starts_with("fastify.route.")));
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:fastify.route_handler");
+    }
+
+    #[test]
+    fn tsjs_prisma_exact_repositories_form_preview_family_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "prisma_exact_repositories",
+            "tsjs-release-prisma-exact-repositories",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            6,
+            "Prisma fixture should derive queries and transaction"
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "prisma.query.findMany")
+                .count(),
+            3
+        );
+        assert!(derived
+            .iter()
+            .any(|(_, target, _)| target == "prisma.transaction"));
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "prisma.query.create")
+                .count(),
+            2
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:prisma.query");
+    }
+
+    #[test]
+    fn tsjs_drizzle_exact_repositories_form_preview_families_without_worker() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "drizzle_exact_repositories",
+            "tsjs-release-drizzle-exact-repositories",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived.len(),
+            7,
+            "Drizzle fixture should derive schema and queries"
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "drizzle.schema.table")
+                .count(),
+            3
+        );
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "drizzle.query.select")
+                .count(),
+            3
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:drizzle.schema.table");
+        assert_family_role(&families_json, "framework:drizzle.query");
+    }
+
+    #[test]
+    fn tsjs_framework_adapter_negative_cases_do_not_form_public_families() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "framework_adapter_negative_cases",
+            "tsjs-release-framework-adapter-negative-cases",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived,
+            vec![(
+                "src/drizzle_raw.ts".to_string(),
+                "drizzle.schema.table".to_string(),
+                "DATAFLOW_DERIVED".to_string()
+            )],
+            "negative fixture should only derive the exact schema table, not route/query support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
     }
 
     #[test]

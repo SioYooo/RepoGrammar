@@ -100,23 +100,24 @@ Existing TypeScript/JavaScript discovery, syntax extraction, framework-role
 facts, TypeScript worker protocol scaffolding, and release fixtures are
 transitional substrate from the earlier bootstrap. They may remain useful, but
 they are no longer the official v0.1 language target. The v0.2 preview may emit
-conservative Express and Jest/Vitest exact-anchor families only when there are
-at least three complete-link-compatible derived support facts and no
-claim-relevant blocking `UNKNOWN`s. Bounded TS/JS project inventory may record
-package/config test-runner context and JSON path aliases, and the syntax parser
-may record unique repo-local literal relative/path-alias imports as
-`STRUCTURAL` context. Dynamic imports, non-literal or conditional `require`,
-unresolved aliases/imports, ambiguous re-exports, and missing test-runner
+conservative exact-anchor families for Express, Jest/Vitest, Next.js, Fastify,
+Prisma, and Drizzle only when there are at least three complete-link-compatible
+derived support facts and no claim-relevant blocking `UNKNOWN`s. Bounded TS/JS
+project inventory may record package/config test-runner context, Next package
+context, and JSON path aliases, and the syntax parser may record unique
+repo-local literal relative/path-alias imports as `STRUCTURAL` context. Dynamic
+imports, non-literal or conditional `require`, unresolved aliases/imports,
+ambiguous re-exports, dynamic framework magic, raw query builders, and missing
 project context remain typed `UNKNOWN` rather than family support.
 Jest/Vitest script configs such as `jest.config.ts` or `vitest.config.js` are
 recorded as metadata/typed `UNKNOWN` only; they are not executed and do not by
-themselves provide ambient runner context. Unsupported JS/TS roles such as
-React components/hooks remain blocked from public family claims even if an
-explicit TypeScript semantic-worker fact names `react`.
-Production-quality TS/JS semantic analysis, React/Next/Fastify family support,
+themselves provide ambient runner context. React components/hooks remain blocked
+from public family claims even if an explicit TypeScript semantic-worker fact
+names `react`. Production-quality TS/JS semantic analysis, React family support,
 TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
-and dynamic-wrapper support remain deferred unless a later ADR changes the
-sequence again.
+Fastify plugin-prefix resolution, Prisma/Drizzle runtime extensions, Next
+server/client semantics, and dynamic-wrapper support remain deferred unless a
+later ADR changes the sequence again.
 
 Rust support in the v0.2 preview is limited to RepoGrammar self-dogfooding. It
 uses Tree-sitter Rust for structural code-unit extraction and RepoGrammar-owned
@@ -138,7 +139,11 @@ whole-program trait/call resolution.
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |
 | JS/TS Express | Conservative v0.2 preview | Exact import/require plus direct literal route calls; support>=3 and complete-link compatibility required. |
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
-| React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; static lookalikes remain unsupported or `UNKNOWN`. |
+| JS/TS Next.js | Structural v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; route groups, dynamic segments, middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings plus whitelisted model operations and array `$transaction`; injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, and whitelisted query builders; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
+| JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
@@ -183,9 +188,9 @@ store a `DOMINANT_PATTERN` family when repeated compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
 non-framework evidence. That support must be role-compatible: an arbitrary
 semantic fact for an unrelated package, API, or framework cannot prove an
-FastAPI, pytest, SQLAlchemy, Pydantic, Express, Jest, or Vitest family. React
-components/hooks are currently recognized only as syntax/framework-role shapes
-and stay `UNKNOWN`.
+FastAPI, pytest, SQLAlchemy, Pydantic, Express, Jest/Vitest, Next.js, Fastify,
+Prisma, or Drizzle family. React components/hooks are currently recognized only
+as syntax/framework-role shapes and stay `UNKNOWN`.
 Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default

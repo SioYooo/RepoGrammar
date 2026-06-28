@@ -1,5 +1,6 @@
 //! Application-layer EC-MVFI-lite family claim construction.
 
+use crate::adapters::frameworks::tsjs;
 use crate::core::model::{
     FactCertainty, SemanticFact, SemanticFactKind, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
@@ -540,6 +541,56 @@ fn tsjs_variation_feature_prefixes(
             ("tsjs_test_shape", &["test_shape:", "async_shape:"]),
             ("tsjs_import_context", &["import_context:"]),
         ],
+        "framework:next.app.page"
+        | "framework:next.app.layout"
+        | "framework:next.route.handler"
+        | "framework:next.pages.api_route"
+        | "framework:next.pages.page" => &[
+            ("tsjs_next_router_kind", &["router_kind:"]),
+            ("tsjs_next_file_convention", &["file_convention:"]),
+            ("tsjs_next_component_shape", &["component_shape:"]),
+            (
+                "tsjs_next_response_shape",
+                &["response_shape:", "fetch_shape:"],
+            ),
+            ("tsjs_next_route_method", &["http_method:"]),
+        ],
+        "framework:fastify.route_handler" => &[
+            ("tsjs_fastify_route_method", &["route_method:"]),
+            ("tsjs_fastify_route_path_shape", &["route_path_shape:"]),
+            (
+                "tsjs_fastify_handler_shape",
+                &["handler_shape:", "async_shape:", "opts_handler_present:"],
+            ),
+            ("tsjs_fastify_reply_shape", &["reply_shape:"]),
+        ],
+        "framework:prisma.query" | "framework:prisma.transaction" => &[
+            ("tsjs_prisma_operation", &["operation:"]),
+            ("tsjs_prisma_model", &["model_name:"]),
+            (
+                "tsjs_prisma_query_shape",
+                &[
+                    "where_shape:",
+                    "select_include_shape:",
+                    "transaction_shape:",
+                ],
+            ),
+        ],
+        "framework:drizzle.schema.table"
+        | "framework:drizzle.query"
+        | "framework:drizzle.transaction" => &[
+            ("tsjs_drizzle_operation", &["operation:"]),
+            ("tsjs_drizzle_table", &["table_name:"]),
+            (
+                "tsjs_drizzle_query_shape",
+                &[
+                    "where_shape:",
+                    "returning_shape:",
+                    "join_shape:",
+                    "transaction_shape:",
+                ],
+            ),
+        ],
         _ => &[],
     }
 }
@@ -865,6 +916,28 @@ fn add_tsjs_family_features(
             ("async_shape=", "async_shape:"),
             ("import_context=", "import_context:"),
             ("path_alias=", "import_context:path_alias_"),
+            ("router_kind=", "router_kind:"),
+            ("file_convention=", "file_convention:"),
+            ("http_method=", "http_method:"),
+            ("component_shape=", "component_shape:"),
+            ("response_shape=", "response_shape:"),
+            ("fetch_shape=", "fetch_shape:"),
+            ("server_client_directive=", "server_client_directive:"),
+            ("schema_present=", "schema_present:"),
+            ("opts_handler_present=", "opts_handler_present:"),
+            ("reply_shape=", "reply_shape:"),
+            ("plugin_context=", "plugin_context:"),
+            ("prefix_unknown=", "prefix_unknown:"),
+            ("model_name=", "model_name:"),
+            ("operation=", "operation:"),
+            ("where_shape=", "where_shape:"),
+            ("select_include_shape=", "select_include_shape:"),
+            ("transaction_shape=", "transaction_shape:"),
+            ("raw_sql_present=", "raw_sql_present:"),
+            ("table_name=", "table_name:"),
+            ("returning_shape=", "returning_shape:"),
+            ("join_shape=", "join_shape:"),
+            ("sql_template_present=", "sql_template_present:"),
         ] {
             if let Some(value) = assumption.strip_prefix(prefix) {
                 entry.insert(format!("{feature_prefix}{}", stable_token(value)));
@@ -884,6 +957,23 @@ fn add_tsjs_family_features(
         } else if let Some(test_target) = target.strip_prefix("jest_vitest.") {
             entry.insert("runner_kind:jest_vitest".to_string());
             entry.insert(format!("test_shape:{}", stable_token(test_target)));
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        } else if target.starts_with("next.") {
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        } else if let Some(method) = target.strip_prefix("fastify.route.") {
+            entry.insert("anchor_kind:fastify_route_call".to_string());
+            entry.insert(format!("route_method:{}", stable_token(method)));
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        } else if target.starts_with("prisma.") || target.starts_with("drizzle.") {
             entry.insert(format!(
                 "support_family:{}",
                 stable_token(&support_target_family(target, framework_role))
@@ -1279,7 +1369,24 @@ fn tsjs_unknown_affected_claim_blocks_family(affected_claim: &str, framework_rol
         | "tsjs_support_target"
         | "tsjs_import_resolution"
         | "tsjs_path_alias"
-        | "tsjs_reexport_resolution" => true,
+        | "tsjs_reexport_resolution"
+        | "next_project_context"
+        | "next_route_convention"
+        | "next_default_export"
+        | "next_pages_api_export"
+        | "next_route_handler_export"
+        | "next_component_shape"
+        | "fastify_route_shape"
+        | "fastify_receiver_binding"
+        | "fastify_route_method"
+        | "prisma_query_shape"
+        | "prisma_transaction_shape"
+        | "prisma_client_binding"
+        | "drizzle_schema_table"
+        | "drizzle_table_binding"
+        | "drizzle_query_shape"
+        | "drizzle_db_binding"
+        | "drizzle_transaction_shape" => true,
         claim if claim.starts_with("family:") => true,
         claim => {
             (framework_role.starts_with("framework:express")
@@ -1528,6 +1635,23 @@ fn tsjs_evidence_pair_is_compatible(
             features_by_unit,
             &["runner_kind:", "test_shape:", "async_shape:"],
         ),
+        "framework_next_app_page" | "framework_next_app_layout" | "framework_next_pages_page" => {
+            equal_feature_profiles(left, right, features_by_unit, &["component_shape:"])
+        }
+        "framework_next_route_handler" | "framework_next_pages_api_route" => {
+            equal_feature_profiles(left, right, features_by_unit, &["response_shape:"])
+        }
+        "framework_fastify_route_handler" => {
+            equal_feature_profiles(left, right, features_by_unit, &["handler_shape:"])
+        }
+        "framework_prisma_query" | "framework_prisma_transaction" => {
+            equal_feature_profiles(left, right, features_by_unit, &["operation:"])
+        }
+        "framework_drizzle_schema_table"
+        | "framework_drizzle_query"
+        | "framework_drizzle_transaction" => {
+            equal_feature_profiles(left, right, features_by_unit, &["operation:"])
+        }
         "framework_react_component" | "framework_react_hook" => false,
         _ => true,
     }
@@ -1727,6 +1851,17 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         "framework:express.route_handler" => "express.route_handler".to_string(),
         "framework:jest_vitest.suite" => "jest_vitest.suite".to_string(),
         "framework:jest_vitest.test" => "jest_vitest.test".to_string(),
+        "framework:next.app.page"
+        | "framework:next.app.layout"
+        | "framework:next.route.handler"
+        | "framework:next.pages.api_route"
+        | "framework:next.pages.page"
+        | "framework:fastify.route_handler"
+        | "framework:prisma.query"
+        | "framework:prisma.transaction"
+        | "framework:drizzle.schema.table"
+        | "framework:drizzle.query"
+        | "framework:drizzle.transaction" => tsjs::support_family(target, framework_role),
         "framework:fastapi.route" => "fastapi.route_decorator".to_string(),
         "framework:pytest.test" => match target {
             "pytest.fixture" => "pytest.fixture_decorator".to_string(),
@@ -1759,7 +1894,7 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
 fn path_context(path: &str) -> String {
     let first_segment = path.split('/').next().unwrap_or("repo");
     match first_segment {
-        "app" | "api" | "src" | "tests" | "test" => stable_token(first_segment),
+        "app" | "api" | "pages" | "src" | "tests" | "test" => stable_token(first_segment),
         _ => "repo".to_string(),
     }
 }
@@ -1893,6 +2028,9 @@ fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) 
                 && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
                 && fact_has_assumption(fact, "provider_resolved=false")
                 && fact_has_assumption(fact, "derived_from=tsjs_structural_anchors")
+                && tsjs::expected_derived_from(framework_role).is_none_or(|derived_from| {
+                    fact_has_assumption(fact, &format!("derived_from={derived_from}"))
+                })
                 && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
         }
         FactCertainty::Semantic => fact.origin.engine == TSJS_WORKER_ENGINE,
@@ -1907,35 +2045,11 @@ pub(crate) fn tsjs_support_target_is_role_compatible(
     target: &str,
     framework_role: &str,
 ) -> Option<bool> {
-    match framework_role {
-        "framework:express.route_handler" => Some(matches!(
-            target,
-            "package:express"
-                | "express.route.get"
-                | "express.route.post"
-                | "express.route.put"
-                | "express.route.patch"
-                | "express.route.delete"
-                | "express.route.use"
-        )),
-        "framework:jest_vitest.suite" => Some(matches!(
-            target,
-            "package:vitest" | "package:@jest/globals" | "jest_vitest.describe"
-        )),
-        "framework:jest_vitest.test" => Some(matches!(
-            target,
-            "package:vitest" | "package:@jest/globals" | "jest_vitest.it" | "jest_vitest.test"
-        )),
-        "framework:react.component" | "framework:react.hook" => Some(false),
-        _ if tsjs_framework_role_is_known(framework_role) => Some(false),
-        _ => None,
-    }
+    tsjs::support_target_is_role_compatible(target, framework_role)
 }
 
 pub(crate) fn tsjs_framework_role_is_known(framework_role: &str) -> bool {
-    framework_role.starts_with("framework:express")
-        || framework_role.starts_with("framework:react")
-        || framework_role.starts_with("framework:jest_vitest")
+    tsjs::framework_role_is_known(framework_role)
 }
 
 fn python_support_fact_is_role_compatible(
@@ -2070,6 +2184,17 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
     matches!(
         kind,
         "express_route"
+            | "next_app_page"
+            | "next_app_layout"
+            | "next_route_handler"
+            | "next_pages_api_route"
+            | "next_pages_page"
+            | "fastify_route"
+            | "prisma_query"
+            | "prisma_transaction"
+            | "drizzle_schema_table"
+            | "drizzle_query"
+            | "drizzle_transaction"
             | "react_component"
             | "react_hook"
             | "test_suite"
@@ -2552,6 +2677,9 @@ mod tests {
             format!("framework_role={framework_role}"),
             format!("tsjs_anchor_kind={}", unit.kind),
         ];
+        if let Some(derived_from) = tsjs::expected_derived_from(framework_role) {
+            assumptions.push(format!("derived_from={derived_from}"));
+        }
         assumptions.extend(
             extra_assumptions
                 .into_iter()

@@ -426,6 +426,10 @@ fn is_tsjs_project_config_path(path: &str) -> bool {
             | "vitest.config.cjs"
             | "vitest.config.mjs"
             | "vitest.config.ts"
+            | "next.config.js"
+            | "next.config.cjs"
+            | "next.config.mjs"
+            | "next.config.ts"
     )
 }
 
@@ -511,6 +515,11 @@ mod tests {
             "export default {};\n",
         )
         .expect("write jest config");
+        fs::write(
+            workspace.path().join("next.config.js"),
+            "module.exports = {};\n",
+        )
+        .expect("write next config");
 
         let report = FilesystemFileDiscovery
             .discover(FileDiscoveryRequest::new(
@@ -526,6 +535,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("jest.config.ts", DiscoveredLanguage::TsJsConfig),
+                ("next.config.js", DiscoveredLanguage::TsJsConfig),
                 ("package.json", DiscoveredLanguage::TsJsConfig),
                 ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
             ]

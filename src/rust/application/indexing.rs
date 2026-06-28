@@ -1,5 +1,6 @@
 //! Indexing use-case boundary.
 
+use crate::adapters::frameworks::tsjs;
 use crate::adapters::parsing::rust_syntax::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs_anchors::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
@@ -701,6 +702,8 @@ fn parser_project_context(
         python_source_roots_from_project_config(request, report, source_store, parser)?;
     let tsjs_module_paths = tsjs_module_paths(report);
     let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
+    let tsjs_package_dependencies =
+        tsjs_package_dependencies_from_project_config(request, report, source_store)?;
     let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
     let rust_module_paths = rust_module_paths(report);
     let mut rust_cargo_files = Vec::new();
@@ -747,10 +750,42 @@ fn parser_project_context(
         python_conftest_files,
         tsjs_module_paths,
         tsjs_path_aliases,
+        tsjs_package_dependencies,
         tsjs_has_test_runner_context,
         rust_module_paths,
         rust_cargo_files,
     })
+}
+
+fn tsjs_package_dependencies_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<Vec<String>, RepoGrammarError> {
+    let Some(package_file) = report.files.iter().find(|file| {
+        file.language == DiscoveredLanguage::TsJsConfig && file.path == "package.json"
+    }) else {
+        return Ok(Vec::new());
+    };
+    let source = source_store
+        .read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: package_file.path.clone(),
+            expected_content_hash: package_file.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        })
+        .map_err(source_store_error)?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+        return Ok(Vec::new());
+    };
+    let mut dependencies = BTreeSet::new();
+    for field in ["dependencies", "devDependencies", "peerDependencies"] {
+        let Some(object) = value.get(field).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        dependencies.extend(object.keys().cloned());
+    }
+    Ok(dependencies.into_iter().collect())
 }
 
 fn tsjs_module_paths(report: &FileDiscoveryReport) -> Vec<String> {
@@ -1575,6 +1610,7 @@ fn derive_tsjs_framework_support_facts(
             target,
             framework_role,
             &fact.evidence.provenance.repository_revision,
+            fact,
         )?);
     }
 
@@ -1604,7 +1640,30 @@ fn derived_tsjs_framework_support_fact(
     target: &str,
     framework_role: &str,
     repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
 ) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=tsjs_structural_anchors".to_string(),
+    ];
+    if let Some(derived_from) = tsjs::derived_from_for_target(target) {
+        assumptions.push(format!("derived_from={derived_from}"));
+    }
+    assumptions.push(format!("framework_role={framework_role}"));
+    for assumption in &source_fact.assumptions {
+        if !assumptions.iter().any(|existing| existing == assumption)
+            && !assumption.starts_with("provider_resolved=")
+            && !assumption.starts_with("framework_role=")
+        {
+            assumptions.push(assumption.clone());
+        }
+    }
+    if !assumptions
+        .iter()
+        .any(|assumption| assumption.starts_with("tsjs_anchor_kind="))
+    {
+        assumptions.push(format!("tsjs_anchor_kind={}", unit.kind));
+    }
     Ok(SemanticFact {
         kind,
         subject: unit.id.clone(),
@@ -1628,12 +1687,7 @@ fn derived_tsjs_framework_support_fact(
             "bounded TS/JS framework anchor support",
         )
         .map_err(RepoGrammarError::InvalidInput)?,
-        assumptions: vec![
-            "provider_resolved=false".to_string(),
-            "derived_from=tsjs_structural_anchors".to_string(),
-            format!("framework_role={framework_role}"),
-            format!("tsjs_anchor_kind={}", unit.kind),
-        ],
+        assumptions,
     })
 }
 
@@ -2701,6 +2755,106 @@ mod tests {
             "framework:express.route_handler"
         );
         assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn tsjs_framework_adapter_exact_anchors_derive_role_compatible_support() {
+        for (kind, role, target, derived_from) in [
+            (
+                "next_app_page",
+                "framework:next.app.page",
+                "next.app.page",
+                "tsjs_next_structural_anchors",
+            ),
+            (
+                "next_route_handler",
+                "framework:next.route.handler",
+                "next.route.GET",
+                "tsjs_next_structural_anchors",
+            ),
+            (
+                "fastify_route",
+                "framework:fastify.route_handler",
+                "fastify.route.get",
+                "tsjs_fastify_structural_anchors",
+            ),
+            (
+                "prisma_query",
+                "framework:prisma.query",
+                "prisma.query.findMany",
+                "tsjs_prisma_structural_anchors",
+            ),
+            (
+                "drizzle_query",
+                "framework:drizzle.query",
+                "drizzle.query.select",
+                "tsjs_drizzle_structural_anchors",
+            ),
+        ] {
+            let first = indexed_tsjs_unit("src/a.ts", kind, 0);
+            let second = indexed_tsjs_unit("src/b.ts", kind, 1);
+            let third = indexed_tsjs_unit("src/c.ts", kind, 2);
+            let units = vec![first.clone(), second.clone(), third.clone()];
+            let parser_facts = vec![
+                tsjs_structural_anchor_fact(&first, target),
+                tsjs_structural_anchor_fact(&second, target),
+                tsjs_structural_anchor_fact(&third, target),
+            ];
+            let role_facts = units
+                .iter()
+                .map(|unit| framework_role_fact_for_unit(unit, role))
+                .collect::<Vec<_>>();
+
+            let derived = derive_tsjs_framework_support_facts(&units, &parser_facts, &role_facts)
+                .expect("derive exact adapter support");
+
+            assert_eq!(derived.len(), 3, "{role} should derive support");
+            assert!(derived.iter().all(|fact| fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == &format!("derived_from={derived_from}"))));
+            let mut family_facts = role_facts;
+            family_facts.extend(derived);
+            let report = build_family_claims(&units, &family_facts);
+            assert_eq!(report.claims.len(), 1, "{role} should form a family");
+            assert_eq!(report.claims[0].framework_role, role);
+            assert_eq!(report.claims[0].support, 3);
+        }
+    }
+
+    #[test]
+    fn tsjs_package_config_facts_do_not_derive_framework_support() {
+        let unit = indexed_tsjs_unit("src/a.ts", "next_app_page", 0);
+        let package_fact = SemanticFact {
+            kind: SemanticFactKind::ProjectConfig,
+            subject: "unit:package.json#project_config".to_string(),
+            target: Some(SymbolId::new("package:next").expect("valid target")),
+            origin: FactOrigin {
+                engine: TSJS_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: "bounded_project_inventory_v1".to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded package dependency metadata",
+            )
+            .expect("valid evidence"),
+            assumptions: vec!["tsjs_project_config=package_json".to_string()],
+        };
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:next.app.page");
+
+        let derived = derive_tsjs_framework_support_facts(&[unit], &[package_fact], &[role_fact])
+            .expect("derive from package config");
+
+        assert!(derived.is_empty());
     }
 
     #[test]

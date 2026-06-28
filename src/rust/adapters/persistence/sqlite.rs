@@ -2093,6 +2093,10 @@ fn ir_graph_violation_count(
                     OR ir_nodes.kind NOT IN (\
                         'module', 'function', 'arrow_function', 'class', 'method', \
                         'react_component', 'react_hook', 'express_route', \
+                        'next_app_page', 'next_app_layout', 'next_route_handler', \
+                        'next_pages_api_route', 'next_pages_page', 'fastify_route', \
+                        'prisma_query', 'prisma_transaction', \
+                        'drizzle_schema_table', 'drizzle_query', 'drizzle_transaction', \
                         'test_suite', 'test_case', 'async_function', \
                         'fastapi_route', 'pytest_test', 'pytest_fixture', \
                         'pydantic_model', 'sqlalchemy_model', \

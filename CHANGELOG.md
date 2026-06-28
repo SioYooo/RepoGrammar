@@ -17,6 +17,16 @@
 
 ### Added
 
+- Conservative TS/JS structural-preview adapters for Next.js, Fastify, Prisma,
+  and Drizzle. The new adapter registry adds role-compatible exact-anchor
+  promotion with framework-specific `derived_from=tsjs_<framework>_structural_anchors`
+  provenance, bounded Next App/Pages conventions, Fastify shorthand/full route
+  declarations, Prisma model operations and array transactions, and Drizzle
+  table/query anchors. Package-only evidence, framework-role heuristics, React
+  components/hooks, Next route magic, Fastify plugin prefixes, Prisma injected/raw
+  clients, and Drizzle raw/dynamic builders remain `UNKNOWN` or non-supporting
+  context. New v0.2 fixtures cover positive Next/Fastify/Prisma/Drizzle families
+  and negative package/dynamic/raw cases.
 - Rust structural self-dogfood indexing for RepoGrammar's own implementation
   families. The new Tree-sitter Rust adapter discovers `.rs` files and
   `Cargo.toml`, extracts structural Rust units, emits typed UNKNOWNs for
@@ -42,30 +52,31 @@
   manage the worker. The feature is explicit per repository and is not started
   by MCP serving, agent installation, or queries.
 - Public-preview readiness documentation now includes an explicit support matrix
-  for Python v0.1, conservative JS/TS v0.2 Express/Jest/Vitest exact-anchor
-  support, unsupported JS/TS frameworks, source-span opt-in, token-saving claim
-  limits, and installer platform boundaries. A readiness report and real-repo
-  dogfood protocol were added under `docs/reports/` and `docs/experiments/`.
+  for Python v0.1, conservative JS/TS v0.2 exact-anchor support, unsupported
+  React/broad TS/JS semantics, source-span opt-in, token-saving claim limits, and
+  installer platform boundaries. A readiness report and real-repo dogfood
+  protocol were added under `docs/reports/` and `docs/experiments/`.
 - Release/install readiness tests now verify npm platform-to-artifact mappings
   for macOS, Linux, and Windows preview targets, unsupported npm platform/arch
   rejection, required bundled Python worker assets, Bash installer state-boundary
   behavior, release workflow artifact names, and installer script checksum
   publication.
-- Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support and
-  React/Next/Fastify/Prisma/Drizzle lookalikes that must not derive public family
-  support.
-- Conservative TS/JS exact-anchor family support for Express route handlers and
-  Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL` anchors only
-  for exact import/require bindings, app/router factories, and literal methods
-  (Express) or imported/ambient-in-test-file runners (Jest/Vitest); reassigned,
-  shadowed, dynamic-receiver or dynamic-method, custom-wrapper, conditional-import, and
-  object-literal lookalikes stay `UNKNOWN`. The application layer promotes those
-  anchors to `DATAFLOW_DERIVED` support facts (engine `repogrammar-tsjs-derived`,
-  method `bounded_exact_anchor_v1`), and the loose substring compatibility gate
-  is replaced by an exact target whitelist plus a safe-origin check. TS/JS
-  family construction now requires at least three compatible support facts,
-  uses complete-link clustering over conservative route/test feature profiles,
-  records route/test variation slots, and keeps project-config inventory
+- Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support,
+  exact Next/Fastify/Prisma/Drizzle positives, and React/package-only/dynamic/raw
+  lookalikes that must not form public family rows.
+- Conservative TS/JS exact-anchor family support for Express route handlers,
+  Jest/Vitest suites/tests, and structural-preview Next.js, Fastify, Prisma, and
+  Drizzle adapters. The syntax parser emits `STRUCTURAL` anchors only for exact
+  local framework bindings and file conventions; reassigned, shadowed,
+  dynamic-receiver or dynamic-method, custom-wrapper, conditional-import, raw,
+  object-literal, and framework-magic lookalikes stay `UNKNOWN`. The application
+  layer promotes those anchors to `DATAFLOW_DERIVED` support facts (engine
+  `repogrammar-tsjs-derived`, method `bounded_exact_anchor_v1`), and the loose
+  substring compatibility gate is replaced by an exact target whitelist plus a
+  safe-origin check. TS/JS family construction now requires at least three
+  compatible support facts, uses complete-link clustering over conservative
+  route/test/component/query feature profiles, records variation slots, and
+  keeps project-config inventory
   (`package.json`, `tsconfig.json`, `jsconfig.json`, Jest/Vitest config files)
   as structural context or typed config `UNKNOWN` only. React components/hooks
   remain `UNKNOWN`. CLI/MCP `find`/`check`/`family` and the source-span renderer

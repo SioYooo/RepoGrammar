@@ -42,14 +42,17 @@ emits a confident family claim. Low-support, dynamic, stale, or unresolved cases
 remain `UNKNOWN`.
 
 TypeScript and JavaScript are not official v0.1 support targets. A conservative
-v0.2 token-saving foundation adds exact-anchor family support for Express route
-handlers and Jest/Vitest suites/tests only: a family is claimed solely when an
-exact import/require binding and literal call shape resolve, while lookalikes,
-reassigned or shadowed bindings, dynamic receivers or methods, custom test
-wrappers, and React components/hooks stay `UNKNOWN`. TS/JS family claims require
-at least three compatible exact-anchor support facts and use conservative
-complete-link clustering so incompatible handler/test shapes do not single-link
-into one family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
+v0.2 token-saving foundation adds exact-anchor family support for Express
+routes, Jest/Vitest suites/tests, and structural-preview Next.js, Fastify,
+Prisma, and Drizzle adapters: a family is claimed solely when an exact local
+anchor is promoted to application-layer `DATAFLOW_DERIVED` support. Lookalikes,
+package-only evidence, reassigned or shadowed bindings, dynamic receivers or
+methods, custom test wrappers, React components/hooks, Next route magic,
+Fastify plugin prefixes, Prisma injected/raw clients, and Drizzle raw/dynamic
+builders stay `UNKNOWN`. TS/JS family claims require at least three compatible
+exact-anchor support facts and use conservative complete-link clustering so
+incompatible handler/test/component/query shapes do not single-link into one
+family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
 Jest/Vitest config inventory is stored as structural context only. A bounded
 repo-local static import resolver can record relative/path-alias imports as
 structural context, while dynamic imports, conditional `require`, unresolved
@@ -77,7 +80,11 @@ analysis.
 | Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |
 | JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls only; support requires at least three complete-link-compatible examples. |
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
-| JS/TS React/Next/Fastify/Prisma/Drizzle | Not supported | No public family claims; any lookalike or framework-shaped evidence must remain unsupported or `UNKNOWN`. |
+| JS/TS Next.js | v0.2 structural preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; route groups, dynamic segments, middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Prisma | v0.2 structural preview | Exact local `new PrismaClient()` bindings plus whitelisted model operations and array `$transaction`; injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Drizzle | v0.2 structural preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, and whitelisted query builders; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
+| JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
@@ -288,9 +295,10 @@ analyzer. In this preview:
 
 - Python support is limited to bounded framework-family evidence.
 - Dynamic Python behavior often produces typed `UNKNOWN`.
-- JS/TS preview support is limited to exact-anchor Express and Jest/Vitest
-  families. Full JS/TS semantics, React, Next.js, Fastify, Prisma, Drizzle,
-  dynamic wrappers, executable Jest/Vitest script-config semantics, and complete
+- JS/TS preview support is limited to exact-anchor Express, Jest/Vitest,
+  Next.js, Fastify, Prisma, and Drizzle families. Full JS/TS semantics, React,
+  dynamic wrappers, executable Jest/Vitest/Next config semantics, Fastify plugin
+  prefix resolution, Prisma/Drizzle runtime extensions, and complete
   alias/re-export resolution are deferred.
 - Source snippets are not returned by default.
 - Full Python semantic providers, runtime observation, and broader language

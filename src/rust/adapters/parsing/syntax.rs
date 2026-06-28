@@ -69,6 +69,7 @@ fn tsjs_project_config_report(document: SourceDocument<'_>) -> Result<ParseRepor
                     &unit,
                     "BuildVariantAmbiguity",
                     "tsjs_project_config",
+                    "invalid_json_project_config",
                     "bounded JSON project config could not be parsed",
                 )?);
                 diagnostics.push(ParseDiagnostic {
@@ -95,6 +96,7 @@ fn tsjs_project_config_report(document: SourceDocument<'_>) -> Result<ParseRepor
             &unit,
             "BuildVariantAmbiguity",
             "tsjs_project_config",
+            script_config_unknown_kind(document.path),
             "script project config was not executed",
         )?);
     }
@@ -221,6 +223,14 @@ fn json_config_assumption(path: &str) -> &'static str {
     }
 }
 
+fn script_config_unknown_kind(path: &str) -> &'static str {
+    if path.starts_with("next.config.") {
+        "next_config_execution_disabled"
+    } else {
+        "script_config_execution_disabled"
+    }
+}
+
 fn tsjs_project_config_fact(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
@@ -259,6 +269,7 @@ fn tsjs_project_config_unknown_fact(
     unit: &CodeUnit,
     reason: &str,
     affected_claim: &str,
+    unknown_kind: &str,
     note: &str,
 ) -> Result<SemanticFact, ParseError> {
     Ok(SemanticFact {
@@ -283,7 +294,10 @@ fn tsjs_project_config_unknown_fact(
             note,
         )
         .map_err(ParseError::Internal)?,
-        assumptions: vec![format!("affected_claim={affected_claim}")],
+        assumptions: vec![
+            format!("affected_claim={affected_claim}"),
+            format!("tsjs_unknown_kind={unknown_kind}"),
+        ],
     })
 }
 
@@ -839,8 +853,7 @@ impl<'a> SyntaxScanner<'a> {
         let mut semantic_facts = super::tsjs_anchors::exact_framework_anchors(
             &self.document,
             &self.units,
-            self.context
-                .is_some_and(|context| context.tsjs_has_test_runner_context),
+            self.context,
         )?;
         if let Some(context) = self.context {
             semantic_facts.extend(tsjs_import_resolution_facts(
@@ -902,16 +915,67 @@ impl<'a> SyntaxScanner<'a> {
     ) -> Result<(), ParseError> {
         let test_runner_names =
             super::tsjs_anchors::exact_test_runner_call_names(self.document.text);
+        let fastify_receivers = fastify_receivers_for_scan(self.document.text);
+        let prisma_clients = prisma_clients_for_scan(self.document.text);
+        let drizzle_tables = drizzle_tables_for_scan(self.document.text);
+        let drizzle_dbs = drizzle_dbs_for_scan(self.document.text);
         for (line_start, line) in lines {
             let line_end = line_start + line.len();
-            if let Some((method, offset)) = express_route_call(line) {
+            if let Some((kind, name, offset)) = next_default_export_unit(self.document.path, line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
-                self.add_unit(CodeUnitKind::ExpressRoute, method, start, end)?;
+                self.add_unit(kind, name, start, end)?;
+            }
+            if let Some((method, offset)) = next_route_handler_export(self.document.path, line) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::NextRouteHandler, method, start, end)?;
+            }
+            if let Some((receiver, method, offset)) = static_route_call(line) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                if fastify_receivers.contains(receiver) {
+                    self.add_unit(CodeUnitKind::FastifyRoute, method, start, end)?;
+                } else {
+                    self.add_unit(CodeUnitKind::ExpressRoute, method, start, end)?;
+                }
+            } else if let Some((receiver, offset)) = fastify_full_route_call(line) {
+                if fastify_receivers.contains(receiver) {
+                    let start = line_start + offset;
+                    let end = declaration_extent(self.document.text, start, line_end);
+                    self.add_unit(CodeUnitKind::FastifyRoute, "route", start, end)?;
+                }
             } else if let Some(offset) = dynamic_route_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::ExpressRoute, "dynamic_route", start, end)?;
+            }
+            if let Some((name, offset)) = prisma_query_call(line, &prisma_clients) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::PrismaQuery, name, start, end)?;
+            }
+            if let Some(offset) = prisma_transaction_call(line, &prisma_clients) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::PrismaTransaction, "transaction", start, end)?;
+            }
+            if let Some((name, offset)) = drizzle_schema_table_declaration(line) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::DrizzleSchemaTable, name, start, end)?;
+            }
+            if let Some((operation, offset)) =
+                drizzle_query_call(line, &drizzle_dbs, &drizzle_tables)
+            {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::DrizzleQuery, operation, start, end)?;
+            }
+            if let Some(offset) = drizzle_transaction_call(line, &drizzle_dbs) {
+                let start = line_start + offset;
+                let end = declaration_extent(self.document.text, start, line_end);
+                self.add_unit(CodeUnitKind::DrizzleTransaction, "transaction", start, end)?;
             }
             for suite_name in &test_runner_names.suite_names {
                 if let Some(offset) = call_offset(line, suite_name) {
@@ -1150,18 +1214,34 @@ fn method_name_from_line(line: &str) -> Option<(String, usize)> {
     Some((name, trimmed_start + name_offset))
 }
 
-fn express_route_call(line: &str) -> Option<(&'static str, usize)> {
-    for method in ["get", "post", "put", "patch", "delete", "use"] {
+fn static_route_call(line: &str) -> Option<(&str, &'static str, usize)> {
+    for method in [
+        "get", "head", "post", "put", "delete", "options", "patch", "all", "use",
+    ] {
         let pattern = format!(".{method}(");
         if let Some(method_dot) = line.find(&pattern) {
             let start = line[..method_dot]
                 .rfind(|character: char| character.is_whitespace())
                 .map(|offset| offset + 1)
                 .unwrap_or(0);
-            return Some((method, start));
+            let receiver = line[start..method_dot].trim();
+            if !receiver.is_empty() {
+                return Some((receiver, method, start));
+            }
         }
     }
     None
+}
+
+fn fastify_full_route_call(line: &str) -> Option<(&str, usize)> {
+    let pattern = ".route(";
+    let method_dot = line.find(pattern)?;
+    let start = line[..method_dot]
+        .rfind(|character: char| character.is_whitespace())
+        .map(|offset| offset + 1)
+        .unwrap_or(0);
+    let receiver = line[start..method_dot].trim();
+    (!receiver.is_empty()).then_some((receiver, start))
 }
 
 fn dynamic_route_call(line: &str) -> Option<usize> {
@@ -1183,6 +1263,303 @@ fn dynamic_route_call(line: &str) -> Option<usize> {
             character.is_ascii_alphabetic() || character == '_' || character == '$'
         }))
     .then_some(start)
+}
+
+fn fastify_receivers_for_scan(text: &str) -> BTreeSet<String> {
+    let mut factories = BTreeSet::new();
+    let mut receivers = BTreeSet::new();
+    for line in top_level_lines(text) {
+        if let Some(name) = imported_default_or_require_name(line, "fastify") {
+            factories.insert(name.to_string());
+        }
+        if line.contains("import { fastify") && line.contains(" from ") && line.contains("fastify")
+        {
+            factories.insert("fastify".to_string());
+        }
+        if line.contains("import { Fastify") && line.contains(" from ") && line.contains("fastify")
+        {
+            factories.insert("Fastify".to_string());
+        }
+    }
+    for line in top_level_lines(text) {
+        let Some((name, rhs)) = declaration_assignment(line) else {
+            continue;
+        };
+        if factories
+            .iter()
+            .any(|factory| exact_call_head(rhs, factory.as_str()))
+        {
+            receivers.insert(name.to_string());
+        }
+    }
+    receivers
+}
+
+fn prisma_clients_for_scan(text: &str) -> BTreeSet<String> {
+    let mut clients = BTreeSet::new();
+    for line in top_level_lines(text) {
+        let Some((name, rhs)) = declaration_assignment(line) else {
+            continue;
+        };
+        if rhs.trim_start().starts_with("new PrismaClient(") {
+            clients.insert(name.to_string());
+        }
+    }
+    clients
+}
+
+fn drizzle_tables_for_scan(text: &str) -> BTreeSet<String> {
+    let mut tables = BTreeSet::new();
+    for line in top_level_lines(text) {
+        if let Some((name, _)) = drizzle_schema_table_declaration(line) {
+            tables.insert(name.to_string());
+        }
+    }
+    tables
+}
+
+fn drizzle_dbs_for_scan(text: &str) -> BTreeSet<String> {
+    let mut dbs = BTreeSet::new();
+    for line in top_level_lines(text) {
+        let Some((name, rhs)) = declaration_assignment(line) else {
+            continue;
+        };
+        if exact_call_head(rhs, "drizzle") {
+            dbs.insert(name.to_string());
+        }
+    }
+    dbs
+}
+
+fn next_default_export_unit(path: &str, line: &str) -> Option<(CodeUnitKind, &'static str, usize)> {
+    let kind = next_file_convention_kind(path)?;
+    let offset = line.find("export default")?;
+    let rest = line[offset..].trim_start();
+    match kind {
+        CodeUnitKind::NextAppPage | CodeUnitKind::NextAppLayout | CodeUnitKind::NextPagesPage => {
+            if rest.contains("function") || rest.contains("=>") || rest.contains("createElement") {
+                Some((kind, "default", offset))
+            } else {
+                None
+            }
+        }
+        CodeUnitKind::NextPagesApiRoute => {
+            if rest.contains("function") || rest.contains("=>") {
+                Some((kind, "handler", offset))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn next_route_handler_export(path: &str, line: &str) -> Option<(&'static str, usize)> {
+    if next_file_convention_kind(path) != Some(CodeUnitKind::NextRouteHandler) {
+        return None;
+    }
+    let offset = line.find("export ")?;
+    let trimmed = line[offset..].trim_start();
+    for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] {
+        let function_pattern = format!("function {method}");
+        if trimmed.contains(&function_pattern) {
+            return Some((method, offset));
+        }
+    }
+    None
+}
+
+fn next_file_convention_kind(path: &str) -> Option<CodeUnitKind> {
+    let path = path.trim_start_matches("./");
+    let extension_ok = [".ts", ".tsx", ".js", ".jsx"]
+        .iter()
+        .any(|extension| path.ends_with(extension));
+    if !extension_ok {
+        return None;
+    }
+    if path.starts_with("app/") && is_named_file(path, "page") {
+        return Some(CodeUnitKind::NextAppPage);
+    }
+    if path.starts_with("app/") && is_named_file(path, "layout") {
+        return Some(CodeUnitKind::NextAppLayout);
+    }
+    if path.starts_with("app/") && is_named_file(path, "route") {
+        return Some(CodeUnitKind::NextRouteHandler);
+    }
+    if path.starts_with("pages/api/") && !path.ends_with(".tsx") && !path.ends_with(".jsx") {
+        return Some(CodeUnitKind::NextPagesApiRoute);
+    }
+    if path.starts_with("pages/") && !path.starts_with("pages/api/") {
+        return Some(CodeUnitKind::NextPagesPage);
+    }
+    None
+}
+
+fn is_named_file(path: &str, stem: &str) -> bool {
+    [".ts", ".tsx", ".js", ".jsx"]
+        .iter()
+        .any(|extension| path.ends_with(&format!("/{stem}{extension}")))
+}
+
+fn prisma_query_call(line: &str, clients: &BTreeSet<String>) -> Option<(&'static str, usize)> {
+    for client in clients {
+        let client_pattern = format!("{client}.");
+        let Some(client_offset) = line.find(&client_pattern) else {
+            continue;
+        };
+        let model_start = client_offset + client_pattern.len();
+        let (model_name, model_name_offset) = parse_identifier_after(line, model_start)?;
+        let after_model = model_name_offset + model_name.len();
+        let rest = line[after_model..].trim_start().strip_prefix('.')?;
+        for operation in [
+            "findMany",
+            "findUnique",
+            "findFirst",
+            "create",
+            "createMany",
+            "update",
+            "updateMany",
+            "upsert",
+            "delete",
+            "deleteMany",
+            "count",
+            "aggregate",
+            "groupBy",
+        ] {
+            if rest.starts_with(operation) && rest[operation.len()..].trim_start().starts_with('(')
+            {
+                return Some((operation, client_offset));
+            }
+        }
+    }
+    None
+}
+
+fn prisma_transaction_call(line: &str, clients: &BTreeSet<String>) -> Option<usize> {
+    clients.iter().find_map(|client| {
+        let pattern = format!("{client}.$transaction(");
+        line.find(&pattern)
+    })
+}
+
+fn drizzle_schema_table_declaration(line: &str) -> Option<(&str, usize)> {
+    let (name, rhs, start) = declaration_assignment_with_offset(line)?;
+    if ["pgTable(", "mysqlTable(", "sqliteTable("]
+        .iter()
+        .any(|pattern| rhs.trim_start().starts_with(pattern))
+    {
+        Some((name, start))
+    } else {
+        None
+    }
+}
+
+fn drizzle_query_call(
+    line: &str,
+    dbs: &BTreeSet<String>,
+    tables: &BTreeSet<String>,
+) -> Option<(&'static str, usize)> {
+    for db in dbs {
+        for operation in ["select", "insert", "update", "delete"] {
+            let pattern = format!("{db}.{operation}(");
+            let Some(offset) = line.find(&pattern) else {
+                continue;
+            };
+            if operation == "select" {
+                if line[offset..].contains(".from(")
+                    && tables.iter().any(|table| line[offset..].contains(table))
+                {
+                    return Some((operation, offset));
+                }
+            } else if tables
+                .iter()
+                .any(|table| line[offset..].contains(&format!("({table}")))
+            {
+                return Some((operation, offset));
+            }
+        }
+    }
+    None
+}
+
+fn drizzle_transaction_call(line: &str, dbs: &BTreeSet<String>) -> Option<usize> {
+    dbs.iter().find_map(|db| {
+        let pattern = format!("{db}.transaction(");
+        line.find(&pattern)
+    })
+}
+
+fn top_level_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut depth: i64 = 0;
+    for line in text.lines() {
+        if depth == 0 {
+            lines.push(line);
+        }
+        depth += line.bytes().fold(0, |delta, byte| match byte {
+            b'{' => delta + 1,
+            b'}' => delta - 1,
+            _ => delta,
+        });
+        if depth < 0 {
+            depth = 0;
+        }
+    }
+    lines
+}
+
+fn imported_default_or_require_name<'a>(line: &'a str, module: &str) -> Option<&'a str> {
+    let trimmed = line.trim();
+    let import_suffix = format!(" from \"{module}\"");
+    let import_suffix_single = format!(" from '{module}'");
+    if let Some(rest) = trimmed.strip_prefix("import ") {
+        if rest.contains(&import_suffix) || rest.contains(&import_suffix_single) {
+            let before_from = rest.split(" from ").next()?.trim();
+            if !before_from.starts_with('{') && !before_from.starts_with('*') {
+                return before_from.split(',').next().map(str::trim);
+            }
+        }
+    }
+    let require_double = format!("require(\"{module}\")");
+    let require_single = format!("require('{module}')");
+    if (trimmed.contains(&require_double) || trimmed.contains(&require_single))
+        && trimmed.starts_with("const ")
+    {
+        return declaration_assignment(trimmed).map(|(name, _)| name);
+    }
+    None
+}
+
+fn declaration_assignment(line: &str) -> Option<(&str, &str)> {
+    declaration_assignment_with_offset(line).map(|(name, rhs, _)| (name, rhs))
+}
+
+fn declaration_assignment_with_offset(line: &str) -> Option<(&str, &str, usize)> {
+    let trimmed_start = line
+        .find(|character: char| !character.is_whitespace())
+        .unwrap_or(0);
+    let mut trimmed = &line[trimmed_start..];
+    let mut prefix_len = 0usize;
+    if let Some(rest) = trimmed.strip_prefix("export ") {
+        prefix_len += "export ".len();
+        trimmed = rest.trim_start();
+    }
+    for keyword in ["const ", "let ", "var "] {
+        let Some(rest) = trimmed.strip_prefix(keyword) else {
+            continue;
+        };
+        let start = trimmed_start + prefix_len;
+        let (name, name_offset) = parse_identifier_after(rest, 0)?;
+        let equals = rest[name_offset + name.len()..].find('=')? + name_offset + name.len();
+        let rhs = rest[equals + 1..].trim();
+        return Some((&rest[name_offset..name_offset + name.len()], rhs, start));
+    }
+    None
+}
+
+fn exact_call_head(rhs: &str, head: &str) -> bool {
+    let rhs = rhs.trim().trim_end_matches(';').trim();
+    rhs.starts_with(head) && rhs[head.len()..].trim_start().starts_with('(')
 }
 
 fn call_offset(line: &str, function_name: &str) -> Option<usize> {

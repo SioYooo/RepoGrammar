@@ -576,13 +576,15 @@ includes `generation_id`, `discovered_files`, `stored_files`, the actual
 `indexed_units` count, the actual `semantic_facts` count, `indexing:
 syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
 deferred`. The structural extractors can also produce syntax-origin
-framework-role fact records for recognized Express, React, Jest/Vitest,
-FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes; these may increase
-`semantic_facts` while `semantic_worker: deferred` remains true. Python
+framework-role fact records for recognized Express, React, Jest/Vitest, Next.js,
+Fastify, Prisma, Drizzle, FastAPI, pytest, Pydantic, and SQLAlchemy code-unit
+shapes; these may increase `semantic_facts` while `semantic_worker: deferred`
+remains true. Python
 parser-origin structural facts, root `pyproject.toml` project-config records,
 TS/JS project-config records, TS/JS exact-anchor support facts, and TS/JS typed
-`UNKNOWN` records for dynamic/unsafe receiver or runner boundaries may also
-increase `semantic_facts` without changing `semantic_worker: deferred`.
+`UNKNOWN` records for dynamic/unsafe receiver, runner, route, client, or query
+boundaries may also increase `semantic_facts` without changing
+`semantic_worker: deferred`.
 Exact-anchor Python `DATAFLOW_DERIVED` support facts may also be stored in this
 default path. By default the
 commands do not launch a semantic worker and report
@@ -615,10 +617,11 @@ FamilyStore-backed lookup path. Commands that install or uninstall agent
 configuration now support narrow explicit-target live writes after MCP
 self-test. The CLI now includes the first Python structural indexing slice, but
 Pyrefly/Pyright provider evidence, richer repo-local module resolution, broad
-Python family mining, React/Next/Fastify TS/JS support, and TypeScript
-compiler-backed analysis remain deferred. Narrow exact-anchor Python family
-rows and conservative TS/JS Express/Jest/Vitest family rows may exist when
-EC-MVFI-lite has enough derived support. Explicit `--include-source-spans` is
-implemented for bounded hash-checked spans; default output remains source-free.
+Python family mining beyond the current framework set, React TS/JS support, and
+TypeScript compiler-backed analysis remain deferred. Narrow exact-anchor Python
+family rows and conservative TS/JS Express/Jest/Vitest/Next/Fastify/Prisma/
+Drizzle family rows may exist when EC-MVFI-lite has enough derived support.
+Explicit `--include-source-spans` is implemented for bounded hash-checked spans;
+default output remains source-free.
 Unsupported live target/scope combinations return explicit deferred errors;
 dry-run planning remains available for all targets and scopes.

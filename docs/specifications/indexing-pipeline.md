@@ -70,23 +70,29 @@ evidence, and no claim-relevant Rust `UNKNOWN`. Structural anchors alone,
 generic Rust functions, unresolved module links, build-variant ambiguity,
 macro/proc-macro expansion, trait-object dispatch, and stale evidence must not
 be upgraded into confident family claims.
-A parallel, deliberately conservative TS/JS path exists for Express route
-handlers and Jest/Vitest suites/tests. The syntax parser emits `STRUCTURAL`
-exact-anchor facts only when an exact import/require binding, app/router factory,
-and literal method (Express) or an imported/ambient-in-test-file runner
-(Jest/Vitest) resolve without reassignment, shadowing, dynamic receivers, custom
-wrappers, dynamic methods, or conditional imports; otherwise the unit emits a
-typed `UNKNOWN` for the affected receiver, runner, or support-target claim. The
-application layer promotes those anchors to `DATAFLOW_DERIVED` support facts with
-engine `repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
-`provider_resolved=false`, `derived_from=tsjs_structural_anchors`,
+A parallel, deliberately conservative TS/JS path exists for Express,
+Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
+parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
+bindings and file conventions match the adapter registry: Express app/router
+calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
+context, Fastify factory receivers, local `new PrismaClient()` clients, and
+Drizzle table/db/query bindings. Dynamic receivers, custom wrappers, dynamic
+methods, conditional imports, Next route magic, Fastify plugin prefixes, Prisma
+raw/injected clients, and Drizzle raw/dynamic builders emit typed `UNKNOWN` for
+the affected claim instead of support. The application layer promotes accepted
+anchors to `DATAFLOW_DERIVED` support facts with engine
+`repogrammar-tsjs-derived` and method `bounded_exact_anchor_v1`, carrying
+`provider_resolved=false`, `derived_from=tsjs_structural_anchors`, a
+framework-specific `derived_from=tsjs_<framework>_structural_anchors`,
 `framework_role=<role>`, and `tsjs_anchor_kind=<kind>` assumptions. The
 family-support gate accepts only exact recognized targets (for example
-`express.route.get`, `jest_vitest.describe`) under a safe origin; it must not
-infer support from fact text that merely contains a framework name. TS/JS
-families require at least three compatible exact-anchor support facts and use
-complete-link compatibility over route method/path/handler profiles or
-runner/test/import profiles. Bounded project inventory for `package.json`,
+`express.route.get`, `jest_vitest.describe`, `next.route.GET`,
+`fastify.route.get`, `prisma.query.findMany`, `drizzle.query.select`) under a
+safe origin; it must not infer support from fact text that merely contains a
+framework name. TS/JS families require at least three compatible exact-anchor
+support facts and use complete-link compatibility over route, runner,
+component, response, query, and schema profiles. Bounded project inventory for
+`package.json`,
 `tsconfig.json`, `jsconfig.json`, and Jest/Vitest config files is structural
 context only. Package dependencies and JSON `jest.config.json` /
 `vitest.config.json` files can provide ambient test-runner context; script
@@ -199,7 +205,9 @@ converted into `CodeUnit` and unified IR types before entering `core`.
 The current implementation uses dependency-free syntax-only extractor adapters
 as bootstrap parser boundaries. The TS/JS extractor recognizes modules,
 functions, assigned arrow functions, classes, methods, React function
-components, custom hooks, Express route calls, and Jest/Vitest
+components, custom hooks, Express route calls, Next.js route/page conventions,
+Fastify routes, Prisma queries/transactions, Drizzle schema/query/transaction
+anchors, and Jest/Vitest
 `describe`/`it`/`test` blocks by structural syntax only. The Python extractor
 uses a checked-in CPython `ast` worker and recognizes modules, functions,
 async functions, classes, methods, FastAPI route-shaped functions, pytest tests
@@ -265,9 +273,11 @@ with stronger compatible evidence. The TS/JS syntax parser additionally emits
 `exact_anchor_v1`) that, like the Python structural anchors, cannot support
 membership by themselves; only the application-layer `repogrammar-tsjs-derived`
 promotion can turn them into `DATAFLOW_DERIVED` support. It also emits typed
-TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express
-receivers, unsafe or unresolved Jest/Vitest runner bindings, and bounded config
-parse/execution ambiguity. The bounded import resolver additionally emits
+TS/JS `UNKNOWN` facts for dynamic route calls, unresolved or unsafe Express or
+Fastify receivers, unsafe or unresolved Jest/Vitest runner bindings, unsupported
+Next route magic, Prisma dynamic/raw/injected clients, Drizzle dynamic/raw or
+unresolved table/db bindings, and bounded config parse/execution ambiguity. The
+bounded import resolver additionally emits
 structural repo-local import facts or typed `UNKNOWN` records for dynamic
 imports, conditional or non-literal `require`, unresolved/conflicting
 path-alias resolution, and ambiguous star re-exports. These facts remain blocked
@@ -368,7 +378,9 @@ classes, methods, decorators, imports, assignments, calls, annotations, class
 bases, FastAPI route/dependency roles, pytest tests/fixtures, Pydantic models,
 and SQLAlchemy model/session roles. Current stored TS/JS unit kinds are
 syntax-only and include module, function, arrow function, class, method, React
-component, React hook, Express route, test suite, and test case.
+component, React hook, Express route, Next.js App/Pages route/page/layout units,
+Fastify route, Prisma query/transaction, Drizzle schema/query/transaction, test
+suite, and test case.
 
 ## Normalization and fingerprinting
 
@@ -433,15 +445,17 @@ compatible same-generation semantic/dataflow support before storing a Python
 family; framework heuristics alone stay `UNKNOWN`.
 
 The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
-Express routes, React components, React hooks, Jest/Vitest suites, and
-Jest/Vitest tests into syntax-origin `FRAMEWORK_ROLE` fact records. It records
+Express routes, React components, React hooks, Jest/Vitest suites/tests,
+Next.js conventions, Fastify routes, Prisma queries/transactions, and Drizzle
+schema/query/transaction anchors into syntax-origin `FRAMEWORK_ROLE` fact
+records. It records
 repo-relative evidence and unresolved-binding assumptions. For the conservative
-v0.2 path, the parser also emits structural exact-anchor facts for
-app/router-bound Express route calls and imported or project-context ambient
-Jest/Vitest runner calls; the application layer may derive
-`DATAFLOW_DERIVED` support from those exact anchors. It still does not perform
-TypeScript compiler-backed binding/export propagation, React runtime behavior,
-dependency injection, or lifecycle semantics.
+v0.2 path, the parser also emits structural exact-anchor facts for those
+framework adapters; the application layer may derive `DATAFLOW_DERIVED` support
+from those exact anchors. It still does not perform TypeScript compiler-backed
+binding/export propagation, React runtime behavior, Next server/client or
+middleware semantics, Fastify plugin-prefix resolution, Prisma/Drizzle runtime
+extensions, dependency injection, or lifecycle semantics.
 
 The current Rust adapter maps only RepoGrammar's own repository structure into
 internal self-dogfood roles. It records structural anchors and typed UNKNOWNs

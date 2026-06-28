@@ -1,7 +1,8 @@
 import fastify from "fastify";
 
 const app = fastify();
+const method = "get";
 
-app.get("/users", async () => {
+app[method]("/users", async () => {
   return [];
 });

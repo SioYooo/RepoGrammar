@@ -14,7 +14,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/adapters/parsing/` | Parser boundaries, including transitional TS/JS syntax extraction, bounded TS/JS project-config inventory, conservative TS/JS exact-anchor structural/UNKNOWN facts (`tsjs_anchors.rs`), Tree-sitter Rust self-dogfood structural extraction (`rust_syntax.rs`), and the CPython AST-backed Python extractor | `docs/specifications/indexing-pipeline.md`, `docs/architecture/dependency-rules.md` |
 | `src/rust/adapters/languages/` | Language-specific parsing configuration | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md` |
 | `src/rust/adapters/semantic_workers/` | Rust-side process boundary for language-native semantic workers | `docs/specifications/semantic-workers.md`, `docs/decisions/ADR-0004-rust-core-language-native-workers.md` |
-| `src/rust/adapters/frameworks/` | Framework recognition boundaries; current TS/JS transitional roles plus Python FastAPI, pytest, SQLAlchemy, and Pydantic roles | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md`, `docs/specifications/python-analysis.md` |
+| `src/rust/adapters/frameworks/` | Framework recognition boundaries; TS/JS adapter registry for Express, Jest/Vitest, React, Next.js, Fastify, Prisma, and Drizzle roles plus Python FastAPI, pytest, SQLAlchemy, and Pydantic roles | `docs/specifications/indexing-pipeline.md`, `docs/roadmap.md`, `docs/specifications/python-analysis.md` |
 | `src/rust/adapters/persistence/` | SQLite storage boundary | `docs/specifications/storage.md`, `docs/decisions/ADR-0002-local-sqlite-index.md` |
 | `src/rust/adapters/telemetry/` | Local diagnostic event sink boundary | `docs/architecture/overview.md` |
 | `src/rust/interfaces/cli/` | Pattern-family-first CLI argument and output boundary | `README.md`, `docs/specifications/cli.md` |
@@ -28,7 +28,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/workers/typescript/` | Transitional TypeScript semantic worker executable stub and future compiler-backed worker | `docs/specifications/semantic-workers.md` |
 | `src/workers/python/` | CPython `ast`/`symtable`-backed Python worker for private parse-document extraction, private `tomllib` project-config summaries, and conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
-| `src/fixtures/typescript/` | TypeScript source fixtures | `docs/development/testing.md` |
+| `src/fixtures/typescript/` | TypeScript/JavaScript source fixtures for Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle, and negative TS/JS adapter cases | `docs/development/testing.md` |
 | `src/fixtures/python/` | Python v0.1 source fixtures | `docs/development/testing.md`, `docs/specifications/python-analysis.md` |
 | `src/fixtures/rust/` | Rust v0.2 self-dogfood source fixtures | `docs/development/testing.md`, `docs/specifications/indexing-pipeline.md` |
 

@@ -21,6 +21,7 @@ pub struct ParserProjectContext {
     pub python_conftest_files: Vec<ParserProjectFileContext>,
     pub tsjs_module_paths: Vec<String>,
     pub tsjs_path_aliases: Vec<ParserTsJsPathAlias>,
+    pub tsjs_package_dependencies: Vec<String>,
     pub tsjs_has_test_runner_context: bool,
     pub rust_module_paths: Vec<String>,
     pub rust_cargo_files: Vec<ParserProjectFileContext>,

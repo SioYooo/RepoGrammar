@@ -95,11 +95,13 @@ Some unknowns block only specific claims:
 - dynamic FastAPI dependency target expressions may block the dependency-target
   sub-claim while still allowing a route family when route membership has enough
   independent exact-anchor support;
-- dynamic TS/JS route methods, unsafe or unresolved Express receivers, and
-  unsafe or unresolved Jest/Vitest runner bindings may block the affected
-  `tsjs_receiver_binding`, `tsjs_runner_binding`, or `tsjs_support_target`
-  claim while other exact-anchor units in the same repository can still form a
-  family when they have enough independent compatible support.
+- dynamic TS/JS route methods, unsafe or unresolved Express/Fastify receivers,
+  unsafe or unresolved Jest/Vitest runner bindings, Next.js route-convention
+  magic, Prisma injected/raw/dynamic clients, and Drizzle unresolved/raw/dynamic
+  builders may block the affected `tsjs_receiver_binding`,
+  `tsjs_runner_binding`, `tsjs_support_target`, or adapter-specific claim while
+  other exact-anchor units in the same repository can still form a family when
+  they have enough independent compatible support.
 - TS/JS dynamic imports, conditional or non-literal `require`, unresolved
   repo-local imports, unresolved or conflicting path aliases, ambiguous star
   re-exports, and missing ambient test-runner project context must remain typed
@@ -109,14 +111,17 @@ Some unknowns block only specific claims:
   guessed away.
 - The TS/JS parser maps granular v0.2 cases onto the stable reason-code set:
   dynamic `import(...)` is `DynamicImport`; non-literal or conditional
-  `require`, dynamic route/test calls, and unresolved custom runner/framework
-  magic are `FrameworkMagic`; unresolved relative imports, unresolved path
-  aliases, unresolved Express receivers, and missing ambient runner context are
-  `UnresolvedImport` or `MissingProjectConfig` as applicable; reassigned or
-  shadowed Express receivers, unsafe test runner bindings, conflicting path
-  aliases, and ambiguous star re-exports are `ConflictingFacts`. These mappings
-  are intentionally conservative and do not create new public reason codes for
-  every syntax shape.
+  `require`, dynamic route/test calls, Next route group/server-client/middleware
+  magic, Fastify dynamic route options, Prisma callback/raw/dynamic operations,
+  and Drizzle raw/dynamic builders are `FrameworkMagic` or
+  `BuildVariantAmbiguity`; unresolved relative imports, unresolved path aliases,
+  unresolved Express/Fastify receivers, unresolved Prisma clients, unresolved
+  Drizzle db/table bindings, and missing ambient runner or Next package context
+  are `UnresolvedImport` or `MissingProjectConfig` as applicable; reassigned or
+  shadowed receivers, unsafe test runner bindings, conflicting path aliases, and
+  ambiguous star re-exports are `ConflictingFacts`. These mappings are
+  intentionally conservative and do not create new public reason codes for every
+  syntax shape.
 - Rust self-dogfood maps unresolved external modules to `UnresolvedImport`,
   `#[cfg]` / `#[cfg_attr]` and target-specific Cargo sections to
   `BuildVariantAmbiguity`, macro/proc-macro syntax to `MacroOrPreprocessor`,

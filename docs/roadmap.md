@@ -34,8 +34,9 @@
   structural code units in active SQLite generations without source snippets,
   absolute paths, or family evidence.
 - Lightweight TS/JS framework-role fact storage for syntax-origin Express,
-  React, and Jest/Vitest code-unit shapes, using `FRAMEWORK_HEURISTIC`
-  certainty and unresolved-binding assumptions without enabling family claims.
+  React, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle code-unit shapes,
+  using `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions
+  without enabling family claims by themselves.
 - Lightweight Python framework-role fact storage for CPython AST-origin
   FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
   `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
@@ -46,10 +47,11 @@
   opt-in over hash-checked read-plan spans while keeping metadata-only output as
   the default.
 - v0.2 conservative TS/JS exact-anchor family support for Express route
-  handlers and Jest/Vitest suites/tests. Support is derived only from exact
-  structural anchors, requires at least three complete-link-compatible members,
-  and blocks dynamic, unsafe, unresolved, stale, or insufficient evidence with
-  typed `UNKNOWN`.
+  handlers, Jest/Vitest suites/tests, and structural-preview Next.js, Fastify,
+  Prisma, and Drizzle adapters. Support is derived only from exact structural
+  anchors, requires at least three complete-link-compatible members, and blocks
+  dynamic, unsafe, unresolved, stale, raw, or insufficient evidence with typed
+  `UNKNOWN`.
 - Bounded exact-anchor Python support derivation that creates separate
   `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
   Python framework compatibility table for a unit with one framework role.
@@ -254,10 +256,10 @@ evidence contracts remain validated together.
 
 - Existing TS/JS discovery, syntax extraction, framework-role facts, worker
   protocol scaffolding, and fixtures remain transitional substrate.
-- A conservative v0.2 token-saving path exists for Express route handlers and
-  Jest/Vitest suites/tests under exact-anchor evidence only. It is not
-  compiler-backed TypeScript analysis, does not support React/Next/Fastify, and
-  does not perform binding/export propagation beyond the bounded structural
+- A conservative v0.2 token-saving path exists for Express, Jest/Vitest,
+  Next.js, Fastify, Prisma, and Drizzle under exact-anchor evidence only. It is
+  not compiler-backed TypeScript analysis, does not support React family claims,
+  and does not perform binding/export propagation beyond the bounded structural
   project-context resolver.
 - Production-quality broad TS/JS family evidence remains deferred until after
   the Python-first path validates the product surface, unless a later ADR
@@ -308,8 +310,9 @@ evidence contracts remain validated together.
 - Optional watcher/daemon support that marks affected families stale and lazily
   recomputes instead of eagerly rebuilding the whole repository.
 - MCP transport implementation for planned tools.
-- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first;
-  Express, NestJS, React, Jest, and Vitest move to the TS/JS follow-up path.
+- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first; broad
+  TS/JS semantics, NestJS, React family support, and richer TS/JS providers move
+  to the TS/JS follow-up path.
 
 ## Open design areas
 

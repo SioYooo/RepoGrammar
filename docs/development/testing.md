@@ -291,24 +291,30 @@ allowed.
   (`src/rust/application/family.rs`), the derivation pass
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
-  object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed negatives,
-  typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver and runner
-  boundaries, bounded `package.json`/`tsconfig.json`/`jsconfig.json`
-  project-config context, bounded static relative/path-alias import resolution,
-  typed `UNKNOWN` for dynamic import, non-literal or conditional `require`,
-  unresolved/conflicting aliases, ambiguous star re-exports, Jest/Vitest
-  imported positives, ambient-in-test-file positives only with package/config
-  test-runner context, custom-wrapper and foreign-import negatives, that
+  Next.js App/Pages file-convention positives, Fastify shorthand/full route
+  positives, Prisma client/query/transaction positives, Drizzle schema/query
+  positives, object-literal/dynamic-receiver/dynamic-method/reassigned/shadowed
+  negatives, typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver, runner,
+  route, client, and query boundaries, bounded
+  `package.json`/`tsconfig.json`/`jsconfig.json` project-config context, bounded
+  static relative/path-alias import resolution, typed `UNKNOWN` for dynamic
+  import, non-literal or conditional `require`, unresolved/conflicting aliases,
+  ambiguous star re-exports, Jest/Vitest imported positives,
+  ambient-in-test-file positives only with package/config test-runner context,
+  custom-wrapper and foreign-import negatives, that
   `FRAMEWORK_HEURISTIC` facts never derive support, that only
   `repogrammar-tsjs-derived` `DATAFLOW_DERIVED` facts with exact whitelisted
   targets form families, that TS/JS families require at least three compatible
   support facts, that complete-link clustering rejects single-link bridge
-  members, that route/test variation slots are recorded from context profiles,
-  and that default JS/TS query output stays source-free while
+  members, that route/test/component/query variation slots are recorded from
+  context profiles, and that default JS/TS query output stays source-free while
   `--include-source-spans` / `include_source_spans=true` returns bounded
   hash-checked line-numbered spans. Positive TS/JS family fixtures live under
-  `src/fixtures/typescript/release/v0_2/express_exact_routes` and
-  `jest_vitest_exact_tests`.
+  `src/fixtures/typescript/release/v0_2/express_exact_routes`,
+  `jest_vitest_exact_tests`, `next_exact_routes`, `fastify_exact_routes`,
+  `prisma_exact_repositories`, and `drizzle_exact_repositories`; package-only,
+  raw, dynamic, and unsupported lookalikes live under
+  `framework_adapter_negative_cases` and `unsupported_framework_lookalikes`.
 - Python v0.1 tests must cover the implemented CPython `ast` frontend output,
   FastAPI, pytest, SQLAlchemy, and Pydantic structural positives, Python
   language/kind token stability, product `index`/`units` smoke coverage,
