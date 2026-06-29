@@ -671,7 +671,7 @@ impl ProductMcpSelfTester {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     fn with_timeout(timeout: std::time::Duration) -> Self {
         Self { timeout }
     }

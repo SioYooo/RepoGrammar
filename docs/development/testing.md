@@ -19,6 +19,9 @@ allowed.
 - Temporary directories must be unique and cleaned up.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
+- Helper code used only by tests must be gated with `#[cfg(test)]` or an
+  equivalent test-only cfg so `cargo clippy --all-targets` does not compile it
+  as dead production code.
 - Symlink safety tests must assert rejection on hosts that can create symlinks.
   On Windows sessions that lack the symlink creation privilege, tests may exit
   early only after confirming the failure is the platform privilege or
