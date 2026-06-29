@@ -6,6 +6,8 @@ pub mod framework_roles;
 pub mod index_store;
 pub mod parser;
 pub mod python_provider;
+pub mod rust_provider;
 pub mod semantic_worker;
 pub mod source_store;
 pub mod telemetry;
+pub mod tsjs_provider;

@@ -86,13 +86,15 @@ slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
 bounded role propagation, cross-function target-centered call recovery, richer
 EC-MVFI-lite family induction, and typed `UNKNOWN` governance.
-The current Rust code now has only the owned future Python provider port
-contract for request scope, provenance assumptions, cache keys, and recoverable
-provider-unavailable `UNKNOWN`s, plus an application-layer planner that can
-construct candidate-scoped Pyrefly framework-identity request envelopes for
-future adapters from in-memory facts or validated active-generation snapshots.
-It does not execute provider tools, store provider facts, or add production
-provider-backed Python semantics.
+The current Rust code now has owned future Python, Rust, and TS/JS provider
+port contracts for request scope, provenance assumptions, cache keys, and
+recoverable provider-unavailable `UNKNOWN`s, plus an application-layer planner
+that can construct candidate-scoped Pyrefly framework-identity request
+envelopes for future adapters from in-memory facts or validated
+active-generation snapshots. It does not execute provider tools, store provider
+facts, or add production provider-backed Python, Rust, or TS/JS semantics. The
+Rust/TSJS semantic analysis roadmap is tracked in
+`docs/plans/rust-tsjs-semantic-analysis-plan.md`.
 The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 
@@ -131,8 +133,9 @@ product tests when support is sufficient and no Rust-specific `UNKNOWN` blocks
 the claim. It must not be described as general Rust semantic analysis: the
 indexer does not run Cargo, rustc, build scripts, procedural macros, or
 whole-program trait/call resolution. Cargo build scripts and target-specific
-manifest sections are typed build-variant `UNKNOWN`s that block affected Rust
-self-dogfood families until resolved.
+root manifest sections are typed build-variant `UNKNOWN`s that block affected
+Rust self-dogfood families until resolved. Nested fixture/package manifests
+must not globally block unrelated root Rust family support.
 
 ## Public-preview support matrix
 
@@ -151,6 +154,8 @@ self-dogfood families until resolved.
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
+| Rust provider-backed semantics | Planned preview | Provider ports exist, but Cargo/rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
+| TS/JS provider-backed semantics | Planned preview | Provider ports exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 

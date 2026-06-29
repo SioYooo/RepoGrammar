@@ -1165,7 +1165,7 @@ fn rust_repository_blocking_unknown(fact: &SemanticFact) -> Option<ClaimUnknown>
         .unwrap_or("rust_family_membership");
     if reason != UnknownReasonCode::BuildVariantAmbiguity
         || affected_claim != "rust_build_variant"
-        || !fact.evidence.provenance.path.ends_with("Cargo.toml")
+        || fact.evidence.provenance.path != "Cargo.toml"
     {
         return None;
     }
@@ -1173,7 +1173,7 @@ fn rust_repository_blocking_unknown(fact: &SemanticFact) -> Option<ClaimUnknown>
         class: UnknownClass::Blocking,
         reason,
         affected_claim: "rust_build_variant".to_string(),
-        recovery: Some("remove or resolve Cargo build/target variant ambiguity".to_string()),
+        recovery: Some("remove or resolve root Cargo build/target variant ambiguity".to_string()),
     })
 }
 
@@ -2913,6 +2913,26 @@ mod tests {
         }
     }
 
+    fn rust_derived_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+    ) -> SemanticFact {
+        let mut fact = semantic_support_fact_with_origin(
+            unit,
+            target,
+            RUST_DERIVED_SUPPORT_ENGINE,
+            RUST_DERIVED_SUPPORT_METHOD,
+        );
+        fact.certainty = FactCertainty::DataflowDerived;
+        fact.assumptions = vec![
+            "provider_resolved=false".to_string(),
+            "derived_from=tree_sitter_rust_structural_anchors".to_string(),
+            format!("framework_role={framework_role}"),
+        ];
+        fact
+    }
+
     fn rust_unknown_fact(
         unit: &IndexedCodeUnitRecord,
         reason: UnknownReasonCode,
@@ -2966,6 +2986,19 @@ mod tests {
         );
         assert!(rust_repository_blocking_unknowns(&[source_unknown]).is_empty());
 
+        let nested_manifest = unit_with_language(
+            "src/fixtures/rust/release/v0_2/module_resolution/Cargo.toml",
+            "rust-config",
+            "cargo_manifest",
+            2,
+        );
+        let nested_manifest_unknown = rust_unknown_fact(
+            &nested_manifest,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "rust_build_variant",
+        );
+        assert!(rust_repository_blocking_unknowns(&[nested_manifest_unknown]).is_empty());
+
         let unrelated_claim_unknown = rust_unknown_fact(
             &rust_manifest,
             UnknownReasonCode::BuildVariantAmbiguity,
@@ -2982,6 +3015,61 @@ mod tests {
         assert_eq!(blockers.len(), 1);
         assert_eq!(blockers[0].reason, UnknownReasonCode::BuildVariantAmbiguity);
         assert_eq!(blockers[0].affected_claim, "rust_build_variant");
+    }
+
+    #[test]
+    fn fixture_cargo_build_variant_unknown_does_not_block_root_rust_families() {
+        let first = unit_with_language(
+            "src/rust/adapters/parsing/rust/mod.rs",
+            "rust",
+            "rust_function",
+            0,
+        );
+        let second = unit_with_language(
+            "src/rust/adapters/parsing/rust/unknown.rs",
+            "rust",
+            "rust_function",
+            1,
+        );
+        let third = unit_with_language(
+            "src/rust/adapters/parsing/rust/tree_sitter.rs",
+            "rust",
+            "rust_function",
+            2,
+        );
+        let nested_manifest = unit_with_language(
+            "src/fixtures/rust/release/v0_2/cargo_build_blocked_family/Cargo.toml",
+            "rust-config",
+            "cargo_manifest",
+            3,
+        );
+        let role = "framework:repogrammar.rust_parser_adapter";
+        let target = "repogrammar.rust.parser_adapter";
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                rust_derived_fact(&first, target, role),
+                rust_derived_fact(&second, target, role),
+                rust_derived_fact(&third, target, role),
+                rust_unknown_fact(
+                    &nested_manifest,
+                    UnknownReasonCode::BuildVariantAmbiguity,
+                    "rust_build_variant",
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "rust");
+        assert_eq!(report.claims[0].framework_role, role);
+        assert_eq!(report.claims[0].support, 3);
+        assert!(!report.unknowns.iter().any(|unknown| {
+            unknown.reason == UnknownReasonCode::BuildVariantAmbiguity
+                && unknown.affected_claim == "rust_build_variant"
+        }));
     }
 
     #[test]

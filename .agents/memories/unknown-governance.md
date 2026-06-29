@@ -27,6 +27,10 @@
   readiness. Stale or missing source blocks with `StaleEvidence`, weak certainty
   and `UNKNOWN` fact kind block with `InsufficientSupport`, and conflicting
   certainty blocks with `ConflictingFacts`.
+- Root `Cargo.toml` `rust_build_variant` UNKNOWNs may block repository-wide Rust
+  self-dogfood families, but nested fixture/package manifests must not globally
+  block unrelated root Rust family claims; keep those unknowns scoped to the
+  affected package/crate/claim until provider-backed package scope exists.
 - A fresh supported semantic fact kind is only eligible input for future claim
   builders. It is not a pattern-family classification or conformance result.
 - Tests for new analyzers should include uncertain, conflicting, stale,

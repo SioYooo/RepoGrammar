@@ -60,7 +60,9 @@
   suite now includes family gates, parser adapters, installer actions, product
   tests, low-support abstention, macro/cfg blockers, trait-dispatch blockers,
   Cargo build-script non-execution/blocking, and bounded module-resolution/Cargo
-  target-dependency inventory.
+  target-dependency inventory. Root `Cargo.toml` build-variant UNKNOWN can block
+  repository-wide Rust self-dogfood family emission, but nested fixture/package
+  manifests must not globally block unrelated root Rust family support.
   `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full
@@ -141,14 +143,16 @@
   `Session.scalars`, and async equivalents plus bounded propagation from
   `__init__`-assigned `self.session`/`self.db` attributes, with same-method
   receiver reassignment blocking
-  canonicalization. A Rust `ports::python_provider`
-  contract now exists for future candidate-scoped provider requests,
-  provenance assumptions, cache-key dimensions, and recoverable
-  provider-unavailable `UNKNOWN`s. The application layer can plan validated
-  Pyrefly framework-identity request scopes for plausible Python candidate
-  groups and skip parser-origin blocking `UNKNOWN`s for the planned claim, but
-  Pyrefly/Pyright/RightTyper execution, provider fact storage, and
-  provider-backed canonical evidence remain deferred. The planner can run over
+  canonicalization. Rust `ports::python_provider`, `ports::rust_provider`, and
+  `ports::tsjs_provider` contracts now exist for future candidate-scoped
+  provider requests, provenance assumptions, cache-key dimensions, and
+  recoverable provider-unavailable `UNKNOWN`s. The application layer can plan
+  validated Pyrefly framework-identity request scopes for plausible Python
+  candidate groups and skip parser-origin blocking `UNKNOWN`s for the planned
+  claim, but Pyrefly/Pyright/RightTyper execution, provider fact storage, and
+  provider-backed canonical evidence remain deferred. Rust/TSJS provider
+  execution is also deferred and tracked in
+  `docs/plans/rust-tsjs-semantic-analysis-plan.md`. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
   The `dynamic-unknown` release fixture now exercises dynamic Pydantic model
