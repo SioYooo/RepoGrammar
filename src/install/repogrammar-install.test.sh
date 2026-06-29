@@ -4,7 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALLER="${SCRIPT_DIR}/repogrammar-install.sh"
 TMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TMP_ROOT"' EXIT
+RELEASE_BINARY_TO_RESTORE=""
+RELEASE_BINARY_BACKUP=""
+RELEASE_BINARY_EXISTED=0
+
+restore_release_binary() {
+  if [[ -z "$RELEASE_BINARY_TO_RESTORE" ]]; then
+    return
+  fi
+  if [[ "$RELEASE_BINARY_EXISTED" -eq 1 ]]; then
+    cp "$RELEASE_BINARY_BACKUP" "$RELEASE_BINARY_TO_RESTORE"
+  else
+    rm -f "$RELEASE_BINARY_TO_RESTORE"
+  fi
+  RELEASE_BINARY_TO_RESTORE=""
+}
+
+trap 'restore_release_binary; rm -rf "$TMP_ROOT"' EXIT
 
 TARGET="$("$INSTALLER" --print-target)"
 RELEASE_DIR="${TMP_ROOT}/release"
@@ -124,6 +140,43 @@ REPOGRAMMAR_INSTALL_DIR="$SOURCE_INSTALL_DIR" \
 test -x "${SOURCE_INSTALL_DIR}/bin/repogrammar"
 test -f "${SOURCE_INSTALL_DIR}/workers/python/worker.py"
 test -f "${SOURCE_COMMAND_DIR}/repogrammar-workers/python/worker.py"
+
+DEFAULT_SOURCE_COMMAND_DIR="${TMP_ROOT}/default-source-bin"
+DEFAULT_SOURCE_INSTALL_DIR="${TMP_ROOT}/default-source-data"
+DEFAULT_SOURCE_CARGO_LOG="${TMP_ROOT}/default-source-cargo.log"
+FAKE_CARGO_DIR="${TMP_ROOT}/fake-cargo"
+RELEASE_BINARY_TO_RESTORE="${SCRIPT_DIR}/../../target/release/repogrammar"
+RELEASE_BINARY_BACKUP="${TMP_ROOT}/repogrammar.release.backup"
+if [[ -e "$RELEASE_BINARY_TO_RESTORE" ]]; then
+  cp "$RELEASE_BINARY_TO_RESTORE" "$RELEASE_BINARY_BACKUP"
+  RELEASE_BINARY_EXISTED=1
+else
+  RELEASE_BINARY_EXISTED=0
+fi
+mkdir -p "$FAKE_CARGO_DIR"
+cat > "${FAKE_CARGO_DIR}/cargo" <<'FAKE_CARGO'
+#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$REPOGRAMMAR_FAKE_CARGO_LOG"
+if [ "${1:-}" = "build" ] && [ "${2:-}" = "--release" ]; then
+  mkdir -p "$(dirname "$REPOGRAMMAR_FAKE_RELEASE_BINARY")"
+  cp "$REPOGRAMMAR_FAKE_SOURCE_BINARY" "$REPOGRAMMAR_FAKE_RELEASE_BINARY"
+  exit 0
+fi
+exit 1
+FAKE_CARGO
+chmod +x "${FAKE_CARGO_DIR}/cargo"
+PATH="${FAKE_CARGO_DIR}:$PATH" \
+REPOGRAMMAR_FAKE_CARGO_LOG="$DEFAULT_SOURCE_CARGO_LOG" \
+REPOGRAMMAR_FAKE_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
+REPOGRAMMAR_FAKE_RELEASE_BINARY="$RELEASE_BINARY_TO_RESTORE" \
+REPOGRAMMAR_COMMAND_DIR="$DEFAULT_SOURCE_COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$DEFAULT_SOURCE_INSTALL_DIR" \
+"$INSTALLER" --install-cli-only --from-source --yes >/dev/null
+
+grep -q "build --release" "$DEFAULT_SOURCE_CARGO_LOG"
+"${DEFAULT_SOURCE_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
+test -x "${DEFAULT_SOURCE_INSTALL_DIR}/bin/repogrammar"
+restore_release_binary
 
 REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$SOURCE_COMMAND_DIR" \

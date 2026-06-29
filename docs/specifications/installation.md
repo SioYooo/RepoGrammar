@@ -90,7 +90,12 @@ directories. It must not directly create a foreign unmanaged command path that
 later causes the Rust installer to refuse ownership. If no release artifact is
 available and the script is not running from a source checkout with
 `--from-source`, it must fail with actionable guidance, including
-`REPOGRAMMAR_RELEASE_DIR` for local artifact tests.
+`REPOGRAMMAR_RELEASE_DIR` for local artifact tests. When a source wrapper runs
+without an explicit `REPOGRAMMAR_SOURCE_BINARY` or `-SourceBinary` override, it
+must run `cargo build --release` before copying `target/release/repogrammar`
+or `target\release\repogrammar.exe`, even if a previous release binary already
+exists, so source-checkout one-step installs do not silently reuse stale
+binaries.
 
 Windows public-preview source checkouts provide `src/install/install.ps1` with
 the same binary-download and checksum-verification boundary. In a source
@@ -329,7 +334,10 @@ noninteractive live writes, and a dependency-light text wizard:
   `repogrammar.exe` on PATH), the installer may copy that executable into
   RepoGrammar-managed user state instead of treating the command path as a
   foreign conflict. It must not overwrite that currently executing command path
-  during the same run; unrelated existing command paths are still refused;
+  during the same run, including wrapper flows that set
+  `REPOGRAMMAR_EXECUTABLE` to a managed data-directory binary while launching
+  `repogrammar install` through the user-writable command path; unrelated
+  existing command paths are still refused;
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;

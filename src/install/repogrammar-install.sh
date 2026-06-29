@@ -7,6 +7,10 @@ REPOGRAMMAR_REPO="${REPOGRAMMAR_REPO:-SioYooo/RepoGrammar}"
 REPOGRAMMAR_VERSION="${REPOGRAMMAR_VERSION:-latest}"
 PREVIEW_VERSION_HINT="${REPOGRAMMAR_PREVIEW_VERSION_HINT:-v0.2.0-preview.0}"
 REPOGRAMMAR_BIN="${REPOGRAMMAR_SOURCE_BINARY:-${REPO_ROOT}/target/release/repogrammar}"
+SOURCE_BINARY_PROVIDED=0
+if [[ -n "${REPOGRAMMAR_SOURCE_BINARY:-}" ]]; then
+  SOURCE_BINARY_PROVIDED=1
+fi
 COMMAND_DIR="${REPOGRAMMAR_COMMAND_DIR:-${HOME:-}/.local/bin}"
 COMMAND_PATH="${COMMAND_DIR}/repogrammar"
 if [[ -n "${REPOGRAMMAR_INSTALL_DIR:-}" ]]; then
@@ -69,7 +73,8 @@ Environment:
   REPOGRAMMAR_RELEASE_BASE   Override release asset URL base
   REPOGRAMMAR_COMMAND_DIR    Directory for the repogrammar command
   REPOGRAMMAR_INSTALL_DIR    Directory for RepoGrammar-managed install state
-  REPOGRAMMAR_SOURCE_BINARY  Prebuilt source-checkout binary for dogfood tests
+  REPOGRAMMAR_SOURCE_BINARY  Prebuilt source-checkout binary for dogfood tests;
+                             skips the default cargo build
   REPOGRAMMAR_WORKER_ROOT    Directory for bundled worker assets
   REPOGRAMMAR_VERSION        Release tag, or latest
   REPOGRAMMAR_USE_SOURCE_BUILD=1  Build from source instead of downloading
@@ -385,17 +390,21 @@ install_cli_from_source() {
   if ! has_source_checkout; then
     die "source build requires running this script from a RepoGrammar source checkout"
   fi
-  if [[ ! -x "$REPOGRAMMAR_BIN" ]]; then
-    printf "RepoGrammar release binary is not built yet.\n"
-    if ! prompt_default_no "Build it now with cargo build --release?"; then
-      printf "Cancelled. Build manually with: cargo build --release\n"
-      return 1
-    fi
+  if [[ "$SOURCE_BINARY_PROVIDED" -eq 1 ]]; then
+    [[ -x "$REPOGRAMMAR_BIN" ]] || die "repogrammar source binary not found or not executable: ${REPOGRAMMAR_BIN}"
+  else
+    command -v cargo >/dev/null 2>&1 || die "cargo is required for --from-source unless REPOGRAMMAR_SOURCE_BINARY points at an already built binary"
+    printf "Building repogrammar with cargo build --release\n"
     (cd "$REPO_ROOT" && cargo build --release)
+    [[ -x "$REPOGRAMMAR_BIN" ]] || die "cargo build completed but did not create expected binary: ${REPOGRAMMAR_BIN}"
   fi
   install_worker_asset "${REPO_ROOT}/src/workers/python/worker.py"
   install_managed_cli_binary "$REPOGRAMMAR_BIN"
-  printf "Installed %s from source build\n" "$COMMAND_PATH"
+  if [[ "$SOURCE_BINARY_PROVIDED" -eq 1 ]]; then
+    printf "Installed %s from provided source binary\n" "$COMMAND_PATH"
+  else
+    printf "Installed %s from source build\n" "$COMMAND_PATH"
+  fi
 }
 
 install_cli_binary() {

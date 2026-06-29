@@ -43,7 +43,7 @@ target\release\repogrammar.exe before running agent setup.
 For local artifact tests, set REPOGRAMMAR_RELEASE_DIR to a directory containing
 the Windows zip and matching .sha256 file. For source dogfood tests,
 REPOGRAMMAR_SOURCE_BINARY or -SourceBinary may point at an already built
-repogrammar.exe.
+repogrammar.exe and skips the default cargo build.
 "@
 }
 
@@ -203,19 +203,14 @@ function Get-SourceBinaryPath {
     return Join-Path (Join-Path $RepoRoot "target\release") "repogrammar.exe"
 }
 
-function Build-SourceBinaryIfNeeded([string]$Binary) {
-    if (Test-Path $Binary) {
-        return
-    }
+function Build-SourceBinary([string]$Binary) {
     if (!(Test-SourceCheckout)) {
         throw "source build requires running this script from a RepoGrammar source checkout"
     }
     if (!(Get-Command cargo -ErrorAction SilentlyContinue)) {
-        throw "cargo is required for -FromSource when the source binary has not been built"
+        throw "cargo is required for -FromSource unless -SourceBinary or REPOGRAMMAR_SOURCE_BINARY points at an already built binary"
     }
-    if (!$Yes -and !(Confirm-DefaultNo "Build repogrammar.exe now with cargo build --release?")) {
-        throw "cancelled; build manually with: cargo build --release"
-    }
+    Write-Output "Building repogrammar.exe with cargo build --release"
     Push-Location $RepoRoot
     try {
         & cargo build --release
@@ -235,10 +230,18 @@ function Install-CliFromSource {
         throw "source install requires running this script from a RepoGrammar source checkout"
     }
     $binary = Get-SourceBinaryPath
-    Build-SourceBinaryIfNeeded $binary
+    $sourceBinaryProvided = ![string]::IsNullOrWhiteSpace($SourceBinary)
+    if ($sourceBinaryProvided) {
+        if (!(Test-Path $binary)) {
+            throw "repogrammar source binary not found: $binary"
+        }
+    } else {
+        Build-SourceBinary $binary
+    }
     Install-WorkerAsset (Join-Path $RepoRoot "src\workers\python\worker.py")
     Install-ManagedCliBinary $binary $true
-    Write-Output "Installed $CommandDir\repogrammar.exe from source build"
+    $sourceLabel = $(if ($sourceBinaryProvided) { "provided source binary" } else { "source build" })
+    Write-Output "Installed $CommandDir\repogrammar.exe from $sourceLabel"
 }
 
 function Install-CliFromRelease {

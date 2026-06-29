@@ -858,6 +858,14 @@ struct CommandInstallRecord {
 fn install_cli_command(
     context: &InstallExecutionContext,
 ) -> Result<CommandInstallRecord, RepoGrammarError> {
+    let current_process_executable = std::env::current_exe().ok();
+    install_cli_command_with_current_process(context, current_process_executable.as_deref())
+}
+
+fn install_cli_command_with_current_process(
+    context: &InstallExecutionContext,
+    current_process_executable: Option<&Path>,
+) -> Result<CommandInstallRecord, RepoGrammarError> {
     let source = Path::new(&context.executable_path);
     let data_bin_dir = Path::new(&context.data_dir).join("bin");
     let installed_executable = data_bin_dir.join(binary_name());
@@ -892,7 +900,8 @@ fn install_cli_command(
     let executable_existed = installed_executable.exists();
     let command_path_was_managed_copy =
         command_path_is_managed_copy(&command_path, &installed_executable);
-    let command_path_is_current_executable = same_path(&command_path, source);
+    let command_path_is_current_executable =
+        command_path_matches_current_executable(&command_path, source, current_process_executable);
     let should_refresh_command_copy = command_path.exists()
         && !same_path(&command_path, &installed_executable)
         && command_path_was_managed_copy
@@ -937,6 +946,17 @@ fn install_cli_command(
     }
 
     Ok(record)
+}
+
+fn command_path_matches_current_executable(
+    command_path: &Path,
+    configured_source: &Path,
+    current_process_executable: Option<&Path>,
+) -> bool {
+    same_path(command_path, configured_source)
+        || current_process_executable
+            .map(|current| same_path(command_path, current))
+            .unwrap_or(false)
 }
 
 fn read_file_bytes(path: &Path, label: &str) -> Result<Vec<u8>, RepoGrammarError> {
@@ -2117,6 +2137,37 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&installed).expect("installed executable"),
             "stub\n"
+        );
+    }
+
+    #[test]
+    fn running_managed_command_copy_is_not_refreshed_when_configured_source_differs() {
+        let workspace = TempInstallWorkspace::new("running-managed-command-copy");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::write(&installed, "managed stub\n").expect("installed executable");
+        fs::copy(&installed, workspace.command_path()).expect("managed command copy");
+        let mut context = workspace.context.clone();
+        context.executable_path = installed.display().to_string();
+        let current_process_executable = workspace.command_path();
+
+        let record =
+            install_cli_command_with_current_process(&context, Some(&current_process_executable))
+                .expect("install command");
+
+        assert!(!record.created_command);
+        assert!(
+            record.previous_command_copy.is_none(),
+            "running command copy must not be overwritten during the same run"
+        );
+        assert_eq!(record.command_path, workspace.command_path_str());
+        assert_eq!(
+            fs::read_to_string(workspace.command_path()).expect("command copy"),
+            "managed stub\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable"),
+            "managed stub\n"
         );
     }
 

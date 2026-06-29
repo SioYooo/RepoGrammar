@@ -54,6 +54,64 @@ try {
         throw "installed repogrammar version check failed"
     }
 
+    $DefaultBuildCommandDir = Join-Path $TempRoot "default-build-bin"
+    $DefaultBuildInstallDir = Join-Path $TempRoot "default-build-data"
+    $FakeCargoDir = Join-Path $TempRoot "fake-cargo"
+    $CargoLog = Join-Path $TempRoot "cargo.log"
+    $ReleaseDir = Join-Path $RepoRoot "target\release"
+    $ReleaseBinary = Join-Path $ReleaseDir "repogrammar.exe"
+    $ReleaseBackup = Join-Path $TempRoot "repogrammar.release.backup.exe"
+    $ReleaseBinaryExisted = Test-Path $ReleaseBinary
+    if ($ReleaseBinaryExisted) {
+        Copy-Item $ReleaseBinary $ReleaseBackup -Force
+    }
+    try {
+        New-Item -ItemType Directory -Force -Path $FakeCargoDir | Out-Null
+        $FakeCargo = Join-Path $FakeCargoDir "cargo.cmd"
+        $FakeCargoScript = @"
+@echo off
+echo %*>>"$CargoLog"
+if /I "%1"=="build" (
+  if /I "%2"=="--release" (
+    if not exist "$ReleaseDir" mkdir "$ReleaseDir"
+    copy /Y "$SourceBinary" "$ReleaseBinary" >NUL
+    exit /B 0
+  )
+)
+exit /B 1
+"@
+        Set-Content -Path $FakeCargo -Value $FakeCargoScript -Encoding ASCII
+        $PowerShellExe = (Get-Command powershell).Source
+        $PreviousPath = $env:PATH
+        try {
+            $env:PATH = $FakeCargoDir
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallCliOnly `
+                -FromSource `
+                -CommandDir $DefaultBuildCommandDir `
+                -InstallDir $DefaultBuildInstallDir `
+                -Yes
+            if ($LASTEXITCODE -ne 0) {
+                throw "default source build install failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            $env:PATH = $PreviousPath
+        }
+        Assert-Contains $CargoLog "build --release"
+        Assert-PathExists (Join-Path $DefaultBuildCommandDir "repogrammar.exe") "default source build command was not installed"
+        Assert-PathExists (Join-Path $DefaultBuildInstallDir "bin\repogrammar.exe") "default source build managed binary was not installed"
+        & (Join-Path $DefaultBuildCommandDir "repogrammar.exe") version | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "default source build repogrammar version check failed"
+        }
+    } finally {
+        if ($ReleaseBinaryExisted) {
+            Copy-Item $ReleaseBackup $ReleaseBinary -Force
+        } else {
+            Remove-Item $ReleaseBinary -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $StateRepo = Join-Path $TempRoot "state-boundary-repo"
     New-Item -ItemType Directory -Force -Path (Join-Path $StateRepo ".repogrammar") | Out-Null
     Set-Content -Path (Join-Path $StateRepo ".repogrammar\sentinel") -Value "keep"
