@@ -96,7 +96,13 @@ Local experiment recording remains separate from anonymous telemetry consent.
 `experiment-start --yes` is the non-interactive confirmation path; interactive
 product runs without `--yes` prompt with default-no `[y/N]`, and the
 controlled-pair prompt warns about additional token usage, time, and provider
-cost.
+cost. `experiment-record --usage-json <path>` may import counts from a
+redacted local usage file instead of requiring manual token flags. The import
+path is not stored, accepted files are bounded JSON objects containing only
+token counts plus optional success/test-outcome metadata, and unsupported fields
+are rejected to prevent raw prompts, messages, source snippets, paths, symbols,
+patches, query text, credentials, or errors from becoming telemetry or
+experiment state.
 When telemetry is disabled, upload returns without opening a network
 connection. Upload is explicit only; no MCP request path performs telemetry
 network I/O.

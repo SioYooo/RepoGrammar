@@ -417,8 +417,20 @@ sessions and usually does not increase token usage. `--experiment-mode
 controlled-pair` records comparable baseline/treatment measurements and warns
 that users may spend additional time, tokens, and provider cost if they choose
 to run separate sessions. `--session baseline|treatment` identifies the
-measurement side. If treatment correctness fails, reports keep the raw token
-delta but mark the result invalid for product token-saving claims.
+measurement side. `experiment-record` accepts either explicit
+`--input-tokens`, `--output-tokens`, optional `--tool-tokens`, and `--success`
+flags, or `--usage-json <path>` pointing at a redacted local usage file.
+Usage-import files may contain only token counts, optional success, and
+optional test outcome, either at the top level or under `usage`; supported
+count names are `input_tokens`/`prompt_tokens`,
+`output_tokens`/`completion_tokens`, optional `tool_tokens`, and optional
+`total_tokens` for deriving tool tokens. Command-line values override imported
+values, and `tool_tokens` defaults to zero when neither a separate nor
+derivable tool-token count is present. Unsupported usage-import fields are
+rejected so raw prompt, message, source, path, symbol, patch, or query payloads
+cannot be accepted as token experiment input. If treatment correctness fails,
+reports keep the raw token delta but mark the result invalid for product
+token-saving claims.
 `experiment-export --json` is redacted by default and must not include the
 user-provided experiment name, session ids, raw token counts, prompts, paths,
 repository names, symbols, or source.

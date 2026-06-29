@@ -44,6 +44,22 @@ repogrammar telemetry experiment-stop --name <id>
 repogrammar telemetry experiment-report --name <id> --json
 ```
 
+`experiment-record` also accepts a redacted local usage import:
+
+```text
+repogrammar telemetry experiment-record --name <id> --usage-json <path>
+```
+
+The usage JSON may contain only token counts, optional success, and optional
+test outcome. Counts may appear at the top level or under `usage`; accepted
+count names are `input_tokens`/`prompt_tokens`,
+`output_tokens`/`completion_tokens`, optional `tool_tokens`, and optional
+`total_tokens` for deriving `tool_tokens`. Command-line token and success
+flags override imported values. If no separate or derivable tool-token count is
+reported, `tool_tokens` defaults to zero. Unsupported fields are rejected so a
+raw host response containing prompts, messages, source, paths, symbols, or
+patches cannot become an experiment record.
+
 `--experiment-mode record-existing` records token counts from sessions the user
 already performed. `--experiment-mode controlled-pair` records a comparable
 baseline/treatment pair and must warn that the user may spend extra time,

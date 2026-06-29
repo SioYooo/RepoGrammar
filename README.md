@@ -299,6 +299,17 @@ repogrammar telemetry export --json
 repogrammar telemetry purge --yes
 ```
 
+Local paired token experiments can record already-redacted host usage counts
+without manual token flags:
+
+```text
+repogrammar telemetry experiment-record --name <id> --usage-json usage.json
+```
+
+The usage file must contain only token counts plus optional success/test
+outcome metadata; raw prompts, source, paths, symbols, messages, patches, and
+query text are rejected.
+
 ## Limitations
 
 RepoGrammar is not production-ready and should not be treated as a sound static

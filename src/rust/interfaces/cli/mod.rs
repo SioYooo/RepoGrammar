@@ -45,7 +45,8 @@ use crate::application::telemetry::{
 };
 use crate::core::model::EstimatedPotentialTokenSavings;
 use crate::error::RepoGrammarError;
-use serde_json::json;
+use serde_json::{json, Map, Value};
+use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -689,7 +690,7 @@ fn command_usage(command: &str) -> Option<String> {
             "",
             "Experiment subcommands:",
             "  experiment-start --name <name> --experiment-mode record_existing|controlled_pair --session baseline|treatment --measurement-source host_reported|user_entered|documented_tokenizer [--yes] [--json]",
-            "  experiment-record --name <name> --input-tokens <n> --output-tokens <n> [--tool-tokens <n>] [--success true|false] [--json]",
+            "  experiment-record --name <name> (--usage-json <path>|--input-tokens <n> --output-tokens <n>) [--tool-tokens <n>] [--success true|false] [--json]",
             "  experiment-stop|experiment-report|experiment-export|experiment-purge --name <name> [--yes] [--json]",
             "",
             "Common options:",
@@ -3100,11 +3101,21 @@ struct ExperimentStartOptions {
 struct ExperimentRecordOptions {
     json: bool,
     name: Option<String>,
+    usage_json_path: Option<PathBuf>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     tool_tokens: Option<u64>,
     success: Option<bool>,
-    test_outcome: TestOutcome,
+    test_outcome: Option<TestOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ExperimentTokenUsageImport {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    tool_tokens: Option<u64>,
+    success: Option<bool>,
+    test_outcome: Option<TestOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3391,10 +3402,7 @@ fn parse_experiment_start_options(rest: &[String]) -> Result<ExperimentStartOpti
 }
 
 fn parse_experiment_record_options(rest: &[String]) -> Result<ExperimentRecordOptions, String> {
-    let mut options = ExperimentRecordOptions {
-        test_outcome: TestOutcome::Unknown,
-        ..ExperimentRecordOptions::default()
-    };
+    let mut options = ExperimentRecordOptions::default();
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
@@ -3405,6 +3413,15 @@ fn parse_experiment_record_options(rest: &[String]) -> Result<ExperimentRecordOp
             "--name" => {
                 options.name =
                     Some(option_value(rest, index, "--name", "an experiment name")?.to_string());
+                index += 2;
+            }
+            "--usage-json" => {
+                options.usage_json_path = Some(PathBuf::from(option_value(
+                    rest,
+                    index,
+                    "--usage-json",
+                    "a token usage JSON file",
+                )?));
                 index += 2;
             }
             "--input-tokens" => {
@@ -3443,7 +3460,8 @@ fn parse_experiment_record_options(rest: &[String]) -> Result<ExperimentRecordOp
                     index,
                     "--test-outcome",
                     "passed, failed, not_run, or unknown",
-                )?)?;
+                )?)
+                .map(Some)?;
                 index += 2;
             }
             other => return Err(format!("unknown experiment-record option: {other}")),
@@ -3502,24 +3520,191 @@ fn experiment_start_request(
 fn experiment_record_request(
     options: ExperimentRecordOptions,
 ) -> Result<ExperimentRecordRequest, String> {
+    let imported = match options.usage_json_path.as_deref() {
+        Some(path) => load_experiment_token_usage_json(path)?,
+        None => ExperimentTokenUsageImport::default(),
+    };
+    let input_tokens = options
+        .input_tokens
+        .or(imported.input_tokens)
+        .ok_or_else(|| "--input-tokens is required".to_string())?;
+    let output_tokens = options
+        .output_tokens
+        .or(imported.output_tokens)
+        .ok_or_else(|| "--output-tokens is required".to_string())?;
+    let tool_tokens = options.tool_tokens.or(imported.tool_tokens).unwrap_or(0);
+    let success = options
+        .success
+        .or(imported.success)
+        .ok_or_else(|| "--success is required".to_string())?;
+    let test_outcome = options
+        .test_outcome
+        .or(imported.test_outcome)
+        .unwrap_or(TestOutcome::Unknown);
     Ok(ExperimentRecordRequest {
         name: options
             .name
             .ok_or_else(|| "--name is required".to_string())?,
-        input_tokens: options
-            .input_tokens
-            .ok_or_else(|| "--input-tokens is required".to_string())?,
-        output_tokens: options
-            .output_tokens
-            .ok_or_else(|| "--output-tokens is required".to_string())?,
-        tool_tokens: options
-            .tool_tokens
-            .ok_or_else(|| "--tool-tokens is required".to_string())?,
-        success: options
-            .success
-            .ok_or_else(|| "--success is required".to_string())?,
-        test_outcome: options.test_outcome,
+        input_tokens,
+        output_tokens,
+        tool_tokens,
+        success,
+        test_outcome,
     })
+}
+
+const MAX_EXPERIMENT_TOKEN_USAGE_JSON_BYTES: u64 = 64 * 1024;
+
+fn load_experiment_token_usage_json(path: &Path) -> Result<ExperimentTokenUsageImport, String> {
+    let metadata = fs::metadata(path).map_err(|_| "failed to read token usage JSON".to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_EXPERIMENT_TOKEN_USAGE_JSON_BYTES {
+        return Err("token usage JSON must be a regular file no larger than 64 KiB".to_string());
+    }
+    let text =
+        fs::read_to_string(path).map_err(|_| "failed to read token usage JSON".to_string())?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|_| "token usage JSON is invalid".to_string())?;
+    parse_experiment_token_usage_json(&value)
+}
+
+fn parse_experiment_token_usage_json(value: &Value) -> Result<ExperimentTokenUsageImport, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "token usage JSON must be an object".to_string())?;
+    reject_unsupported_token_usage_keys(
+        object,
+        &[
+            "schema_version",
+            "usage",
+            "input_tokens",
+            "prompt_tokens",
+            "output_tokens",
+            "completion_tokens",
+            "tool_tokens",
+            "total_tokens",
+            "success",
+            "test_outcome",
+        ],
+    )?;
+    let usage_object = match object.get("usage") {
+        Some(usage) => {
+            if object.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "input_tokens"
+                        | "prompt_tokens"
+                        | "output_tokens"
+                        | "completion_tokens"
+                        | "tool_tokens"
+                        | "total_tokens"
+                )
+            }) {
+                return Err(
+                    "token usage JSON must put token counts either under usage or at top level"
+                        .to_string(),
+                );
+            }
+            let usage_object = usage
+                .as_object()
+                .ok_or_else(|| "token usage field must be an object".to_string())?;
+            reject_unsupported_token_usage_keys(
+                usage_object,
+                &[
+                    "input_tokens",
+                    "prompt_tokens",
+                    "output_tokens",
+                    "completion_tokens",
+                    "tool_tokens",
+                    "total_tokens",
+                ],
+            )?;
+            usage_object
+        }
+        None => object,
+    };
+    let input_tokens = aliased_usage_u64(usage_object, "input_tokens", "prompt_tokens")?;
+    let output_tokens = aliased_usage_u64(usage_object, "output_tokens", "completion_tokens")?;
+    let explicit_tool_tokens = usage_u64(usage_object, "tool_tokens")?;
+    let total_tokens = usage_u64(usage_object, "total_tokens")?;
+    let tool_tokens = match (
+        explicit_tool_tokens,
+        total_tokens,
+        input_tokens,
+        output_tokens,
+    ) {
+        (Some(tool_tokens), _, _, _) => Some(tool_tokens),
+        (None, Some(total), Some(input), Some(output)) => {
+            let known = input.saturating_add(output);
+            if total < known {
+                return Err(
+                    "token usage total_tokens is smaller than input plus output tokens".to_string(),
+                );
+            }
+            Some(total - known)
+        }
+        _ => None,
+    };
+    let success = object.get("success").map(usage_bool).transpose()?;
+    let test_outcome = object
+        .get("test_outcome")
+        .map(usage_test_outcome)
+        .transpose()?;
+    Ok(ExperimentTokenUsageImport {
+        input_tokens,
+        output_tokens,
+        tool_tokens,
+        success,
+        test_outcome,
+    })
+}
+
+fn reject_unsupported_token_usage_keys(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), String> {
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err("token usage JSON contains unsupported fields".to_string());
+    }
+    Ok(())
+}
+
+fn aliased_usage_u64(
+    object: &Map<String, Value>,
+    primary: &str,
+    alias: &str,
+) -> Result<Option<u64>, String> {
+    let primary_value = usage_u64(object, primary)?;
+    let alias_value = usage_u64(object, alias)?;
+    match (primary_value, alias_value) {
+        (Some(primary_value), Some(alias_value)) if primary_value != alias_value => {
+            Err("token usage JSON contains conflicting aliased token counts".to_string())
+        }
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn usage_u64(object: &Map<String, Value>, key: &str) -> Result<Option<u64>, String> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| "token usage counts must be non-negative integers".to_string())
+}
+
+fn usage_bool(value: &Value) -> Result<bool, String> {
+    value
+        .as_bool()
+        .ok_or_else(|| "token usage success must be true or false".to_string())
+}
+
+fn usage_test_outcome(value: &Value) -> Result<TestOutcome, String> {
+    let outcome = value
+        .as_str()
+        .ok_or_else(|| "token usage test_outcome must be a string".to_string())?;
+    TestOutcome::parse(outcome)
 }
 
 fn experiment_cli_json(
@@ -9980,6 +10165,190 @@ mod tests {
         assert_eq!(value["claim_validity"], "valid_for_product_claim");
         assert!(!stats
             .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn telemetry_experiment_record_imports_token_usage_json() {
+        let workspace = TempWorkspace::new("cli-token-experiment-usage-json");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        let baseline_usage = workspace.path().join("baseline-usage.json");
+        let treatment_usage = workspace.path().join("treatment-usage.json");
+        fs::write(
+            &baseline_usage,
+            json!({
+                "schema_version": "repogrammar-token-usage.v1",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 40,
+                    "total_tokens": 155
+                },
+                "success": true,
+                "test_outcome": "passed"
+            })
+            .to_string(),
+        )
+        .expect("write baseline usage");
+        fs::write(
+            &treatment_usage,
+            json!({
+                "schema_version": "repogrammar-token-usage.v1",
+                "prompt_tokens": 70,
+                "completion_tokens": 30,
+                "tool_tokens": 5,
+                "success": true,
+                "test_outcome": "passed"
+            })
+            .to_string(),
+        )
+        .expect("write treatment usage");
+
+        for args in [
+            vec![
+                "telemetry".to_string(),
+                "experiment-start".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+                "--experiment-mode".to_string(),
+                "record-existing".to_string(),
+                "--session".to_string(),
+                "baseline".to_string(),
+                "--measurement-source".to_string(),
+                "host_reported".to_string(),
+                "--yes".to_string(),
+            ],
+            vec![
+                "telemetry".to_string(),
+                "experiment-record".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+                "--usage-json".to_string(),
+                baseline_usage.display().to_string(),
+            ],
+            vec![
+                "telemetry".to_string(),
+                "experiment-stop".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+            ],
+            vec![
+                "telemetry".to_string(),
+                "experiment-start".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+                "--experiment-mode".to_string(),
+                "record-existing".to_string(),
+                "--session".to_string(),
+                "treatment".to_string(),
+                "--measurement-source".to_string(),
+                "host_reported".to_string(),
+                "--yes".to_string(),
+            ],
+            vec![
+                "telemetry".to_string(),
+                "experiment-record".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+                "--usage-json".to_string(),
+                treatment_usage.display().to_string(),
+            ],
+            vec![
+                "telemetry".to_string(),
+                "experiment-stop".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+            ],
+        ] {
+            let output = run_with_context(args, workspace.path(), &env);
+            assert_eq!(output.status, 0, "{output:?}");
+            assert!(!output
+                .stdout
+                .contains(workspace.path().to_string_lossy().as_ref()));
+            assert!(!output
+                .stderr
+                .contains(workspace.path().to_string_lossy().as_ref()));
+        }
+
+        let report = run_with_context(
+            [
+                "telemetry",
+                "experiment-report",
+                "--name",
+                "task-a",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(report.status, 0);
+        let value: Value = serde_json::from_str(report.stdout.trim()).expect("report JSON");
+        assert_eq!(value["measurement_status"], "paired_measurement_available");
+        assert_eq!(value["baseline_total_tokens"], 155);
+        assert_eq!(value["treatment_total_tokens"], 105);
+        assert_eq!(value["token_savings"], 50);
+        assert_eq!(value["measurement_source"], "host_reported");
+        assert_eq!(value["correctness_comparison"], "both_success");
+    }
+
+    #[test]
+    fn telemetry_experiment_record_rejects_raw_usage_json_fields() {
+        let workspace = TempWorkspace::new("cli-token-experiment-usage-json-raw");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| {
+            if key == "XDG_DATA_HOME" {
+                Some(data_home.display().to_string())
+            } else {
+                None
+            }
+        };
+        let usage = workspace.path().join("raw-usage.json");
+        fs::write(
+            &usage,
+            json!({
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 3
+                },
+                "success": true,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "secret prompt text"
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write raw usage");
+
+        let output = run_with_context(
+            vec![
+                "telemetry".to_string(),
+                "experiment-record".to_string(),
+                "--name".to_string(),
+                "task-a".to_string(),
+                "--usage-json".to_string(),
+                usage.display().to_string(),
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output
+            .stderr
+            .contains("token usage JSON contains unsupported fields"));
+        assert!(!output.stderr.contains("secret prompt text"));
+        assert!(!output
+            .stderr
             .contains(workspace.path().to_string_lossy().as_ref()));
     }
 
