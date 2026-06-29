@@ -902,6 +902,9 @@ fn install_cli_command_with_current_process(
         command_path_is_managed_copy(&command_path, &installed_executable);
     let command_path_is_current_executable =
         command_path_matches_current_executable(&command_path, source, current_process_executable);
+    let installed_is_current_executable = current_process_executable
+        .map(|current| same_path(&installed_executable, current))
+        .unwrap_or(false);
     let should_refresh_command_copy = command_path.exists()
         && !same_path(&command_path, &installed_executable)
         && command_path_was_managed_copy
@@ -915,7 +918,7 @@ fn install_cli_command_with_current_process(
             "repogrammar command path already exists and is not managed by RepoGrammar".to_string(),
         ));
     }
-    if !same_path(source, &installed_executable) {
+    if !same_path(source, &installed_executable) && !installed_is_current_executable {
         if executable_existed {
             record.previous_executable = Some(read_file_bytes(
                 &installed_executable,
@@ -1123,9 +1126,22 @@ fn binary_name() -> &'static str {
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
+    if let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) {
+        return left == right;
+    }
+    // Fallback when canonicalization is unavailable (for example a path
+    // component does not exist, or the platform rejects the verbatim form):
+    // compare best-effort normalized lexical paths. This stays conservative by
+    // reporting a match only when both normalized forms are identical.
+    normalized_lexical_path(left) == normalized_lexical_path(right)
+}
+
+fn normalized_lexical_path(path: &Path) -> String {
+    let unified = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        unified.to_ascii_lowercase()
+    } else {
+        unified
     }
 }
 
@@ -1999,6 +2015,39 @@ mod tests {
             fs::read_to_string(workspace.command_path()).expect("command copy"),
             "updated stub\n"
         );
+    }
+
+    #[test]
+    fn install_skips_replacing_installed_executable_that_is_current_process() {
+        let workspace = TempInstallWorkspace::new("installed-is-current-exe");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::write(&installed, "running binary\n").expect("installed executable");
+        // The configured source differs from the managed installed executable,
+        // but the running process IS that installed executable.
+        fs::write(&workspace.context.executable_path, "new source\n").expect("source");
+
+        let record =
+            install_cli_command_with_current_process(&workspace.context, Some(installed.as_path()))
+                .expect("install must not fail when installed executable is the running process");
+
+        assert!(!record.created_executable);
+        assert!(record.previous_executable.is_none());
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable untouched"),
+            "running binary\n",
+            "must not overwrite the installed executable that is the current process"
+        );
+    }
+
+    #[test]
+    fn same_path_falls_back_to_lexical_when_canonicalize_unavailable() {
+        // Non-existent absolute paths cannot be canonicalized; identical lexical
+        // forms must still match, and distinct ones must not.
+        let path = Path::new("/repogrammar/does/not/exist/bin/repogrammar");
+        assert!(same_path(path, path));
+        let other = Path::new("/repogrammar/does/not/exist/bin/other");
+        assert!(!same_path(path, other));
     }
 
     #[test]

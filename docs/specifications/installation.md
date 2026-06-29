@@ -379,7 +379,10 @@ noninteractive live writes, and a dependency-light text wizard:
   during the same run, including wrapper flows that set
   `REPOGRAMMAR_EXECUTABLE` to a managed data-directory binary while launching
   `repogrammar install` through the user-writable command path; unrelated
-  existing command paths are still refused;
+  existing command paths are still refused. The installer likewise skips
+  replacing the managed installed executable under the data directory when that
+  file is the currently running process, instead of attempting an overwrite the
+  operating system would reject;
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;
