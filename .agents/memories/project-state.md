@@ -51,7 +51,7 @@
   repo-shape diagnostics for local pattern density, family support coverage,
   abstention rate, external dependency signal, and thin-wrapper/token-saving
   risk, and reports measured token savings only when local paired
-  baseline/treatment experiment records are comparable. `index` and `sync` emit
+  baseline/treatment experiment records are comparable. `index`, `sync`, and `resync` emit
   typed stage progress to stderr while running, with exact counts when known
   and NDJSON progress available through `--json --progress always`.
   Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
@@ -150,16 +150,17 @@
   validated Pyrefly framework-identity request scopes for plausible Python
   candidate groups and skip parser-origin blocking `UNKNOWN`s for the planned
   claim, but Pyrefly/Pyright/RightTyper execution, provider fact storage, and
-  provider-backed canonical evidence remain deferred. Rust/TSJS provider
-  execution is also deferred and tracked in
+  provider-backed canonical evidence remain deferred. Except for the default
+  safe Rust Cargo metadata project-model stage, Rust/TSJS provider execution is
+  also deferred and tracked in
   `docs/plans/rust-tsjs-semantic-analysis-plan.md`. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
-  An explicit Rust Cargo metadata provider adapter can parse
+  The Rust Cargo metadata provider adapter can parse
   `cargo metadata --format-version=1 --no-deps` output into owned
-  `PROJECT_CONFIG` facts and recoverable provider `UNKNOWN`s when called
-  directly; default indexing does not call it, and rust-analyzer/rustc/rustdoc
-  JSON semantic providers remain deferred.
+  `PROJECT_CONFIG` facts and recoverable provider `UNKNOWN`s during
+  `index`/`sync`/`resync` when same-generation `Cargo.toml` code units exist;
+  rust-analyzer/rustc/rustdoc JSON semantic providers remain deferred.
   The `dynamic-unknown` release fixture now exercises dynamic Pydantic model
   factories, dynamic import, `sys.path` mutation, dynamic call target,
   dynamic/unresolved decorator, and monkey-patch boundaries through product indexing/query paths;
@@ -190,7 +191,7 @@
   Python gitignore behavior in root and parent-worktree layouts, and explicit
   strict gitignore failure when Git ignore checks are unavailable. CLI/MCP
   query inputs share target and token-budget bounds.
-- Last updated: 2026-06-27
+- Last updated: 2026-06-29
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
@@ -345,7 +346,7 @@ current builder emits `canonical` and `support`, plus one narrow Python
 framework-anchor support targets. Requested exception coverage and broader
 variation coverage are returned in `missing_claims` until later builders link
 evidence to those roles.
-`index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
+`index`, `sync`, and `resync` acquire `.repogrammar/locks/index.lock` before discovery and
 hold it through validation and activation. Partial lock metadata write failures
 must remove the partial lock file. `unlock --force --yes` removes only confirmed
 stale `index.lock`; active, unknown, invalid, daemon, and SQLite locks remain
@@ -354,7 +355,7 @@ fields and do not expose ambiguous `schema_version` fields.
 The storage port and SQLite adapter can persist already-validated semantic facts
 and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default
-`index` and `sync` still report `semantic_worker: deferred`; when
+`index`, `sync`, and `resync` still report `semantic_worker: deferred`; when
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies its argv vector, and accepted
 worker facts may be recorded before generation validation and activation.

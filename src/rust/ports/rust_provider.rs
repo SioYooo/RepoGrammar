@@ -10,6 +10,7 @@ use crate::core::model::{
     UnknownReasonCode,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
+use std::path::Path;
 
 const MAX_PROVIDER_METADATA_CHARS: usize = 128;
 
@@ -292,6 +293,20 @@ impl RustProviderOutput {
             provenance: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RustProviderError {
+    InvalidRequest(String),
+    ProtocolViolation(String),
+}
+
+pub trait RustSemanticProvider {
+    fn analyze_project(
+        &self,
+        project_root: &Path,
+        request: RustProviderRequest,
+    ) -> Result<RustProviderOutput, RustProviderError>;
 }
 
 fn validate_optional_repo_relative_path(

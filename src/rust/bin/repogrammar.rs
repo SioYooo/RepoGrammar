@@ -3,6 +3,7 @@ use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
+use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::autosync::{
     acquire_autosync_daemon, autosync_status, daemon_log_path, disable_autosync, enable_autosync,
@@ -10,8 +11,8 @@ use repogrammar::application::autosync::{
 };
 use repogrammar::application::indexing::{
     discover_repository_files,
-    index_repository_with_discovery_parser_frameworks_families_and_store_with_progress,
-    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress,
+    index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
+    index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::install::{
@@ -317,6 +318,8 @@ impl CliRuntime for ProductCliRuntime {
         };
         let framework_roles = SyntaxFrameworkRoleDetector;
         let parser = RepoGrammarSourceParser::default();
+        let rust_provider = CargoMetadataRustProvider::new("cargo")
+            .with_provider_version(env!("CARGO_PKG_VERSION"));
         let emit_progress = should_emit_progress(
             request.progress,
             request.json,
@@ -336,22 +339,22 @@ impl CliRuntime for ProductCliRuntime {
         if let Some(executable) = request.semantic_worker_executable {
             let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                 .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
+            index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &parser,
-                (&framework_roles, &worker),
+                (&framework_roles, &worker, &rust_provider),
                 &store,
                 &mut progress,
             )
         } else {
-            index_repository_with_discovery_parser_frameworks_families_and_store_with_progress(
+            index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
                 indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &parser,
-                &framework_roles,
+                (&framework_roles, &rust_provider),
                 &store,
                 &mut progress,
             )
@@ -2937,6 +2940,77 @@ mod tests {
             .expect("families")
             .is_empty());
         assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn product_runtime_resync_records_cargo_metadata_project_model_without_build_script() {
+        let workspace = TempWorkspace::new("product-runtime-rust-cargo-metadata");
+        fs::create_dir_all(workspace.path().join("src")).expect("create src");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+        )
+        .expect("write manifest");
+        fs::write(
+            workspace.path().join("build.rs"),
+            "fn main() { std::fs::write(\"build-script-ran.txt\", \"ran\").unwrap(); }\n",
+        )
+        .expect("write build script");
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn demo() -> usize { 1 }\n",
+        )
+        .expect("write lib");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime).status,
+            0
+        );
+
+        let output = run_with_runtime(
+            cli_args(
+                "resync",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(
+            !workspace.path().join("build-script-ran.txt").exists(),
+            "resync must not execute Cargo build scripts"
+        );
+        let value = parse_machine_output("resync", &output, &workspace);
+        assert_eq!(value["command"], "resync");
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.certainty == "SEMANTIC"
+                && fact.origin_engine == "cargo_metadata"
+                && fact.origin_method == "cargo_metadata_no_deps_v1"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.package.demo_crate")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "cargo_metadata_no_deps=true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "build_scripts_executed=false")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "proc_macros_executed=false")
+        }));
     }
 
     #[test]

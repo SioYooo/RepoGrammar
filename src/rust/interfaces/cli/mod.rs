@@ -215,6 +215,7 @@ impl CliRuntime for DeferredCliRuntime {
     ) -> Result<IndexingOutcome, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented(match command {
             "sync" => "sync",
+            "resync" => "resync",
             _ => "index",
         }))
     }
@@ -464,6 +465,8 @@ fn usage() -> String {
         "      Build a fresh syntax/code-unit index and activate it atomically.",
         "  sync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
         "      Rebuild the active index using the same safe indexing path.",
+        "  resync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+        "      Alias for sync; rebuild the active index and static-analysis facts.",
         "  autosync <status|enable|start|stop|disable|run> [options]",
         "      Manage optional repo-local automatic sync. Use `autosync start`, not `--start`.",
         "  status [--project <path>] [--json]",
@@ -550,6 +553,7 @@ fn command_usage(command: &str) -> Option<String> {
         ])),
         "index" => Some(index_or_sync_usage("index", "Build a fresh index and atomically activate it.")),
         "sync" => Some(index_or_sync_usage("sync", "Rebuild the active index after repository changes.")),
+        "resync" => Some(index_or_sync_usage("resync", "Alias for sync; rebuild the active index and static-analysis facts after repository changes.")),
         "autosync" => Some(help_text(&[
             "Usage: repogrammar autosync [status|enable|start|stop|disable|run] [options]",
             "",
@@ -802,7 +806,16 @@ fn is_known_cli_command(command: &str) -> bool {
 fn is_project_lifecycle_command(command: &str) -> bool {
     matches!(
         command,
-        "init" | "uninit" | "index" | "sync" | "autosync" | "status" | "doctor" | "unlock" | "logs"
+        "init"
+            | "uninit"
+            | "index"
+            | "sync"
+            | "resync"
+            | "autosync"
+            | "status"
+            | "doctor"
+            | "unlock"
+            | "logs"
     )
 }
 
@@ -858,7 +871,9 @@ where
         "status" => handle_status(&options, current_dir, env_lookup, runtime),
         "doctor" => handle_doctor(&options, current_dir, env_lookup, runtime),
         "unlock" => handle_unlock(&options, current_dir, env_lookup),
-        "index" | "sync" => handle_index(command, &options, current_dir, env_lookup, runtime),
+        "index" | "sync" | "resync" => {
+            handle_index(command, &options, current_dir, env_lookup, runtime)
+        }
         _ => CliOutput::failure(2, format!("unknown project lifecycle command: {command}\n")),
     }
 }
@@ -4235,7 +4250,7 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
                 set_project_path(&mut options.project_path, value)?;
                 index += 2;
             }
-            "--progress" if matches!(command, "init" | "index" | "sync") => {
+            "--progress" if matches!(command, "init" | "index" | "sync" | "resync") => {
                 let value = option_value(rest, index, "--progress", "auto, always, or never")?;
                 options.progress = ProgressMode::parse(value)?;
                 index += 2;
@@ -5304,7 +5319,7 @@ mod tests {
             command: &str,
             request: CliIndexRequest,
         ) -> Result<IndexingOutcome, RepoGrammarError> {
-            assert!(matches!(command, "index" | "sync"));
+            assert!(matches!(command, "index" | "sync" | "resync"));
             assert_eq!(
                 request.semantic_worker_executable.as_deref(),
                 Some("/opt/repogrammar/typescript-worker")
@@ -5878,6 +5893,7 @@ mod tests {
         assert!(output
             .stdout
             .contains("autosync <status|enable|start|stop|disable|run>"));
+        assert!(output.stdout.contains("resync [--project <path>]"));
         assert!(output.stdout.contains("install [--target <agent[,agent]>]"));
         assert!(output
             .stdout
@@ -6050,6 +6066,33 @@ mod tests {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
         assert_eq!(value["command"], "sync");
+        assert_eq!(value["semantic_worker"], "complete");
+        assert_eq!(value["semantic_facts"], 2);
+    }
+
+    #[test]
+    fn resync_request_uses_sync_indexing_path_for_any_repository() {
+        let workspace = TempWorkspace::new("cli-resync-semantic-worker-env");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_TYPESCRIPT_WORKER" => {
+                Some("/opt/repogrammar/typescript-worker".to_string())
+            }
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON" => {
+                Some(r#"["src/workers/typescript/worker.js"]"#.to_string())
+            }
+            _ => None,
+        };
+        let output = run_with_context_and_runtime(
+            ["resync", "--json"],
+            workspace.path(),
+            &env,
+            &SemanticWorkerEnvRuntime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("resync JSON");
+        assert_eq!(value["command"], "resync");
         assert_eq!(value["semantic_worker"], "complete");
         assert_eq!(value["semantic_facts"], 2);
     }
@@ -7570,6 +7613,38 @@ mod tests {
     }
 
     #[test]
+    fn resync_json_rebuilds_static_analysis_for_non_rust_repository() {
+        let workspace = TempWorkspace::new("cli-resync-real-runtime");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        fs::write(
+            workspace.path().join("b.ts"),
+            "export function b(){ return 2; }\n",
+        )
+        .expect("write b");
+
+        let output =
+            run_with_context_and_runtime(["resync", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("resync JSON");
+        assert_eq!(value["command"], "resync");
+        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["discovered_files"], 2);
+        assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 2);
+        assert_eq!(
+            indexed_paths(&workspace, "gen-000002"),
+            vec!["a.ts", "b.ts"]
+        );
+    }
+
+    #[test]
     fn index_refuses_uninitialized_repository() {
         let workspace = TempWorkspace::new("cli-index-uninitialized");
         let env = |_: &str| None;
@@ -7659,7 +7734,7 @@ mod tests {
         let _guard = acquire_index_lock(workspace.path().to_string_lossy().as_ref(), None)
             .expect("hold index lock");
 
-        for command in ["index", "sync"] {
+        for command in ["index", "sync", "resync"] {
             let output =
                 run_with_context_and_runtime([command, "--json"], workspace.path(), &env, &runtime);
 

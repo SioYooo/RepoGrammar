@@ -36,9 +36,15 @@ use crate::ports::parser::{
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
 };
+use crate::ports::rust_provider::{
+    RustProviderCandidate, RustProviderError, RustProviderKind, RustProviderOperation,
+    RustProviderOutput, RustProviderProvenance, RustProviderRequest, RustSemanticProvider,
+};
 use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingRequest {
@@ -191,6 +197,7 @@ pub fn index_repository_with_discovery_parser_and_store(
         parser,
         IndexingPipelineOptions {
             framework_roles: None,
+            rust_provider: None,
             semantic_worker: None,
             family_store: None,
         },
@@ -215,6 +222,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
         parser,
         IndexingPipelineOptions {
             framework_roles: Some(framework_roles),
+            rust_provider: None,
             semantic_worker: None,
             family_store: None,
         },
@@ -239,6 +247,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
         parser,
         IndexingPipelineOptions {
             framework_roles: Some(framework_roles),
+            rust_provider: None,
             semantic_worker: None,
             family_store: Some(store),
         },
@@ -263,6 +272,33 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with
         parser,
         IndexingPipelineOptions {
             framework_roles: Some(framework_roles),
+            rust_provider: None,
+            semantic_worker: None,
+            family_store: Some(store),
+        },
+        store,
+        progress,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let (framework_roles, rust_provider) = framework_and_rust_provider;
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            rust_provider: Some(rust_provider),
             semantic_worker: None,
             family_store: Some(store),
         },
@@ -287,6 +323,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
         parser,
         IndexingPipelineOptions {
             framework_roles: None,
+            rust_provider: None,
             semantic_worker: Some(semantic_worker),
             family_store: None,
         },
@@ -312,6 +349,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
         parser,
         IndexingPipelineOptions {
             framework_roles: Some(framework_roles),
+            rust_provider: None,
             semantic_worker: Some(semantic_worker),
             family_store: None,
         },
@@ -358,6 +396,37 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
         parser,
         IndexingPipelineOptions {
             framework_roles: Some(framework_roles),
+            rust_provider: None,
+            semantic_worker: Some(semantic_worker),
+            family_store: Some(store),
+        },
+        store,
+        progress,
+    )
+}
+
+pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_worker_and_rust_provider: (
+        &dyn FrameworkRoleDetector,
+        &dyn SemanticWorker,
+        &dyn RustSemanticProvider,
+    ),
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            rust_provider: Some(rust_provider),
             semantic_worker: Some(semantic_worker),
             family_store: Some(store),
         },
@@ -554,6 +623,25 @@ fn index_repository_with_optional_semantic_worker(
         known_work_units(local_support_fact_count, local_support_fact_count),
     );
 
+    let rust_provider_facts = record_rust_provider_facts(
+        &request,
+        &indexed_code_units,
+        &generation,
+        options.rust_provider,
+        store,
+        &mut warnings,
+        local_support_fact_count,
+    )?;
+    let rust_provider_fact_count = rust_provider_facts.len();
+    if rust_provider_fact_count > 0 {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "recorded rust provider facts",
+            known_work_units(rust_provider_fact_count, rust_provider_fact_count),
+        );
+    }
+
     if options.semantic_worker.is_some() {
         emit_progress(
             progress,
@@ -576,7 +664,7 @@ fn index_repository_with_optional_semantic_worker(
         options.semantic_worker,
         store,
         &mut warnings,
-        local_support_fact_count,
+        local_support_fact_count + rust_provider_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
     if worker_semantic_facts > 0 {
@@ -601,6 +689,7 @@ fn index_repository_with_optional_semantic_worker(
                 + derived_python_support_facts.len()
                 + derived_tsjs_support_facts.len()
                 + derived_rust_support_facts.len()
+                + rust_provider_facts.len()
                 + worker_facts.len(),
         );
         family_facts.extend(parser_semantic_facts.iter().cloned());
@@ -608,6 +697,7 @@ fn index_repository_with_optional_semantic_worker(
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(derived_tsjs_support_facts);
         family_facts.extend(derived_rust_support_facts);
+        family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         record_family_claims(
             family_store,
@@ -640,10 +730,9 @@ fn index_repository_with_optional_semantic_worker(
 
     Ok(IndexingOutcome {
         indexed_units,
-        // `local_support_fact_count` already sums every locally recorded support
-        // fact (parser, framework role, Python-derived, and TS/JS-derived). Reuse
-        // it so the reported total cannot silently drop a support family again.
-        semantic_facts: local_support_fact_count + worker_semantic_facts,
+        // `local_support_fact_count` sums local parser/framework/derived facts;
+        // add provider and worker facts so the reported total matches storage.
+        semantic_facts: local_support_fact_count + rust_provider_fact_count + worker_semantic_facts,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -674,6 +763,7 @@ fn known_work_units(completed: usize, total: usize) -> WorkUnits {
 #[derive(Clone, Copy)]
 struct IndexingPipelineOptions<'a> {
     framework_roles: Option<&'a dyn FrameworkRoleDetector>,
+    rust_provider: Option<&'a dyn RustSemanticProvider>,
     semantic_worker: Option<&'a dyn SemanticWorker>,
     family_store: Option<&'a dyn FamilyStore>,
 }
@@ -1150,6 +1240,244 @@ fn record_family_claims(
         }
     }
     Ok(report.claims.len())
+}
+
+fn record_rust_provider_facts(
+    request: &IndexingRequest,
+    code_units: &[IndexedCodeUnitRecord],
+    generation: &GenerationHandle,
+    rust_provider: Option<&dyn RustSemanticProvider>,
+    store: &impl IndexStore,
+    warnings: &mut Vec<String>,
+    fact_id_offset: usize,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let Some(rust_provider) = rust_provider else {
+        return Ok(Vec::new());
+    };
+    let candidates = rust_provider_manifest_candidates(code_units)?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let project_root = Path::new(&request.repository_root);
+    if !project_root.is_absolute() || !project_root.is_dir() {
+        warnings.push("rust provider fallback: invalid_project_root".to_string());
+        return Ok(Vec::new());
+    }
+    let provider_request = rust_cargo_metadata_provider_request(candidates)?;
+    let output = match rust_provider.analyze_project(project_root, provider_request.clone()) {
+        Ok(output) => output,
+        Err(error) => {
+            warnings.push(format!(
+                "rust provider fallback: {}",
+                rust_provider_error_token(&error)
+            ));
+            return Ok(Vec::new());
+        }
+    };
+    let unknown_count = output.unknowns.len();
+    let unknown_facts = rust_provider_unknown_facts(&provider_request, &output)?;
+    let mut facts = output.facts;
+    facts.extend(unknown_facts);
+    if unknown_count > 0 {
+        warnings.push(format!(
+            "rust provider reported {unknown_count} typed UNKNOWN(s)"
+        ));
+    }
+    sort_semantic_facts(&mut facts);
+    record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    Ok(facts)
+}
+
+fn rust_provider_manifest_candidates(
+    code_units: &[IndexedCodeUnitRecord],
+) -> Result<Vec<RustProviderCandidate>, RepoGrammarError> {
+    let mut candidates = Vec::new();
+    for unit in code_units {
+        if unit.language != DiscoveredLanguage::RustConfig.as_str()
+            || unit.kind != "project_config"
+            || !(unit.path == "Cargo.toml" || unit.path.ends_with("/Cargo.toml"))
+        {
+            continue;
+        }
+        candidates.push(
+            RustProviderCandidate::new(
+                CodeUnitId::new(unit.id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+                unit.path.clone(),
+                unit.content_hash.clone(),
+                SourceRange::new(unit.start_byte, unit.end_byte)
+                    .map_err(RepoGrammarError::InvalidInput)?,
+                Some(unit.path.clone()),
+                None,
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+        );
+    }
+    Ok(candidates)
+}
+
+fn rust_cargo_metadata_provider_request(
+    mut candidates: Vec<RustProviderCandidate>,
+) -> Result<RustProviderRequest, RepoGrammarError> {
+    candidates.sort_by(|left, right| {
+        rust_provider_candidate_sort_key(left).cmp(&rust_provider_candidate_sort_key(right))
+    });
+    let cargo_metadata_hash =
+        rust_provider_dimension_hash("cargo_metadata_manifest_candidates_v1", &candidates);
+    let cfg_profile_hash = rust_provider_dimension_hash(
+        "cfg_profile_default_no_build_scripts_no_proc_macros_v1",
+        &candidates,
+    );
+    RustProviderRequest::new(
+        RustProviderKind::CargoMetadata,
+        RustProviderOperation::CargoProjectModel,
+        candidates,
+        "unknown",
+        cargo_metadata_hash,
+        cfg_profile_hash,
+        "default-no-build-scripts-no-proc-macros",
+        false,
+        false,
+    )
+    .map_err(RepoGrammarError::InvalidInput)
+}
+
+fn rust_provider_candidate_sort_key(
+    candidate: &RustProviderCandidate,
+) -> (&str, usize, usize, &str, Option<&str>, Option<&str>) {
+    (
+        candidate.path.as_str(),
+        candidate.range.start_byte,
+        candidate.range.end_byte,
+        candidate.code_unit_id.as_str(),
+        candidate.manifest_path.as_deref(),
+        candidate.crate_root_path.as_deref(),
+    )
+}
+
+fn rust_provider_dimension_hash(
+    label: &'static str,
+    candidates: &[RustProviderCandidate],
+) -> ContentHash {
+    let mut hasher = Sha256::new();
+    hasher.update(label.as_bytes());
+    for candidate in candidates {
+        hasher.update(b"\0");
+        hasher.update(candidate.path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(candidate.code_unit_id.as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(candidate.content_hash.as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(candidate.range.start_byte.to_string().as_bytes());
+        hasher.update(b":");
+        hasher.update(candidate.range.end_byte.to_string().as_bytes());
+    }
+    ContentHash::new(format!("sha256:{:x}", hasher.finalize()))
+        .expect("sha2 digest formats as strict sha256 hash")
+}
+
+fn rust_provider_unknown_facts(
+    request: &RustProviderRequest,
+    output: &RustProviderOutput,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let Some(candidate) = request.candidates.first() else {
+        return Ok(Vec::new());
+    };
+    let mut facts = Vec::new();
+    for (index, unknown) in output.unknowns.iter().enumerate() {
+        let mut assumptions = output
+            .provenance
+            .as_ref()
+            .map(RustProviderProvenance::assumptions)
+            .unwrap_or_else(|| {
+                vec![
+                    "provider_resolved=false".to_string(),
+                    format!("provider={}", request.provider.as_str()),
+                    format!("query_operation={}", request.operation.as_str()),
+                    format!("rust_toolchain={}", request.rust_toolchain),
+                    format!(
+                        "cargo_metadata_hash={}",
+                        request.cargo_metadata_hash.as_str()
+                    ),
+                    format!("cfg_profile_hash={}", request.cfg_profile_hash.as_str()),
+                    format!(
+                        "environment_fingerprint={}",
+                        request.environment_fingerprint
+                    ),
+                    format!("build_scripts_executed={}", request.build_scripts_executed),
+                    format!("proc_macros_executed={}", request.proc_macros_executed),
+                ]
+            });
+        assumptions.push("rust_provider_unknown=true".to_string());
+        assumptions.push(format!("unknown_class={}", unknown.class.as_protocol_str()));
+        assumptions.push(format!("affected_claim={}", unknown.affected_claim));
+        if let Some(recovery) = &unknown.recovery {
+            assumptions.push(format!(
+                "recovery={}",
+                sanitize_semantic_assumption(recovery)
+            ));
+        }
+        facts.push(SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: format!(
+                "{}#rust_provider_unknown:{index}",
+                candidate.code_unit_id.as_str()
+            ),
+            target: Some(
+                SymbolId::new(unknown.reason.as_protocol_str())
+                    .map_err(RepoGrammarError::InvalidInput)?,
+            ),
+            origin: FactOrigin {
+                engine: output
+                    .provenance
+                    .as_ref()
+                    .map(|provenance| provenance.provider.as_str().to_string())
+                    .unwrap_or_else(|| request.provider.as_str().to_string()),
+                engine_version: output
+                    .provenance
+                    .as_ref()
+                    .map(|provenance| provenance.provider_version.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                method: format!("{}_unknown", request.operation.as_str()),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(candidate.code_unit_id.as_str())
+                    .map_err(RepoGrammarError::InvalidInput)?,
+                SourceRange::new(candidate.range.start_byte, candidate.range.end_byte)
+                    .map_err(RepoGrammarError::InvalidInput)?,
+                Provenance::new(
+                    &candidate.path,
+                    candidate.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("UNKNOWN is a valid revision marker"),
+                )
+                .map_err(RepoGrammarError::InvalidInput)?,
+                "Rust provider typed UNKNOWN",
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            assumptions,
+        });
+    }
+    Ok(facts)
+}
+
+fn rust_provider_error_token(error: &RustProviderError) -> &'static str {
+    match error {
+        RustProviderError::InvalidRequest(_) => "invalid_request",
+        RustProviderError::ProtocolViolation(_) => "protocol_violation",
+    }
+}
+
+fn sanitize_semantic_assumption(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    if sanitized.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn derive_python_framework_support_facts(
@@ -2215,6 +2543,7 @@ mod tests {
     use crate::adapters::frameworks::SyntaxFrameworkRoleDetector;
     use crate::adapters::parsing::python::PythonAstParser;
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
+    use crate::adapters::parsing::RepoGrammarSourceParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::application::query::{assess_semantic_fact_readiness, SemanticFactReadinessRequest};
     use crate::core::model::{
@@ -2326,6 +2655,64 @@ mod tests {
                 semantic_facts: Vec::new(),
                 diagnostics: Vec::new(),
             })
+        }
+    }
+
+    struct FakeRustProjectModelProvider;
+
+    impl RustSemanticProvider for FakeRustProjectModelProvider {
+        fn analyze_project(
+            &self,
+            _project_root: &Path,
+            request: RustProviderRequest,
+        ) -> Result<RustProviderOutput, RustProviderError> {
+            let candidate = request
+                .candidates
+                .first()
+                .expect("test request has a Cargo.toml candidate");
+            let provenance = RustProviderProvenance::new(
+                request.provider,
+                "test-provider",
+                request.rust_toolchain.clone(),
+                request.cargo_metadata_hash.clone(),
+                request.cfg_profile_hash.clone(),
+                request.environment_fingerprint.clone(),
+                request.operation,
+                request.build_scripts_executed,
+                request.proc_macros_executed,
+            )
+            .expect("valid fake Rust provenance");
+            let mut assumptions = provenance.assumptions();
+            assumptions.push("cargo_fact=workspace".to_string());
+            Ok(RustProviderOutput::facts(
+                provenance,
+                vec![SemanticFact {
+                    kind: SemanticFactKind::ProjectConfig,
+                    subject: format!("{}#fake_cargo_metadata", candidate.code_unit_id.as_str()),
+                    target: Some(SymbolId::new("cargo.workspace").expect("valid target")),
+                    origin: FactOrigin {
+                        engine: "cargo_metadata".to_string(),
+                        engine_version: "test-provider".to_string(),
+                        method: "cargo_metadata_no_deps_v1".to_string(),
+                    },
+                    certainty: FactCertainty::Semantic,
+                    evidence: Evidence::new(
+                        CodeUnitId::new(candidate.code_unit_id.as_str()).expect("valid unit id"),
+                        SourceRange::new(candidate.range.start_byte, candidate.range.end_byte)
+                            .expect("valid range"),
+                        Provenance::new(
+                            &candidate.path,
+                            candidate.content_hash.clone(),
+                            RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                        )
+                        .expect("valid provenance"),
+                        "fake Cargo metadata workspace model",
+                    )
+                    .expect("valid evidence"),
+                    assumptions,
+                }],
+                Vec::new(),
+            ))
         }
     }
 
@@ -5249,6 +5636,56 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn rust_provider_project_config_facts_are_recorded_in_active_generation() {
+        let workspace = TempWorkspace::new("indexing-rust-provider-cargo-metadata");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write manifest");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let provider = FakeRustProjectModelProvider;
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &RepoGrammarSourceParser::default(),
+                (&detector, &provider),
+                &store,
+                &mut |_event| {},
+            )
+            .expect("index with Rust project-model provider");
+
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert!(outcome.semantic_facts >= 1);
+        assert!(outcome.warnings.is_empty());
+        let facts = store
+            .list_active_semantic_facts()
+            .expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.certainty == "SEMANTIC"
+                && fact.origin_engine == "cargo_metadata"
+                && fact.origin_method == "cargo_metadata_no_deps_v1"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.workspace")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "build_scripts_executed=false")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "proc_macros_executed=false")
+        }));
     }
 
     #[test]

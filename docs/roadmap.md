@@ -177,10 +177,11 @@ semantic-provider contracts for candidate-scoped requests, provider provenance
 assumptions, cache-key dimensions, and recoverable provider-unavailable
 `UNKNOWN`s, plus an internal planner for future Pyrefly framework-identity
 request scopes over active-generation snapshots, but no provider adapter
-execution is wired. An explicit Rust Cargo metadata provider adapter can parse
-`cargo metadata --format-version=1 --no-deps` output into owned
-`PROJECT_CONFIG` facts when called directly; it is not default indexing and
-does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
+execution is wired except the default-safe Rust Cargo metadata project-model
+stage. That adapter can parse `cargo metadata --format-version=1 --no-deps`
+output into owned `PROJECT_CONFIG` facts during `index`/`sync`/`resync` when
+same-generation `Cargo.toml` code units exist; it does not execute build
+scripts or proc macros and does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
 semantic-provider roadmap is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md`.
 Continue one boundary at a time:

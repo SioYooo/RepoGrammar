@@ -11,6 +11,7 @@ Project lifecycle:
 - `uninit`
 - `index`
 - `sync`
+- `resync`
 - `autosync`
 - `status`
 - `doctor`
@@ -104,10 +105,10 @@ All long-running commands must support:
 - `--quiet`
 - `--verbose`
 
-Long-running commands include repository initialization, indexing, sync,
+Long-running commands include repository initialization, indexing, sync, resync,
 `autosync run`, and MCP serving.
 
-For `index` and `sync`, human progress is emitted to stderr when
+For `index`, `sync`, and `resync`, human progress is emitted to stderr when
 `--progress always` is set, or when `--progress auto` detects an interactive
 stderr. `--quiet` and `--progress never` suppress progress. Final human or JSON
 results remain on stdout. When `--json --progress always` is used, progress
@@ -170,13 +171,13 @@ During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
-`repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. The implemented bootstrap path runs TS/JS,
-bounded TS/JS project-config, and Python `.py` discovery, reads source through a
-repo-relative hash-checked boundary, store repo-relative file metadata and
-syntax-only code-unit records plus any syntax-origin framework-role fact records
-in a new generation-scoped SQLite database, validate the generation, and
-atomically activate
+`repogrammar index`, `repogrammar sync`, and `repogrammar resync` currently
+require an initialized repository-local state directory. The implemented
+bootstrap path runs TS/JS, bounded TS/JS project-config, and Python `.py`
+discovery, reads source through a repo-relative hash-checked boundary, stores
+repo-relative file metadata and syntax-only code-unit records plus any
+syntax-origin framework-role fact records in a new generation-scoped SQLite
+database, validates the generation, and atomically activates
 `.repogrammar/current-generation`. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
@@ -190,21 +191,29 @@ Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
 exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
 without running a semantic worker. These are bounded RepoGrammar support facts,
 not compiler/provider-backed facts.
+`resync` is an alias for `sync`: it is available for any repository, rebuilds a
+new active generation through the same static-analysis path, and uses the
+invoked command name in CLI output.
 Rust self-dogfood indexing may likewise add Tree-sitter-origin structural
 anchors, Cargo manifest inventory, Rust typed `UNKNOWN`s, and bounded internal
 `DATAFLOW_DERIVED` support facts for RepoGrammar-owned implementation roles.
 Those facts are not Cargo/rustc-backed semantics and do not imply general Rust
 target-language support.
-During a non-quiet run, `index` and `sync` emit progress for project discovery,
-file scanning, syntax parsing, local support-fact recording, semantic-worker
-deferred/running state, candidate/family construction, and persistence
-validation. Known work uses exact completed/total counts. Unknown work must
-remain explicit and must not display fabricated percentages or ETAs. Progress
-events must not include source snippets, source paths, content hashes, symbols,
-raw targets, or repository-identifying absolute paths.
+During a non-quiet run, `index`, `sync`, and `resync` emit progress for project
+discovery, file scanning, syntax parsing, local support-fact recording,
+semantic-worker deferred/running state, candidate/family construction, and
+persistence validation. Known work uses exact completed/total counts. Unknown
+work must remain explicit and must not display fabricated percentages or ETAs.
+Progress events must not include source snippets, source paths, content hashes,
+symbols, raw targets, or repository-identifying absolute paths.
+The product runtime also runs the default safe Rust Cargo metadata project-model
+substage during `index`, `sync`, and `resync` when same-generation `Cargo.toml`
+code units exist. It may add provider-backed `PROJECT_CONFIG` facts and typed
+provider `UNKNOWN`s, but package/crate/target/feature/dependency metadata cannot
+prove symbol/type/call semantics or family membership.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
-`index` and `sync` may run that worker after syntax-only code units are stored
-for the building generation.
+`index`, `sync`, and `resync` may run that worker after syntax-only code units
+are stored for the building generation.
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply an optional JSON array of
 non-blank string arguments. This is an argv contract, not shell parsing; worker
 arguments without `REPOGRAMMAR_TYPESCRIPT_WORKER` are invalid. Worker facts must
@@ -214,13 +223,13 @@ failures must fall back to syntax-only indexing with a typed
 `semantic_worker: fallback_*` status and sanitized warnings. A worker fact that
 conflicts with the indexed code-unit path, content hash, or range must abort the
 new generation rather than silently dropping or accepting stale evidence. If
-storage health is already unhealthy, index and sync must refuse and direct the
-user to `repogrammar doctor` rather than masking the corruption with a new
-generation. Before discovery, source reads, generation preparation, validation,
-and activation, both commands acquire `.repogrammar/locks/index.lock` and hold
-it through validation and activation.
+storage health is already unhealthy, index, sync, and resync must refuse and
+direct the user to `repogrammar doctor` rather than masking the corruption with
+a new generation. Before discovery, source reads, generation preparation,
+validation, and activation, all three commands acquire
+`.repogrammar/locks/index.lock` and hold it through validation and activation.
 `REPOGRAMMAR_STRICT_GITIGNORE=true` makes unavailable Git ignore checks a hard
-index/sync error; otherwise discovery keeps the warning fallback and continues.
+index/sync/resync error; otherwise discovery keeps the warning fallback and continues.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced

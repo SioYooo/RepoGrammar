@@ -101,12 +101,18 @@ The Rust provider-backed path is planned in
 output, and unavailable `UNKNOWN` boundaries for future Cargo metadata,
 rust-analyzer, rustc, and rustdoc JSON adapters. It is not an adapter and does
 not execute Cargo, rustc, build scripts, procedural macros, or repository code.
-The current `adapters::semantic_workers::rust` slice implements only an
-explicit Cargo metadata provider. It can run `cargo metadata --format-version=1
---no-deps` when directly called, parse workspace/package/target/feature/
-dependency metadata into owned `PROJECT_CONFIG` semantic facts, and return
-recoverable `UNKNOWN`s for unavailable Cargo or missing manifest candidates.
-Default `index` and `sync` do not call it.
+The current `adapters::semantic_workers::rust` slice implements only the Cargo
+metadata project-model provider. During `index`, `sync`, and `resync`, the
+product runtime wires this provider into the safe indexing path after
+same-generation `Cargo.toml` code units exist. Non-Rust repositories, or
+repositories with no discovered `Cargo.toml`, skip this substage. The provider runs
+`cargo metadata --format-version=1 --no-deps`, parses
+workspace/package/target/feature/dependency metadata into owned
+`PROJECT_CONFIG` semantic facts, and returns recoverable `UNKNOWN`s for
+unavailable Cargo, unreadable project configuration, or missing manifest
+candidates. It does not execute build scripts or procedural macros, and its
+facts do not prove Rust symbols, types, calls, trait dispatch, dataflow, borrow
+facts, or family support.
 
 Future Rust adapters must translate Cargo/rustc/rust-analyzer/rustdoc objects
 into RepoGrammar-owned `SemanticFact`, `Evidence`, `Provenance`, and
@@ -310,8 +316,8 @@ TypeScript process adapter that can send request JSON over stdin, enforce a
 timeout, validate NDJSON stdout, map sanitized worker errors, and translate fact
 messages into RepoGrammar-owned semantic facts, and includes a no-dependency
 Node worker stub that reports semantic analysis as unavailable without echoing
-source paths. `index` and `sync` can optionally execute a configured worker via
-`REPOGRAMMAR_TYPESCRIPT_WORKER` plus
+source paths. `index`, `sync`, and `resync` can optionally execute a configured
+worker via `REPOGRAMMAR_TYPESCRIPT_WORKER` plus
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
 `semantic_worker: deferred`. The storage/query boundary can load an internal
 active-generation claim-input snapshot after validating files, units, IR

@@ -24,8 +24,8 @@ Repository files
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync` wiring. The current CLI can discover TS/JS/Python files, read
-source through a hash-checked repo-relative boundary, store repo-relative file
+`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python files,
+read source through a hash-checked repo-relative boundary, store repo-relative file
 metadata and structural code units in a generation-scoped SQLite database,
 validate that generation, and activate `.repogrammar/current-generation`. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
@@ -37,14 +37,18 @@ The current CLI can also discover `.rs` files and `Cargo.toml` manifests for
 RepoGrammar self-dogfooding. Rust parsing uses Tree-sitter Rust to extract
 structural modules, use items, structs, enums, traits, impl blocks, functions,
 methods, test functions, and macro syntax. Cargo manifests are bounded
-structural inventory only. This Rust path never runs Cargo, rustc, build
-scripts, proc macros, or project code. Root `Cargo.toml` build-variant
+structural inventory only. The default safe Rust project-model substage can run
+`cargo metadata --format-version=1 --no-deps` after `Cargo.toml` code units are
+stored for the building generation, and it records only owned `PROJECT_CONFIG`
+facts or recoverable provider `UNKNOWN`s. It never executes build scripts, proc
+macros, rustc, rust-analyzer, rustdoc, or project code, and it cannot prove
+symbol/type/call semantics or family support. Root `Cargo.toml` build-variant
 ambiguity can block repository-wide Rust self-dogfood family support, but
 nested fixture/package manifests must not globally block unrelated root Rust
 families.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
-`index` and `sync` can also ask that worker for facts about the discovered
-repo-relative TS/JS file set. Optional worker arguments come from
+`index`, `sync`, and `resync` can also ask that worker for facts about the
+discovered repo-relative TS/JS file set. Optional worker arguments come from
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of strings, not a shell
 command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
@@ -384,10 +388,14 @@ validated active-generation claim-input snapshot used by query/family code.
 It does not execute those requests, persist provider facts, or expose them
 through CLI/MCP.
 No Pyrefly, Pyright, RightTyper, or runtime-trace adapter is implemented.
-An explicit Rust Cargo metadata provider adapter can parse
+The Rust Cargo metadata provider adapter is wired into the default product
+indexing path as a safe project-model refresh stage for repositories with
+same-generation `Cargo.toml` code units. It parses
 `cargo metadata --format-version=1 --no-deps` output into owned
-`PROJECT_CONFIG` facts, but default indexing does not call it and it does not
-execute build scripts or procedural macros.
+`PROJECT_CONFIG` facts, records provider `UNKNOWN`s when Cargo or project
+configuration is unavailable, and does not execute build scripts or procedural
+macros. These facts are context only: package metadata, targets, features, and
+dependencies do not directly prove family membership.
 
 ## Optional providers
 

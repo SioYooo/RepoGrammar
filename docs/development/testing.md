@@ -459,7 +459,7 @@ CPython AST Python worker structural parse and NDJSON smoke behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory
-projects, index/sync lock acquisition and doctor lock-state reporting, and
+projects, index/sync/resync lock acquisition and doctor lock-state reporting, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
 
 ## Required local gate

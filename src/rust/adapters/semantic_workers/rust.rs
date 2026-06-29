@@ -9,9 +9,10 @@ use crate::core::model::{
     SemanticFactKind, SourceRange, SymbolId, TypedUnknown, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
+use crate::ports::rust_provider::RustProviderError;
 use crate::ports::rust_provider::{
     RustProviderCandidate, RustProviderKind, RustProviderOperation, RustProviderOutput,
-    RustProviderProvenance, RustProviderRequest,
+    RustProviderProvenance, RustProviderRequest, RustSemanticProvider,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -90,6 +91,25 @@ impl CargoMetadataRustProvider {
             request,
             self.provider_version.clone(),
         )
+    }
+}
+
+impl RustSemanticProvider for CargoMetadataRustProvider {
+    fn analyze_project(
+        &self,
+        project_root: &Path,
+        request: RustProviderRequest,
+    ) -> Result<RustProviderOutput, RustProviderError> {
+        CargoMetadataRustProvider::analyze_project(self, project_root, request).map_err(|error| {
+            match error {
+                CargoMetadataProviderError::InvalidRequest(message) => {
+                    RustProviderError::InvalidRequest(message)
+                }
+                CargoMetadataProviderError::ProtocolViolation(message) => {
+                    RustProviderError::ProtocolViolation(message)
+                }
+            }
+        })
     }
 }
 

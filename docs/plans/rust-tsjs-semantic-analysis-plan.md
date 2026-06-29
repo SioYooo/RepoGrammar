@@ -45,13 +45,15 @@ execute tools. Rust build-variant repository blocking is now scoped to the root
 Rust family support.
 
 The current implementation also includes an explicit
-`adapters::semantic_workers::rust` Cargo metadata provider slice. It can run
-`cargo metadata --format-version=1 --no-deps` when called explicitly, parse
+`adapters::semantic_workers::rust` Cargo metadata provider slice. The product
+indexing path now wires it into `index`/`sync`/`resync` as a default-safe Rust
+project-model refresh stage after same-generation `Cargo.toml` code units are
+stored. It can run `cargo metadata --format-version=1 --no-deps`, parse
 workspace/package/target/feature/dependency metadata into owned
 `PROJECT_CONFIG` semantic facts, and return recoverable provider `UNKNOWN`s for
-unavailable Cargo or missing manifest candidates. It is not wired into default
-`index`/`sync`, and it rejects requests that claim build-script or proc-macro
-execution.
+unavailable Cargo, unreadable project configuration, or missing manifest
+candidates. It rejects requests that claim build-script or proc-macro execution
+and does not prove Rust symbol/type/call/family support.
 
 ## Research Sources
 
@@ -168,7 +170,8 @@ Provider output should translate to RepoGrammar-owned facts such as:
    fixture coverage for workspace packages, target-specific dependencies,
    features, build scripts, and proc-macro declarations. The first slice parses
    workspace packages, targets, features, and dependencies into owned
-   `PROJECT_CONFIG` facts without default indexing execution.
+   `PROJECT_CONFIG` facts through the default-safe `index`/`sync`/`resync`
+   project-model stage.
 2. rust-analyzer-backed worker or sidecar that accepts bounded candidates and
    returns owned resolved item/type/import facts or recoverable `UNKNOWN`.
 3. Optional rustc-backed cross-checks for claim-upgrading facts, limited by
