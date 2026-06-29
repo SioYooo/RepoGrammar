@@ -37,7 +37,7 @@ pub struct PythonAstParser {
 impl Default for PythonAstParser {
     fn default() -> Self {
         Self {
-            executable: "python3".to_string(),
+            executable: default_python_executable(|key| std::env::var(key).ok()),
             worker_script: default_python_worker_script(),
         }
     }
@@ -97,6 +97,25 @@ impl SourceParser for PythonAstParser {
         }
         Ok(report)
     }
+}
+
+fn default_python_executable<F>(env_lookup: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env_lookup("REPOGRAMMAR_PYTHON_EXECUTABLE")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| platform_python_executable().to_string())
+}
+
+#[cfg(windows)]
+fn platform_python_executable() -> &'static str {
+    "python"
+}
+
+#[cfg(not(windows))]
+fn platform_python_executable() -> &'static str {
+    "python3"
 }
 
 fn default_python_worker_script() -> PathBuf {
@@ -1430,6 +1449,36 @@ mod tests {
                 PathBuf::from("/opt/repogrammar/bin/workers/python/worker.py"),
             ]
         );
+    }
+
+    #[test]
+    fn python_executable_env_override_wins_when_non_blank() {
+        let executable = default_python_executable(|key| {
+            (key == "REPOGRAMMAR_PYTHON_EXECUTABLE").then_some("E:/conda/python.exe".to_string())
+        });
+
+        assert_eq!(executable, "E:/conda/python.exe");
+    }
+
+    #[test]
+    fn blank_python_executable_env_override_uses_platform_default() {
+        let executable = default_python_executable(|key| {
+            (key == "REPOGRAMMAR_PYTHON_EXECUTABLE").then_some("   ".to_string())
+        });
+
+        assert_eq!(executable, platform_python_executable());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn python_executable_defaults_to_python_on_windows() {
+        assert_eq!(default_python_executable(|_| None), "python");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn python_executable_defaults_to_python3_off_windows() {
+        assert_eq!(default_python_executable(|_| None), "python3");
     }
 
     #[cfg(unix)]

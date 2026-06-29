@@ -198,6 +198,12 @@ implemented Python frontend uses CPython `ast` for code-unit extraction,
 CPython `symtable` for structural scope anchors, and a private standard-library
 `tomllib` parser mode for sanitized `pyproject.toml` summaries that default
 indexing persists only as structural config context or typed config `UNKNOWN`.
+The frontend is invoked through `REPOGRAMMAR_PYTHON_EXECUTABLE` when that
+environment variable is non-blank. Otherwise it defaults to `python` on Windows
+and `python3` on non-Windows platforms so Conda and other Windows Python
+installations are not shadowed by the Microsoft Store `python3.exe` app
+execution alias. `REPOGRAMMAR_PYTHON_WORKER` may still override only the worker
+script path.
 Default parser-mode indexing now passes discovered repo-relative `.py`
 inventory and sanitized root `pyproject.toml` source roots from the existing
 `tomllib` project-config parse report into private parse-document requests, so
