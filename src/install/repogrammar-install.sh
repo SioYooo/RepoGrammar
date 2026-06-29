@@ -280,7 +280,7 @@ replace_file_from_temp() {
     fi
     if ! mv "$destination" "$backup"; then
       rm -f "$source"
-      die "failed to replace ${label} at ${destination}; close any running repogrammar or coding-agent process that may be using it and retry"
+      die "failed to remove previous ${label} at ${destination}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
     fi
   fi
   if ! mv "$source" "$destination"; then
@@ -291,7 +291,7 @@ replace_file_from_temp() {
     die "failed to install ${label} at ${destination}"
   fi
   if [[ -n "$backup" ]]; then
-    rm -f "$backup" || true
+    rm -f "$backup" || die "failed to delete previous ${label} at ${backup}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
   fi
 }
 
@@ -306,7 +306,7 @@ install_managed_cli_binary() {
 
   mkdir -p "$COMMAND_DIR"
   if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
-    rm -f "$COMMAND_PATH" || die "failed to replace repogrammar command at ${COMMAND_PATH}; close any running repogrammar or coding-agent process that may be using it and retry"
+    rm -f "$COMMAND_PATH" || die "failed to remove previous repogrammar command at ${COMMAND_PATH}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
   fi
   if ! ln -s "$INSTALLED_EXECUTABLE" "$COMMAND_PATH" 2>/dev/null; then
     local tmp_command="${COMMAND_PATH}.tmp.$$"

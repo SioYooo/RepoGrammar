@@ -188,7 +188,7 @@ function Install-TempFileReplacing([string]$TempPath, [string]$Destination, [str
             Move-Item -LiteralPath $Destination -Destination $backup -ErrorAction Stop
         } catch {
             Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
-            throw "failed to replace $Label at ${Destination}: $($_.Exception.Message). Close any running repogrammar or coding-agent process that may be using it and retry."
+            throw "failed to remove previous $Label at ${Destination}: $($_.Exception.Message). Exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command."
         }
     }
 
@@ -203,7 +203,11 @@ function Install-TempFileReplacing([string]$TempPath, [string]$Destination, [str
     }
 
     if ($backup -and (Test-Path -LiteralPath $backup)) {
-        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        try {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction Stop
+        } catch {
+            throw "failed to delete previous $Label at ${backup}: $($_.Exception.Message). Exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command."
+        }
     }
 }
 

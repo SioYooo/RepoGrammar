@@ -23,6 +23,7 @@ use repogrammar::application::install::{
     InstallExecutionOutcome, InstallRequest, InstallScope, McpSelfTestRunner, NativeAgentAction,
     NativeAgentConfigurator, MCP_SERVER_NAME,
 };
+use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::query::{
     list_code_units, list_families_with_freshness, list_indexed_files,
     lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
@@ -74,6 +75,64 @@ fn main() {
 struct ProductCliRuntime;
 
 struct ProductInstallTelemetryPrompt;
+
+struct ProductProgressSink<'a> {
+    command: &'a str,
+    json_output: bool,
+    interactive: bool,
+    last_width: usize,
+}
+
+impl<'a> ProductProgressSink<'a> {
+    fn new(command: &'a str, json_output: bool, interactive: bool) -> Self {
+        Self {
+            command,
+            json_output,
+            interactive,
+            last_width: 0,
+        }
+    }
+
+    fn emit(&mut self, event: &ProgressEvent) {
+        if self.interactive {
+            let (frame, width) =
+                render_interactive_index_progress_event(self.command, event, self.last_width);
+            eprint!("{frame}");
+            self.last_width = width;
+        } else {
+            eprint!(
+                "{}",
+                render_index_progress_event(self.command, event, self.json_output)
+            );
+        }
+        let _ = std::io::stderr().flush();
+    }
+
+    fn finish(&mut self) {
+        if self.interactive && self.last_width > 0 {
+            eprintln!();
+            let _ = std::io::stderr().flush();
+            self.last_width = 0;
+        }
+    }
+}
+
+fn render_interactive_index_progress_event(
+    command: &str,
+    event: &ProgressEvent,
+    previous_width: usize,
+) -> (String, usize) {
+    let line = render_index_progress_event(command, event, false)
+        .trim_end_matches('\n')
+        .to_string();
+    let width = line.chars().count();
+    let mut frame = format!("\r{line}");
+    let padding = previous_width.saturating_sub(width);
+    if padding > 0 {
+        frame.push_str(&" ".repeat(padding));
+    }
+    (frame, width)
+}
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
     fn is_interactive(&self) -> bool {
@@ -387,7 +446,7 @@ impl CliRuntime for ProductCliRuntime {
         match status.status {
             RepositoryStatus::NotInitialized => {
                 return Err(RepoGrammarError::InvalidInput(
-                    "repository is not initialized; run repogrammar init".to_string(),
+                    "repository is not initialized; run repogrammar init --yes".to_string(),
                 ));
             }
             RepositoryStatus::CorruptedManifest => {
@@ -426,38 +485,41 @@ impl CliRuntime for ProductCliRuntime {
             request.stderr_is_terminal,
         );
         let json_progress = request.json;
-        let mut progress = |event| {
-            if emit_progress {
-                eprint!(
-                    "{}",
-                    render_index_progress_event(command, &event, json_progress)
-                );
-                let _ = std::io::stderr().flush();
+        let interactive_progress = emit_progress && !request.json && request.stderr_is_terminal;
+        let mut progress_sink =
+            ProductProgressSink::new(command, json_progress, interactive_progress);
+        let result = {
+            let mut progress = |event| {
+                if emit_progress {
+                    progress_sink.emit(&event);
+                }
+            };
+            if let Some(executable) = request.semantic_worker_executable {
+                let worker = TypeScriptSemanticWorkerBoundary::new(executable)
+                    .with_args(request.semantic_worker_args);
+                index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+                    indexing_request,
+                    &FilesystemFileDiscovery,
+                    &FilesystemSourceStore,
+                    &parser,
+                    (&framework_roles, &worker, &rust_provider),
+                    &store,
+                    &mut progress,
+                )
+            } else {
+                index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
+                    indexing_request,
+                    &FilesystemFileDiscovery,
+                    &FilesystemSourceStore,
+                    &parser,
+                    (&framework_roles, &rust_provider),
+                    &store,
+                    &mut progress,
+                )
             }
         };
-        if let Some(executable) = request.semantic_worker_executable {
-            let worker = TypeScriptSemanticWorkerBoundary::new(executable)
-                .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
-                indexing_request,
-                &FilesystemFileDiscovery,
-                &FilesystemSourceStore,
-                &parser,
-                (&framework_roles, &worker, &rust_provider),
-                &store,
-                &mut progress,
-            )
-        } else {
-            index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
-                indexing_request,
-                &FilesystemFileDiscovery,
-                &FilesystemSourceStore,
-                &parser,
-                (&framework_roles, &rust_provider),
-                &store,
-                &mut progress,
-            )
-        }
+        progress_sink.finish();
+        result
     }
 
     fn repository_status(
@@ -1024,6 +1086,7 @@ fn run_native_agent_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::application::progress::{ProgressStage, WorkUnits};
     use repogrammar::application::query::{
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
         SemanticFactReadinessRequest,
@@ -1089,6 +1152,30 @@ mod tests {
         ];
         args.extend(extra.iter().map(|value| value.to_string()));
         args
+    }
+
+    #[test]
+    fn interactive_index_progress_rewrites_single_terminal_line() {
+        let long = ProgressEvent::new(
+            ProgressStage::FileScanning,
+            "stored file metadata",
+            WorkUnits::known(12, 236).expect("valid work"),
+        );
+        let (long_frame, long_width) = render_interactive_index_progress_event("sync", &long, 0);
+
+        assert!(long_frame.starts_with('\r'));
+        assert!(!long_frame.contains('\n'));
+        assert!(long_frame.contains("sync: [#-------------------] 5% 12/236 file_scanning"));
+
+        let short = ProgressEvent::new(ProgressStage::ProjectDiscovery, "done", WorkUnits::Unknown);
+        let (short_frame, short_width) =
+            render_interactive_index_progress_event("sync", &short, long_width);
+
+        assert!(short_frame.starts_with('\r'));
+        assert!(!short_frame.contains('\n'));
+        assert!(short_frame.contains("sync: [working] project_discovery: done"));
+        assert!(!short_frame.contains('%'));
+        assert!(short_frame.ends_with(&" ".repeat(long_width - short_width)));
     }
 
     #[test]

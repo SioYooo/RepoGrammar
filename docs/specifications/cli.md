@@ -113,9 +113,11 @@ when `--progress always` is set, or when `--progress auto` detects an
 interactive stderr. Known work renders an ASCII progress bar, exact integer
 percentage, and completed/total counts; unknown work remains indeterminate and
 does not display a percentage. `--quiet` and `--progress never` suppress
-progress. Final human or JSON results remain on stdout. When `--json --progress
-always` is used, progress events are emitted as NDJSON on stderr and the final
-command result remains a single JSON object on stdout.
+progress. Interactive TTY progress rewrites a single terminal line and finishes
+with one newline; noninteractive plain-log progress remains append-only with one
+line per event. Final human or JSON results remain on stdout. When `--json
+--progress always` is used, progress events are emitted as NDJSON on stderr and
+the final command result remains a single JSON object on stdout.
 
 ## Repository state commands
 
@@ -349,12 +351,16 @@ writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install or receipt write fails.
 Re-running `install` refreshes only a RepoGrammar-managed command path and
 skips native agent add commands for already managed target receipts. When the
-selected command path is the same executable currently running the installer,
-such as a local Cargo-installed `repogrammar.exe` on PATH, the installer may
-copy that executable into RepoGrammar-managed user state and continue without
-overwriting that currently executing command path in the same run. Existing
-unrelated foreign command paths must still be refused rather than adopted
-silently.
+selected managed binary or managed command copy already exists, refresh stages
+the new file, removes the previous RepoGrammar-managed file, and then activates
+the new file. If the previous managed file cannot be removed because a running
+coding agent or MCP process still holds it, install must fail with guidance to
+exit that agent and rerun the install or build command. When the selected
+command path is the same executable currently running the installer, such as a
+local Cargo-installed `repogrammar.exe` on PATH, the installer may copy that
+executable into RepoGrammar-managed user state and continue without overwriting
+that currently executing command path in the same run. Existing unrelated
+foreign command paths must still be refused rather than adopted silently.
 `uninstall` removes only receipt-owned managed entries. `uninstall --target all
 --scope global --yes` removes every owned first-class agent receipt it finds,
 but refuses unmanaged or foreign receipts.

@@ -91,6 +91,9 @@ allowed.
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
   snippets or absolute paths in CLI output and stored metadata.
+  Progress renderer tests must also cover exact integer percentages and
+  interactive TTY progress as single-line carriage-return updates with one
+  final newline rather than one terminal line per event.
 - Auto-sync CLI tests must cover `autosync` defaulting to `status`,
   `enable/start/status/stop/disable/run` routing, `--poll-ms` and
   `--debounce-ms` validation, `--progress` compatibility, strict-gitignore
@@ -161,6 +164,10 @@ allowed.
   normalization, and invalid empty CSV entries, no-write
   `--print-config <target>` behavior for deferred registry targets, and no
   `.repogrammar/` mutation.
+  Managed-binary refresh tests must cover staging the new file, removing the
+  previous RepoGrammar-managed executable or managed command copy before
+  activation, and actionable failure guidance when that previous file cannot be
+  removed because a coding agent or MCP process may still hold it.
   Default tests must not invoke real `codex` or `claude` binaries; validate
   native integration through dry-run output, command-vector construction, fake
   configurators, fake prompts, and receipt behavior. Any real native-agent CLI

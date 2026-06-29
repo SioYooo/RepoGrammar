@@ -22,6 +22,8 @@ Progress must:
   when known;
 - never display fabricated percentages for unknown work or unstable ETAs;
 - support interactive TTY, plain logs, and NDJSON;
+- rewrite a single terminal line for interactive TTY progress while keeping
+  plain logs and NDJSON append-only;
 - support `--progress auto|always|never`, `--json`, `--quiet`, and `--verbose`;
 - remain testable independently of terminal rendering.
 
@@ -42,9 +44,10 @@ parsing, code-unit normalization, local support-fact recording, semantic-worker
 deferred/running status, candidate/family construction, and persistence
 validation. Human progress is rendered to stderr with an ASCII bar, integer
 percentage, and exact counts when exact work counts are known, and `[working]`
-without a percentage when a denominator is not known. `--json --progress
-always` emits progress NDJSON on stderr while keeping the final JSON result on
-stdout.
+without a percentage when a denominator is not known. Interactive TTY progress
+uses carriage-return single-line updates and emits one final newline; plain-log
+progress remains one line per event. `--json --progress always` emits progress
+NDJSON on stderr while keeping the final JSON result on stdout.
 
 Deferred work: semantic workers do not yet provide fine-grained internal
 progress through the product CLI, and future mining/provider phases will need

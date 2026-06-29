@@ -926,9 +926,10 @@ fn install_cli_command_with_current_process(
             record.previous_command_copy =
                 Some(read_file_bytes(&command_path, "repogrammar command")?);
         }
-        fs::copy(source, &installed_executable).map_err(|error| {
-            RepoGrammarError::InvalidInput(format!("failed to install RepoGrammar CLI: {error}"))
-        })?;
+        replace_managed_file(source, &installed_executable, "installed RepoGrammar CLI")
+            .inspect_err(|_| {
+                let _ = rollback_command_install(&record);
+            })?;
         record.created_executable = !executable_existed;
     }
 
@@ -979,9 +980,46 @@ fn command_path_is_managed_copy(command_path: &Path, installed_executable: &Path
 }
 
 fn refresh_command_copy(source: &Path, destination: &Path) -> Result<(), RepoGrammarError> {
-    fs::copy(source, destination).map(|_| ()).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!("failed to refresh repogrammar command: {error}"))
+    replace_managed_file(source, destination, "repogrammar command")
+}
+
+fn replace_managed_file(
+    source: &Path,
+    destination: &Path,
+    label: &str,
+) -> Result<(), RepoGrammarError> {
+    let temporary = managed_replace_temp_path(destination);
+    fs::copy(source, &temporary).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to stage new {label}: {error}"))
+    })?;
+    if destination.exists() {
+        if let Err(error) = fs::remove_file(destination) {
+            let _ = fs::remove_file(&temporary);
+            return Err(previous_managed_file_removal_error(label, error));
+        }
+    }
+    fs::rename(&temporary, destination).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        RepoGrammarError::InvalidInput(format!("failed to activate new {label}: {error}"))
     })
+}
+
+fn managed_replace_temp_path(destination: &Path) -> PathBuf {
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(CLI_BINARY_NAME);
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    destination.with_file_name(format!("{file_name}.tmp-{}-{suffix}", std::process::id()))
+}
+
+fn previous_managed_file_removal_error(label: &str, error: std::io::Error) -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(format!(
+        "failed to remove previous {label}: {error}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
+    ))
 }
 
 fn rollback_install_run(
@@ -2049,6 +2087,26 @@ mod tests {
             fs::read_to_string(workspace.command_path()).expect("command copy restored"),
             "old managed stub\n"
         );
+    }
+
+    #[test]
+    fn managed_file_replacement_refuses_when_previous_file_cannot_be_removed() {
+        let workspace = TempInstallWorkspace::new("managed-file-remove-refusal");
+        let destination = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(&destination).expect("directory occupying managed path");
+
+        let error = replace_managed_file(
+            Path::new(&workspace.context.executable_path),
+            &destination,
+            "installed RepoGrammar CLI",
+        )
+        .expect_err("managed replacement must remove the previous path first");
+
+        let message = error.to_string();
+        assert!(message.contains("failed to remove previous installed RepoGrammar CLI"));
+        assert!(message.contains("exit any running coding agent sessions"));
+        assert!(message.contains("rerun the install or build command"));
+        assert!(destination.is_dir());
     }
 
     #[test]

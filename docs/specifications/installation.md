@@ -94,9 +94,12 @@ refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
 Repeated CLI installation must replace existing RepoGrammar-managed installed
 executables and managed command copies rather than failing only because the
-destination file already exists. If replacement is blocked by an active process
-or permissions, wrappers must fail with actionable guidance instead of silently
-leaving a partial unmanaged command.
+destination file already exists. Replacement must stage the new file, remove
+the previous RepoGrammar-managed file, and then activate the staged file. If the
+previous file cannot be removed because an active coding agent or MCP process
+is using it, the install path must fail and tell the user to exit that agent
+before rerunning the install or build command; it must not keep an alternate
+new binary beside the old active one.
 If the user-writable command path already contains an unmanaged
 `repogrammar`, the wrapper may back it up and replace it with the managed
 command because the user explicitly invoked CLI installation. It must not
@@ -355,6 +358,11 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary.
+  Repeated installs stage the new binary, delete the previous
+  RepoGrammar-managed binary or managed command copy, and then activate the new
+  file; if deletion is blocked by a running coding agent or MCP process, install
+  fails with guidance to exit that agent before rerunning the install or build
+  command.
   If the selected command path is the same executable currently running
   `repogrammar install` (for example a local Cargo-installed
   `repogrammar.exe` on PATH), the installer may copy that executable into
