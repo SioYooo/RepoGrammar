@@ -294,8 +294,9 @@ concrete target lists. Recognized concrete ids are `codex`, `claude-code`
 `kiro`. `repogrammar install` with no flags launches a simple TUI-style text
 wizard when running in an interactive terminal. The wizard supports multi-select
 Codex and Claude Code in one run, shows existing RepoGrammar-managed receipts,
-skips already managed agents by default, and lets users add missing supported
-agents on later runs.
+uses `a` as the default automatic selection, selects only detected
+not-yet-managed agents through that default, reports a no-op when that set is
+empty, and lets users explicitly add missing supported agents on later runs.
 
 Noninteractive live writes require `--yes`. `install --yes`, `install
 --dry-run`, and explicit `--target ... --yes` must never prompt. The current

@@ -1966,13 +1966,10 @@ fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
     let all_installed = statuses.iter().all(|status| status.installed);
     let automatic_label = if all_installed {
         "refresh all already managed agents"
+    } else if automatic_targets.is_empty() {
+        "all detected not-yet-installed agents (currently none)"
     } else {
         "all detected not-yet-installed agents"
-    };
-    let default_label = if automatic_targets.is_empty() {
-        "none"
-    } else {
-        "a"
     };
     let mut prompt = String::from(
         "RepoGrammar installer\n\nThis configures RepoGrammar as a read-only MCP server for coding agents.\nIt does not index this repository.\nIt does not create or modify .repogrammar/.\nIt does not enable telemetry unless you explicitly opt in.\n\nDetected agents:\n",
@@ -2000,7 +1997,7 @@ fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
         );
     }
     prompt.push_str(&format!(
-        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = {automatic_label}\n  none = configure no agents\n  q = cancel\n\nSelection [{default_label}]: "
+        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = {automatic_label}\n  none = configure no agents\n  q = cancel\n\nSelection [a]: "
     ));
     prompt
 }
@@ -8483,8 +8480,10 @@ mod tests {
         assert!(selection_prompt.contains("detected     installed"));
         assert!(selection_prompt.contains("Claude Code"));
         assert!(selection_prompt.contains("not detected not installed"));
-        assert!(selection_prompt.contains("a = all detected not-yet-installed agents"));
-        assert!(selection_prompt.contains("Selection [none]:"));
+        assert!(
+            selection_prompt.contains("a = all detected not-yet-installed agents (currently none)")
+        );
+        assert!(selection_prompt.contains("Selection [a]:"));
     }
 
     #[test]
