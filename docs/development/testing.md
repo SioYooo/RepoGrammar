@@ -176,6 +176,11 @@ allowed.
   target/scope pass-through for comma-separated, `none`, and local-scope
   install requests, and command removal. Default tests must not use wrapper
   scripts to call real `codex` or `claude` binaries.
+  Windows PowerShell wrapper coverage must include `src/install/install.ps1`
+  source-checkout `-FromSource` installation with an already built local binary,
+  bundled worker asset installation, unmanaged command backup, no
+  `.repogrammar/` mutation, and nonzero propagation when delegated
+  `repogrammar install` fails.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
   cover the full public-preview platform/artifact matrix, unsupported

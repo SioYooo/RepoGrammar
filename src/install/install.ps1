@@ -4,8 +4,10 @@ param(
     [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\RepoGrammar\bin" }),
     [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "RepoGrammar" }),
     [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path $InstallDir "workers" }),
+    [string]$SourceBinary = $(if ($env:REPOGRAMMAR_SOURCE_BINARY) { $env:REPOGRAMMAR_SOURCE_BINARY } else { "" }),
     [string]$Target = "all",
     [string]$Scope = "global",
+    [switch]$FromSource,
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
     [switch]$UninstallCommand,
@@ -15,6 +17,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $PreviewVersionHint = $(if ($env:REPOGRAMMAR_PREVIEW_VERSION_HINT) { $env:REPOGRAMMAR_PREVIEW_VERSION_HINT } else { "v0.2.0-preview.0" })
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
+$UseSource = [bool]$FromSource
 
 function Show-Usage {
     Write-Output @"
@@ -23,18 +28,28 @@ RepoGrammar Windows installer preview
 Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly
+  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly -FromSource -Yes
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure
+  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -Target "codex,claude-code" -Scope global
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
 
-The script downloads a prebuilt Windows x64 release artifact, verifies its
-checksum, installs repogrammar.exe into a user-writable command directory, and
-can launch repogrammar install for Codex / Claude Code MCP wiring.
+By default, the script downloads a prebuilt Windows x64 release artifact,
+verifies its checksum, installs repogrammar.exe into a user-writable command
+directory, and can launch repogrammar install for Codex / Claude Code MCP
+wiring. In a source checkout, use -FromSource to build or copy a local
+target\release\repogrammar.exe before running agent setup.
 
-Windows source-checkout dogfood builds are deferred. For local artifact tests,
-set REPOGRAMMAR_RELEASE_DIR to a directory containing the Windows zip and
-matching .sha256 file.
+For local artifact tests, set REPOGRAMMAR_RELEASE_DIR to a directory containing
+the Windows zip and matching .sha256 file. For source dogfood tests,
+REPOGRAMMAR_SOURCE_BINARY or -SourceBinary may point at an already built
+repogrammar.exe.
 "@
+}
+
+function Test-SourceCheckout {
+    return (Test-Path (Join-Path $RepoRoot "Cargo.toml")) -and
+        (Test-Path (Join-Path $RepoRoot "src\rust"))
 }
 
 function Confirm-DefaultNo([string]$Prompt) {
@@ -126,7 +141,107 @@ function Assert-SafeArchiveEntries([string]$Archive) {
     }
 }
 
-function Install-Cli {
+function Install-WorkerAsset([string]$WorkerSource) {
+    if (!(Test-Path $WorkerSource)) {
+        throw "source checkout did not contain bundled Python worker at src/workers/python/worker.py"
+    }
+    $workerRoots = @($WorkerRoot)
+    if (!$env:REPOGRAMMAR_WORKER_ROOT) {
+        $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
+    }
+    foreach ($root in ($workerRoots | Select-Object -Unique)) {
+        $workerDest = Join-Path $root "python"
+        New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
+        Copy-Item $WorkerSource (Join-Path $workerDest "worker.py") -Force
+    }
+}
+
+function Backup-UnmanagedCommand([string]$CommandPath) {
+    if (!(Test-Path $CommandPath)) {
+        return
+    }
+    $item = Get-Item $CommandPath
+    if ($item.PSIsContainer) {
+        throw "repogrammar command path is a directory and cannot be replaced automatically; choose a different CommandDir"
+    }
+    $backup = "$CommandPath.unmanaged-backup"
+    if (Test-Path $backup) {
+        $backup = "$backup.$((Get-Date).ToString('yyyyMMddHHmmss')).$PID"
+    }
+    Move-Item -LiteralPath $CommandPath -Destination $backup
+    Write-Output "Backed up existing unmanaged repogrammar command to $backup"
+}
+
+function Install-ManagedCliBinary([string]$Binary, [bool]$AllowUnmanagedBackup) {
+    if (!(Test-Path $Binary)) {
+        throw "repogrammar source binary not found: $Binary"
+    }
+    $installedBinary = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
+    $commandPath = Join-Path $CommandDir "repogrammar.exe"
+    if ((Test-Path $commandPath) -and !(Test-ManagedCommandPath $commandPath $installedBinary)) {
+        if ($AllowUnmanagedBackup) {
+            Backup-UnmanagedCommand $commandPath
+        } else {
+            throw "repogrammar command path already exists and is not managed by RepoGrammar; move it aside or choose a different CommandDir"
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
+    $tmpInstalled = "$installedBinary.tmp.$PID"
+    Copy-Item $Binary $tmpInstalled -Force
+    Move-Item $tmpInstalled $installedBinary -Force
+    New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
+    $tmpCommand = "$commandPath.tmp.$PID"
+    Copy-Item $installedBinary $tmpCommand -Force
+    Move-Item $tmpCommand $commandPath -Force
+    Write-Output "Installed $commandPath"
+}
+
+function Get-SourceBinaryPath {
+    if (![string]::IsNullOrWhiteSpace($SourceBinary)) {
+        return [System.IO.Path]::GetFullPath($SourceBinary)
+    }
+    return Join-Path (Join-Path $RepoRoot "target\release") "repogrammar.exe"
+}
+
+function Build-SourceBinaryIfNeeded([string]$Binary) {
+    if (Test-Path $Binary) {
+        return
+    }
+    if (!(Test-SourceCheckout)) {
+        throw "source build requires running this script from a RepoGrammar source checkout"
+    }
+    if (!(Get-Command cargo -ErrorAction SilentlyContinue)) {
+        throw "cargo is required for -FromSource when the source binary has not been built"
+    }
+    if (!$Yes -and !(Confirm-DefaultNo "Build repogrammar.exe now with cargo build --release?")) {
+        throw "cancelled; build manually with: cargo build --release"
+    }
+    Push-Location $RepoRoot
+    try {
+        & cargo build --release
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo build --release failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+    if (!(Test-Path $Binary)) {
+        throw "cargo build completed but did not create expected binary: $Binary"
+    }
+}
+
+function Install-CliFromSource {
+    if (!(Test-SourceCheckout)) {
+        throw "source install requires running this script from a RepoGrammar source checkout"
+    }
+    $binary = Get-SourceBinaryPath
+    Build-SourceBinaryIfNeeded $binary
+    Install-WorkerAsset (Join-Path $RepoRoot "src\workers\python\worker.py")
+    Install-ManagedCliBinary $binary $true
+    Write-Output "Installed $CommandDir\repogrammar.exe from source build"
+}
+
+function Install-CliFromRelease {
     $artifact = "repogrammar-x86_64-pc-windows-msvc.zip"
     $installedBinary = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
     $commandPath = Join-Path $CommandDir "repogrammar.exe"
@@ -154,22 +269,18 @@ function Install-Cli {
         if (!(Test-Path $worker)) {
             throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
         }
-        $workerRoots = @($WorkerRoot)
-        if (!$env:REPOGRAMMAR_WORKER_ROOT) {
-            $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
-        }
-        foreach ($root in ($workerRoots | Select-Object -Unique)) {
-            $workerDest = Join-Path $root "python"
-            New-Item -ItemType Directory -Force -Path $workerDest | Out-Null
-            Copy-Item $worker (Join-Path $workerDest "worker.py") -Force
-        }
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
-        Copy-Item $binary $installedBinary -Force
-        New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
-        Copy-Item $installedBinary $commandPath -Force
-        Write-Output "Installed $commandPath"
+        Install-WorkerAsset $worker
+        Install-ManagedCliBinary $binary $false
     } finally {
         Remove-Item -Recurse -Force $temp.FullName -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-Cli {
+    if ($script:UseSource) {
+        Install-CliFromSource
+    } else {
+        Install-CliFromRelease
     }
 }
 
@@ -212,6 +323,9 @@ function Run-AgentInstall {
         } else {
             & $command install
         }
+        if ($LASTEXITCODE -ne 0) {
+            throw "repogrammar install failed with exit code $LASTEXITCODE"
+        }
     }
 }
 
@@ -252,19 +366,28 @@ if ($UninstallCommand) {
 
 Write-Output "RepoGrammar setup"
 Write-Output ""
-Write-Output "1 = install or update repogrammar and configure coding agents"
-Write-Output "2 = install or update repogrammar command only"
+if (Test-SourceCheckout) {
+    Write-Output "1 = build/install from this source checkout and configure coding agents"
+    Write-Output "2 = build/install command from this source checkout only"
+} else {
+    Write-Output "1 = install or update repogrammar and configure coding agents"
+    Write-Output "2 = install or update repogrammar command only"
+}
 Write-Output "3 = configure coding agents only"
 Write-Output "4 = uninstall repogrammar command only"
+if (Test-SourceCheckout) {
+    Write-Output "5 = install or update from release artifact instead"
+}
 Write-Output "q = cancel"
 $choice = Read-Host "Selection [1]"
 switch ($choice) {
-    "" { Install-Cli; Run-AgentInstall }
-    "1" { Install-Cli; Run-AgentInstall }
-    "2" { Install-Cli }
-    "3" { Run-AgentInstall }
-    "4" { Remove-Command }
-    "q" { Write-Output "Cancelled. No changes made." }
-    "Q" { Write-Output "Cancelled. No changes made." }
+    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
+    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
+    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; break }
+    "3" { Run-AgentInstall; break }
+    "4" { Remove-Command; break }
+    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli } else { throw "invalid selection: $choice" }; break }
+    "q" { Write-Output "Cancelled. No changes made."; break }
+    "Q" { Write-Output "Cancelled. No changes made."; break }
     default { throw "invalid selection: $choice" }
 }

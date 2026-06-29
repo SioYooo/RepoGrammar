@@ -151,19 +151,23 @@ From a source checkout, the same installer lives at:
 
 ```text
 bash src/install/repogrammar-install.sh
+powershell -ExecutionPolicy Bypass -File src/install/install.ps1
 ```
 
-That script can install or repair the `repogrammar` command from a release,
+Those scripts can install or repair the `repogrammar` command from a release,
 configure Codex and Claude Code, uninstall connected agent integrations, remove
-the local `repogrammar` command, or, for contributors, build from source. Until
-the first prerelease artifact exists, source-checkout dogfood is the supported
-path:
+the local `repogrammar` command, or, for contributors, build from source. On
+Windows, the PowerShell source-checkout menu defaults to the same contributor
+source-build path. Until the first prerelease artifact exists, source-checkout
+dogfood is the supported path:
 
 ```text
 cargo build --release
 bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all
+powershell -ExecutionPolicy Bypass -File src/install/install.ps1 -InstallCliOnly -FromSource -Yes
+powershell -ExecutionPolicy Bypass -File src/install/install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
 ```
 
 The source path installs the built binary into RepoGrammar-managed user state

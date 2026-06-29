@@ -74,6 +74,8 @@ through explicit contributor paths:
 
 - `bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes`;
 - `bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all`.
+- `powershell -ExecutionPolicy Bypass -File src/install/install.ps1 -InstallCliOnly -FromSource -Yes`;
+- `powershell -ExecutionPolicy Bypass -File src/install/install.ps1 -InstallAndConfigure -FromSource -Yes -Target all`.
 
 The source path may require Rust/Cargo because it is a contributor workflow,
 but it must install the built binary into RepoGrammar-managed user state before
@@ -90,11 +92,13 @@ available and the script is not running from a source checkout with
 `--from-source`, it must fail with actionable guidance, including
 `REPOGRAMMAR_RELEASE_DIR` for local artifact tests.
 
-Windows public-preview source checkouts may provide `src/install/install.ps1`
-with the same binary-download and checksum-verification boundary. Windows
-source-checkout builds are deferred in this preview; Windows dogfood should use
-a local release-artifact directory until a Windows source-build path is
-specified and tested.
+Windows public-preview source checkouts provide `src/install/install.ps1` with
+the same binary-download and checksum-verification boundary. In a source
+checkout, `-FromSource` is a contributor path that builds or copies a local
+`repogrammar.exe`, installs bundled worker assets, refreshes the user-writable
+command path, and may then delegate to `repogrammar install`. It supports
+`REPOGRAMMAR_SOURCE_BINARY` / `-SourceBinary` for deterministic local dogfood
+tests with an already built binary.
 
 The npm package `@sioyooo/repogrammar` is a thin launcher only. Its `bin`
 entrypoint lives under `src/npm/`, detects OS/architecture, downloads the
@@ -285,7 +289,9 @@ noninteractive live writes, and a dependency-light text wizard:
   `--from-source` mode supports dogfood before release artifacts exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
   Windows x86_64 artifact. It verifies checksums and validates zip entry names
-  before extraction. Windows source-checkout dogfood builds remain deferred;
+  before extraction. In a source checkout, its interactive menu defaults to
+  the contributor source-build path, and its noninteractive `-FromSource` mode
+  supports dogfood before release artifacts exist;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
