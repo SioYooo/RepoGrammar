@@ -39,6 +39,7 @@
 
 - Every completed agent assignment ends with one or more atomic commits. Each commit must be independently coherent and include its tests and documentation.
 - Use Conventional Commits, stage explicit paths, and review the staged diff before committing.
+- Automated agents must never add themselves, model or provider identities, tool accounts, or AI vendors as authors, committers, co-authors, signed-off-by identities, or any other contributor attribution. Agent-made commits must use only the maintainer-configured author and committer identity, with no agent attribution trailers.
 - Implement a major feature on a dedicated branch. A major feature changes public behavior, module boundaries, storage or protocol contracts, or multiple subsystems.
 - Merge a major-feature branch into `main` only after all required checks pass. Use a non-fast-forward merge unless repository policy explicitly requires another strategy.
 - Do not rewrite shared history, force-push, discard unrelated changes, commit secrets, or push unless explicitly authorized.

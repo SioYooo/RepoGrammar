@@ -33,6 +33,14 @@ fix(store): preserve index revision on rollback
 docs(mcp): define conformance response contract
 ```
 
+## Attribution
+
+Automated agents must not add themselves, model or provider identities, tool
+accounts, or AI vendors as authors, committers, co-authors, signed-off-by
+identities, or any other contributor attribution. Agent-made commits must use
+only the maintainer-configured author and committer identity, with no agent
+attribution trailers.
+
 ## Merge conditions
 
 A major-feature branch can merge into `main` only after all required checks
