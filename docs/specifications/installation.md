@@ -92,6 +92,14 @@ but it must install the built binary into RepoGrammar-managed user state before
 refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
+First-party installers must resolve the same default install data directory as
+the Rust installer (`$XDG_DATA_HOME/repogrammar`, otherwise
+`~/.local/share/repogrammar`), so release installs, source builds, and direct
+`repogrammar install` runs converge on one managed executable authority under
+that data directory's `bin`, and agent MCP entries written by any of them point
+at the same managed executable. `cargo install` and the npm launcher install to
+their own toolchain-managed locations; they are contributor and bypass
+acquisition paths, not the managed authority. See ADR-0014.
 Repeated CLI installation must replace existing RepoGrammar-managed installed
 executables and managed command copies rather than failing only because the
 destination file already exists. Replacement must stage the new file, remove

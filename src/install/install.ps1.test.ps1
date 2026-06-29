@@ -68,6 +68,42 @@ try {
         throw "reinstalled repogrammar version check failed"
     }
 
+    # Default layout (no -CommandDir/-InstallDir) must resolve to the unified
+    # authority: ~/.local/share/repogrammar/bin and ~/.local/bin (ADR-0014).
+    $DefaultHome = Join-Path $TempRoot "default-home"
+    New-Item -ItemType Directory -Force -Path $DefaultHome | Out-Null
+    $SavedUserProfile = $env:USERPROFILE
+    $SavedHome = $env:HOME
+    $SavedXdg = $env:XDG_DATA_HOME
+    $SavedEnvCommandDir = $env:REPOGRAMMAR_COMMAND_DIR
+    $SavedEnvInstallDir = $env:REPOGRAMMAR_INSTALL_DIR
+    $SavedEnvWorkerRoot = $env:REPOGRAMMAR_WORKER_ROOT
+    try {
+        $env:USERPROFILE = $DefaultHome
+        $env:HOME = $DefaultHome
+        Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue
+        Remove-Item Env:REPOGRAMMAR_COMMAND_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:REPOGRAMMAR_INSTALL_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:REPOGRAMMAR_WORKER_ROOT -ErrorAction SilentlyContinue
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -Yes
+        if ($LASTEXITCODE -ne 0) {
+            throw "default-layout install failed with exit code $LASTEXITCODE"
+        }
+        Assert-PathExists (Join-Path $DefaultHome ".local\share\repogrammar\bin\repogrammar.exe") "default install dir did not resolve to ~/.local/share/repogrammar/bin"
+        Assert-PathExists (Join-Path $DefaultHome ".local\bin\repogrammar.exe") "default command dir did not resolve to ~/.local/bin"
+    } finally {
+        $env:USERPROFILE = $SavedUserProfile
+        if ($null -ne $SavedHome) { $env:HOME = $SavedHome } else { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
+        if ($null -ne $SavedXdg) { $env:XDG_DATA_HOME = $SavedXdg } else { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
+        if ($null -ne $SavedEnvCommandDir) { $env:REPOGRAMMAR_COMMAND_DIR = $SavedEnvCommandDir } else { Remove-Item Env:REPOGRAMMAR_COMMAND_DIR -ErrorAction SilentlyContinue }
+        if ($null -ne $SavedEnvInstallDir) { $env:REPOGRAMMAR_INSTALL_DIR = $SavedEnvInstallDir } else { Remove-Item Env:REPOGRAMMAR_INSTALL_DIR -ErrorAction SilentlyContinue }
+        if ($null -ne $SavedEnvWorkerRoot) { $env:REPOGRAMMAR_WORKER_ROOT = $SavedEnvWorkerRoot } else { Remove-Item Env:REPOGRAMMAR_WORKER_ROOT -ErrorAction SilentlyContinue }
+    }
+
     $DefaultBuildCommandDir = Join-Path $TempRoot "default-build-bin"
     $DefaultBuildInstallDir = Join-Path $TempRoot "default-build-data"
     $FakeCargoDir = Join-Path $TempRoot "fake-cargo"
