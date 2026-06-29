@@ -125,6 +125,12 @@ available, and it must create `.repogrammar/.gitignore` as a second defense.
 absolute paths, traversal, nested paths, symlink state directories, file
 conflicts, and names outside `.repogrammar` or `.repogrammar-*` must be
 rejected.
+After successful initialization, human and JSON `init` output must report the
+current repository storage and indexing status from the same status inspection
+contract used by `repogrammar status`. Re-running `init` in a repository with a
+readable active generation must therefore report `storage: available` and the
+active indexing mode such as `syntax_only_code_units`, rather than replaying
+bootstrap manifest placeholder values.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive

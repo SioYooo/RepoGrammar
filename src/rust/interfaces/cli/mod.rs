@@ -852,7 +852,7 @@ where
     };
 
     match command {
-        "init" => handle_init(&options, current_dir, env_lookup),
+        "init" => handle_init(&options, current_dir, env_lookup, runtime),
         "uninit" => handle_uninit(&options, current_dir, env_lookup),
         "status" => handle_status(&options, current_dir, env_lookup, runtime),
         "doctor" => handle_doctor(&options, current_dir, env_lookup, runtime),
@@ -3597,19 +3597,37 @@ fn read_plan_count_bucket(value: usize) -> &'static str {
     }
 }
 
-fn handle_init<F>(options: &LifecycleOptions, current_dir: &Path, env_lookup: &F) -> CliOutput
+fn handle_init<F>(
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
 where
     F: Fn(&str) -> Option<String>,
 {
+    let repository_root = repository_root(current_dir, options.project_path.as_deref());
+    let state_dir_override = state_dir_override(env_lookup);
     let request = RepositoryLifecycleInitRequest {
-        path: repository_root(current_dir, options.project_path.as_deref()),
-        state_dir_override: state_dir_override(env_lookup),
+        path: repository_root.clone(),
+        state_dir_override: state_dir_override.clone(),
         write_root_gitignore: options.write_gitignore,
     };
 
     match init_repository(request) {
-        Ok(outcome) if options.json => CliOutput::success(init_outcome_json(&outcome)),
-        Ok(outcome) => CliOutput::success(init_outcome_human(&outcome)),
+        Ok(outcome) => {
+            let status = runtime
+                .repository_status(RepositoryStatusRequest {
+                    path: repository_root,
+                    state_dir_override,
+                })
+                .ok();
+            if options.json {
+                CliOutput::success(init_outcome_json(&outcome, status.as_ref()))
+            } else {
+                CliOutput::success(init_outcome_human(&outcome, status.as_ref()))
+            }
+        }
         Err(error) => lifecycle_error("init", options.json, error),
     }
 }
@@ -4418,9 +4436,12 @@ where
         .unwrap_or(false)
 }
 
-fn init_outcome_human(outcome: &RepositoryInitOutcome) -> String {
+fn init_outcome_human(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+) -> String {
     let mut output = format!(
-        "init: repository-local state ready\nstate_dir: {}\ncreated: {}\ngit_info_exclude: {}\nroot_gitignore: {}\nstorage: not_implemented\nindexing: not_implemented\n",
+        "init: repository-local state ready\nstate_dir: {}\ncreated: {}\ngit_info_exclude: {}\nroot_gitignore: {}\nstorage: {}\nindexing: {}\n",
         outcome.state_dir,
         outcome.created,
         if outcome.git_info_exclude_updated {
@@ -4432,7 +4453,9 @@ fn init_outcome_human(outcome: &RepositoryInitOutcome) -> String {
             "updated"
         } else {
             "not_modified"
-        }
+        },
+        implementation_status(init_storage_status(outcome, status)),
+        implementation_status(init_indexing_status(outcome, status))
     );
     for entry in &outcome.repaired_entries {
         output.push_str("repaired_entry: ");
@@ -4442,7 +4465,10 @@ fn init_outcome_human(outcome: &RepositoryInitOutcome) -> String {
     output
 }
 
-fn init_outcome_json(outcome: &RepositoryInitOutcome) -> String {
+fn init_outcome_json(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+) -> String {
     json_line(json!({
         "command": "init",
         "status": "initialized",
@@ -4450,10 +4476,28 @@ fn init_outcome_json(outcome: &RepositoryInitOutcome) -> String {
         "created": outcome.created,
         "git_info_exclude_updated": outcome.git_info_exclude_updated,
         "root_gitignore_updated": outcome.root_gitignore_updated,
-        "storage": "not_implemented",
-        "indexing": "not_implemented",
+        "storage": implementation_status(init_storage_status(outcome, status)),
+        "indexing": implementation_status(init_indexing_status(outcome, status)),
         "repaired_entries": outcome.repaired_entries,
     }))
+}
+
+fn init_storage_status(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+) -> RepositoryImplementationStatus {
+    status
+        .map(|report| report.storage)
+        .unwrap_or(outcome.storage)
+}
+
+fn init_indexing_status(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+) -> RepositoryImplementationStatus {
+    status
+        .map(|report| report.indexing)
+        .unwrap_or(outcome.indexing)
 }
 
 fn uninit_outcome_human(outcome: &RepositoryUninitOutcome) -> String {
@@ -7089,6 +7133,37 @@ mod tests {
         assert!(output.stdout.contains("repository-local state ready"));
         assert!(output.stdout.contains("storage: not_implemented"));
         assert!(output.stdout.contains("indexing: not_implemented"));
+    }
+
+    #[test]
+    fn init_rerun_reports_active_storage_and_indexing_status() {
+        let workspace = TempWorkspace::new("cli-init-rerun-active-status");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let json_output =
+            run_with_context_and_runtime(["init", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(json_output.status, 0);
+        let value: Value = serde_json::from_str(json_output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["created"], false);
+        assert_eq!(value["storage"], "available");
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+
+        let human_output = run_with_context_and_runtime(["init"], workspace.path(), &env, &runtime);
+
+        assert_eq!(human_output.status, 0);
+        assert!(human_output.stdout.contains("created: false"));
+        assert!(human_output.stdout.contains("storage: available"));
+        assert!(human_output
+            .stdout
+            .contains("indexing: syntax_only_code_units"));
     }
 
     #[test]
