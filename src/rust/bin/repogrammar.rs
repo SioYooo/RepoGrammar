@@ -11,7 +11,8 @@ use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::autosync::{
     acquire_autosync_daemon, autosync_status, daemon_log_path, disable_autosync, enable_autosync,
-    stop_autosync, AutosyncReport, AutosyncRequest, AutosyncSettings,
+    record_autosync_run, stop_autosync, AutosyncReport, AutosyncRequest, AutosyncRunResult,
+    AutosyncSettings,
 };
 use repogrammar::application::indexing::{
     index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
@@ -247,10 +248,25 @@ impl ProductCliRuntime {
                 stderr_is_terminal: false,
             };
             match self.index_repository("sync", sync_request) {
-                Ok(_) if !request.quiet => eprintln!("autosync: sync complete"),
-                Ok(_) => {}
+                Ok(outcome) => {
+                    if !request.quiet {
+                        eprintln!("autosync: sync complete");
+                    }
+                    let _ = record_autosync_run(
+                        &autosync_request,
+                        AutosyncRunResult::Ok,
+                        outcome.active_generation.as_deref(),
+                        None,
+                    );
+                }
                 Err(error) => {
                     eprintln!("autosync: sync failed: {error}");
+                    let _ = record_autosync_run(
+                        &autosync_request,
+                        AutosyncRunResult::Error,
+                        None,
+                        Some(&error.to_string()),
+                    );
                 }
             }
         }
@@ -311,6 +327,7 @@ impl ProductCliRuntime {
             pid: Some(child.id()),
             poll_ms: request.poll_ms,
             debounce_ms: request.debounce_ms,
+            last_run: status.last_run,
             message: "auto-sync started".to_string(),
         })
     }

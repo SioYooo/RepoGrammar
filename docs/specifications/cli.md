@@ -278,6 +278,14 @@ the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `disable` requires the daemon to be stopped first and removes
 `.repogrammar/autosync.json`.
 
+After each sync attempt the daemon records a best-effort run state in
+`.repogrammar/autosync-run.json` (last sync time, result, synced generation,
+and any error). `autosync status` surfaces it as `last_sync_unix_seconds`,
+`last_sync_result`, optional `last_sync_generation`, and optional
+`last_sync_error`, so `running: true` can be distinguished from "actually synced
+recently". A missing or unreadable run-state file is reported as absent rather
+than failing the status read.
+
 `autosync` supports `--project <path>`, `--path <path>`, `--json`, `--quiet`,
 `--progress auto|always|never` for long-running command compatibility,
 `--poll-ms <n>` where `n` is 100 through 600000, and `--debounce-ms <n>` where

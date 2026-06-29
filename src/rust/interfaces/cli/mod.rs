@@ -5138,6 +5138,19 @@ fn autosync_human(
         "poll_ms: {}\ndebounce_ms: {}\n",
         report.poll_ms, report.debounce_ms
     ));
+    if let Some(run) = &report.last_run {
+        output.push_str(&format!(
+            "last_sync_unix_seconds: {}\nlast_sync_result: {}\n",
+            run.last_sync_unix_seconds,
+            run.result.as_str()
+        ));
+        if let Some(generation) = &run.synced_generation {
+            output.push_str(&format!("last_sync_generation: {generation}\n"));
+        }
+        if let Some(error) = &run.error {
+            output.push_str(&format!("last_sync_error: {error}\n"));
+        }
+    }
     output
 }
 
@@ -5152,6 +5165,12 @@ fn autosync_json(command: AutosyncCommand, report: &AutosyncReport) -> String {
         "pid": report.pid,
         "poll_ms": report.poll_ms,
         "debounce_ms": report.debounce_ms,
+        "last_run": report.last_run.as_ref().map(|run| json!({
+            "last_sync_unix_seconds": run.last_sync_unix_seconds,
+            "result": run.result.as_str(),
+            "synced_generation": run.synced_generation,
+            "error": run.error,
+        })),
         "message": report.message,
     }))
 }
@@ -5853,6 +5872,7 @@ mod tests {
                     .then_some(1234),
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
+                last_run: None,
                 message: format!("autosync {} ok", command.as_str()),
             })
         }
@@ -8434,6 +8454,35 @@ mod tests {
             Some("/home/u/.local/share/repogrammar/bin/repogrammar"),
         );
         assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn autosync_human_renders_last_sync_summary() {
+        let report = AutosyncReport {
+            state_dir: ".repogrammar".to_string(),
+            enabled: true,
+            running: true,
+            pid: Some(42),
+            poll_ms: 1000,
+            debounce_ms: 750,
+            last_run: Some(crate::application::autosync::AutosyncRunReport {
+                last_sync_unix_seconds: 1_700_000_000,
+                result: crate::application::autosync::AutosyncRunResult::Ok,
+                synced_generation: Some("gen-000007".to_string()),
+                error: None,
+            }),
+            message: "auto-sync status".to_string(),
+        };
+        let output = autosync_human(
+            AutosyncCommand::Status,
+            &report,
+            &AutosyncOptions::default(),
+        );
+        assert!(output.contains("last_sync_result: ok"), "{output}");
+        assert!(
+            output.contains("last_sync_generation: gen-000007"),
+            "{output}"
+        );
     }
 
     #[test]
