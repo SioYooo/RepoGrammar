@@ -386,6 +386,11 @@ noninteractive live writes, and a dependency-light text wizard:
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;
+- install reports an advisory environment self-check: when multiple
+  `repogrammar` executables are discoverable on PATH, or when the PATH-resolved
+  `repogrammar` is not the RepoGrammar-managed command, it prints the conflicting
+  paths and convergence guidance. The self-check is advisory only and never
+  blocks or fails the install;
 - install runs a read-only MCP self-test before native agent configuration, with
   a bounded timeout that kills and reaps a hanging self-test process;
 - install writes one RepoGrammar-owned receipt per configured target under the

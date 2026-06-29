@@ -1114,7 +1114,7 @@ fn create_command_link_or_copy(source: &Path, destination: &Path) -> Result<(), 
     }
 }
 
-fn binary_name() -> &'static str {
+pub(crate) fn binary_name() -> &'static str {
     #[cfg(windows)]
     {
         "repogrammar.exe"
@@ -1136,7 +1136,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
     normalized_lexical_path(left) == normalized_lexical_path(right)
 }
 
-fn normalized_lexical_path(path: &Path) -> String {
+pub(crate) fn normalized_lexical_path(path: &Path) -> String {
     let unified = path.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         unified.to_ascii_lowercase()

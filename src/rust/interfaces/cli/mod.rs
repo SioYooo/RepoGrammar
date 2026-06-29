@@ -3,9 +3,10 @@
 use crate::application::autosync::{AutosyncReport, AutosyncSettings};
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    known_agent_targets, normalize_concrete_targets, owned_install_receipt_exists, plan_install,
-    resolve_instruction_file, supported_concrete_targets, target_adapter, targets_for_display,
-    AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
+    binary_name, known_agent_targets, normalize_concrete_targets, normalized_lexical_path,
+    owned_install_receipt_exists, plan_install, resolve_instruction_file,
+    supported_concrete_targets, target_adapter, targets_for_display, AgentTarget,
+    InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
@@ -1832,6 +1833,16 @@ where
             output.push_str(&line);
             output.push('\n');
         }
+        if command == "install" {
+            for line in install_environment_warnings(
+                &discovered_repogrammar_executables(env_lookup),
+                None,
+                None,
+            ) {
+                output.push_str(&line);
+                output.push('\n');
+            }
+        }
         output.push_str(
             "anonymous telemetry does not run paired token-saving experiments or add model calls\n",
         );
@@ -1875,6 +1886,14 @@ where
                 let mut output = wizard_prefix;
                 output.push_str(&install_outcome_human(&outcome));
                 if command == "install" {
+                    for line in install_environment_warnings(
+                        &discovered_repogrammar_executables(env_lookup),
+                        outcome.command_path.as_deref(),
+                        outcome.installed_executable_path.as_deref(),
+                    ) {
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
                     match apply_install_telemetry_preference(&request, &context, env_lookup) {
                         Ok(status) => output.push_str(&install_telemetry_human(&status)),
                         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
@@ -2327,6 +2346,58 @@ where
         .filter(|entry| !entry.trim().is_empty())
         .map(PathBuf::from)
         .collect()
+}
+
+fn discovered_repogrammar_executables<F>(env_lookup: &F) -> Vec<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let name = binary_name();
+    let mut found = Vec::new();
+    let mut seen = Vec::new();
+    for dir in path_entries(env_lookup) {
+        let candidate = dir.join(name);
+        if !candidate.is_file() {
+            continue;
+        }
+        let key = normalized_lexical_path(&candidate);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        found.push(candidate.display().to_string());
+    }
+    found
+}
+
+/// Advisory install-time environment self-check. Reports when multiple
+/// `repogrammar` executables are discoverable on PATH, or when the PATH-resolved
+/// `repogrammar` is not the RepoGrammar-managed command. It never blocks install.
+fn install_environment_warnings(
+    discovered_copies: &[String],
+    command_path: Option<&str>,
+    installed_executable: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if discovered_copies.len() > 1 {
+        warnings.push(format!(
+            "self-check: multiple repogrammar executables are on PATH ({}); your shell and coding agents may run different versions. Keep one authority and remove the rest.",
+            discovered_copies.join(", ")
+        ));
+    }
+    if let (Some(first), Some(command)) = (discovered_copies.first(), command_path) {
+        let first_key = normalized_lexical_path(Path::new(first));
+        let matches_authority = [Some(command), installed_executable]
+            .into_iter()
+            .flatten()
+            .any(|authority| normalized_lexical_path(Path::new(authority)) == first_key);
+        if !matches_authority {
+            warnings.push(format!(
+                "self-check: the repogrammar resolved first on PATH ({first}) is not the RepoGrammar-managed command ({command}); reinstalls update the managed copy, not the PATH entry."
+            ));
+        }
+    }
+    warnings
 }
 
 fn path_is_on_env_path<F>(path: &Path, env_lookup: &F) -> bool
@@ -8332,6 +8403,37 @@ mod tests {
         let logs = run(["logs", "--mystery"]);
         assert_eq!(logs.status, 2);
         assert!(logs.stderr.contains("unknown logs option: --mystery"));
+    }
+
+    #[test]
+    fn install_environment_warnings_flag_multiple_copies_and_shadowed_authority() {
+        let copies = vec![
+            "/usr/local/cargo/bin/repogrammar".to_string(),
+            "/home/u/.local/share/repogrammar/bin/repogrammar".to_string(),
+        ];
+        let warnings = install_environment_warnings(
+            &copies,
+            Some("/home/u/.local/bin/repogrammar"),
+            Some("/home/u/.local/share/repogrammar/bin/repogrammar"),
+        );
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("multiple repogrammar executables")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("not the RepoGrammar-managed command")));
+    }
+
+    #[test]
+    fn install_environment_warnings_quiet_for_single_authoritative_copy() {
+        let copies = vec!["/home/u/.local/bin/repogrammar".to_string()];
+        let warnings = install_environment_warnings(
+            &copies,
+            Some("/home/u/.local/bin/repogrammar"),
+            Some("/home/u/.local/share/repogrammar/bin/repogrammar"),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
