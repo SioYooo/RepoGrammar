@@ -155,6 +155,11 @@
   `docs/plans/rust-tsjs-semantic-analysis-plan.md`. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
+  An explicit Rust Cargo metadata provider adapter can parse
+  `cargo metadata --format-version=1 --no-deps` output into owned
+  `PROJECT_CONFIG` facts and recoverable provider `UNKNOWN`s when called
+  directly; default indexing does not call it, and rust-analyzer/rustc/rustdoc
+  JSON semantic providers remain deferred.
   The `dynamic-unknown` release fixture now exercises dynamic Pydantic model
   factories, dynamic import, `sys.path` mutation, dynamic call target,
   dynamic/unresolved decorator, and monkey-patch boundaries through product indexing/query paths;

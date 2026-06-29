@@ -44,6 +44,15 @@ execute tools. Rust build-variant repository blocking is now scoped to the root
 `Cargo.toml`; fixture or nested manifests must not globally clear unrelated
 Rust family support.
 
+The current implementation also includes an explicit
+`adapters::semantic_workers::rust` Cargo metadata provider slice. It can run
+`cargo metadata --format-version=1 --no-deps` when called explicitly, parse
+workspace/package/target/feature/dependency metadata into owned
+`PROJECT_CONFIG` semantic facts, and return recoverable provider `UNKNOWN`s for
+unavailable Cargo or missing manifest candidates. It is not wired into default
+`index`/`sync`, and it rejects requests that claim build-script or proc-macro
+execution.
+
 ## Research Sources
 
 Primary sources and high-quality papers reviewed on 2026-06-29:
@@ -157,7 +166,9 @@ Provider output should translate to RepoGrammar-owned facts such as:
 
 1. Cargo metadata ingestion with repo-relative manifest/target/crate scope and
    fixture coverage for workspace packages, target-specific dependencies,
-   features, build scripts, and proc-macro declarations.
+   features, build scripts, and proc-macro declarations. The first slice parses
+   workspace packages, targets, features, and dependencies into owned
+   `PROJECT_CONFIG` facts without default indexing execution.
 2. rust-analyzer-backed worker or sidecar that accepts bounded candidates and
    returns owned resolved item/type/import facts or recoverable `UNKNOWN`.
 3. Optional rustc-backed cross-checks for claim-upgrading facts, limited by

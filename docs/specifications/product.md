@@ -92,8 +92,10 @@ recoverable provider-unavailable `UNKNOWN`s, plus an application-layer planner
 that can construct candidate-scoped Pyrefly framework-identity request
 envelopes for future adapters from in-memory facts or validated
 active-generation snapshots. It does not execute provider tools, store provider
-facts, or add production provider-backed Python, Rust, or TS/JS semantics. The
-Rust/TSJS semantic analysis roadmap is tracked in
+facts, or add production provider-backed Python, Rust, or TS/JS family support.
+An explicit Rust Cargo metadata adapter can produce owned `PROJECT_CONFIG`
+facts when called directly, but it is not wired into default indexing and does
+not prove symbol/type/call semantics. The Rust/TSJS semantic analysis roadmap is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md`.
 The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
@@ -154,7 +156,7 @@ must not globally block unrelated root Rust family support.
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
-| Rust provider-backed semantics | Planned preview | Provider ports exist, but Cargo/rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
+| Rust provider-backed semantics | Planned preview | Provider ports and an explicit Cargo metadata `PROJECT_CONFIG` adapter exist, but rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
 | TS/JS provider-backed semantics | Planned preview | Provider ports exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |

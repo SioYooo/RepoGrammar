@@ -101,6 +101,12 @@ The Rust provider-backed path is planned in
 output, and unavailable `UNKNOWN` boundaries for future Cargo metadata,
 rust-analyzer, rustc, and rustdoc JSON adapters. It is not an adapter and does
 not execute Cargo, rustc, build scripts, procedural macros, or repository code.
+The current `adapters::semantic_workers::rust` slice implements only an
+explicit Cargo metadata provider. It can run `cargo metadata --format-version=1
+--no-deps` when directly called, parse workspace/package/target/feature/
+dependency metadata into owned `PROJECT_CONFIG` semantic facts, and return
+recoverable `UNKNOWN`s for unavailable Cargo or missing manifest candidates.
+Default `index` and `sync` do not call it.
 
 Future Rust adapters must translate Cargo/rustc/rust-analyzer/rustdoc objects
 into RepoGrammar-owned `SemanticFact`, `Evidence`, `Provenance`, and

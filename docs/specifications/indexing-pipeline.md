@@ -384,6 +384,10 @@ validated active-generation claim-input snapshot used by query/family code.
 It does not execute those requests, persist provider facts, or expose them
 through CLI/MCP.
 No Pyrefly, Pyright, RightTyper, or runtime-trace adapter is implemented.
+An explicit Rust Cargo metadata provider adapter can parse
+`cargo metadata --format-version=1 --no-deps` output into owned
+`PROJECT_CONFIG` facts, but default indexing does not call it and it does not
+execute build scripts or procedural macros.
 
 ## Optional providers
 
