@@ -261,6 +261,40 @@ prepare_command_path_for_install() {
   printf "Backed up existing unmanaged repogrammar command to %s\n" "$backup"
 }
 
+replace_file_from_temp() {
+  local source="$1"
+  local destination="$2"
+  local label="$3"
+  local backup=""
+  if [[ ! -e "$source" ]]; then
+    die "temporary ${label} was not created: ${source}"
+  fi
+  if [[ -d "$destination" && ! -L "$destination" ]]; then
+    rm -f "$source"
+    die "${label} path is a directory and cannot be replaced automatically: ${destination}"
+  fi
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    backup="${destination}.replace-backup.$$"
+    if [[ -e "$backup" || -L "$backup" ]]; then
+      backup="${backup}.$(date +%Y%m%d%H%M%S)"
+    fi
+    if ! mv "$destination" "$backup"; then
+      rm -f "$source"
+      die "failed to replace ${label} at ${destination}; close any running repogrammar or coding-agent process that may be using it and retry"
+    fi
+  fi
+  if ! mv "$source" "$destination"; then
+    if [[ -n "$backup" && ( -e "$backup" || -L "$backup" ) ]]; then
+      mv "$backup" "$destination" 2>/dev/null || true
+    fi
+    rm -f "$source"
+    die "failed to install ${label} at ${destination}"
+  fi
+  if [[ -n "$backup" ]]; then
+    rm -f "$backup" || true
+  fi
+}
+
 install_managed_cli_binary() {
   local source="$1"
   prepare_command_path_for_install
@@ -268,17 +302,17 @@ install_managed_cli_binary() {
   local tmp_executable="${INSTALLED_EXECUTABLE}.tmp.$$"
   cp "$source" "$tmp_executable"
   chmod 755 "$tmp_executable"
-  mv "$tmp_executable" "$INSTALLED_EXECUTABLE"
+  replace_file_from_temp "$tmp_executable" "$INSTALLED_EXECUTABLE" "managed repogrammar executable"
 
   mkdir -p "$COMMAND_DIR"
   if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
-    rm -f "$COMMAND_PATH"
+    rm -f "$COMMAND_PATH" || die "failed to replace repogrammar command at ${COMMAND_PATH}; close any running repogrammar or coding-agent process that may be using it and retry"
   fi
   if ! ln -s "$INSTALLED_EXECUTABLE" "$COMMAND_PATH" 2>/dev/null; then
     local tmp_command="${COMMAND_PATH}.tmp.$$"
     cp "$INSTALLED_EXECUTABLE" "$tmp_command"
     chmod 755 "$tmp_command"
-    mv "$tmp_command" "$COMMAND_PATH"
+    replace_file_from_temp "$tmp_command" "$COMMAND_PATH" "repogrammar command"
   fi
 }
 

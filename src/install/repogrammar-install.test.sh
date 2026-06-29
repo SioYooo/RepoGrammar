@@ -74,6 +74,14 @@ test -f "${TMP_ROOT}/share/repogrammar/workers/python/worker.py"
 test -f "${COMMAND_DIR}/repogrammar-workers/python/worker.py"
 test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
 
+REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+"$INSTALLER" --install-cli-only --yes >/dev/null
+
+"${COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
+test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
+
 STATE_REPO="${TMP_ROOT}/state-boundary-repo"
 STATE_COMMAND_DIR="${TMP_ROOT}/state-boundary-bin"
 STATE_INSTALL_DIR="${TMP_ROOT}/state-boundary-data"
@@ -140,6 +148,14 @@ REPOGRAMMAR_INSTALL_DIR="$SOURCE_INSTALL_DIR" \
 test -x "${SOURCE_INSTALL_DIR}/bin/repogrammar"
 test -f "${SOURCE_INSTALL_DIR}/workers/python/worker.py"
 test -f "${SOURCE_COMMAND_DIR}/repogrammar-workers/python/worker.py"
+
+REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
+REPOGRAMMAR_COMMAND_DIR="$SOURCE_COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$SOURCE_INSTALL_DIR" \
+"$INSTALLER" --install-cli-only --from-source --yes >/dev/null
+
+"${SOURCE_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
+test -x "${SOURCE_INSTALL_DIR}/bin/repogrammar"
 
 DEFAULT_SOURCE_COMMAND_DIR="${TMP_ROOT}/default-source-bin"
 DEFAULT_SOURCE_INSTALL_DIR="${TMP_ROOT}/default-source-data"

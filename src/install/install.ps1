@@ -172,6 +172,41 @@ function Backup-UnmanagedCommand([string]$CommandPath) {
     Write-Output "Backed up existing unmanaged repogrammar command to $backup"
 }
 
+function Install-TempFileReplacing([string]$TempPath, [string]$Destination, [string]$Label) {
+    if (!(Test-Path -LiteralPath $TempPath)) {
+        throw "temporary $Label was not created: $TempPath"
+    }
+    if (Test-Path -LiteralPath $Destination -PathType Container) {
+        Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
+        throw "$Label path is a directory and cannot be replaced automatically: $Destination"
+    }
+
+    $backup = $null
+    if (Test-Path -LiteralPath $Destination) {
+        $backup = "$Destination.replace-backup.$PID.$([guid]::NewGuid().ToString('N'))"
+        try {
+            Move-Item -LiteralPath $Destination -Destination $backup -ErrorAction Stop
+        } catch {
+            Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
+            throw "failed to replace $Label at ${Destination}: $($_.Exception.Message). Close any running repogrammar or coding-agent process that may be using it and retry."
+        }
+    }
+
+    try {
+        Move-Item -LiteralPath $TempPath -Destination $Destination -ErrorAction Stop
+    } catch {
+        if ($backup -and (Test-Path -LiteralPath $backup)) {
+            Move-Item -LiteralPath $backup -Destination $Destination -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
+        throw "failed to install $Label at ${Destination}: $($_.Exception.Message)"
+    }
+
+    if ($backup -and (Test-Path -LiteralPath $backup)) {
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-ManagedCliBinary([string]$Binary, [bool]$AllowUnmanagedBackup) {
     if (!(Test-Path $Binary)) {
         throw "repogrammar source binary not found: $Binary"
@@ -187,12 +222,12 @@ function Install-ManagedCliBinary([string]$Binary, [bool]$AllowUnmanagedBackup) 
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installedBinary) | Out-Null
     $tmpInstalled = "$installedBinary.tmp.$PID"
-    Copy-Item $Binary $tmpInstalled -Force
-    Move-Item $tmpInstalled $installedBinary -Force
+    Copy-Item -LiteralPath $Binary -Destination $tmpInstalled -Force
+    Install-TempFileReplacing $tmpInstalled $installedBinary "managed repogrammar executable"
     New-Item -ItemType Directory -Force -Path $CommandDir | Out-Null
     $tmpCommand = "$commandPath.tmp.$PID"
-    Copy-Item $installedBinary $tmpCommand -Force
-    Move-Item $tmpCommand $commandPath -Force
+    Copy-Item -LiteralPath $installedBinary -Destination $tmpCommand -Force
+    Install-TempFileReplacing $tmpCommand $commandPath "repogrammar command"
     Write-Output "Installed $commandPath"
 }
 

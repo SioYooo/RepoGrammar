@@ -53,6 +53,20 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "installed repogrammar version check failed"
     }
+    & powershell -ExecutionPolicy Bypass -File $Installer `
+        -InstallCliOnly `
+        -FromSource `
+        -SourceBinary $SourceBinary `
+        -CommandDir $CommandDir `
+        -InstallDir $InstallDir `
+        -Yes
+    if ($LASTEXITCODE -ne 0) {
+        throw "source reinstall over existing managed files failed with exit code $LASTEXITCODE"
+    }
+    & (Join-Path $CommandDir "repogrammar.exe") version | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "reinstalled repogrammar version check failed"
+    }
 
     $DefaultBuildCommandDir = Join-Path $TempRoot "default-build-bin"
     $DefaultBuildInstallDir = Join-Path $TempRoot "default-build-data"

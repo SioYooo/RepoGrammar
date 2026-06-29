@@ -82,6 +82,11 @@ but it must install the built binary into RepoGrammar-managed user state before
 refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
+Repeated CLI installation must replace existing RepoGrammar-managed installed
+executables and managed command copies rather than failing only because the
+destination file already exists. If replacement is blocked by an active process
+or permissions, wrappers must fail with actionable guidance instead of silently
+leaving a partial unmanaged command.
 If the user-writable command path already contains an unmanaged
 `repogrammar`, the wrapper may back it up and replace it with the managed
 command because the user explicitly invoked CLI installation. It must not
