@@ -243,7 +243,9 @@ Global MCP integration is supported for Codex and Claude Code. Running
 `repogrammar install` with no flags opens a simple text wizard that lets you
 select Codex, Claude Code, or both in one run. Re-running the wizard later lets
 you add a missing supported agent or repair the `repogrammar` command without
-reinstalling already managed agents.
+reinstalling already managed agents. Anonymous telemetry remains opt-in and
+default-no in the wizard; after you review the install plan, pressing Enter at
+the final confirmation proceeds.
 
 Noninteractive dry-runs remain available:
 

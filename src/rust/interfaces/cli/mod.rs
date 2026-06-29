@@ -1557,8 +1557,8 @@ where
 
     let plan = interactive_install_plan(request, &statuses);
     let confirmation = install_prompt
-        .prompt_install_confirmation(&format!("{plan}\nProceed with install? [y/N] "))?;
-    if !parse_default_no_prompt_response(&confirmation)? {
+        .prompt_install_confirmation(&format!("{plan}\nProceed with install? [Y/n] "))?;
+    if !parse_default_yes_prompt_response(&confirmation)? {
         return Ok(InteractiveInstallDecision::Exit(
             "install cancelled; no changes made\n".to_string(),
         ));
@@ -1809,6 +1809,14 @@ fn parse_default_no_prompt_response(response: &str) -> Result<bool, String> {
     match response.trim().to_ascii_lowercase().as_str() {
         "" | "n" | "no" => Ok(false),
         "y" | "yes" => Ok(true),
+        _ => Err("prompt requires y/yes or n/no".to_string()),
+    }
+}
+
+fn parse_default_yes_prompt_response(response: &str) -> Result<bool, String> {
+    match response.trim().to_ascii_lowercase().as_str() {
+        "" | "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
         _ => Err("prompt requires y/yes or n/no".to_string()),
     }
 }
@@ -7769,7 +7777,7 @@ mod tests {
             _ => None,
         };
         let runtime = InstallRuntime::default();
-        let prompt = WizardPrompt::new(["2,1"], [""], ["y"]);
+        let prompt = WizardPrompt::new(["2,1"], [""], [""]);
 
         let output =
             run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
@@ -7790,6 +7798,7 @@ mod tests {
         assert_eq!(prompt.selection_calls.get(), 1);
         assert_eq!(prompt.telemetry_calls.get(), 1);
         assert_eq!(prompt.confirmation_calls.get(), 1);
+        assert!(prompt.confirmation_prompts.borrow()[0].contains("[Y/n]"));
     }
 
     #[test]
@@ -8029,6 +8038,73 @@ mod tests {
         assert_eq!(output.status, 0);
         assert!(output.stdout.contains("install cancelled"));
         assert!(!runtime.delegated.get());
+    }
+
+    #[test]
+    fn interactive_install_confirmation_no_stops_before_runtime_writes() {
+        struct InstallRuntime {
+            delegated: Cell<bool>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer wizard cancel test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                _command: &str,
+                _request: InstallRequest,
+                _context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.delegated.set(true);
+                unreachable!("confirmation no must stop before native writes")
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-wizard-confirmation-no");
+        let command_dir = workspace.path().join("commands");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            "PATH" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime {
+            delegated: Cell::new(false),
+        };
+        let prompt = WizardPrompt::new(["1"], [""], ["n"]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stdout.contains("install cancelled"));
+        assert!(!runtime.delegated.get());
+        assert_eq!(prompt.selection_calls.get(), 1);
+        assert_eq!(prompt.telemetry_calls.get(), 1);
+        assert_eq!(prompt.confirmation_calls.get(), 1);
+        assert!(prompt.confirmation_prompts.borrow()[0].contains("[Y/n]"));
     }
 
     #[test]
@@ -8631,6 +8707,7 @@ mod tests {
         selection_prompts: RefCell<Vec<String>>,
         telemetry: RefCell<VecDeque<String>>,
         confirmations: RefCell<VecDeque<String>>,
+        confirmation_prompts: RefCell<Vec<String>>,
         selection_calls: Cell<usize>,
         telemetry_calls: Cell<usize>,
         confirmation_calls: Cell<usize>,
@@ -8649,6 +8726,7 @@ mod tests {
                 confirmations: RefCell::new(
                     confirmations.into_iter().map(str::to_string).collect(),
                 ),
+                confirmation_prompts: RefCell::new(Vec::new()),
                 selection_calls: Cell::new(0),
                 telemetry_calls: Cell::new(0),
                 confirmation_calls: Cell::new(0),
@@ -8678,9 +8756,12 @@ mod tests {
                 .ok_or_else(|| "missing fake telemetry response".to_string())
         }
 
-        fn prompt_install_confirmation(&self, _prompt: &str) -> Result<String, String> {
+        fn prompt_install_confirmation(&self, prompt: &str) -> Result<String, String> {
             self.confirmation_calls
                 .set(self.confirmation_calls.get() + 1);
+            self.confirmation_prompts
+                .borrow_mut()
+                .push(prompt.to_string());
             self.confirmations
                 .borrow_mut()
                 .pop_front()

@@ -9,7 +9,7 @@ use crate::core::model::{
     CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, Provenance, RepositoryRevision,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
-use crate::core::policy::paths::looks_like_windows_absolute_path;
+use crate::core::policy::paths::looks_like_absolute_path;
 use crate::ports::semantic_worker::{
     SemanticWorker, SemanticWorkerError, SemanticWorkerRequest, SEMANTIC_VERSION_UNSUPPORTED_CODE,
     SEMANTIC_WORKER_PROTOCOL_VERSION,
@@ -780,9 +780,7 @@ fn protocol_text(value: &str, line_number: usize) -> Result<String, SemanticWork
 }
 
 fn looks_like_embedded_absolute_path(value: &str) -> bool {
-    value
-        .split_whitespace()
-        .any(|token| Path::new(token).is_absolute() || looks_like_windows_absolute_path(token))
+    value.split_whitespace().any(looks_like_absolute_path)
 }
 
 fn looks_like_source_snippet(value: &str) -> bool {
@@ -808,9 +806,11 @@ mod tests {
     use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerMessageKind};
     use crate::test_support::TempWorkspace;
     use serde_json::json;
+    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{symlink, PermissionsExt};
+    #[cfg(unix)]
     use std::time::Duration;
 
     #[test]
@@ -1429,7 +1429,9 @@ mod tests {
     #[test]
     fn boundary_rejects_oversized_requests_before_spawn() {
         let workspace = TempWorkspace::new("typescript-worker-request-too-large");
-        let worker = TypeScriptSemanticWorkerBoundary::new("/unused");
+        let worker = TypeScriptSemanticWorkerBoundary::new(
+            workspace.path().join("unused-worker").display().to_string(),
+        );
         let request = request_with_serialized_len(
             &workspace.path().display().to_string(),
             MAX_WORKER_STDIN_BYTES,
@@ -1478,6 +1480,7 @@ mod tests {
         assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
     }
 
+    #[cfg(unix)]
     fn valid_request(workspace: &TempWorkspace) -> SemanticWorkerRequest {
         SemanticWorkerRequest {
             project_root: workspace.path().display().to_string(),

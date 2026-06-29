@@ -53,7 +53,7 @@ pub trait SemanticWorker {
 mod tests {
     use super::*;
     use crate::core::model::{ContentHash, FactCertainty, SemanticFactKind};
-    use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
+    use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
     use serde_json::{json, Map, Value};
     use std::{collections::BTreeSet, fs, path::Path};
 
@@ -533,7 +533,7 @@ mod tests {
 
         required_string(object, "request_id")?;
         let project_root = required_string(object, "project_root")?;
-        if project_root.contains('\0') || !Path::new(project_root).is_absolute() {
+        if project_root.contains('\0') || !looks_like_absolute_path(project_root) {
             return Err("project_root must be an absolute path string".to_string());
         }
 
@@ -587,9 +587,7 @@ mod tests {
             || value.contains('\n')
             || value.contains('\r')
             || value.contains("://")
-            || value.split_whitespace().any(|token| {
-                Path::new(token).is_absolute() || looks_like_windows_absolute_path(token)
-            })
+            || value.split_whitespace().any(looks_like_absolute_path)
             || looks_like_source_snippet(value)
         {
             Err(format!("{field} contains unsupported content"))

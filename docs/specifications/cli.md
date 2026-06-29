@@ -286,19 +286,24 @@ Noninteractive live writes require `--yes`. `install --yes`, `install
 implementation supports `--target codex --scope global` through the native
 Codex MCP CLI, `--target claude-code --scope global` through the native Claude
 Code MCP CLI, and safe `--target all --scope global --yes` through the same
-all-or-rollback transaction. `all` and `auto` resolve to the current
-first-class live targets for safe noninteractive writes. Registry targets
-without a live writer must fail before command-path, receipt, or native config
-writes and direct the user to `--dry-run` or `--print-config`. Project-local
-writes remain deferred.
+all-or-rollback transaction. In the interactive wizard, anonymous telemetry
+consent remains default-no, while the final reviewed install-plan confirmation
+is default-yes. `all` and `auto` resolve to the current first-class live targets
+for safe noninteractive writes. Registry targets without a live writer must fail
+before command-path, receipt, or native config writes and direct the user to
+`--dry-run` or `--print-config`. Project-local writes remain deferred.
 
 `install` places the `repogrammar` command in a user-writable command directory
 when possible, runs a read-only MCP self-test before native configuration,
 writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install or receipt write fails.
 Re-running `install` refreshes only a RepoGrammar-managed command path and
-skips native agent add commands for already managed target receipts. Existing
-foreign command paths must still be refused rather than adopted silently.
+skips native agent add commands for already managed target receipts. When the
+selected command path is the same executable currently running the installer,
+such as a local Cargo-installed `repogrammar.exe` on PATH, the installer may
+copy that executable into RepoGrammar-managed user state and continue. Existing
+unrelated foreign command paths must still be refused rather than adopted
+silently.
 `uninstall` removes only receipt-owned managed entries. `uninstall --target all
 --scope global --yes` removes every owned first-class agent receipt it finds,
 but refuses unmanaged or foreign receipts.

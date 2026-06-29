@@ -1,7 +1,7 @@
 //! Storage use-case boundary.
 
 use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
-use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
+use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily, FamilyStore,
@@ -12,7 +12,6 @@ use crate::ports::index_store::{
     GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
 };
-use std::path::Path;
 
 pub fn prepare_index_generation(
     store: &impl IndexStore,
@@ -437,16 +436,20 @@ fn validate_semantic_text_field(field_name: &str, value: &str) -> Result<(), Rep
 }
 
 fn looks_like_embedded_absolute_path(value: &str) -> bool {
-    value
-        .split_whitespace()
-        .any(|token| Path::new(token).is_absolute() || looks_like_windows_absolute_path(token))
+    value.split_whitespace().any(looks_like_absolute_path)
 }
 
 fn looks_like_source_snippet(value: &str) -> bool {
+    let trimmed = value.trim_start();
     value.contains("=>")
         || (value.contains('=') && value.contains(';'))
         || value.contains('{')
         || value.contains('}')
+        || trimmed.starts_with("const ")
+        || trimmed.starts_with("let ")
+        || trimmed.starts_with("var ")
+        || trimmed.starts_with("import ")
+        || trimmed.starts_with("export ")
 }
 
 fn validate_repo_relative_path(path: &str) -> Result<(), RepoGrammarError> {

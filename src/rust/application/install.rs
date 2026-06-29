@@ -892,9 +892,11 @@ fn install_cli_command(
     let executable_existed = installed_executable.exists();
     let command_path_was_managed_copy =
         command_path_is_managed_copy(&command_path, &installed_executable);
+    let command_path_is_current_executable = same_path(&command_path, source);
     if command_path.exists()
         && !same_path(&command_path, &installed_executable)
         && !command_path_was_managed_copy
+        && !command_path_is_current_executable
     {
         return Err(RepoGrammarError::InvalidInput(
             "repogrammar command path already exists and is not managed by RepoGrammar".to_string(),
@@ -2046,6 +2048,44 @@ mod tests {
         assert_eq!(configurator.actions.borrow().len(), 0);
         assert_eq!(self_test.calls.borrow().len(), 0);
         assert!(!workspace.data_dir.join("bin").join(binary_name()).exists());
+    }
+
+    #[test]
+    fn current_executable_command_path_is_allowed_for_source_installs() {
+        let workspace = TempInstallWorkspace::new("current-executable-command-path");
+        let source_command = workspace.command_path();
+        fs::copy(&workspace.context.executable_path, &source_command)
+            .expect("current executable on PATH");
+        let mut context = workspace.context.clone();
+        context.executable_path = source_command.display().to_string();
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let outcome =
+            execute_install(&request, &context, &configurator, &self_test).expect("install");
+
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        assert!(installed.exists());
+        assert_eq!(
+            outcome.installed_executable_path.as_deref(),
+            Some(installed.display().to_string().as_str())
+        );
+        assert_eq!(
+            outcome.command_path.as_deref(),
+            Some(context.executable_path.as_str())
+        );
+        assert_eq!(
+            self_test.calls.borrow().as_slice(),
+            &[installed.display().to_string()]
+        );
+        assert_eq!(configurator.actions.borrow().len(), 1);
     }
 
     #[test]

@@ -291,6 +291,9 @@ noninteractive live writes, and a dependency-light text wizard:
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
   detects existing RepoGrammar-owned receipts, and skips already managed agents
   by default;
+- the wizard keeps anonymous telemetry opt-in default-no, but the final
+  reviewed installation plan confirmation is default-yes so pressing Enter
+  proceeds after the plan is shown;
 - the installer has a target registry for Codex, Claude Code, Cursor,
   opencode, Hermes, Gemini, Antigravity, and Kiro, exposed through a per-target
   adapter contract (`TargetAdapter`) that consolidates scope support, live-writer
@@ -314,7 +317,12 @@ noninteractive live writes, and a dependency-light text wizard:
 - live project-local writes remain deferred until ownership, receipt, and native
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
-  when possible and points agent MCP entries at the installed command binary;
+  when possible and points agent MCP entries at the installed command binary.
+  If the selected command path is the same executable currently running
+  `repogrammar install` (for example a local Cargo-installed
+  `repogrammar.exe` on PATH), the installer may copy that executable into
+  RepoGrammar-managed user state instead of treating the command path as a
+  foreign conflict; unrelated existing command paths are still refused;
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;

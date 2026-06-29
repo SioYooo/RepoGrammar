@@ -668,7 +668,7 @@ impl ProductMcpSelfTester {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(unix)]
     fn with_timeout(timeout: std::time::Duration) -> Self {
         Self { timeout }
     }
@@ -776,7 +776,7 @@ fn native_add_command(
                 ));
             }
             Ok((
-                "codex".to_string(),
+                native_agent_program(target).to_string(),
                 vec![
                     "mcp".to_string(),
                     "add".to_string(),
@@ -795,7 +795,7 @@ fn native_add_command(
             }
             let scope = claude_scope(scope);
             Ok((
-                "claude".to_string(),
+                native_agent_program(target).to_string(),
                 vec![
                     "mcp".to_string(),
                     "add".to_string(),
@@ -833,7 +833,7 @@ fn native_remove_command(
                 ));
             }
             Ok((
-                "codex".to_string(),
+                native_agent_program(target).to_string(),
                 vec![
                     "mcp".to_string(),
                     "remove".to_string(),
@@ -848,7 +848,7 @@ fn native_remove_command(
                 ));
             }
             Ok((
-                "claude".to_string(),
+                native_agent_program(target).to_string(),
                 vec![
                     "mcp".to_string(),
                     "remove".to_string(),
@@ -868,6 +868,24 @@ fn native_remove_command(
             target.as_str()
         ))),
     }
+}
+
+fn native_agent_program(target: AgentTarget) -> &'static str {
+    match target {
+        AgentTarget::Codex => native_codex_program(),
+        AgentTarget::ClaudeCode => "claude",
+        _ => unreachable!("native_agent_program requires a concrete native agent target"),
+    }
+}
+
+#[cfg(windows)]
+fn native_codex_program() -> &'static str {
+    "codex.cmd"
+}
+
+#[cfg(not(windows))]
+fn native_codex_program() -> &'static str {
+    "codex"
 }
 
 fn claude_scope(scope: InstallScope) -> &'static str {
@@ -908,13 +926,18 @@ mod tests {
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
         SemanticFactReadinessRequest,
     };
-    use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision, UnknownReasonCode};
+    use repogrammar::core::model::UnknownReasonCode;
+    #[cfg(unix)]
+    use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
     use repogrammar::core::policy::freshness::ClaimInputReadiness;
     use repogrammar::interfaces::mcp::handle_context_call;
+    #[cfg(unix)]
     use repogrammar::ports::file_discovery::{
         DiscoveredLanguage, FileDiscovery, FileDiscoveryRequest,
     };
+    #[cfg(unix)]
     use repogrammar::ports::parser::{SourceDocument, SourceParser};
+    #[cfg(unix)]
     use repogrammar::ports::source_store::{SourceReadRequest, SourceStore};
     use serde_json::Value;
     use std::collections::BTreeSet;
@@ -1632,6 +1655,7 @@ mod tests {
         payload
     }
 
+    #[cfg(unix)]
     fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         match language {
             DiscoveredLanguage::TypeScript | DiscoveredLanguage::TypeScriptReact => {
@@ -5810,9 +5834,13 @@ class User(Base):
 
     #[test]
     fn native_agent_commands_use_public_mcp_cli_shapes() {
-        let (_program, codex_args) =
+        let (codex_program, codex_args) =
             native_add_command(AgentTarget::Codex, InstallScope::Global, "/opt/repogrammar")
                 .expect("codex add");
+        #[cfg(windows)]
+        assert_eq!(codex_program, "codex.cmd");
+        #[cfg(not(windows))]
+        assert_eq!(codex_program, "codex");
         assert_eq!(
             codex_args,
             vec![
@@ -5831,9 +5859,10 @@ class User(Base):
         )
         .is_err());
 
-        let (_program, claude_args) =
+        let (claude_program, claude_args) =
             native_add_command(AgentTarget::ClaudeCode, InstallScope::Global, "/opt/rg")
                 .expect("claude add");
+        assert_eq!(claude_program, "claude");
         assert_eq!(
             claude_args,
             vec![
@@ -5854,13 +5883,15 @@ class User(Base):
         )
         .is_err());
 
-        let (_program, codex_remove_args) =
+        let (codex_remove_program, codex_remove_args) =
             native_remove_command(AgentTarget::Codex, InstallScope::Global).expect("codex remove");
+        assert_eq!(codex_remove_program, codex_program);
         assert_eq!(codex_remove_args, vec!["mcp", "remove", "repogrammar"]);
 
-        let (_program, remove_args) =
+        let (claude_remove_program, remove_args) =
             native_remove_command(AgentTarget::ClaudeCode, InstallScope::Global)
                 .expect("claude remove");
+        assert_eq!(claude_remove_program, "claude");
         assert_eq!(
             remove_args,
             vec!["mcp", "remove", "--scope", "user", "repogrammar"]

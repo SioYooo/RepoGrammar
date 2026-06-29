@@ -25,7 +25,7 @@ pub fn validate_repo_relative_path(path: &str) -> Result<(), RepoRelativePathErr
     if path.contains("://") {
         return Err(RepoRelativePathError::UriLike);
     }
-    if Path::new(path).is_absolute() || looks_like_windows_absolute_path(path) {
+    if looks_like_absolute_path(path) {
         return Err(RepoRelativePathError::Absolute);
     }
     if path
@@ -54,6 +54,10 @@ pub fn repo_relative_path_buf(path: &str) -> Result<PathBuf, RepoRelativePathErr
 pub fn looks_like_windows_absolute_path(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+pub fn looks_like_absolute_path(path: &str) -> bool {
+    Path::new(path).is_absolute() || path.starts_with('/') || looks_like_windows_absolute_path(path)
 }
 
 #[cfg(test)]
