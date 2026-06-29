@@ -73,8 +73,16 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     ".agents/memories/unknown-governance.md",
     ".agents/memories/v0.1-substrate-hardening-checkpoint.md",
     ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
     "docs/specifications/semantic-workers.md",
     "src/rust/bin/repo_guard.rs",
+];
+const DEPRECATED_NODE20_ACTIONS: &[(&str, &str)] = &[
+    ("actions/checkout@v4", "use actions/checkout@v5 or newer"),
+    (
+        "actions/setup-node@v4",
+        "use actions/setup-node@v5 or newer",
+    ),
 ];
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "c", "cc", "cpp", "h", "hpp", "go", "py", "js", "jsx", "ts", "tsx", "java", "kt", "kts",
@@ -193,6 +201,7 @@ fn check_repository(root: &Path) -> io::Result<Vec<GuardViolation>> {
     check_root_guides(root, &mut violations);
     check_required_documents(root, &mut violations);
     check_required_skills(root, &mut violations);
+    check_github_workflow_actions(root, &mut violations)?;
     check_tree_rules(root, &mut violations)?;
     Ok(violations)
 }
@@ -310,6 +319,50 @@ fn validate_skill_front_matter(content: &str, expected_name: &str) -> Result<(),
         Some(value) if !value.is_empty() => Ok(()),
         _ => Err("front matter must include non-empty description".to_string()),
     }
+}
+
+fn check_github_workflow_actions(
+    root: &Path,
+    violations: &mut Vec<GuardViolation>,
+) -> io::Result<()> {
+    let workflows = root.join(".github").join("workflows");
+    let entries = match fs::read_dir(&workflows) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+
+    for entry in entries {
+        let path = entry?.path();
+        let Some(extension) = path.extension().and_then(OsStr::to_str) else {
+            continue;
+        };
+        if !matches!(extension, "yml" | "yaml") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)?;
+        let relative = workflow_relative_path(root, &path);
+        for (deprecated, replacement) in DEPRECATED_NODE20_ACTIONS {
+            if contents.contains(deprecated) {
+                violations.push(GuardViolation::new(
+                    relative.clone(),
+                    "DeprecatedGitHubActionRuntime",
+                    format!(
+                        "{deprecated} targets the deprecated Node.js 20 runtime; {replacement}"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn workflow_relative_path(root: &Path, path: &Path) -> String {
+    relative_path(root, path)
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn check_tree_rules(root: &Path, violations: &mut Vec<GuardViolation>) -> io::Result<()> {
@@ -628,6 +681,33 @@ mod tests {
 
         assert!(!violations.iter().any(|violation| {
             violation.rule == "SourceOutsideSrc" && violation.path.starts_with(".repogrammar")
+        }));
+    }
+
+    #[test]
+    fn deprecated_node20_github_actions_are_reported() {
+        let root = TempRoot::new("node20-actions");
+        write_file(
+            root.path().join(".github/workflows/ci.yml"),
+            b"steps:\n  - uses: actions/checkout@v4\n",
+        );
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            b"steps:\n  - uses: actions/setup-node@v4\n",
+        );
+
+        let mut violations = Vec::new();
+        check_github_workflow_actions(root.path(), &mut violations).expect("workflow check");
+
+        assert!(violations.iter().any(|violation| {
+            violation.path == ".github/workflows/ci.yml"
+                && violation.rule == "DeprecatedGitHubActionRuntime"
+                && violation.detail.contains("actions/checkout@v5")
+        }));
+        assert!(violations.iter().any(|violation| {
+            violation.path == ".github/workflows/release.yml"
+                && violation.rule == "DeprecatedGitHubActionRuntime"
+                && violation.detail.contains("actions/setup-node@v5")
         }));
     }
 

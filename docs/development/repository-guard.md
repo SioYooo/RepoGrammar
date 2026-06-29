@@ -19,7 +19,8 @@ The check command verifies:
 - `AGENTS.md` and `CLAUDE.md` exist.
 - both guides are regular files and not symlinks.
 - both guides are byte-identical.
-- required bootstrap docs and workflows exist, including
+- required bootstrap docs and workflows exist, including CI and release
+  workflows plus
   `docs/decisions/ADR-0008-repo-local-state-boundary.md`, the v0.1 planning
   documents, the Python v0.1 analysis specification, ADR-0011, ADR-0012, the
   substrate hardening checkpoint, typed UNKNOWN specification, ADR-0009/ADR-0010,
@@ -32,6 +33,9 @@ The check command verifies:
   of implementation language.
 - generated local state directories such as `.repogrammar/`,
   `.repogrammar-*`, `.codegraph/`, `target/`, and `.git/` are ignored.
+- GitHub workflow files do not use deprecated Node.js 20 action majors for
+  first-party checkout or Node setup actions; currently `actions/checkout@v4`
+  and `actions/setup-node@v4` are rejected in favor of `@v5` or newer.
 
 Check mode reports concrete paths and rules and does not modify the repository.
 
