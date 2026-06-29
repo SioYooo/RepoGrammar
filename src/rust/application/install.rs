@@ -893,6 +893,10 @@ fn install_cli_command(
     let command_path_was_managed_copy =
         command_path_is_managed_copy(&command_path, &installed_executable);
     let command_path_is_current_executable = same_path(&command_path, source);
+    let should_refresh_command_copy = command_path.exists()
+        && !same_path(&command_path, &installed_executable)
+        && command_path_was_managed_copy
+        && !command_path_is_current_executable;
     if command_path.exists()
         && !same_path(&command_path, &installed_executable)
         && !command_path_was_managed_copy
@@ -909,7 +913,7 @@ fn install_cli_command(
                 "installed RepoGrammar CLI",
             )?);
         }
-        if command_path_was_managed_copy {
+        if should_refresh_command_copy {
             record.previous_command_copy =
                 Some(read_file_bytes(&command_path, "repogrammar command")?);
         }
@@ -920,7 +924,7 @@ fn install_cli_command(
     }
 
     if command_path.exists() {
-        if !same_path(&command_path, &installed_executable) && command_path_was_managed_copy {
+        if should_refresh_command_copy {
             refresh_command_copy(&installed_executable, &command_path).inspect_err(|_| {
                 let _ = rollback_command_install(&record);
             })?;
@@ -2086,6 +2090,34 @@ mod tests {
             &[installed.display().to_string()]
         );
         assert_eq!(configurator.actions.borrow().len(), 1);
+    }
+
+    #[test]
+    fn current_executable_managed_command_copy_is_not_refreshed_in_place() {
+        let workspace = TempInstallWorkspace::new("current-executable-managed-command-copy");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::copy(&workspace.context.executable_path, &installed).expect("installed executable");
+        fs::copy(&installed, workspace.command_path()).expect("managed command copy");
+        let mut context = workspace.context.clone();
+        context.executable_path = workspace.command_path_str();
+
+        let record = install_cli_command(&context).expect("install command");
+
+        assert!(!record.created_command);
+        assert!(
+            record.previous_command_copy.is_none(),
+            "current executable command path must not be overwritten or restored in the same run"
+        );
+        assert_eq!(record.command_path, context.executable_path);
+        assert_eq!(
+            fs::read_to_string(workspace.command_path()).expect("command copy"),
+            "stub\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable"),
+            "stub\n"
+        );
     }
 
     #[test]

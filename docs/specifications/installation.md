@@ -322,7 +322,8 @@ noninteractive live writes, and a dependency-light text wizard:
   `repogrammar install` (for example a local Cargo-installed
   `repogrammar.exe` on PATH), the installer may copy that executable into
   RepoGrammar-managed user state instead of treating the command path as a
-  foreign conflict; unrelated existing command paths are still refused;
+  foreign conflict. It must not overwrite that currently executing command path
+  during the same run; unrelated existing command paths are still refused;
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;

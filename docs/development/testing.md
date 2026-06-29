@@ -19,6 +19,10 @@ allowed.
 - Temporary directories must be unique and cleaned up.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
+- Symlink safety tests must assert rejection on hosts that can create symlinks.
+  On Windows sessions that lack the symlink creation privilege, tests may exit
+  early only after confirming the failure is the platform privilege or
+  unsupported-symlink error; unrelated I/O errors must still fail the test.
 - CLI not-implemented behavior must be stable and asserted.
 - CLI missing-index fallback tests must cover both human-readable output and
   `--json` output for the query command surface.

@@ -449,7 +449,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
-    use crate::test_support::TempWorkspace;
+    use crate::test_support::{create_test_symlink_file, TempWorkspace};
     use std::fs;
     use std::process::Command;
 
@@ -874,19 +874,12 @@ mod tests {
         )
         .expect("write outside");
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            outside.path().join("outside.ts"),
-            workspace.path().join("link.ts"),
-        )
-        .expect("create symlink");
-
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(
-            outside.path().join("outside.ts"),
-            workspace.path().join("link.ts"),
-        )
-        .expect("create symlink");
+        if !create_test_symlink_file(
+            &outside.path().join("outside.ts"),
+            &workspace.path().join("link.ts"),
+        ) {
+            return;
+        }
 
         let report = FilesystemFileDiscovery
             .discover(FileDiscoveryRequest::new(

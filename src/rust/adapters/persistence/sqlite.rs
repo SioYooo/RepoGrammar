@@ -2712,7 +2712,7 @@ CREATE TABLE IF NOT EXISTS evidence (
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
-    use crate::test_support::TempWorkspace;
+    use crate::test_support::{create_test_symlink_dir, create_test_symlink_file, TempWorkspace};
 
     fn store(workspace: &TempWorkspace) -> SqliteIndexStore {
         let state = workspace.path().join(".repogrammar");
@@ -4659,13 +4659,9 @@ mod tests {
         let outside = workspace.path().join("outside-generation");
         fs::create_dir_all(&outside).expect("create outside generation");
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, generations.join("gen-000001"))
-            .expect("create generation symlink");
-
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&outside, generations.join("gen-000001"))
-            .expect("create generation symlink");
+        if !create_test_symlink_dir(&outside, &generations.join("gen-000001")) {
+            return;
+        }
 
         let store = SqliteIndexStore::new(state);
         let generation = GenerationHandle {
@@ -4688,19 +4684,12 @@ mod tests {
         fs::remove_file(store.generation_database_path(&generation.generation_id))
             .expect("remove generated database");
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(
+        if !create_test_symlink_file(
             &outside,
-            store.generation_database_path(&generation.generation_id),
-        )
-        .expect("create database symlink");
-
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(
-            &outside,
-            store.generation_database_path(&generation.generation_id),
-        )
-        .expect("create database symlink");
+            &store.generation_database_path(&generation.generation_id),
+        ) {
+            return;
+        }
 
         let error = store
             .validate_generation(&generation)
@@ -4716,13 +4705,9 @@ mod tests {
         let generation = store.prepare_next_generation().expect("prepare generation");
         let outside = workspace.path().join("outside-pointer");
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, store.current_generation_path())
-            .expect("create pointer symlink");
-
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&outside, store.current_generation_path())
-            .expect("create pointer symlink");
+        if !create_test_symlink_file(&outside, &store.current_generation_path()) {
+            return;
+        }
 
         let error = store
             .activate_generation(&generation)
@@ -4736,13 +4721,9 @@ mod tests {
         let store = store(&workspace);
         let outside = workspace.path().join("outside-pointer");
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, store.current_generation_path())
-            .expect("create pointer symlink");
-
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&outside, store.current_generation_path())
-            .expect("create pointer symlink");
+        if !create_test_symlink_file(&outside, &store.current_generation_path()) {
+            return;
+        }
 
         let error = store
             .inspect()

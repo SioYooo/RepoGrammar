@@ -317,7 +317,8 @@ Re-running `install` refreshes only a RepoGrammar-managed command path and
 skips native agent add commands for already managed target receipts. When the
 selected command path is the same executable currently running the installer,
 such as a local Cargo-installed `repogrammar.exe` on PATH, the installer may
-copy that executable into RepoGrammar-managed user state and continue. Existing
+copy that executable into RepoGrammar-managed user state and continue without
+overwriting that currently executing command path in the same run. Existing
 unrelated foreign command paths must still be refused rather than adopted
 silently.
 `uninstall` removes only receipt-owned managed entries. `uninstall --target all
