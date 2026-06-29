@@ -560,6 +560,10 @@ started by MCP serving or agent installation, and does not scan repositories
 that have not explicitly initialized RepoGrammar state.
 
 The current auto-sync worker is conservative and reuses the existing full
-`sync` path after detecting a changed discovery fingerprint and debouncing file
-changes. Incremental changed-unit reparsing, affected-family stale marking, and
-lazy query-time recomputation remain future work.
+`sync` path after detecting a changed lightweight supported-file metadata
+fingerprint and debouncing file changes. The detector avoids reading source
+contents during idle polling; the subsequent full `sync` remains authoritative
+for content hashes, Git-ignore enforcement, parser/provider facts, freshness,
+and active-generation activation. Incremental changed-unit reparsing,
+affected-family stale marking, and lazy query-time recomputation remain future
+work.

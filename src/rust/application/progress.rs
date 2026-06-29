@@ -59,6 +59,13 @@ impl KnownWorkUnits {
     pub fn total(self) -> u64 {
         self.total
     }
+
+    pub fn percent(self) -> u64 {
+        if self.total == 0 {
+            return 100;
+        }
+        (((self.completed as u128) * 100) / (self.total as u128)).min(100) as u64
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,9 +95,10 @@ impl ProgressEvent {
         match self.work {
             WorkUnits::Unknown => format!("{}: {}\n", self.stage.as_str(), self.message),
             WorkUnits::Known(work) => format!(
-                "{}: {} ({completed}/{total})\n",
+                "{}: {} ({percent}% {completed}/{total})\n",
                 self.stage.as_str(),
                 self.message,
+                percent = work.percent(),
                 completed = work.completed(),
                 total = work.total()
             ),
@@ -104,6 +112,7 @@ impl ProgressEvent {
                 "kind": "known",
                 "completed": work.completed(),
                 "total": work.total(),
+                "percent": work.percent(),
             }),
         };
         let mut output = json!({
@@ -152,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_rendering_uses_counts_not_percentages_or_etas() {
+    fn progress_rendering_uses_counts_percentages_and_no_etas() {
         let event = ProgressEvent::new(
             ProgressStage::FileScanning,
             "scanning files",
@@ -160,8 +169,8 @@ mod tests {
         );
 
         let plain = event.render_plain();
+        assert!(plain.contains("30%"));
         assert!(plain.contains("3/10"));
-        assert!(!plain.contains('%'));
         assert!(!plain.to_ascii_lowercase().contains("eta"));
     }
 
@@ -173,6 +182,7 @@ mod tests {
         };
         assert_eq!(work.completed(), 3);
         assert_eq!(work.total(), 10);
+        assert_eq!(work.percent(), 30);
         assert!(WorkUnits::known(11, 10).is_err());
     }
 

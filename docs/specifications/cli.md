@@ -108,12 +108,14 @@ All long-running commands must support:
 Long-running commands include repository initialization, indexing, sync, resync,
 `autosync run`, and MCP serving.
 
-For `index`, `sync`, and `resync`, human progress is emitted to stderr when
-`--progress always` is set, or when `--progress auto` detects an interactive
-stderr. `--quiet` and `--progress never` suppress progress. Final human or JSON
-results remain on stdout. When `--json --progress always` is used, progress
-events are emitted as NDJSON on stderr and the final command result remains a
-single JSON object on stdout.
+For `init`, `index`, `sync`, and `resync`, human progress is emitted to stderr
+when `--progress always` is set, or when `--progress auto` detects an
+interactive stderr. Known work renders an ASCII progress bar, exact integer
+percentage, and completed/total counts; unknown work remains indeterminate and
+does not display a percentage. `--quiet` and `--progress never` suppress
+progress. Final human or JSON results remain on stdout. When `--json --progress
+always` is used, progress events are emitted as NDJSON on stderr and the final
+command result remains a single JSON object on stdout.
 
 ## Repository state commands
 
@@ -132,6 +134,14 @@ contract used by `repogrammar status`. Re-running `init` in a repository with a
 readable active generation must therefore report `storage: available` and the
 active indexing mode such as `syntax_only_code_units`, rather than replaying
 bootstrap manifest placeholder values.
+`repogrammar init --yes` is accepted as an agent-safe noninteractive
+confirmation flag. It does not broaden `init` writes, does not run indexing,
+and does not make root `.gitignore` writes unless `--write-gitignore` is also
+present. Agent bootstrap guidance may recommend `repogrammar init --yes`
+followed by `repogrammar resync` for a repository whose user has allowed
+repo-local analysis state, then `repogrammar autosync start` when the user wants
+new or modified files from an agent session to enter later RepoGrammar results
+without manual `resync`.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -191,19 +201,23 @@ Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
 exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
 without running a semantic worker. These are bounded RepoGrammar support facts,
 not compiler/provider-backed facts.
-`resync` is an alias for `sync`: it is available for any repository, rebuilds a
-new active generation through the same static-analysis path, and uses the
-invoked command name in CLI output.
+`resync` is an alias for `sync`: it is available for any initialized
+repository, rebuilds a new active generation through the same static-analysis
+path, and uses the invoked command name in CLI output. Public fallback and MCP
+guidance should prefer `resync` for missing, stale, or intentionally refreshed
+analysis because it names the user intent to rebuild static-analysis facts.
 Rust self-dogfood indexing may likewise add Tree-sitter-origin structural
 anchors, Cargo manifest inventory, Rust typed `UNKNOWN`s, and bounded internal
 `DATAFLOW_DERIVED` support facts for RepoGrammar-owned implementation roles.
 Those facts are not Cargo/rustc-backed semantics and do not imply general Rust
 target-language support.
-During a non-quiet run, `index`, `sync`, and `resync` emit progress for project
-discovery, file scanning, syntax parsing, local support-fact recording,
-semantic-worker deferred/running state, candidate/family construction, and
-persistence validation. Known work uses exact completed/total counts. Unknown
-work must remain explicit and must not display fabricated percentages or ETAs.
+During a non-quiet run, `init` emits repository-state initialization progress.
+`index`, `sync`, and `resync` emit progress for project discovery, file
+scanning, syntax parsing, local support-fact recording, semantic-worker
+deferred/running state, candidate/family construction, and persistence
+validation. Known work uses exact completed/total counts and exact integer
+percentages. Unknown work must remain explicit and must not display fabricated
+percentages or ETAs.
 Progress events must not include source snippets, source paths, content hashes,
 symbols, raw targets, or repository-identifying absolute paths.
 The product runtime also runs the default safe Rust Cargo metadata project-model
@@ -247,12 +261,16 @@ supports subcommands:
 
 With no subcommand, `autosync` is equivalent to `autosync status`. `start`
 enables auto-sync for the current repository if needed and launches a
-background `repogrammar autosync run` worker. The worker polls the same
-discovery fingerprint used by indexing, debounces changes, and calls the
-existing `sync` implementation when indexed files change. It must not scan
-repositories that have not explicitly run `init`, and it must not be started by
-`install`, `serve`, MCP queries, or agent wiring. `run` is the foreground worker
-entrypoint used by `start`; it writes diagnostics to
+background `repogrammar autosync run` worker. The worker polls a lightweight
+supported-file metadata fingerprint, debounces changes, and calls the existing
+`sync` implementation when indexed files are added, removed, or modified. The
+lightweight detector must skip RepoGrammar state directories, default excluded
+directories, unsupported extensions, oversized files, symlinks, and paths
+outside the repository; the following full `sync` remains the authoritative
+content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
+step. It must not scan repositories that have not explicitly run `init`, and it
+must not be started by `install`, `serve`, MCP queries, or agent wiring. `run`
+is the foreground worker entrypoint used by `start`; it writes diagnostics to
 `.repogrammar/logs/daemon.log` when started in the background. `stop` terminates
 the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `disable` requires the daemon to be stopped first and removes
@@ -473,7 +491,7 @@ fallback guidance rather than panic or implicitly initialize the repository:
 ```text
 FALLBACK_TO_CODE_SEARCH
 reason: repository is not initialized
-guidance: run repogrammar init
+guidance: run repogrammar init --yes
 ```
 
 During the bootstrap, pattern-family query commands use this fallback shape only
@@ -507,7 +525,7 @@ stable JSON object to `stderr` rather than the human text block:
 {
   "status": "FALLBACK_TO_CODE_SEARCH",
   "reason": "repository is not initialized",
-  "guidance": "run repogrammar init",
+  "guidance": "run repogrammar init --yes",
   "command": "find",
   "implemented": false
 }

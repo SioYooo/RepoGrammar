@@ -488,11 +488,13 @@ than failing noisily:
 ```text
 FALLBACK_TO_CODE_SEARCH
 reason: repository is not initialized
-guidance: run repogrammar init
+guidance: run repogrammar init --yes
 ```
 
-If the index is stale, RepoGrammar must either return a stale warning or refuse
-family claims whose evidence changed.
+If repository-local state exists but the active generation is missing or stale,
+RepoGrammar should guide users and agents to run `repogrammar resync`. If the
+index is stale, RepoGrammar must either return a stale warning or refuse family
+claims whose evidence changed.
 
 The current implementation performs only an internal semantic-fact
 claim-input readiness check over the active claim-input snapshot against current
@@ -506,9 +508,12 @@ warnings in `status`, and freshness checks before MCP claims. When enabled with
 `repogrammar autosync start`, RepoGrammar stores `.repogrammar/autosync.json`,
 uses `.repogrammar/locks/daemon.lock` for the running worker, and writes
 diagnostics to `.repogrammar/logs/daemon.log`. The current worker detects
-changed discovery fingerprints and calls the existing full `sync` path after a
-debounce interval. Incremental changed-unit reparsing, affected-family stale
-marking, and lazy query-time recomputation remain future work.
+changed lightweight supported-file metadata fingerprints and calls the existing
+full `sync` path after a debounce interval. The detector is only a low-cost
+change trigger; the full sync remains responsible for content hashes,
+Git-ignore enforcement, parsing, semantic facts, and atomic generation
+activation. Incremental changed-unit reparsing, affected-family stale marking,
+and lazy query-time recomputation remain future work.
 
 ## Migration Strategy
 

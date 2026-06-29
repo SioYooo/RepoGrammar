@@ -1,4 +1,8 @@
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
+use repogrammar::adapters::filesystem::discovery::{
+    is_default_excluded_directory_name, is_repogrammar_state_directory_name,
+    supported_language_for_path,
+};
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::RepoGrammarSourceParser;
@@ -10,7 +14,6 @@ use repogrammar::application::autosync::{
     stop_autosync, AutosyncReport, AutosyncRequest, AutosyncSettings,
 };
 use repogrammar::application::indexing::{
-    discover_repository_files,
     index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
     index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
@@ -50,8 +53,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::IsTerminal;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -132,27 +136,7 @@ impl ProductCliRuntime {
         &self,
         request: &CliAutosyncRequest,
     ) -> Result<String, RepoGrammarError> {
-        let report = discover_repository_files(
-            IndexingRequest {
-                repository_root: request.repository_root.clone(),
-                state_dir_override: request.state_dir_override.clone(),
-                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
-                strict_gitignore: request.strict_gitignore,
-            },
-            &FilesystemFileDiscovery,
-        )?;
-        let mut hasher = Sha256::new();
-        for file in report.files {
-            hasher.update(file.path.as_bytes());
-            hasher.update([0]);
-            hasher.update(file.content_hash.as_str().as_bytes());
-            hasher.update([0]);
-            hasher.update(file.size_bytes.to_string().as_bytes());
-            hasher.update([0]);
-            hasher.update(file.language.as_str().as_bytes());
-            hasher.update([0xff]);
-        }
-        Ok(format!("{:x}", hasher.finalize()))
+        repository_change_fingerprint(&request.repository_root, DEFAULT_MAX_FILE_BYTES)
     }
 
     fn run_autosync_loop(
@@ -271,6 +255,121 @@ impl ProductCliRuntime {
             message: "auto-sync started".to_string(),
         })
     }
+}
+
+fn repository_change_fingerprint(
+    repository_root: &str,
+    max_file_bytes: u64,
+) -> Result<String, RepoGrammarError> {
+    let root = PathBuf::from(repository_root);
+    let metadata = fs::symlink_metadata(&root).map_err(|_| {
+        RepoGrammarError::InvalidInput("repository root is not readable".to_string())
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RepoGrammarError::InvalidInput(
+            "repository root must be a real directory".to_string(),
+        ));
+    }
+    let canonical_root = fs::canonicalize(&root).map_err(|_| {
+        RepoGrammarError::InvalidInput("repository root is not readable".to_string())
+    })?;
+    let mut entries = Vec::new();
+    collect_change_fingerprint_entries(
+        &root,
+        &canonical_root,
+        PathBuf::new(),
+        max_file_bytes,
+        &mut entries,
+    )?;
+    entries.sort();
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.as_bytes());
+        hasher.update([0xff]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_change_fingerprint_entries(
+    root: &Path,
+    canonical_root: &Path,
+    relative_dir: PathBuf,
+    max_file_bytes: u64,
+    entries: &mut Vec<String>,
+) -> Result<(), RepoGrammarError> {
+    let directory = root.join(&relative_dir);
+    let mut children = fs::read_dir(&directory)
+        .map_err(|_| RepoGrammarError::InvalidInput("failed to read directory".to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to read directory entry".to_string())
+        })?;
+    children.sort_by_key(|entry| entry.file_name());
+
+    for child in children {
+        let relative = relative_dir.join(child.file_name());
+        let Some(relative_path) = repo_relative_string(&relative) else {
+            continue;
+        };
+        let metadata = match fs::symlink_metadata(child.path()) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            let name = relative.file_name().and_then(|value| value.to_str());
+            if is_repogrammar_state_directory_name(name) || is_default_excluded_directory_name(name)
+            {
+                continue;
+            }
+            match fs::canonicalize(child.path()) {
+                Ok(canonical) if canonical.starts_with(canonical_root) => {
+                    collect_change_fingerprint_entries(
+                        root,
+                        canonical_root,
+                        relative,
+                        max_file_bytes,
+                        entries,
+                    )?;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if !metadata.is_file() || metadata.len() > max_file_bytes {
+            continue;
+        }
+        let Some(language) = supported_language_for_path(&relative_path) else {
+            continue;
+        };
+        match fs::canonicalize(child.path()) {
+            Ok(canonical) if canonical.starts_with(canonical_root) => {}
+            _ => continue,
+        }
+        let modified = metadata.modified().ok().and_then(|value| {
+            value
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|duration| format!("{}.{:09}", duration.as_secs(), duration.subsec_nanos()))
+        });
+        entries.push(format!(
+            "{relative_path}\0{}\0{}\0{}",
+            metadata.len(),
+            modified.as_deref().unwrap_or("unknown"),
+            language.as_str()
+        ));
+    }
+    Ok(())
+}
+
+fn repo_relative_string(path: &Path) -> Option<String> {
+    let parts = path
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<Vec<_>>>()?;
+    Some(parts.join("/"))
 }
 
 impl CliRuntime for ProductCliRuntime {
@@ -990,6 +1089,58 @@ mod tests {
         ];
         args.extend(extra.iter().map(|value| value.to_string()));
         args
+    }
+
+    #[test]
+    fn autosync_change_fingerprint_tracks_supported_sources_and_skips_noise() {
+        let workspace = TempWorkspace::new("autosync-change-fingerprint");
+
+        let empty =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("empty fingerprint");
+
+        fs::create_dir_all(workspace.path().join(".repogrammar/logs")).expect("create state noise");
+        fs::write(
+            workspace.path().join(".repogrammar/logs/generated.ts"),
+            "export const ignored = true;\n",
+        )
+        .expect("write state noise");
+        let after_state_noise =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("state noise fingerprint");
+        assert_eq!(after_state_noise, empty);
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 1;\n",
+        )
+        .expect("write tracked source");
+        let after_source =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("source fingerprint");
+        assert_ne!(after_source, empty);
+
+        fs::write(workspace.path().join("notes.md"), "# ignored\n").expect("write ignored md");
+        fs::create_dir_all(workspace.path().join("node_modules/pkg")).expect("create excluded dir");
+        fs::write(
+            workspace.path().join("node_modules/pkg/index.ts"),
+            "export const ignored = true;\n",
+        )
+        .expect("write excluded source");
+        let after_excluded_noise =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("excluded noise fingerprint");
+        assert_eq!(after_excluded_noise, after_source);
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 12345;\n",
+        )
+        .expect("modify tracked source");
+        let after_modified =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("modified fingerprint");
+        assert_ne!(after_modified, after_source);
     }
 
     fn release_fixture_root() -> PathBuf {

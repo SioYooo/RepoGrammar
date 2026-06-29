@@ -7,7 +7,7 @@ use crate::application::install::{
     resolve_instruction_file, supported_concrete_targets, target_adapter, targets_for_display,
     AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
 };
-use crate::application::progress::{ProgressEvent, WorkUnits};
+use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, query_preflight,
     read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
@@ -302,6 +302,14 @@ impl CliOutput {
         }
     }
 
+    fn success_with_stderr(stdout: impl Into<String>, stderr: impl Into<String>) -> Self {
+        Self {
+            status: 0,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
     fn failure(status: i32, stderr: impl Into<String>) -> Self {
         Self {
             status,
@@ -457,8 +465,8 @@ fn usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  init [--project <path>] [--write-gitignore] [--json] [--progress auto|always|never]",
-        "      Create safe repo-local state under .repogrammar/ without indexing.",
+        "  init [--project <path>] [--yes] [--write-gitignore] [--json] [--progress auto|always|never]",
+        "      Create safe repo-local state under .repogrammar/ without indexing; --yes is accepted for agent scripts.",
         "  uninit [--project <path>] --yes [--json]",
         "      Remove RepoGrammar repo-local state after explicit confirmation.",
         "  index [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
@@ -466,7 +474,7 @@ fn usage() -> String {
         "  sync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
         "      Rebuild the active index using the same safe indexing path.",
         "  resync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
-        "      Alias for sync; rebuild the active index and static-analysis facts.",
+        "      Rebuild the active index and static-analysis facts for any initialized repository.",
         "  autosync <status|enable|start|stop|disable|run> [options]",
         "      Manage optional repo-local automatic sync. Use `autosync start`, not `--start`.",
         "  status [--project <path>] [--json]",
@@ -504,6 +512,12 @@ fn usage() -> String {
         "  uninstall [--target <agent[,agent]>] [--scope global|project-local] --yes",
         "      Remove only RepoGrammar-owned agent integration receipts.",
         "",
+        "Agent-safe repository bootstrap:",
+        "  repogrammar init --yes",
+        "  repogrammar resync",
+        "  repogrammar autosync start",
+        "      install wires agents; init/resync/autosync remain explicit per-repository analysis steps.",
+        "",
         "Metrics:",
         "  stats [--project <path>] [--json]",
         "      Report repo-shape diagnostics and estimated potential read displacement.",
@@ -528,13 +542,16 @@ fn help_text(lines: &[&str]) -> String {
 fn command_usage(command: &str) -> Option<String> {
     match command {
         "init" => Some(help_text(&[
-            "Usage: repogrammar init [--project <path>|--path <path>] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+            "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
             "",
             "Creates repository-local RepoGrammar state under .repogrammar/ by default.",
             "It does not index source code. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
+            "--yes is accepted as an agent-safe noninteractive confirmation flag; it does not broaden init writes.",
+            "Run repogrammar resync after init to build or refresh static-analysis facts; run repogrammar autosync start when a coding agent should keep them fresh during edits.",
             "",
             "Options:",
             "  --project <path>, --path <path>     Repository root to initialize. Defaults to the current directory.",
+            "  --yes                              Accepted no-op confirmation flag for noninteractive agent bootstrap.",
             "  --write-gitignore                  Add a marker-fenced .gitignore entry in the repository root.",
             "  --json                             Emit machine-readable output.",
             "  --progress auto|always|never       Control progress output.",
@@ -553,12 +570,13 @@ fn command_usage(command: &str) -> Option<String> {
         ])),
         "index" => Some(index_or_sync_usage("index", "Build a fresh index and atomically activate it.")),
         "sync" => Some(index_or_sync_usage("sync", "Rebuild the active index after repository changes.")),
-        "resync" => Some(index_or_sync_usage("resync", "Alias for sync; rebuild the active index and static-analysis facts after repository changes.")),
+        "resync" => Some(index_or_sync_usage("resync", "Rebuild the active index and static-analysis facts after repository changes.")),
         "autosync" => Some(help_text(&[
             "Usage: repogrammar autosync [status|enable|start|stop|disable|run] [options]",
             "",
             "Manages optional repository-local automatic sync. With no subcommand, autosync is equivalent to autosync status.",
             "Subcommands are positional: use `repogrammar autosync start`, not `repogrammar autosync --start`.",
+            "Use autosync start after an initial resync when new or modified files should enter RepoGrammar results without manual resync.",
             "",
             "Subcommands:",
             "  status     Show auto-sync configuration and daemon state.",
@@ -727,7 +745,7 @@ fn index_or_sync_usage(command: &str, summary: &str) -> String {
         &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]"),
         "",
         summary,
-        "Requires initialized repo-local state and writes a new validated active generation.",
+        "Requires initialized repo-local state and writes a new validated active generation. Agents may run resync after init when analysis is missing or stale, and autosync start when subsequent edits should update automatically.",
         "",
         "Options:",
         "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
@@ -1063,7 +1081,7 @@ where
             command,
             options.json,
             "query execution requires pattern-family evidence",
-            "run repogrammar index after pattern-family indexing is implemented",
+            "run repogrammar resync after pattern-family indexing is implemented",
             false,
         ),
     }
@@ -1260,7 +1278,7 @@ fn families_human(report: &FamilyListReport) -> String {
         if report.unknowns.is_empty() {
             output.push_str("unknown: blocking_unknown:InsufficientSupport affected_claim: repository pattern families\n");
             output.push_str(
-                "recovery: run repogrammar index after adding compatible implementations\n",
+                "recovery: run repogrammar resync after adding compatible implementations\n",
             );
         } else {
             for unknown in &report.unknowns {
@@ -3822,14 +3840,38 @@ where
                     state_dir_override,
                 })
                 .ok();
+            let progress = init_progress_stderr(options);
             if options.json {
-                CliOutput::success(init_outcome_json(&outcome, status.as_ref()))
+                CliOutput::success_with_stderr(
+                    init_outcome_json(&outcome, status.as_ref()),
+                    progress,
+                )
             } else {
-                CliOutput::success(init_outcome_human(&outcome, status.as_ref()))
+                CliOutput::success_with_stderr(
+                    init_outcome_human(&outcome, status.as_ref()),
+                    progress,
+                )
             }
         }
         Err(error) => lifecycle_error("init", options.json, error),
     }
+}
+
+fn init_progress_stderr(options: &LifecycleOptions) -> String {
+    if !should_emit_progress(
+        options.progress,
+        options.json,
+        options.quiet,
+        std::io::stderr().is_terminal(),
+    ) {
+        return String::new();
+    }
+    let event = ProgressEvent::new(
+        ProgressStage::PersistenceValidation,
+        "repository state initialized",
+        WorkUnits::known(1, 1).expect("init progress uses valid known work units"),
+    );
+    render_index_progress_event("init", &event, options.json)
 }
 
 fn handle_uninit<F>(options: &LifecycleOptions, current_dir: &Path, env_lookup: &F) -> CliOutput
@@ -4271,7 +4313,7 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
                 options.write_gitignore = true;
                 index += 1;
             }
-            "--yes" if matches!(command, "uninit" | "unlock") => {
+            "--yes" if matches!(command, "init" | "uninit" | "unlock") => {
                 options.yes = true;
                 index += 1;
             }
@@ -5168,15 +5210,19 @@ pub fn render_index_progress_event(
 fn progress_bar(work: WorkUnits) -> String {
     match work {
         WorkUnits::Unknown => "[working]".to_string(),
-        WorkUnits::Known(work) if work.total() == 0 => "[done] 0/0".to_string(),
         WorkUnits::Known(work) => {
             let width = 20u64;
-            let filled = (work.completed().saturating_mul(width) / work.total()).min(width);
+            let filled = if work.total() == 0 {
+                width
+            } else {
+                (work.completed().saturating_mul(width) / work.total()).min(width)
+            };
             let empty = width.saturating_sub(filled);
             format!(
-                "[{}{}] {}/{}",
+                "[{}{}] {}% {}/{}",
                 "#".repeat(filled as usize),
                 "-".repeat(empty as usize),
+                work.percent(),
                 work.completed(),
                 work.total()
             )
@@ -5264,8 +5310,7 @@ mod tests {
         );
 
         let human = render_index_progress_event("index", &event, false);
-        assert!(human.contains("index: [##########----------] 2/4 file_scanning"));
-        assert!(!human.contains('%'));
+        assert!(human.contains("index: [##########----------] 50% 2/4 file_scanning"));
         assert!(!human.to_ascii_lowercase().contains("eta"));
 
         let machine = render_index_progress_event("index", &event, true);
@@ -5274,6 +5319,20 @@ mod tests {
         assert_eq!(value["message"], "stored files");
         assert_eq!(value["work"]["completed"], 2);
         assert_eq!(value["work"]["total"], 4);
+        assert_eq!(value["work"]["percent"], 50);
+    }
+
+    #[test]
+    fn unknown_progress_renderer_remains_indeterminate_without_percentages() {
+        let event = ProgressEvent::new(
+            crate::application::progress::ProgressStage::SemanticResolution,
+            "waiting for worker",
+            WorkUnits::Unknown,
+        );
+
+        let human = render_index_progress_event("sync", &event, false);
+        assert!(human.contains("sync: [working] semantic_resolution"));
+        assert!(!human.contains('%'));
     }
 
     fn stale_index_lock_json(token: &str) -> String {
@@ -5627,7 +5686,7 @@ mod tests {
                         reason: crate::core::model::UnknownReasonCode::InsufficientSupport,
                         affected_claim: "query target".to_string(),
                         recovery: Some(
-                            "run repogrammar index after adding compatible implementations"
+                            "run repogrammar resync after adding compatible implementations"
                                 .to_string(),
                         ),
                     }],
@@ -5743,7 +5802,7 @@ mod tests {
             match status.status {
                 RepositoryStatus::NotInitialized => {
                     return Err(RepoGrammarError::InvalidInput(
-                        "repository is not initialized; run repogrammar init".to_string(),
+                        "repository is not initialized; run repogrammar init --yes".to_string(),
                     ));
                 }
                 RepositoryStatus::CorruptedManifest => {
@@ -5894,6 +5953,8 @@ mod tests {
             .stdout
             .contains("autosync <status|enable|start|stop|disable|run>"));
         assert!(output.stdout.contains("resync [--project <path>]"));
+        assert!(output.stdout.contains("repogrammar init --yes"));
+        assert!(output.stdout.contains("repogrammar resync"));
         assert!(output.stdout.contains("install [--target <agent[,agent]>]"));
         assert!(output
             .stdout
@@ -5950,7 +6011,7 @@ mod tests {
 
             assert_eq!(output.status, 2);
             assert!(output.stderr.starts_with(
-                "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
+                "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init --yes\n"
             ));
             assert!(output.stderr.contains("not implemented yet"));
             assert!(output.stdout.is_empty());
@@ -5960,7 +6021,7 @@ mod tests {
 
             assert_eq!(output.status, 2);
             assert!(output.stderr.starts_with(
-                "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init\n"
+                "FALLBACK_TO_CODE_SEARCH\nreason: repository is not initialized\nguidance: run repogrammar init --yes\n"
             ));
             assert!(output
                 .stderr
@@ -6403,7 +6464,7 @@ mod tests {
             serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
         assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(fallback["reason"], "repository is not initialized");
-        assert_eq!(fallback["guidance"], "run repogrammar init");
+        assert_eq!(fallback["guidance"], "run repogrammar init --yes");
         assert_eq!(fallback["command"], "find");
         assert_eq!(fallback["implemented"], false);
     }
@@ -6446,7 +6507,7 @@ mod tests {
                 serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
             assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
             assert_eq!(fallback["reason"], "repository is not initialized");
-            assert_eq!(fallback["guidance"], "run repogrammar init");
+            assert_eq!(fallback["guidance"], "run repogrammar init --yes");
             assert_eq!(fallback["command"], command);
             assert_eq!(
                 fallback["implemented"],
@@ -6617,7 +6678,7 @@ mod tests {
             serde_json::from_str(output.stderr.trim()).expect("stats fallback must be JSON");
         assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(fallback["reason"], "repository is not initialized");
-        assert_eq!(fallback["guidance"], "run repogrammar init");
+        assert_eq!(fallback["guidance"], "run repogrammar init --yes");
         assert_eq!(fallback["command"], "stats");
         assert_eq!(fallback["implemented"], true);
     }
@@ -7123,7 +7184,7 @@ mod tests {
                 serde_json::from_str(json.stderr.trim()).expect("query fallback must be JSON");
             assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
             assert_eq!(fallback["reason"], "no active index generation");
-            assert_eq!(fallback["guidance"], "run repogrammar index");
+            assert_eq!(fallback["guidance"], "run repogrammar resync");
             assert_eq!(fallback["command"], command);
             assert_eq!(fallback["implemented"], true);
         }
@@ -7348,6 +7409,59 @@ mod tests {
         assert_eq!(value["storage"], "not_implemented");
         assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
         assert!(workspace.path().join(".gitignore").is_file());
+    }
+
+    #[test]
+    fn init_yes_is_agent_safe_confirmation_only() {
+        let workspace = TempWorkspace::new("cli-init-agent-safe-yes");
+        let env = |_: &str| None;
+
+        let output = run_with_context(["init", "--yes", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["command"], "init");
+        assert_eq!(value["status"], "initialized");
+        assert_eq!(value["root_gitignore_updated"], false);
+        assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
+        assert!(!workspace.path().join(".gitignore").exists());
+    }
+
+    #[test]
+    fn init_progress_always_emits_human_bar_percentage_on_stderr() {
+        let workspace = TempWorkspace::new("cli-init-progress-human");
+        let env = |_: &str| None;
+
+        let output = run_with_context(["init", "--progress", "always"], workspace.path(), &env);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("repository-local state ready"));
+        assert!(output
+            .stderr
+            .contains("init: [####################] 100% 1/1 persistence_validation"));
+        assert!(!output.stderr.to_ascii_lowercase().contains("eta"));
+    }
+
+    #[test]
+    fn init_json_progress_always_keeps_result_on_stdout_and_ndjson_on_stderr() {
+        let workspace = TempWorkspace::new("cli-init-progress-json");
+        let env = |_: &str| None;
+
+        let output = run_with_context(
+            ["init", "--json", "--progress", "always"],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 0);
+        let result: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(result["command"], "init");
+        let progress: Value =
+            serde_json::from_str(output.stderr.trim()).expect("init progress NDJSON");
+        assert_eq!(progress["stage"], "persistence_validation");
+        assert_eq!(progress["work"]["kind"], "known");
+        assert_eq!(progress["work"]["percent"], 100);
     }
 
     #[test]
@@ -10730,7 +10844,7 @@ mod tests {
         assert_eq!(value["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["reason"], "repository is not initialized");
-        assert_eq!(value["guidance"], "run repogrammar init");
+        assert_eq!(value["guidance"], "run repogrammar init --yes");
         let serialized = output.stderr;
         assert!(!serialized.contains("/Users/"));
         assert!(!serialized.contains("src/"));

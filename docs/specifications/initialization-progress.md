@@ -18,8 +18,9 @@ Repository initialization and indexing must publish typed progress events.
 Progress must:
 
 - show an indeterminate spinner until the workload denominator is known;
-- show exact completed and total work units when known;
-- never display fabricated percentages or unstable ETAs;
+- show exact completed and total work units plus an exact integer percentage
+  when known;
+- never display fabricated percentages for unknown work or unstable ETAs;
 - support interactive TTY, plain logs, and NDJSON;
 - support `--progress auto|always|never`, `--json`, `--quiet`, and `--verbose`;
 - remain testable independently of terminal rendering.
@@ -34,16 +35,17 @@ state directory described in `docs/specifications/storage.md`.
 ## Current implementation status
 
 The bootstrap defines typed progress stages, known and unknown work units,
-plain rendering, and NDJSON rendering. `index` and `sync` now emit typed
-per-stage progress events while they run discovery, file metadata storage,
-syntax parsing, code-unit normalization, local support-fact recording,
-semantic-worker deferred/running status, candidate/family construction, and
-persistence validation. Human progress is rendered to stderr with an ASCII bar
-when exact work counts are known and `[working]` when a denominator is not
-known. `--json --progress always` emits progress NDJSON on stderr while keeping
-the final JSON result on stdout.
+plain rendering, and NDJSON rendering. `init` emits repository-state
+initialization progress. `index`, `sync`, and `resync` emit typed per-stage
+progress events while they run discovery, file metadata storage, syntax
+parsing, code-unit normalization, local support-fact recording, semantic-worker
+deferred/running status, candidate/family construction, and persistence
+validation. Human progress is rendered to stderr with an ASCII bar, integer
+percentage, and exact counts when exact work counts are known, and `[working]`
+without a percentage when a denominator is not known. `--json --progress
+always` emits progress NDJSON on stderr while keeping the final JSON result on
+stdout.
 
-Deferred work: repository initialization does not yet emit per-step progress,
-semantic workers do not yet provide fine-grained internal progress through the
-product CLI, and future mining/provider phases will need more detailed
-candidate, provider, and evidence-selection progress events.
+Deferred work: semantic workers do not yet provide fine-grained internal
+progress through the product CLI, and future mining/provider phases will need
+more detailed candidate, provider, and evidence-selection progress events.

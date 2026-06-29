@@ -95,7 +95,7 @@ pub fn query_preflight(
     match &status_report.status {
         RepositoryStatus::NotInitialized => fallback(
             "repository is not initialized",
-            "run repogrammar init",
+            "run repogrammar init --yes",
             operation.command_is_implemented(),
         ),
         RepositoryStatus::CorruptedManifest => {
@@ -116,7 +116,7 @@ pub fn query_preflight(
                         || active_generation == "not implemented"
                         || !inventory_indexing_is_readable(status_report.indexing) =>
                 {
-                    fallback("no active index generation", "run repogrammar index", true)
+                    fallback("no active index generation", "run repogrammar resync", true)
                 }
                 QueryPreflightOperation::ActiveIndexInventory => QueryPreflightReport::Ready,
                 QueryPreflightOperation::PatternFamilyQuery
@@ -124,7 +124,11 @@ pub fn query_preflight(
                         || active_generation == "not implemented"
                         || !inventory_indexing_is_readable(status_report.indexing) =>
                 {
-                    fallback("no active index generation", "run repogrammar index", false)
+                    fallback(
+                        "no active index generation",
+                        "run repogrammar resync",
+                        false,
+                    )
                 }
                 QueryPreflightOperation::PatternFamilyQuery => QueryPreflightReport::Ready,
             }
@@ -1593,7 +1597,9 @@ fn insufficient_support_unknown(affected_claim: impl Into<String>) -> FamilyQuer
         class: UnknownClass::Blocking,
         reason: UnknownReasonCode::InsufficientSupport,
         affected_claim: affected_claim.into(),
-        recovery: Some("run repogrammar index after adding compatible implementations".to_string()),
+        recovery: Some(
+            "run repogrammar resync after adding compatible implementations".to_string(),
+        ),
     }
 }
 
@@ -2117,7 +2123,7 @@ mod tests {
             &status,
         ));
         assert_eq!(pattern.reason, "repository is not initialized");
-        assert_eq!(pattern.guidance, "run repogrammar init");
+        assert_eq!(pattern.guidance, "run repogrammar init --yes");
         assert!(!pattern.implemented);
 
         let inventory = fallback_report(query_preflight(
@@ -2125,7 +2131,7 @@ mod tests {
             &status,
         ));
         assert_eq!(inventory.reason, "repository is not initialized");
-        assert_eq!(inventory.guidance, "run repogrammar init");
+        assert_eq!(inventory.guidance, "run repogrammar init --yes");
         assert!(inventory.implemented);
     }
 
@@ -2184,7 +2190,7 @@ mod tests {
             ));
 
             assert_eq!(fallback.reason, "no active index generation");
-            assert_eq!(fallback.guidance, "run repogrammar index");
+            assert_eq!(fallback.guidance, "run repogrammar resync");
             assert!(fallback.implemented);
         }
     }

@@ -208,8 +208,8 @@ From a repository you want to analyze:
 
 ```text
 repogrammar install
-repogrammar init
-repogrammar index
+repogrammar init --yes
+repogrammar resync
 repogrammar autosync start
 repogrammar status
 repogrammar families
@@ -223,15 +223,20 @@ Before a repository is initialized or before enough evidence exists, query
 commands return explicit fallback or `UNKNOWN` results rather than pretending an
 index or family claim exists.
 
-`repogrammar index` shows progress automatically in an interactive terminal.
-Use `repogrammar index --progress always` to force progress output, or
-`repogrammar index --progress never` for quiet scripts.
+`repogrammar install` wires machine-level agent MCP integration only.
+Repository analysis is always an explicit per-repository step:
+`repogrammar init --yes` creates safe repo-local state, and
+`repogrammar resync` rebuilds the active static-analysis generation. `resync`
+shows progress automatically in an interactive terminal. Use
+`repogrammar resync --progress always` to force progress output, or
+`repogrammar resync --progress never` for quiet scripts.
 
 `repogrammar autosync start` is optional but recommended for dogfooding. It
-enables repository-local auto-sync and starts a background worker that watches
-for file changes, debounces saves, and reuses the existing `sync` path. It does
-not run from `install`, does not initialize other repositories, and can be
-managed with:
+enables repository-local auto-sync and starts a background worker that tracks a
+lightweight supported-file metadata fingerprint, debounces saves, and reuses
+the existing `sync` path so newly added or modified files enter the next active
+generation without a manual `resync`. It does not run from `install`, does not
+initialize other repositories, and can be managed with:
 
 ```text
 repogrammar autosync status

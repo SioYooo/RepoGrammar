@@ -424,7 +424,9 @@ allowed.
   token-savings fields, unknown option rejection, and absence of source/path
   leakage.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
-  constructor rather than constructing impossible progress states directly.
+  constructor rather than constructing impossible progress states directly, and
+  must assert known-work percentages while preserving indeterminate output for
+  unknown work.
 
 ## Current coverage
 

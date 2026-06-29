@@ -165,7 +165,7 @@ struct ContextArguments {
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context. In initialized repositories, call this before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Source spans are metadata-only by default and require include_source_spans=true.",
+        "description": "Read-only RepoGrammar pattern-family context. In initialized repositories, call this before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. If state is missing, ask to run repogrammar init --yes; if analysis is missing or stale, ask to run repogrammar resync; if edits should stay indexed during an agent session, ask to run repogrammar autosync start after the first resync. Source spans are metadata-only by default and require include_source_spans=true.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -409,7 +409,7 @@ fn handle_json_rpc_value_result(
                             "name": "repogrammar",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Default output is metadata-only with token-budgeted read_plan items. Request include_source_spans=true only when bounded line-numbered source spans are needed. If output is UNKNOWN, stale, omitted, or insufficient, fall back to normal Read/Grep for the affected files.",
+                        "instructions": "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. If the repository is not initialized and the user allows repo-local analysis state, run repogrammar init --yes; if no active generation or stale analysis exists, run repogrammar resync; if a coding agent should keep newly added or modified files indexed during the session, run repogrammar autosync start after the first resync. Default output is metadata-only with token-budgeted read_plan items. Request include_source_spans=true only when bounded line-numbered source spans are needed. If output is UNKNOWN, stale, omitted, or insufficient, fall back to normal Read/Grep for the affected files.",
                     }),
                 )),
                 should_shutdown: false,
@@ -821,6 +821,18 @@ mod tests {
         let schema = tool_schema();
 
         assert_eq!(schema["name"], "repogrammar_context");
+        assert!(schema["description"]
+            .as_str()
+            .expect("tool description")
+            .contains("repogrammar init --yes"));
+        assert!(schema["description"]
+            .as_str()
+            .expect("tool description")
+            .contains("repogrammar resync"));
+        assert!(schema["description"]
+            .as_str()
+            .expect("tool description")
+            .contains("repogrammar autosync start"));
         assert_eq!(
             schema["inputSchema"]["properties"]["operation"]["enum"],
             json!([
@@ -884,7 +896,7 @@ mod tests {
 
         assert_eq!(response["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(response["reason"], "repository is not initialized");
-        assert_eq!(response["guidance"], "run repogrammar init");
+        assert_eq!(response["guidance"], "run repogrammar init --yes");
         assert_eq!(response["implemented"], false);
         assert_eq!(runtime.lookup_calls(), 0);
     }
@@ -902,7 +914,7 @@ mod tests {
 
         assert_eq!(response["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(response["reason"], "no active index generation");
-        assert_eq!(response["guidance"], "run repogrammar index");
+        assert_eq!(response["guidance"], "run repogrammar resync");
         assert_eq!(runtime.lookup_calls(), 0);
     }
 
@@ -1247,6 +1259,19 @@ mod tests {
         let runtime = FakeMcpRuntime::ready_unknown();
         let context = context();
 
+        let initialize = handle_json_rpc_value(
+            &runtime,
+            &context,
+            json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"}),
+        );
+        let initialize_response = initialize.response.expect("initialize response");
+        let instructions = initialize_response["result"]["instructions"]
+            .as_str()
+            .expect("initialize instructions");
+        assert!(instructions.contains("repogrammar init --yes"));
+        assert!(instructions.contains("repogrammar resync"));
+        assert!(instructions.contains("repogrammar autosync start"));
+
         let list = handle_json_rpc_value(
             &runtime,
             &context,
@@ -1468,7 +1493,7 @@ mod tests {
                 reason: UnknownReasonCode::InsufficientSupport,
                 affected_claim: "query target".to_string(),
                 recovery: Some(
-                    "run repogrammar index after adding compatible implementations".to_string(),
+                    "run repogrammar resync after adding compatible implementations".to_string(),
                 ),
             }],
         })
