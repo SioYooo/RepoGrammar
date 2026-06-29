@@ -398,6 +398,17 @@ where
             CliOutput::success(format!("repogrammar {}\n", env!("CARGO_PKG_VERSION")))
         }
         [command] if command == "help" => CliOutput::success(usage()),
+        [command, topic] if command == "help" => match command_usage(topic) {
+            Some(usage) => CliOutput::success(usage),
+            None => CliOutput::failure(2, format!("unknown help topic: {topic}\n")),
+        },
+        [command, ..] if command == "help" => CliOutput::failure(
+            2,
+            "help accepts at most one command topic; use repogrammar help <command>\n",
+        ),
+        [command, rest @ ..] if is_known_cli_command(command) && contains_help_flag(rest) => {
+            CliOutput::success(command_usage(command).unwrap_or_else(usage))
+        }
         [command, rest @ ..] if is_project_lifecycle_command(command) => {
             handle_project_lifecycle(command, rest, current_dir, env_lookup, runtime)
         }
@@ -433,17 +444,358 @@ where
 }
 
 fn usage() -> String {
-    [
+    help_text(&[
         "Usage: repogrammar <command> [options]",
         "",
-        "Project lifecycle: init, uninit, index, sync, autosync, status, doctor, unlock, logs",
-        "Pattern-family queries: find, families, family, member, explain, check, files, units",
-        "Agent integration: serve, install, uninstall",
-        "Metrics: stats, telemetry",
-        "Maintenance: version, help",
+        "RepoGrammar finds source-backed implementation-pattern families and exposes them to humans and coding agents.",
         "",
-    ]
-    .join("\n")
+        "How to read help:",
+        "  repogrammar help <command>",
+        "  repogrammar <command> --help",
+        "  repogrammar <command> -h",
+        "",
+        "Project lifecycle:",
+        "  init [--project <path>] [--write-gitignore] [--json] [--progress auto|always|never]",
+        "      Create safe repo-local state under .repogrammar/ without indexing.",
+        "  uninit [--project <path>] --yes [--json]",
+        "      Remove RepoGrammar repo-local state after explicit confirmation.",
+        "  index [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+        "      Build a fresh syntax/code-unit index and activate it atomically.",
+        "  sync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+        "      Rebuild the active index using the same safe indexing path.",
+        "  autosync <status|enable|start|stop|disable|run> [options]",
+        "      Manage optional repo-local automatic sync. Use `autosync start`, not `--start`.",
+        "  status [--project <path>] [--json]",
+        "      Report repository state, active generation, schema, and storage health.",
+        "  doctor [--project <path>] [--json]",
+        "      Inspect lifecycle hygiene, storage health, locks, and repair guidance.",
+        "  unlock [--project <path>] [--force --yes] [--json]",
+        "      Inspect locks; remove only confirmed stale index locks with --force --yes.",
+        "  logs [--project <path>] [--component index|daemon|mcp|telemetry] [--tail [n]] [--since <duration>] [--json]",
+        "      Read redacted repo-local diagnostics.",
+        "",
+        "Pattern-family queries:",
+        "  find [target] [--mode compact|evidence|deep] [--token-budget <n>] [--json]",
+        "      Find analogous implementations for a target without returning source by default.",
+        "  families [--json]",
+        "      List active supported pattern families, or typed UNKNOWN if support is insufficient.",
+        "  family <family-id> [--mode compact|evidence|deep] [--include-source-spans] [--json]",
+        "      Show one family by exact id.",
+        "  member <member-id> [--mode compact|evidence|deep] [--json]",
+        "      Show the family context for one exact indexed member id.",
+        "  explain [target] [--include-variations] [--include-exceptions] [--json]",
+        "      Explain whether a target is a legal variation, exception, incompatibility, or UNKNOWN.",
+        "  check [target] [--mode compact|evidence|deep] [--json]",
+        "      Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+        "  files [--project <path>] [--json]",
+        "      Read active indexed file inventory.",
+        "  units [--project <path>] [--json]",
+        "      Read active indexed code-unit inventory.",
+        "",
+        "Agent integration:",
+        "  serve [--project <path>]",
+        "      Run the read-only MCP stdio server from the product binary.",
+        "  install [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]]",
+        "      Configure RepoGrammar as a read-only MCP server for agents.",
+        "  uninstall [--target <agent[,agent]>] [--scope global|project-local] --yes",
+        "      Remove only RepoGrammar-owned agent integration receipts.",
+        "",
+        "Metrics:",
+        "  stats [--project <path>] [--json]",
+        "      Report repo-shape diagnostics and estimated potential read displacement.",
+        "  telemetry <status|on|off|export|upload|purge|research-*|experiment-*> [options]",
+        "      Manage optional anonymous telemetry and local token experiment records.",
+        "",
+        "Maintenance:",
+        "  version, --version, -V",
+        "      Print the product version.",
+        "  help [command]",
+        "      Print this overview or command-specific usage.",
+        "",
+    ])
+}
+
+fn help_text(lines: &[&str]) -> String {
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
+}
+
+fn command_usage(command: &str) -> Option<String> {
+    match command {
+        "init" => Some(help_text(&[
+            "Usage: repogrammar init [--project <path>|--path <path>] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+            "",
+            "Creates repository-local RepoGrammar state under .repogrammar/ by default.",
+            "It does not index source code. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root to initialize. Defaults to the current directory.",
+            "  --write-gitignore                  Add a marker-fenced .gitignore entry in the repository root.",
+            "  --json                             Emit machine-readable output.",
+            "  --progress auto|always|never       Control progress output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+        ])),
+        "uninit" => Some(help_text(&[
+            "Usage: repogrammar uninit [--project <path>|--path <path>] --yes [--json] [--quiet|--verbose]",
+            "",
+            "Removes RepoGrammar repo-local state. This is the only command that removes .repogrammar/.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --yes                              Required for removal.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+        ])),
+        "index" => Some(index_or_sync_usage("index", "Build a fresh index and atomically activate it.")),
+        "sync" => Some(index_or_sync_usage("sync", "Rebuild the active index after repository changes.")),
+        "autosync" => Some(help_text(&[
+            "Usage: repogrammar autosync [status|enable|start|stop|disable|run] [options]",
+            "",
+            "Manages optional repository-local automatic sync. With no subcommand, autosync is equivalent to autosync status.",
+            "Subcommands are positional: use `repogrammar autosync start`, not `repogrammar autosync --start`.",
+            "",
+            "Subcommands:",
+            "  status     Show auto-sync configuration and daemon state.",
+            "  enable     Enable auto-sync configuration for this repository.",
+            "  start      Enable if needed and launch a background autosync run worker.",
+            "  stop       Stop the recorded autosync daemon and remove its daemon lock.",
+            "  disable    Disable auto-sync; the daemon must already be stopped.",
+            "  run        Run the foreground polling worker used by start.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet                            Suppress nonessential human output.",
+            "  --progress auto|always|never       Accepted for long-running command compatibility.",
+            "  --poll-ms <n>                      Poll interval, 100 through 600000 milliseconds.",
+            "  --debounce-ms <n>                  Debounce interval, 0 through 60000 milliseconds.",
+        ])),
+        "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.")),
+        "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.")),
+        "unlock" => Some(help_text(&[
+            "Usage: repogrammar unlock [--project <path>|--path <path>] [--force --yes] [--json] [--quiet|--verbose]",
+            "",
+            "Inspects RepoGrammar locks. Without --force --yes it is inspection-only.",
+            "With --force --yes it removes only confirmed stale index locks; daemon and SQLite locks are preserved.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --force                            Request stale index-lock removal.",
+            "  --yes                              Confirm --force removal.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+        ])),
+        "logs" => Some(help_text(&[
+            "Usage: repogrammar logs [--project <path>|--path <path>] [--component index|daemon|mcp|telemetry] [--since <duration>] [--tail [n]] [--redact] [--json] [--quiet|--verbose]",
+            "",
+            "Reads redacted repo-local diagnostic logs. Logs are local diagnostics, not telemetry.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --component <name>                  Filter to index, daemon, mcp, or telemetry logs.",
+            "  --since <duration>                  Filter by duration such as 1h.",
+            "  --tail [n]                          Return the last n entries; defaults to 100 when n is omitted.",
+            "  --redact                            Keep output metadata-only and source-free. This is the default.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+        ])),
+        "find" => Some(query_usage(
+            "find",
+            "repogrammar find [target] [options]",
+            "Find source-backed analogous implementations for a target.",
+        )),
+        "families" => Some(query_usage(
+            "families",
+            "repogrammar families [options]",
+            "List active supported pattern families, or typed UNKNOWN if evidence is insufficient.",
+        )),
+        "family" => Some(query_usage(
+            "family",
+            "repogrammar family <family-id> [options]",
+            "Show a family by exact family id.",
+        )),
+        "member" => Some(query_usage(
+            "member",
+            "repogrammar member <member-id> [options]",
+            "Show family context for an exact indexed member id.",
+        )),
+        "explain" => Some(query_usage(
+            "explain",
+            "repogrammar explain [target] [options]",
+            "Explain whether a target is a legal variation, exception, incompatibility, or UNKNOWN.",
+        )),
+        "check" => Some(query_usage(
+            "check",
+            "repogrammar check [target] [options]",
+            "Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+        )),
+        "files" => Some(help_text(&[
+            "Usage: repogrammar files [--project <path>] [--json]",
+            "",
+            "Reads repo-relative active indexed-file inventory from a readable active generation.",
+            "",
+            "Options:",
+            "  --project <path>                    Repository root. Defaults to the current directory.",
+            "  --json                             Emit machine-readable output.",
+        ])),
+        "units" => Some(help_text(&[
+            "Usage: repogrammar units [--project <path>] [--json]",
+            "",
+            "Reads repo-relative active code-unit inventory from a readable active generation.",
+            "",
+            "Options:",
+            "  --project <path>                    Repository root. Defaults to the current directory.",
+            "  --json                             Emit machine-readable output.",
+        ])),
+        "serve" => Some(help_text(&[
+            "Usage: repogrammar serve [--project <path>|--path <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+            "",
+            "Runs the read-only MCP stdio server from the product binary.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root served through MCP. Defaults to the current directory.",
+            "  --progress auto|always|never       Accepted for long-running command compatibility.",
+            "  --json                             Accepted by the CLI parser.",
+            "  --quiet, --verbose                 Accepted serving verbosity flags.",
+        ])),
+        "install" => Some(install_usage("install", "Configure RepoGrammar as a read-only MCP server for coding agents.")),
+        "uninstall" => Some(install_usage("uninstall", "Remove RepoGrammar-owned agent integration receipts and managed entries.")),
+        "stats" => Some(help_text(&[
+            "Usage: repogrammar stats [--project <path>] [--json] [--quiet|--verbose]",
+            "",
+            "Reports repo-shape diagnostics and estimated potential read displacement. It does not upload telemetry.",
+            "",
+            "Options:",
+            "  --project <path>                    Repository root. Defaults to the current directory.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted metrics verbosity flags.",
+        ])),
+        "telemetry" => Some(help_text(&[
+            "Usage: repogrammar telemetry [status|on|off|export|upload|purge|research-*|experiment-*] [options]",
+            "",
+            "Manages optional anonymous telemetry, research-trace consent, and local paired token experiment records.",
+            "Telemetry is disabled by default and uploads only through explicit telemetry upload.",
+            "",
+            "Anonymous telemetry subcommands:",
+            "  status [--json] [--project <path>]",
+            "  on|off [--json] [--project <path>]",
+            "  export [--json] [--project <path>]",
+            "  upload [--json] [--dry-run] [--yes] [--endpoint <url>] [--project <path>]",
+            "  purge [--json] --yes [--project <path>]",
+            "",
+            "Research trace subcommands:",
+            "  research-status|research-on|research-off|research-export|research-purge [--json] [--yes]",
+            "",
+            "Experiment subcommands:",
+            "  experiment-start --name <name> --experiment-mode record_existing|controlled_pair --session baseline|treatment --measurement-source host_reported|user_entered|documented_tokenizer [--yes] [--json]",
+            "  experiment-record --name <name> --input-tokens <n> --output-tokens <n> [--tool-tokens <n>] [--success true|false] [--json]",
+            "  experiment-stop|experiment-report|experiment-export|experiment-purge --name <name> [--yes] [--json]",
+            "",
+            "Common options:",
+            "  --project <path>                    Repository root used for local diagnostics.",
+            "  --json                             Emit machine-readable output.",
+            "  --yes                              Confirm upload, purge, or experiment recording where required.",
+            "  --dry-run                          Validate upload payload without network activity.",
+            "  --endpoint <url>                    HTTPS or localhost telemetry upload endpoint.",
+        ])),
+        "version" => Some(help_text(&[
+            "Usage: repogrammar version",
+            "       repogrammar --version",
+            "       repogrammar -V",
+            "",
+            "Prints the RepoGrammar package version.",
+        ])),
+        "help" => Some(help_text(&[
+            "Usage: repogrammar help [command]",
+            "       repogrammar <command> --help",
+            "       repogrammar <command> -h",
+            "",
+            "Prints top-level help or command-specific usage and options.",
+        ])),
+        _ => None,
+    }
+}
+
+fn index_or_sync_usage(command: &str, summary: &str) -> String {
+    help_text(&[
+        &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]"),
+        "",
+        summary,
+        "Requires initialized repo-local state and writes a new validated active generation.",
+        "",
+        "Options:",
+        "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+        "  --json                             Emit machine-readable output.",
+        "  --progress auto|always|never       Control human or NDJSON progress events on stderr.",
+        "  --quiet                            Suppress progress and nonessential human output.",
+        "  --verbose                          Accepted lifecycle verbosity flag.",
+    ])
+}
+
+fn status_or_doctor_usage(command: &str, summary: &str) -> String {
+    help_text(&[
+        &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--quiet|--verbose]"),
+        "",
+        summary,
+        "",
+        "Options:",
+        "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+        "  --json                             Emit machine-readable output.",
+        "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+    ])
+}
+
+fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
+    help_text(&[
+        &format!("Usage: {usage_line}"),
+        "",
+        summary,
+        "Queries never initialize a repository. Missing or stale indexes return fallback or typed UNKNOWN guidance.",
+        "",
+        "Options:",
+        "  --project <path>                    Repository root. Defaults to the current directory.",
+        "  --token-budget <n>                  Positive budget up to 200000; implies --mode evidence unless mode is explicit.",
+        "  --mode compact|evidence|deep        Select metadata detail. Deep still omits source unless source spans are requested.",
+        "  --json                             Emit machine-readable output.",
+        "  --include-variations               Request variation evidence coverage metadata.",
+        "  --include-exceptions               Request exception evidence coverage metadata.",
+        "  --include-source-spans             Explicitly render bounded hash-checked source spans when available.",
+    ])
+}
+
+fn install_usage(command: &str, summary: &str) -> String {
+    help_text(&[
+        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--telemetry|--no-telemetry] [--no-permissions]"),
+        "",
+        summary,
+        "Installer commands configure agent integration only; they do not initialize, index, or rewrite .repogrammar/.",
+        "",
+        "Targets:",
+        "  auto, all, none, codex, claude-code, claude, cursor, opencode, hermes, gemini, antigravity, kiro",
+        "",
+        "Options:",
+        "  --target <target[,target]>          Select one target, all/auto, none, or comma-separated concrete targets.",
+        "  --scope global|project-local        Select integration scope. project and local are accepted aliases.",
+        "  --location global|local             Alias for --scope.",
+        "  --dry-run                          Print the reversible plan without writing.",
+        "  --yes                              Required for noninteractive live writes.",
+        "  --print-config [target]             Print MCP config snippet without live writes.",
+        "  --telemetry, --no-telemetry         Explicit anonymous telemetry consent choice for install.",
+        "  --no-permissions                   Reserve no extra permission prompts.",
+    ])
+}
+
+fn contains_help_flag(rest: &[String]) -> bool {
+    rest.iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+}
+
+fn is_known_cli_command(command: &str) -> bool {
+    is_project_lifecycle_command(command)
+        || is_query_command(command)
+        || is_installer_command(command)
+        || matches!(command, "stats" | "telemetry" | "version" | "help")
 }
 
 fn is_project_lifecycle_command(command: &str) -> bool {
@@ -5275,6 +5627,66 @@ mod tests {
         assert_eq!(output.status, 0);
         assert!(output.stdout.starts_with("repogrammar "));
         assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn top_level_help_lists_usage_options_and_topics() {
+        let output = run(["--help"]);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(output
+            .stdout
+            .contains("Usage: repogrammar <command> [options]"));
+        assert!(output.stdout.contains("repogrammar help <command>"));
+        assert!(output
+            .stdout
+            .contains("autosync <status|enable|start|stop|disable|run>"));
+        assert!(output.stdout.contains("install [--target <agent[,agent]>]"));
+        assert!(output
+            .stdout
+            .contains("telemetry <status|on|off|export|upload|purge|research-*|experiment-*>"));
+    }
+
+    #[test]
+    fn command_help_is_available_from_help_topic_and_help_flags() {
+        let by_topic = run(["help", "autosync"]);
+        let by_short_flag = run(["autosync", "-h"]);
+        let by_long_flag = run(["autosync", "--help"]);
+
+        for output in [by_topic, by_short_flag, by_long_flag] {
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            assert!(output
+                .stdout
+                .contains("Usage: repogrammar autosync [status|enable|start|stop|disable|run]"));
+            assert!(output.stdout.contains("Subcommands are positional"));
+            assert!(output.stdout.contains("repogrammar autosync start"));
+            assert!(output.stdout.contains("not `repogrammar autosync --start`"));
+            assert!(output.stdout.contains("--poll-ms <n>"));
+            assert!(output.stdout.contains("--debounce-ms <n>"));
+        }
+    }
+
+    #[test]
+    fn command_help_does_not_call_command_runtime() {
+        let runtime = AutosyncRequestRuntime::default();
+        let env = |_: &str| None;
+        let output =
+            run_with_context_and_runtime(["autosync", "--help"], Path::new("."), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(runtime.last_command.get().is_none());
+        assert!(runtime.last_request.borrow().is_none());
+    }
+
+    #[test]
+    fn unknown_help_topic_is_rejected() {
+        let output = run(["help", "missing-command"]);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, "unknown help topic: missing-command\n");
     }
 
     #[test]

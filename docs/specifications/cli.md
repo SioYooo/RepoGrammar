@@ -44,6 +44,22 @@ Maintenance:
 - `version`
 - `help`
 
+## Help contract
+
+`repogrammar --help`, `repogrammar -h`, and `repogrammar help` must print a
+top-level command overview that includes command families, common invocation
+forms, and representative options. `repogrammar help <command>`,
+`repogrammar <command> --help`, and `repogrammar <command> -h` must print
+command-specific usage, supported subcommands where applicable, accepted
+options, and safety notes.
+
+Help output is read-only discovery. It must not initialize a repository, index
+source, start or stop auto-sync, configure agents, change telemetry consent, or
+write receipts. Unknown help topics must fail cleanly with exit status `2`.
+For `autosync`, help must make the positional subcommand contract explicit:
+`repogrammar autosync start` starts auto-sync; `repogrammar autosync --start`
+is not a supported flag.
+
 ## Pattern-family commands
 
 `repogrammar find` is the main human-facing equivalent of the MCP
