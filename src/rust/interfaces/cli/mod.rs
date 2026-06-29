@@ -1885,7 +1885,7 @@ where
     };
     if selected_targets.is_empty() {
         return Ok(InteractiveInstallDecision::Exit(
-            "install: selected agents are already managed by RepoGrammar; no changes made\n"
+            "install: no detected uninstalled agent integrations were selected; no changes made\n"
                 .to_string(),
         ));
     }
@@ -1962,6 +1962,18 @@ fn prompt_agent_selection_until_valid(
 }
 
 fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
+    let automatic_targets = default_interactive_targets(statuses);
+    let all_installed = statuses.iter().all(|status| status.installed);
+    let automatic_label = if all_installed {
+        "refresh all already managed agents"
+    } else {
+        "all detected not-yet-installed agents"
+    };
+    let default_label = if automatic_targets.is_empty() {
+        "none"
+    } else {
+        "a"
+    };
     let mut prompt = String::from(
         "RepoGrammar installer\n\nThis configures RepoGrammar as a read-only MCP server for coding agents.\nIt does not index this repository.\nIt does not create or modify .repogrammar/.\nIt does not enable telemetry unless you explicitly opt in.\n\nDetected agents:\n",
     );
@@ -1987,9 +1999,9 @@ fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
             "\nWarning: no supported agent CLI was detected on PATH; selected native configuration may fail.\n",
         );
     }
-    prompt.push_str(
-        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = all available not-yet-installed agents\n  q = cancel\n\nSelection [a]: ",
-    );
+    prompt.push_str(&format!(
+        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = {automatic_label}\n  none = configure no agents\n  q = cancel\n\nSelection [{default_label}]: "
+    ));
     prompt
 }
 
@@ -2002,7 +2014,9 @@ fn parse_interactive_agent_selection(
         return Ok(None);
     }
     let mut selected = Vec::new();
-    if trimmed.is_empty()
+    if trimmed.eq_ignore_ascii_case("none") {
+        selected = Vec::new();
+    } else if trimmed.is_empty()
         || trimmed.eq_ignore_ascii_case("a")
         || trimmed.eq_ignore_ascii_case("all")
     {
@@ -2015,17 +2029,18 @@ fn parse_interactive_agent_selection(
                 "2" => AgentTarget::ClaudeCode,
                 "codex" => AgentTarget::Codex,
                 "claude" | "claude-code" => AgentTarget::ClaudeCode,
-                _ => {
-                    return Err(
-                        "unknown agent selection; use 1, 2, 1,2, codex, claude-code, all, or q"
-                            .to_string(),
-                    )
-                }
+                _ => return Err(
+                    "unknown agent selection; use 1, 2, 1,2, codex, claude-code, all, none, or q"
+                        .to_string(),
+                ),
             };
             if !selected.contains(&target) {
                 selected.push(target);
             }
         }
+    }
+    if selected.is_empty() {
+        return Ok(Some(Vec::new()));
     }
     let selected = normalize_concrete_targets(&selected).map_err(|error| error.to_string())?;
     Ok(Some(selected))
@@ -2040,15 +2055,10 @@ fn default_interactive_targets(statuses: &[InstallAgentStatus]) -> Vec<AgentTarg
     if !detected_missing.is_empty() {
         return detected_missing;
     }
-    let missing = statuses
-        .iter()
-        .filter(|status| !status.installed)
-        .map(|status| status.target)
-        .collect::<Vec<_>>();
-    if missing.is_empty() {
+    if statuses.iter().all(|status| status.installed) {
         statuses.iter().map(|status| status.target).collect()
     } else {
-        missing
+        Vec::new()
     }
 }
 
@@ -8392,6 +8402,92 @@ mod tests {
     }
 
     #[test]
+    fn interactive_install_default_ignores_undetected_unmanaged_agent() {
+        struct InstallRuntime {
+            delegated: Cell<bool>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer undetected default test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer undetected default test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer undetected default test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                _command: &str,
+                _request: InstallRequest,
+                _context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.delegated.set(true);
+                unreachable!("undetected default must stop before native writes")
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-undetected-default");
+        let command_dir = workspace.path().join("commands");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        fs::write(command_dir.join("codex"), "").expect("fake codex cli");
+        let data_home = workspace.path().join("data-home");
+        let receipt_dir = data_home
+            .join("repogrammar")
+            .join("install")
+            .join("receipts");
+        fs::create_dir_all(&receipt_dir).expect("receipt dir");
+        fs::write(
+            receipt_dir.join("codex-global.json"),
+            r#"{"schema_version":1,"managed_by":"repogrammar","mcp_server":"repogrammar","target":"codex","scope":"global"}"#,
+        )
+        .expect("codex receipt");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            "PATH" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime {
+            delegated: Cell::new(false),
+        };
+        let prompt = WizardPrompt::new([""], [""], ["y"]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output
+            .stdout
+            .contains("no detected uninstalled agent integrations were selected"));
+        assert!(!runtime.delegated.get());
+        assert_eq!(prompt.selection_calls.get(), 1);
+        assert_eq!(prompt.telemetry_calls.get(), 0);
+        assert_eq!(prompt.confirmation_calls.get(), 0);
+        let selection_prompt = &prompt.selection_prompts.borrow()[0];
+        assert!(selection_prompt.contains("Codex CLI"));
+        assert!(selection_prompt.contains("detected     installed"));
+        assert!(selection_prompt.contains("Claude Code"));
+        assert!(selection_prompt.contains("not detected not installed"));
+        assert!(selection_prompt.contains("a = all detected not-yet-installed agents"));
+        assert!(selection_prompt.contains("Selection [none]:"));
+    }
+
+    #[test]
     fn interactive_install_cancel_stops_before_runtime_writes() {
         struct InstallRuntime {
             delegated: Cell<bool>,
@@ -8559,12 +8655,58 @@ mod tests {
             Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
         );
         assert_eq!(
+            parse_interactive_agent_selection("none", &statuses).expect("selection"),
+            Some(Vec::new())
+        );
+        assert_eq!(
             parse_interactive_agent_selection("q", &statuses).expect("selection"),
             None
         );
         assert!(parse_interactive_agent_selection("unknown", &statuses).is_err());
         assert!(parse_interactive_agent_selection("1a", &statuses).is_err());
         assert!(parse_interactive_agent_selection("1,,2", &statuses).is_err());
+
+        let statuses = vec![
+            InstallAgentStatus {
+                target: AgentTarget::Codex,
+                detected: true,
+                installed: true,
+            },
+            InstallAgentStatus {
+                target: AgentTarget::ClaudeCode,
+                detected: false,
+                installed: false,
+            },
+        ];
+        assert_eq!(
+            parse_interactive_agent_selection("", &statuses).expect("selection"),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("a", &statuses).expect("selection"),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("2", &statuses).expect("selection"),
+            Some(vec![AgentTarget::ClaudeCode])
+        );
+
+        let statuses = vec![
+            InstallAgentStatus {
+                target: AgentTarget::Codex,
+                detected: true,
+                installed: true,
+            },
+            InstallAgentStatus {
+                target: AgentTarget::ClaudeCode,
+                detected: false,
+                installed: true,
+            },
+        ];
+        assert_eq!(
+            parse_interactive_agent_selection("", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex, AgentTarget::ClaudeCode])
+        );
     }
 
     #[test]

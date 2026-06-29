@@ -26,6 +26,13 @@ Agent integration may require the selected native agent CLI:
 
 Missing agent CLIs must be non-fatal in interactive flows when other supported
 choices remain available.
+In the interactive wizard, pressing Enter and the `a` selection must include
+only detected, not-yet-managed agent integrations by default. Undetected
+unmanaged agents are shown for explicit selection, but they must not be selected
+implicitly. When every supported concrete agent is already managed by
+RepoGrammar, the default may select those already managed agents so the installer
+can refresh the RepoGrammar-managed command path without rerunning native agent
+configuration.
 
 RepoGrammar follows a CodeGraph-style installation architecture: CLI
 acquisition, machine-level agent wiring, and repository-level `init`/`index`
@@ -305,8 +312,9 @@ noninteractive live writes, and a dependency-light text wizard:
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
-  detects existing RepoGrammar-owned receipts, and skips already managed agents
-  by default;
+  detects existing RepoGrammar-owned receipts, defaults to detected
+  not-yet-managed agents only, leaves undetected unmanaged agents unselected
+  unless explicitly chosen, and skips already managed agents during live writes;
 - the wizard keeps anonymous telemetry opt-in default-no, but the final
   reviewed installation plan confirmation is default-yes so pressing Enter
   proceeds after the plan is shown;
@@ -317,10 +325,10 @@ noninteractive live writes, and a dependency-light text wizard:
   plan lines (`describe_paths`). The current registry exposes deferred targets
   through dry-run and `--print-config` snippets only; live writes remain
   implemented for global Codex and global Claude Code;
-- re-running the wizard can add missing supported agents later or refresh the
-  RepoGrammar-managed command path even when all selected agents are already
-  managed, without re-running native agent add commands for already managed
-  receipts;
+- re-running the wizard can add detected missing supported agents later or
+  refresh the RepoGrammar-managed command path when every supported concrete
+  agent is already managed, without re-running native agent add commands for
+  already managed receipts;
 - noninteractive live writes still require `--yes`;
 - `install --yes`, `install --dry-run`, and explicit `--target ... --yes`
   never prompt;
