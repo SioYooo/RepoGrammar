@@ -120,14 +120,15 @@ pub fn enable_autosync(
 
 pub fn disable_autosync(request: AutosyncRequest) -> Result<AutosyncReport, RepoGrammarError> {
     let state = require_initialized_state(&request)?;
-    let lock = inspect_daemon_lock(&state.state_dir)?;
-    if lock.running {
+    let lock_path = state.state_dir.join("locks").join(DAEMON_LOCK_FILE);
+    let lock = inspect_daemon_lock_path(&lock_path)?;
+    if lock.status.running {
         return Err(invalid_input(
             "auto-sync is running; run repogrammar autosync stop before disable",
         ));
     }
-    if lock.pid.is_some() {
-        let _ = fs::remove_file(state.state_dir.join("locks").join(DAEMON_LOCK_FILE));
+    if let Some(stale_contents) = lock.contents {
+        let _ = remove_daemon_lock_if_contents_match(&lock_path, &stale_contents)?;
     }
     let path = config_path(&state.state_dir);
     match fs::remove_file(&path) {
@@ -156,33 +157,37 @@ pub fn acquire_autosync_daemon(
     let locks_dir = state.state_dir.join("locks");
     ensure_dir(&locks_dir, "failed to open auto-sync lock directory")?;
     let lock_path = locks_dir.join(DAEMON_LOCK_FILE);
-    let lock = inspect_daemon_lock(&state.state_dir)?;
-    if lock.running {
-        return Err(invalid_input("auto-sync is already running"));
-    }
-    if lock.pid.is_some() {
-        let _ = fs::remove_file(&lock_path);
-    }
     let contents = daemon_lock_contents();
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|_| invalid_input("failed to create auto-sync daemon lock"))?;
-    if let Err(error) = file.write_all(contents.as_bytes()) {
-        let _ = fs::remove_file(&lock_path);
-        return Err(invalid_input(format!(
-            "failed to write auto-sync daemon lock: {error}"
-        )));
+
+    for _attempt in 0..2 {
+        match create_daemon_lock_atomically(&lock_path, &contents)? {
+            CreateDaemonLockResult::Acquired => {
+                return Ok((
+                    AutosyncDaemonGuard {
+                        path: lock_path,
+                        contents,
+                    },
+                    config.settings,
+                    state.root,
+                ));
+            }
+            CreateDaemonLockResult::AlreadyExists => {
+                let inspection = inspect_daemon_lock_path(&lock_path)?;
+                if inspection.status.running {
+                    return Err(invalid_input("auto-sync is already running"));
+                }
+                if let Some(stale_contents) = inspection.contents {
+                    if remove_daemon_lock_if_contents_match(&lock_path, &stale_contents)? {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+        }
     }
-    Ok((
-        AutosyncDaemonGuard {
-            path: lock_path,
-            contents,
-        },
-        config.settings,
-        state.root,
-    ))
+
+    Err(invalid_input("failed to acquire auto-sync daemon lock"))
 }
 
 pub fn stop_autosync(request: AutosyncRequest) -> Result<AutosyncReport, RepoGrammarError> {
@@ -219,6 +224,11 @@ struct AutosyncState {
 struct DaemonLockStatus {
     running: bool,
     pid: Option<u32>,
+}
+
+struct DaemonLockInspection {
+    status: DaemonLockStatus,
+    contents: Option<String>,
 }
 
 fn require_initialized_state(request: &AutosyncRequest) -> Result<AutosyncState, RepoGrammarError> {
@@ -396,12 +406,19 @@ fn write_config(state_dir: &Path, config: &AutosyncConfig) -> Result<(), RepoGra
 
 fn inspect_daemon_lock(state_dir: &Path) -> Result<DaemonLockStatus, RepoGrammarError> {
     let path = state_dir.join("locks").join(DAEMON_LOCK_FILE);
-    let text = match read_limited_text(&path) {
+    Ok(inspect_daemon_lock_path(&path)?.status)
+}
+
+fn inspect_daemon_lock_path(path: &Path) -> Result<DaemonLockInspection, RepoGrammarError> {
+    let text = match read_limited_text(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DaemonLockStatus {
-                running: false,
-                pid: None,
+            return Ok(DaemonLockInspection {
+                status: DaemonLockStatus {
+                    running: false,
+                    pid: None,
+                },
+                contents: None,
             });
         }
         Err(_) => return Err(invalid_input("failed to inspect auto-sync daemon lock")),
@@ -417,10 +434,108 @@ fn inspect_daemon_lock(state_dir: &Path) -> Result<DaemonLockStatus, RepoGrammar
         .ok_or_else(|| invalid_input("auto-sync daemon lock is invalid"))?;
     let pid =
         u32::try_from(pid_u64).map_err(|_| invalid_input("auto-sync daemon lock is invalid"))?;
-    Ok(DaemonLockStatus {
-        running: process_is_running(pid),
-        pid: Some(pid),
+    Ok(DaemonLockInspection {
+        status: DaemonLockStatus {
+            running: process_is_running(pid),
+            pid: Some(pid),
+        },
+        contents: Some(text),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateDaemonLockResult {
+    Acquired,
+    AlreadyExists,
+}
+
+fn create_daemon_lock_atomically(
+    lock_path: &Path,
+    contents: &str,
+) -> Result<CreateDaemonLockResult, RepoGrammarError> {
+    let tmp_path = temporary_daemon_lock_path(lock_path);
+    let tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map_err(|_| invalid_input("failed to create auto-sync daemon lock temp file"))?;
+    write_daemon_lock_contents(tmp_file, &tmp_path, contents)?;
+
+    let link_result = match fs::hard_link(&tmp_path, lock_path) {
+        Ok(()) => CreateDaemonLockResult::Acquired,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            CreateDaemonLockResult::AlreadyExists
+        }
+        Err(_) => create_daemon_lock_with_exclusive_open(lock_path, contents)?,
+    };
+    let _ = fs::remove_file(&tmp_path);
+    Ok(link_result)
+}
+
+fn temporary_daemon_lock_path(lock_path: &Path) -> PathBuf {
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    lock_path.with_file_name(format!(
+        "{DAEMON_LOCK_FILE}.{}-{started}.tmp",
+        std::process::id()
+    ))
+}
+
+fn create_daemon_lock_with_exclusive_open(
+    lock_path: &Path,
+    contents: &str,
+) -> Result<CreateDaemonLockResult, RepoGrammarError> {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(file) => {
+            write_daemon_lock_contents(file, lock_path, contents)?;
+            Ok(CreateDaemonLockResult::Acquired)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(CreateDaemonLockResult::AlreadyExists)
+        }
+        Err(_) => Err(invalid_input("failed to create auto-sync daemon lock")),
+    }
+}
+
+fn write_daemon_lock_contents<W: Write>(
+    mut writer: W,
+    lock_path: &Path,
+    contents: &str,
+) -> Result<(), RepoGrammarError> {
+    if let Err(error) = writer.write_all(contents.as_bytes()) {
+        let _ = fs::remove_file(lock_path);
+        return Err(invalid_input(format!(
+            "failed to write auto-sync daemon lock: {error}"
+        )));
+    }
+    Ok(())
+}
+
+fn remove_daemon_lock_if_contents_match(
+    lock_path: &Path,
+    expected: &str,
+) -> Result<bool, RepoGrammarError> {
+    let current = match read_limited_text(lock_path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(_) => return Err(invalid_input("failed to inspect auto-sync daemon lock")),
+    };
+    if current != expected {
+        return Ok(false);
+    }
+    match fs::remove_file(lock_path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(_) => Err(invalid_input(
+            "failed to remove stale auto-sync daemon lock",
+        )),
+    }
 }
 
 fn daemon_lock_contents() -> String {
@@ -479,6 +594,10 @@ fn process_is_running(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
+        const MAX_POSITIVE_PID_T: u32 = i32::MAX as u32;
+        if pid > MAX_POSITIVE_PID_T {
+            return false;
+        }
         std::process::Command::new("kill")
             .args(["-0", &pid.to_string()])
             .status()
@@ -589,6 +708,89 @@ mod tests {
     #[test]
     fn current_process_is_reported_running() {
         assert!(process_is_running(std::process::id()));
+        assert!(!process_is_running(0));
+        assert!(!process_is_running(u32::MAX));
+    }
+
+    #[test]
+    fn acquire_daemon_writes_complete_lock_and_removes_own_lock() {
+        let workspace = TempWorkspace::new("autosync-acquire-lock");
+        init_repository(RepositoryLifecycleInitRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+            write_root_gitignore: false,
+        })
+        .expect("init");
+        enable_autosync(request(&workspace), AutosyncSettings::default()).expect("enable");
+
+        let (guard, _settings, _root) =
+            acquire_autosync_daemon(request(&workspace)).expect("acquire daemon");
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        let contents = fs::read_to_string(&lock_path).expect("read daemon lock");
+        let value: Value = serde_json::from_str(&contents).expect("daemon lock JSON");
+        assert_eq!(value["kind"], "autosync_daemon");
+        assert_eq!(value["pid"], std::process::id());
+        assert!(!workspace
+            .path()
+            .join(".repogrammar/locks")
+            .read_dir()
+            .expect("read locks dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".tmp")));
+
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn acquire_daemon_replaces_stale_lock_by_content_match() {
+        let workspace = TempWorkspace::new("autosync-acquire-stale-lock");
+        init_repository(RepositoryLifecycleInitRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+            write_root_gitignore: false,
+        })
+        .expect("init");
+        enable_autosync(request(&workspace), AutosyncSettings::default()).expect("enable");
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "schema_version": AUTOSYNC_SCHEMA_VERSION,
+                "kind": "autosync_daemon",
+                "pid": 0,
+                "started_unix_seconds": 0,
+                "repogrammar_version": env!("CARGO_PKG_VERSION"),
+            })
+            .to_string(),
+        )
+        .expect("write stale daemon lock");
+
+        let (guard, _settings, _root) =
+            acquire_autosync_daemon(request(&workspace)).expect("replace stale daemon lock");
+
+        let contents = fs::read_to_string(&lock_path).expect("read replacement lock");
+        let value: Value = serde_json::from_str(&contents).expect("daemon lock JSON");
+        assert_eq!(value["pid"], std::process::id());
+
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn remove_daemon_lock_preserves_concurrently_replaced_contents() {
+        let workspace = TempWorkspace::new("autosync-lock-content-match");
+        let lock_path = workspace.path().join("daemon.lock");
+        fs::write(&lock_path, "new").expect("write daemon lock");
+
+        let removed =
+            remove_daemon_lock_if_contents_match(&lock_path, "old").expect("compare daemon lock");
+
+        assert!(!removed);
+        assert_eq!(
+            fs::read_to_string(&lock_path).expect("read daemon lock"),
+            "new"
+        );
     }
 
     #[test]
