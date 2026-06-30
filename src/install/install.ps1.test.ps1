@@ -4,6 +4,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
 $Installer = Join-Path $ScriptDir "install.ps1"
 $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("repogrammar-install-ps-test-" + [guid]::NewGuid().ToString())
+$PowerShellExe = (Get-Command powershell).Source
+$CargoExe = (Get-Command cargo).Source
+$SavedGlobalUserProfile = $env:USERPROFILE
+$SavedGlobalHome = $env:HOME
 
 function Assert-PathExists([string]$Path, [string]$Message) {
     if (!(Test-Path $Path)) {
@@ -18,11 +22,21 @@ function Assert-Contains([string]$Path, [string]$Expected) {
     }
 }
 
+function Invoke-InstallerWithPath([string]$PathValue, [scriptblock]$Body) {
+    $PreviousPath = $env:PATH
+    try {
+        $env:PATH = $PathValue
+        & $Body
+    } finally {
+        $env:PATH = $PreviousPath
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     Push-Location $RepoRoot
     try {
-        & cargo build --quiet --bin repogrammar
+        & $CargoExe build --quiet --bin repogrammar
         if ($LASTEXITCODE -ne 0) {
             throw "cargo build failed with exit code $LASTEXITCODE"
         }
@@ -33,15 +47,22 @@ try {
     $SourceBinary = Join-Path $RepoRoot "target\debug\repogrammar.exe"
     Assert-PathExists $SourceBinary "source binary was not built"
 
+    $TestHome = Join-Path $TempRoot "home"
+    New-Item -ItemType Directory -Force -Path $TestHome | Out-Null
+    $env:USERPROFILE = $TestHome
+    $env:HOME = $TestHome
+
     $CommandDir = Join-Path $TempRoot "bin"
     $InstallDir = Join-Path $TempRoot "data"
-    & powershell -ExecutionPolicy Bypass -File $Installer `
-        -InstallCliOnly `
-        -FromSource `
-        -SourceBinary $SourceBinary `
-        -CommandDir $CommandDir `
-        -InstallDir $InstallDir `
-        -Yes
+    Invoke-InstallerWithPath $CommandDir {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $CommandDir `
+            -InstallDir $InstallDir `
+            -Yes
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "source install failed with exit code $LASTEXITCODE"
     }
@@ -53,13 +74,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "installed repogrammar version check failed"
     }
-    & powershell -ExecutionPolicy Bypass -File $Installer `
-        -InstallCliOnly `
-        -FromSource `
-        -SourceBinary $SourceBinary `
-        -CommandDir $CommandDir `
-        -InstallDir $InstallDir `
-        -Yes
+    Invoke-InstallerWithPath $CommandDir {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $CommandDir `
+            -InstallDir $InstallDir `
+            -Yes
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "source reinstall over existing managed files failed with exit code $LASTEXITCODE"
     }
@@ -85,11 +108,13 @@ try {
         Remove-Item Env:REPOGRAMMAR_COMMAND_DIR -ErrorAction SilentlyContinue
         Remove-Item Env:REPOGRAMMAR_INSTALL_DIR -ErrorAction SilentlyContinue
         Remove-Item Env:REPOGRAMMAR_WORKER_ROOT -ErrorAction SilentlyContinue
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $Installer `
-            -InstallCliOnly `
-            -FromSource `
-            -SourceBinary $SourceBinary `
-            -Yes
+        Invoke-InstallerWithPath (Join-Path $DefaultHome ".local\bin") {
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallCliOnly `
+                -FromSource `
+                -SourceBinary $SourceBinary `
+                -Yes
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "default-layout install failed with exit code $LASTEXITCODE"
         }
@@ -131,21 +156,16 @@ if /I "%1"=="build" (
 exit /B 1
 "@
         Set-Content -Path $FakeCargo -Value $FakeCargoScript -Encoding ASCII
-        $PowerShellExe = (Get-Command powershell).Source
-        $PreviousPath = $env:PATH
-        try {
-            $env:PATH = $FakeCargoDir
+        Invoke-InstallerWithPath "$FakeCargoDir;$DefaultBuildCommandDir" {
             & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
                 -InstallCliOnly `
                 -FromSource `
                 -CommandDir $DefaultBuildCommandDir `
                 -InstallDir $DefaultBuildInstallDir `
                 -Yes
-            if ($LASTEXITCODE -ne 0) {
-                throw "default source build install failed with exit code $LASTEXITCODE"
-            }
-        } finally {
-            $env:PATH = $PreviousPath
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "default source build install failed with exit code $LASTEXITCODE"
         }
         Assert-Contains $CargoLog "build --release"
         Assert-PathExists (Join-Path $DefaultBuildCommandDir "repogrammar.exe") "default source build command was not installed"
@@ -167,13 +187,15 @@ exit /B 1
     Set-Content -Path (Join-Path $StateRepo ".repogrammar\sentinel") -Value "keep"
     Push-Location $StateRepo
     try {
-        & powershell -ExecutionPolicy Bypass -File $Installer `
-            -InstallCliOnly `
-            -FromSource `
-            -SourceBinary $SourceBinary `
-            -CommandDir (Join-Path $TempRoot "state-bin") `
-            -InstallDir (Join-Path $TempRoot "state-data") `
-            -Yes
+        Invoke-InstallerWithPath (Join-Path $TempRoot "state-bin") {
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallCliOnly `
+                -FromSource `
+                -SourceBinary $SourceBinary `
+                -CommandDir (Join-Path $TempRoot "state-bin") `
+                -InstallDir (Join-Path $TempRoot "state-data") `
+                -Yes
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "source install from state repo failed with exit code $LASTEXITCODE"
         }
@@ -186,13 +208,15 @@ exit /B 1
     $ForeignInstallDir = Join-Path $TempRoot "foreign-data"
     New-Item -ItemType Directory -Force -Path $ForeignCommandDir | Out-Null
     Set-Content -Path (Join-Path $ForeignCommandDir "repogrammar.exe") -Value "foreign"
-    & powershell -ExecutionPolicy Bypass -File $Installer `
-        -InstallCliOnly `
-        -FromSource `
-        -SourceBinary $SourceBinary `
-        -CommandDir $ForeignCommandDir `
-        -InstallDir $ForeignInstallDir `
-        -Yes
+    Invoke-InstallerWithPath $ForeignCommandDir {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $ForeignCommandDir `
+            -InstallDir $ForeignInstallDir `
+            -Yes
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "source install with unmanaged command backup failed with exit code $LASTEXITCODE"
     }
@@ -210,13 +234,15 @@ exit /B 1
     $VerifyInstallDir = Join-Path $TempRoot "verify-data"
     $VerifyStaleDir = Join-Path $TempRoot "verify-stale"
     New-Item -ItemType Directory -Force -Path $VerifyHome, $VerifyStaleDir | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $Installer `
-        -InstallCliOnly `
-        -FromSource `
-        -SourceBinary $SourceBinary `
-        -CommandDir $VerifyCommandDir `
-        -InstallDir $VerifyInstallDir `
-        -Yes | Out-Null
+    Invoke-InstallerWithPath $VerifyCommandDir {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $VerifyCommandDir `
+            -InstallDir $VerifyInstallDir `
+            -Yes | Out-Null
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "verify setup install failed with exit code $LASTEXITCODE"
     }
@@ -227,13 +253,12 @@ exit /B 1
     Set-Content -Path (Join-Path $CodexDir "config.toml") `
         -Value "[mcp_servers.repogrammar]`ncommand = '$AuthorityBin'`nargs = [`"serve`"]"
     $VerifyOut = Join-Path $TempRoot "verify.out"
-    $VerifyPowerShellExe = (Get-Command powershell).Source
     $SavedVerifyUserProfile = $env:USERPROFILE
     $SavedVerifyPath = $env:PATH
     try {
         $env:USERPROFILE = $VerifyHome
         $env:PATH = "$VerifyCommandDir;$VerifyStaleDir"
-        & $VerifyPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
             -Verify `
             -Prune `
             -CommandDir $VerifyCommandDir `
@@ -254,6 +279,32 @@ exit /B 1
     }
     Assert-PathExists (Join-Path $VerifyCommandDir "repogrammar.exe") "command copy must survive prune"
 
+    # Normal install/update paths run the same stale PATH cleanup automatically.
+    $AutoPruneCommandDir = Join-Path $TempRoot "auto-prune-bin"
+    $AutoPruneInstallDir = Join-Path $TempRoot "auto-prune-data"
+    $AutoPruneStaleDir = Join-Path $TempRoot "auto-prune-stale"
+    $AutoPruneOut = Join-Path $TempRoot "auto-prune.out"
+    New-Item -ItemType Directory -Force -Path $AutoPruneStaleDir | Out-Null
+    Set-Content -Path (Join-Path $AutoPruneStaleDir "repogrammar.exe") -Value "stale-bytes"
+    Invoke-InstallerWithPath "$AutoPruneCommandDir;$AutoPruneStaleDir" {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $AutoPruneCommandDir `
+            -InstallDir $AutoPruneInstallDir `
+            -Yes *> $AutoPruneOut
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "auto-prune install failed with exit code $LASTEXITCODE"
+    }
+    Assert-Contains $AutoPruneOut "Stale PATH copies"
+    Assert-Contains $AutoPruneOut "Removed"
+    if (Test-Path (Join-Path $AutoPruneStaleDir "repogrammar.exe")) {
+        throw "install/update path did not automatically prune stale PATH copy"
+    }
+    Assert-PathExists (Join-Path $AutoPruneCommandDir "repogrammar.exe") "command copy must survive automatic prune"
+
     # -Purge removes binaries/workers/data under a fake home + restricted PATH, so
     # it can never touch the developer's real install or running processes.
     $PurgeHome = Join-Path $TempRoot "purge-home"
@@ -261,25 +312,26 @@ exit /B 1
     $PurgeInstallDir = Join-Path $TempRoot "purge-data"
     $PurgeExtraDir = Join-Path $TempRoot "purge-extra"
     New-Item -ItemType Directory -Force -Path $PurgeHome, $PurgeExtraDir | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $Installer `
-        -InstallCliOnly `
-        -FromSource `
-        -SourceBinary $SourceBinary `
-        -CommandDir $PurgeCommandDir `
-        -InstallDir $PurgeInstallDir `
-        -Yes | Out-Null
+    Invoke-InstallerWithPath $PurgeCommandDir {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $PurgeCommandDir `
+            -InstallDir $PurgeInstallDir `
+            -Yes | Out-Null
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "purge setup install failed with exit code $LASTEXITCODE"
     }
     Set-Content -Path (Join-Path $PurgeExtraDir "repogrammar.exe") -Value "extra-copy"
     $PurgeOut = Join-Path $TempRoot "purge.out"
-    $PurgePowerShellExe = (Get-Command powershell).Source
     $SavedPurgeUserProfile = $env:USERPROFILE
     $SavedPurgePath = $env:PATH
     try {
         $env:USERPROFILE = $PurgeHome
         $env:PATH = "$PurgeCommandDir;$PurgeExtraDir"
-        & $PurgePowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
             -Purge `
             -CommandDir $PurgeCommandDir `
             -InstallDir $PurgeInstallDir `
@@ -308,14 +360,16 @@ exit /B 1
     $PreviousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & powershell -ExecutionPolicy Bypass -File $Installer `
-            -InstallAndConfigure `
-            -FromSource `
-            -SourceBinary $SourceBinary `
-            -CommandDir $FailureCommandDir `
-            -InstallDir $FailureInstallDir `
-            -Target none `
-            -Yes *> $FailureOut
+        Invoke-InstallerWithPath $FailureCommandDir {
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallAndConfigure `
+                -FromSource `
+                -SourceBinary $SourceBinary `
+                -CommandDir $FailureCommandDir `
+                -InstallDir $FailureInstallDir `
+                -Target none `
+                -Yes *> $FailureOut
+        }
         $FailureStatus = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
@@ -325,5 +379,7 @@ exit /B 1
     }
     Assert-Contains $FailureOut "repogrammar install failed with exit code"
 } finally {
+    if ($null -ne $SavedGlobalUserProfile) { $env:USERPROFILE = $SavedGlobalUserProfile } else { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue }
+    if ($null -ne $SavedGlobalHome) { $env:HOME = $SavedGlobalHome } else { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $TempRoot -ErrorAction SilentlyContinue
 }

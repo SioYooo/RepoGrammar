@@ -44,7 +44,8 @@ Usage:
 -Verify reports, by SHA256, whether the repogrammar copies on PATH, the
 configured agent MCP servers, and any running serve processes match the managed
 authority binary. -Prune additionally removes PATH copies whose hash differs
-from the authority (add -Yes to skip the confirmation).
+from the authority (add -Yes to skip the confirmation). Install/update actions
+run the same stale PATH cleanup after refreshing the managed command.
 -Purge fully removes RepoGrammar: it prints a plan, then stops repogrammar
 processes, runs uninstall (agent MCP entries and receipts), optionally runs
 uninit on -Project (the .repogrammar state), and deletes every repogrammar
@@ -727,12 +728,14 @@ if ($Purge) {
 
 if ($InstallCliOnly) {
     Install-Cli
+    Invoke-VerifyInstall $true
     exit 0
 }
 
 if ($InstallAndConfigure) {
     Install-Cli
     Run-AgentInstall
+    Invoke-VerifyInstall $true
     exit 0
 }
 
@@ -758,12 +761,12 @@ if (Test-SourceCheckout) {
 Write-Output "q = cancel"
 $choice = Read-Host "Selection [1]"
 switch ($choice) {
-    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
-    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
-    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; break }
+    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Invoke-VerifyInstall $true; break }
     "3" { Run-AgentInstall; break }
     "4" { Remove-Command; break }
-    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli } else { throw "invalid selection: $choice" }; break }
+    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli; Invoke-VerifyInstall $true } else { throw "invalid selection: $choice" }; break }
     "q" { Write-Output "Cancelled. No changes made."; break }
     "Q" { Write-Output "Cancelled. No changes made."; break }
     default { throw "invalid selection: $choice" }

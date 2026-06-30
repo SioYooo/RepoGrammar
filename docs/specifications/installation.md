@@ -72,8 +72,9 @@ around release artifacts and the product binary: it may download a prebuilt
 release artifact, verify its checksum, install or repair the user-writable
 `repogrammar` command, install bundled worker assets, call
 `repogrammar install`, call `repogrammar uninstall`, remove the local command
-path after confirmation, display PATH guidance, or build from source only when
-the user explicitly chooses the contributor source-build path. It must not
+path after confirmation, clean up stale `repogrammar` copies found on PATH,
+display PATH guidance, or build from source only when the user explicitly
+chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
 
@@ -106,6 +107,15 @@ previous file cannot be removed because an active coding agent or MCP process
 is using it, the install path must fail and tell the user to exit that agent
 before rerunning the install or build command; it must not keep an alternate
 new binary beside the old active one.
+After a successful CLI install/update action, first-party wrappers must scan the
+current PATH for additional `repogrammar` command copies and compare each copy's
+SHA256 with the managed installed executable authority. Copies whose hash
+differs from the authority are stale and must be removed after confirmation, or
+without prompting when the noninteractive `--yes` / `-Yes` flag is present. The
+managed authority and any matching command copy must be preserved. Explicit
+verify/prune commands may remain available for diagnosis and manual repair, but
+normal install/update paths must not require users to run a second cleanup
+command.
 If the user-writable command path already contains an unmanaged
 `repogrammar`, the wrapper may back it up and replace it with the managed
 command because the user explicitly invoked CLI installation. It must not
@@ -322,9 +332,11 @@ noninteractive live writes, and a dependency-light text wizard:
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, validates archive entry names before extraction,
   installs the bundled worker asset plus CLI, and can then launch agent wiring
-  or uninstall flows. In a source checkout, its interactive menu makes the
-  contributor source-build path first-class, and its noninteractive
-  `--from-source` mode supports dogfood before release artifacts exist;
+  or uninstall flows. Install/update paths also prune stale PATH copies whose
+  checksum differs from the managed executable authority. In a source checkout,
+  its interactive menu makes the contributor source-build path first-class, and
+  its noninteractive `--from-source` mode supports dogfood before release
+  artifacts exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
   Windows x86_64 artifact. It verifies checksums and validates zip entry names
   before extraction. In a source checkout, its interactive menu defaults to
@@ -336,7 +348,8 @@ noninteractive live writes, and a dependency-light text wizard:
   they invoke and the binary their agents run are the same build. `-Prune`
   additionally removes PATH copies whose hash differs from the authority, after
   confirmation unless `-Yes` is passed, and never deletes copies that match the
-  authority. `-Purge` performs a full uninstall: it prints a plan, stops only the
+  authority. Install/update paths run the same stale PATH cleanup automatically.
+  `-Purge` performs a full uninstall: it prints a plan, stops only the
   repogrammar processes that run the binaries it is about to delete, runs
   `uninstall --target all` to remove agent MCP entries and receipts, optionally
   runs `uninit` on `-Project` to remove that repository's `.repogrammar` state,

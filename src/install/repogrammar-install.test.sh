@@ -7,6 +7,10 @@ TMP_ROOT="$(mktemp -d)"
 RELEASE_BINARY_TO_RESTORE=""
 RELEASE_BINARY_BACKUP=""
 RELEASE_BINARY_EXISTED=0
+ORIGINAL_PATH="${PATH:-}"
+SYSTEM_PATH="$(command -p getconf PATH 2>/dev/null || printf '/usr/bin:/bin')"
+CARGO_BIN="$(command -v cargo || true)"
+PATH="$SYSTEM_PATH"
 
 restore_release_binary() {
   if [[ -z "$RELEASE_BINARY_TO_RESTORE" ]]; then
@@ -81,6 +85,25 @@ REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
 
 "${COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
 test -x "${TMP_ROOT}/share/repogrammar/bin/repogrammar"
+
+AUTO_PRUNE_COMMAND_DIR="${TMP_ROOT}/auto-prune-bin"
+AUTO_PRUNE_INSTALL_DIR="${TMP_ROOT}/auto-prune-data"
+AUTO_PRUNE_STALE_DIR="${TMP_ROOT}/auto-prune-stale"
+mkdir -p "$AUTO_PRUNE_STALE_DIR"
+printf 'stale\n' > "${AUTO_PRUNE_STALE_DIR}/repogrammar"
+chmod +x "${AUTO_PRUNE_STALE_DIR}/repogrammar"
+PATH="${AUTO_PRUNE_COMMAND_DIR}:${AUTO_PRUNE_STALE_DIR}:${SYSTEM_PATH}" \
+REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+REPOGRAMMAR_COMMAND_DIR="$AUTO_PRUNE_COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$AUTO_PRUNE_INSTALL_DIR" \
+"$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/auto-prune.out"
+grep -q "Stale PATH copies" "${TMP_ROOT}/auto-prune.out"
+grep -q "Removed" "${TMP_ROOT}/auto-prune.out"
+if [[ -e "${AUTO_PRUNE_STALE_DIR}/repogrammar" ]]; then
+  echo "install/update path did not automatically prune stale PATH copy" >&2
+  exit 1
+fi
+test -x "${AUTO_PRUNE_COMMAND_DIR}/repogrammar"
 
 STATE_REPO="${TMP_ROOT}/state-boundary-repo"
 STATE_COMMAND_DIR="${TMP_ROOT}/state-boundary-bin"
@@ -202,7 +225,11 @@ REPOGRAMMAR_FAKE_LOG="$SOURCE_LOG" \
 
 grep -q "install --target all --scope global --yes --no-telemetry" "$SOURCE_LOG"
 
-cargo build --quiet --bin repogrammar
+if [[ -z "$CARGO_BIN" ]]; then
+  echo "cargo is required for installer product smoke test" >&2
+  exit 1
+fi
+PATH="$ORIGINAL_PATH" "$CARGO_BIN" build --quiet --bin repogrammar
 PRODUCT_COMMAND_DIR="${TMP_ROOT}/product-bin"
 PRODUCT_INSTALL_DIR="${TMP_ROOT}/product-data"
 PRODUCT_REPO="${TMP_ROOT}/product-repo"
@@ -219,9 +246,9 @@ REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
 test -x "${PRODUCT_INSTALL_DIR}/bin/repogrammar"
 test -f "${PRODUCT_INSTALL_DIR}/workers/python/worker.py"
 test -f "${PRODUCT_COMMAND_DIR}/repogrammar-workers/python/worker.py"
-(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" init >/dev/null)
-(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
-(cd "$PRODUCT_REPO" && "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
+(cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init >/dev/null)
+(cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
+(cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
 
 FOREIGN_COMMAND_DIR="${TMP_ROOT}/foreign-bin"
 FOREIGN_INSTALL_DIR="${TMP_ROOT}/foreign-data"
