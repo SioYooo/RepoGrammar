@@ -169,6 +169,19 @@ fn read_prompt_response(prompt: &str) -> Result<String, String> {
     Ok(response)
 }
 
+/// One-line auto-sync summary written to `.repogrammar/logs/daemon.log` after a
+/// successful sync. Records files seen, code units indexed, elapsed time, and the
+/// activated generation so the daemon log shows what each sync did.
+fn format_autosync_sync_log(outcome: &IndexingOutcome, elapsed_ms: u128) -> String {
+    format!(
+        "autosync: synced {} file(s), {} unit(s) in {}ms (generation {})",
+        outcome.discovered_files,
+        outcome.indexed_units,
+        elapsed_ms,
+        outcome.active_generation.as_deref().unwrap_or("none")
+    )
+}
+
 impl ProductCliRuntime {
     fn store_for_status_request(
         &self,
@@ -247,11 +260,15 @@ impl ProductCliRuntime {
                 quiet: true,
                 stderr_is_terminal: false,
             };
+            let started = Instant::now();
             match self.index_repository("sync", sync_request) {
                 Ok(outcome) => {
-                    if !request.quiet {
-                        eprintln!("autosync: sync complete");
-                    }
+                    // Always written: the daemon runs with --quiet, so this
+                    // per-sync summary is the daemon log's primary content.
+                    eprintln!(
+                        "{}",
+                        format_autosync_sync_log(&outcome, started.elapsed().as_millis())
+                    );
                     let _ = record_autosync_run(
                         &autosync_request,
                         AutosyncRunResult::Ok,
@@ -260,7 +277,10 @@ impl ProductCliRuntime {
                     );
                 }
                 Err(error) => {
-                    eprintln!("autosync: sync failed: {error}");
+                    eprintln!(
+                        "autosync: sync failed after {}ms: {error}",
+                        started.elapsed().as_millis()
+                    );
                     let _ = record_autosync_run(
                         &autosync_request,
                         AutosyncRunResult::Error,
@@ -1193,6 +1213,40 @@ mod tests {
         assert!(short_frame.contains("sync: [working] project_discovery: done"));
         assert!(!short_frame.contains('%'));
         assert!(short_frame.ends_with(&" ".repeat(long_width - short_width)));
+    }
+
+    #[test]
+    fn autosync_sync_log_summarizes_files_units_time_and_generation() {
+        let outcome = IndexingOutcome {
+            indexed_units: 42,
+            semantic_facts: 7,
+            discovered_files: 3,
+            skipped_paths: 1,
+            active_generation: Some("gen-000007".to_string()),
+            semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            format_autosync_sync_log(&outcome, 241),
+            "autosync: synced 3 file(s), 42 unit(s) in 241ms (generation gen-000007)"
+        );
+    }
+
+    #[test]
+    fn autosync_sync_log_handles_missing_generation() {
+        let outcome = IndexingOutcome {
+            indexed_units: 0,
+            semantic_facts: 0,
+            discovered_files: 0,
+            skipped_paths: 0,
+            active_generation: None,
+            semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            format_autosync_sync_log(&outcome, 5),
+            "autosync: synced 0 file(s), 0 unit(s) in 5ms (generation none)"
+        );
     }
 
     #[test]

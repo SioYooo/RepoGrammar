@@ -273,7 +273,12 @@ content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
 step. It must not scan repositories that have not explicitly run `init`, and it
 must not be started by `install`, `serve`, MCP queries, or agent wiring. `run`
 is the foreground worker entrypoint used by `start`; it writes diagnostics to
-`.repogrammar/logs/daemon.log` when started in the background. `stop` terminates
+`.repogrammar/logs/daemon.log` when started in the background. After every sync
+the daemon always records a one-line summary to that log — files seen, code
+units indexed, elapsed milliseconds, and the activated generation
+(`autosync: synced N file(s), U unit(s) in Xms (generation G)`), or a failure
+line with the elapsed time — independent of `--quiet`, which only suppresses the
+interactive "watching"/"change detected" chatter. `stop` terminates
 the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `disable` requires the daemon to be stopped first and removes
 `.repogrammar/autosync.json`.
