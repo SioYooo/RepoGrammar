@@ -487,14 +487,7 @@ fn process_is_running(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
-            .map(|output| {
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
-            })
-            .unwrap_or(false)
+        windows_process_is_running(pid)
     }
 }
 
@@ -503,19 +496,80 @@ fn terminate_process(pid: u32) -> Result<(), RepoGrammarError> {
     let status = std::process::Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
+    #[cfg(unix)]
+    {
+        status
+            .map_err(|_| invalid_input("failed to stop auto-sync process"))
+            .and_then(|status| {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(invalid_input("failed to stop auto-sync process"))
+                }
+            })
+    }
     #[cfg(windows)]
-    let status = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string()])
-        .status();
-    status
-        .map_err(|_| invalid_input("failed to stop auto-sync process"))
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err(invalid_input("failed to stop auto-sync process"))
-            }
-        })
+    {
+        if windows_terminate_process(pid) {
+            Ok(())
+        } else {
+            Err(invalid_input("failed to stop auto-sync process"))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_is_running(pid: u32) -> bool {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    let Some(handle) = open_process(PROCESS_QUERY_LIMITED_INFORMATION, pid) else {
+        return false;
+    };
+    let mut exit_code = 0_u32;
+    let ok = unsafe { GetExitCodeProcess(handle.0, &mut exit_code) != 0 };
+    ok && exit_code == STILL_ACTIVE
+}
+
+#[cfg(windows)]
+fn windows_terminate_process(pid: u32) -> bool {
+    const PROCESS_TERMINATE: u32 = 0x0001;
+
+    let Some(handle) = open_process(PROCESS_TERMINATE, pid) else {
+        return false;
+    };
+    unsafe { TerminateProcess(handle.0, 1) != 0 }
+}
+
+#[cfg(windows)]
+fn open_process(access: u32, pid: u32) -> Option<WindowsProcessHandle> {
+    let handle = unsafe { OpenProcess(access, 0, pid) };
+    (!handle.is_null()).then_some(WindowsProcessHandle(handle))
+}
+
+#[cfg(windows)]
+struct WindowsProcessHandle(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for WindowsProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenProcess(
+        dw_desired_access: u32,
+        b_inherit_handle: i32,
+        dw_process_id: u32,
+    ) -> *mut std::ffi::c_void;
+    fn GetExitCodeProcess(h_process: *mut std::ffi::c_void, lp_exit_code: *mut u32) -> i32;
+    fn TerminateProcess(h_process: *mut std::ffi::c_void, u_exit_code: u32) -> i32;
+    fn CloseHandle(h_object: *mut std::ffi::c_void) -> i32;
 }
 
 fn invalid_input(message: impl Into<String>) -> RepoGrammarError {
@@ -530,6 +584,11 @@ mod tests {
 
     fn request(workspace: &TempWorkspace) -> AutosyncRequest {
         AutosyncRequest::new(workspace.path().display().to_string())
+    }
+
+    #[test]
+    fn current_process_is_reported_running() {
+        assert!(process_is_running(std::process::id()));
     }
 
     #[test]

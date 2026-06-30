@@ -5256,6 +5256,7 @@ fn index_outcome_value(
         "command": command,
         "status": "complete",
         "generation_id": outcome.active_generation,
+        "active_generation": outcome.active_generation,
         "discovered_files": outcome.discovered_files,
         "stored_files": outcome.discovered_files,
         "skipped_paths": outcome.skipped_paths,
@@ -5490,12 +5491,14 @@ fn logs_human(outcome: &RepositoryLogsReport) -> String {
 }
 
 fn logs_json(outcome: &RepositoryLogsReport, options: &LogsOptions) -> String {
+    let component = options.component.as_deref().unwrap_or("daemon");
     json_line(json!({
         "command": "logs",
         "state_dir": outcome.state_dir,
         "available": outcome.available,
         "redacted": outcome.redacted,
         "paths": "repo_relative_only",
+        "component": component,
         "component_filter": options.component,
         "tail": options.tail,
         "since": options.since,
@@ -8096,6 +8099,7 @@ mod tests {
         assert_eq!(value["resync"]["command"], "resync");
         assert_eq!(value["resync"]["progress"], "never");
         assert_eq!(value["resync"]["generation_id"], "gen-000001");
+        assert_eq!(value["resync"]["active_generation"], "gen-000001");
         assert_eq!(value["bootstrap"]["resync_requested"], true);
         assert_eq!(value["bootstrap"]["autosync_requested"], false);
         assert_eq!(value["autosync"], Value::Null);
@@ -9089,6 +9093,7 @@ mod tests {
         assert_eq!(value["command"], "logs");
         assert_eq!(value["paths"], "repo_relative_only");
         assert_eq!(value["redacted"], true);
+        assert_eq!(value["component"], "index");
         assert_eq!(value["component_filter"], "index");
         let entries = value["entries"].as_array().expect("entries");
         assert_eq!(entries.len(), 1);

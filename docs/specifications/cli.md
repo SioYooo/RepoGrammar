@@ -329,8 +329,9 @@ The default component is `daemon`. Missing, unreadable, non-file, symlinked, or
 malformed log files must return a clean unavailable report rather than panic.
 `--since` is accepted for contract stability but may return the bounded tail
 with a message that duration filtering is not implemented. Logs are diagnostic
-state, not telemetry. `logs` redacts by default and machine-readable output must
-not include source snippets or absolute paths.
+state, not telemetry. JSON output includes the selected `component` and the raw
+`component_filter` option value. `logs` redacts by default and
+machine-readable output must not include source snippets or absolute paths.
 
 ## Installer commands
 
@@ -689,10 +690,11 @@ returns a bounded redacted tail for selected repo-local component logs.
 `index` and `sync` currently create syntax-only SQLite generations from the
 TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
 the Python `.py` discovery/CPython AST structural extractor. Their JSON output
-includes `generation_id`, `discovered_files`, `stored_files`, the actual
-`indexed_units` count, the actual `semantic_facts` count, `indexing:
-syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
-deferred`. The structural extractors can also produce syntax-origin
+includes `generation_id`, `active_generation`, `discovered_files`,
+`stored_files`, the actual `indexed_units` count, the actual `semantic_facts`
+count, `indexing: syntax_only_code_units`, `parser: syntax_only`,
+`semantic_worker`, and `mining: deferred`. The structural extractors can also
+produce syntax-origin
 framework-role fact records for recognized Express, React, Jest/Vitest, Next.js,
 Fastify, Prisma, Drizzle, FastAPI, pytest, Pydantic, and SQLAlchemy code-unit
 shapes; these may increase `semantic_facts` while `semantic_worker: deferred`

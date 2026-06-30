@@ -52,12 +52,21 @@ use repogrammar::interfaces::mcp::{
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::ffi::{c_void, OsString};
 use std::fs;
 use std::io::IsTerminal;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, UNIX_EPOCH};
+
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+#[cfg(windows)]
+const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -182,6 +191,15 @@ fn format_autosync_sync_log(outcome: &IndexingOutcome, elapsed_ms: u128) -> Stri
     )
 }
 
+fn append_autosync_daemon_log(path: Option<&Path>, line: &str) {
+    let Some(path) = path else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 impl ProductCliRuntime {
     fn store_for_status_request(
         &self,
@@ -217,6 +235,7 @@ impl ProductCliRuntime {
         request: CliAutosyncRequest,
     ) -> Result<AutosyncReport, RepoGrammarError> {
         let autosync_request = self.autosync_request(&request);
+        let log_path = daemon_log_path(&autosync_request).ok();
         let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
         let env_lookup = |key: &str| std::env::var(key).ok();
         let semantic_worker_executable =
@@ -263,12 +282,11 @@ impl ProductCliRuntime {
             let started = Instant::now();
             match self.index_repository("sync", sync_request) {
                 Ok(outcome) => {
-                    // Always written: the daemon runs with --quiet, so this
-                    // per-sync summary is the daemon log's primary content.
-                    eprintln!(
-                        "{}",
-                        format_autosync_sync_log(&outcome, started.elapsed().as_millis())
-                    );
+                    let line = format_autosync_sync_log(&outcome, started.elapsed().as_millis());
+                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    if !request.quiet {
+                        eprintln!("{line}");
+                    }
                     let _ = record_autosync_run(
                         &autosync_request,
                         AutosyncRunResult::Ok,
@@ -277,10 +295,14 @@ impl ProductCliRuntime {
                     );
                 }
                 Err(error) => {
-                    eprintln!(
+                    let line = format!(
                         "autosync: sync failed after {}ms: {error}",
                         started.elapsed().as_millis()
                     );
+                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    if !request.quiet {
+                        eprintln!("{line}");
+                    }
                     let _ = record_autosync_run(
                         &autosync_request,
                         AutosyncRunResult::Error,
@@ -306,51 +328,236 @@ impl ProductCliRuntime {
                 ..status
             });
         }
-        let log_path = daemon_log_path(&autosync_request)?;
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-            .map_err(|_| {
-                RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
-            })?;
-        let log_err = log.try_clone().map_err(|_| {
-            RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
-        })?;
-        let mut command = Command::new(std::env::current_exe().map_err(|_| {
-            RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
-        })?);
-        command
-            .arg("autosync")
-            .arg("run")
-            .arg("--path")
-            .arg(&request.repository_root)
-            .arg("--poll-ms")
-            .arg(request.poll_ms.to_string())
-            .arg("--debounce-ms")
-            .arg(request.debounce_ms.to_string())
-            .arg("--quiet")
-            .current_dir(&request.repository_root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err));
-        if let Some(state_dir) = &request.state_dir_override {
-            command.env("REPOGRAMMAR_DIR", state_dir);
-        }
-        let child = command
-            .spawn()
-            .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))?;
+        let _log_path = daemon_log_path(&autosync_request)?;
+        let child_pid = spawn_autosync_daemon(request)?;
         Ok(AutosyncReport {
             state_dir: status.state_dir,
             enabled: true,
             running: true,
-            pid: Some(child.id()),
+            pid: Some(child_pid),
             poll_ms: request.poll_ms,
             debounce_ms: request.debounce_ms,
             last_run: status.last_run,
             message: "auto-sync started".to_string(),
         })
     }
+}
+
+#[cfg(not(windows))]
+fn spawn_autosync_daemon(request: &CliAutosyncRequest) -> Result<u32, RepoGrammarError> {
+    let mut command = Command::new(std::env::current_exe().map_err(|_| {
+        RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+    })?);
+    command
+        .arg("autosync")
+        .arg("run")
+        .arg("--path")
+        .arg(&request.repository_root)
+        .arg("--poll-ms")
+        .arg(request.poll_ms.to_string())
+        .arg("--debounce-ms")
+        .arg(request.debounce_ms.to_string())
+        .arg("--quiet")
+        .current_dir(&request.repository_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(state_dir) = &request.state_dir_override {
+        command.env("REPOGRAMMAR_DIR", state_dir);
+    }
+    command
+        .spawn()
+        .map(|child| child.id())
+        .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))
+}
+
+#[cfg(windows)]
+fn spawn_autosync_daemon(request: &CliAutosyncRequest) -> Result<u32, RepoGrammarError> {
+    let executable = std::env::current_exe().map_err(|_| {
+        RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+    })?;
+    let args = vec![
+        executable.as_os_str().to_os_string(),
+        OsString::from("autosync"),
+        OsString::from("run"),
+        OsString::from("--path"),
+        OsString::from(request.repository_root.as_str()),
+        OsString::from("--poll-ms"),
+        OsString::from(request.poll_ms.to_string()),
+        OsString::from("--debounce-ms"),
+        OsString::from(request.debounce_ms.to_string()),
+        OsString::from("--quiet"),
+    ];
+    let mut command_line = windows_command_line(&args);
+    let application_name = windows_null_terminated(executable.as_os_str());
+    let current_directory =
+        windows_null_terminated(Path::new(&request.repository_root).as_os_str());
+    let mut environment = windows_environment_block(request.state_dir_override.as_deref());
+    let environment_ptr = environment
+        .as_mut()
+        .map(|block| block.as_mut_ptr().cast::<c_void>())
+        .unwrap_or(std::ptr::null_mut());
+    let mut startup_info = StartupInfoW {
+        cb: std::mem::size_of::<StartupInfoW>() as u32,
+        ..Default::default()
+    };
+    let mut process_info = ProcessInformation::default();
+    let creation_flags = CREATE_NEW_PROCESS_GROUP
+        | DETACHED_PROCESS
+        | environment
+            .as_ref()
+            .map(|_| CREATE_UNICODE_ENVIRONMENT)
+            .unwrap_or(0);
+    let created = unsafe {
+        CreateProcessW(
+            application_name.as_ptr(),
+            command_line.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            creation_flags,
+            environment_ptr,
+            current_directory.as_ptr(),
+            &mut startup_info,
+            &mut process_info,
+        ) != 0
+    };
+    if !created {
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to start auto-sync".to_string(),
+        ));
+    }
+    unsafe {
+        let _ = CloseHandle(process_info.h_process);
+        let _ = CloseHandle(process_info.h_thread);
+    }
+    Ok(process_info.dw_process_id)
+}
+
+#[cfg(windows)]
+fn windows_command_line(args: &[OsString]) -> Vec<u16> {
+    let mut command_line = Vec::new();
+    for (index, arg) in args.iter().enumerate() {
+        if index > 0 {
+            command_line.push(b' ' as u16);
+        }
+        push_windows_quoted_arg(&mut command_line, arg);
+    }
+    command_line.push(0);
+    command_line
+}
+
+#[cfg(windows)]
+fn push_windows_quoted_arg(command_line: &mut Vec<u16>, arg: &OsString) {
+    let value = arg.as_os_str().encode_wide().collect::<Vec<_>>();
+    let needs_quotes = value.is_empty()
+        || value
+            .iter()
+            .any(|ch| *ch == b' ' as u16 || *ch == b'\t' as u16 || *ch == b'"' as u16);
+    if !needs_quotes {
+        command_line.extend(value);
+        return;
+    }
+
+    command_line.push(b'"' as u16);
+    let mut backslashes = 0_usize;
+    for ch in value {
+        if ch == b'\\' as u16 {
+            backslashes += 1;
+        } else if ch == b'"' as u16 {
+            command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2 + 1));
+            command_line.push(ch);
+            backslashes = 0;
+        } else {
+            command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
+            command_line.push(ch);
+            backslashes = 0;
+        }
+    }
+    command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2));
+    command_line.push(b'"' as u16);
+}
+
+#[cfg(windows)]
+fn windows_null_terminated(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn windows_environment_block(state_dir_override: Option<&str>) -> Option<Vec<u16>> {
+    let state_dir = state_dir_override?;
+    let mut values = std::env::vars_os().collect::<Vec<_>>();
+    values.retain(|(key, _)| {
+        !key.to_string_lossy()
+            .eq_ignore_ascii_case("REPOGRAMMAR_DIR")
+    });
+    values.push((OsString::from("REPOGRAMMAR_DIR"), OsString::from(state_dir)));
+    values.sort_by_key(|(key, _)| key.to_string_lossy().to_ascii_uppercase());
+
+    let mut block = Vec::new();
+    for (key, value) in values {
+        block.extend(key.as_os_str().encode_wide());
+        block.push(b'=' as u16);
+        block.extend(value.as_os_str().encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    Some(block)
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct StartupInfoW {
+    cb: u32,
+    lp_reserved: *mut u16,
+    lp_desktop: *mut u16,
+    lp_title: *mut u16,
+    dw_x: u32,
+    dw_y: u32,
+    dw_x_size: u32,
+    dw_y_size: u32,
+    dw_x_count_chars: u32,
+    dw_y_count_chars: u32,
+    dw_fill_attribute: u32,
+    dw_flags: u32,
+    w_show_window: u16,
+    cb_reserved2: u16,
+    lp_reserved2: *mut u8,
+    h_std_input: *mut c_void,
+    h_std_output: *mut c_void,
+    h_std_error: *mut c_void,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct ProcessInformation {
+    h_process: *mut c_void,
+    h_thread: *mut c_void,
+    dw_process_id: u32,
+    dw_thread_id: u32,
+}
+
+#[cfg(windows)]
+const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateProcessW(
+        lp_application_name: *const u16,
+        lp_command_line: *mut u16,
+        lp_process_attributes: *mut c_void,
+        lp_thread_attributes: *mut c_void,
+        b_inherit_handles: i32,
+        dw_creation_flags: u32,
+        lp_environment: *mut c_void,
+        lp_current_directory: *const u16,
+        lp_startup_info: *mut StartupInfoW,
+        lp_process_information: *mut ProcessInformation,
+    ) -> i32;
+    fn CloseHandle(h_object: *mut c_void) -> i32;
 }
 
 fn repository_change_fingerprint(
@@ -1270,6 +1477,43 @@ mod tests {
             format_autosync_sync_log(&outcome, 5),
             "autosync: synced 0 file(s), 0 unit(s) in 5ms (generation none)"
         );
+    }
+
+    #[test]
+    fn autosync_daemon_log_append_is_direct_and_line_based() {
+        let workspace = TempWorkspace::new("autosync-log-append");
+        let log_path = workspace.path().join("daemon.log");
+
+        append_autosync_daemon_log(Some(&log_path), "autosync: first");
+        append_autosync_daemon_log(Some(&log_path), "autosync: second");
+        append_autosync_daemon_log(None, "autosync: ignored");
+
+        let contents = fs::read_to_string(log_path).expect("read daemon log");
+        assert_eq!(contents, "autosync: first\nautosync: second\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_daemon_spawn_helpers_quote_args_and_override_state_dir() {
+        let args = vec![
+            OsString::from(r"C:\Program Files\RepoGrammar\repogrammar.exe"),
+            OsString::from("--path"),
+            OsString::from(r"C:\repo path"),
+            OsString::from("a\"b"),
+        ];
+        let command_line = windows_command_line(&args);
+        let rendered =
+            String::from_utf16(&command_line[..command_line.len() - 1]).expect("valid utf16");
+        assert_eq!(
+            rendered,
+            r#""C:\Program Files\RepoGrammar\repogrammar.exe" --path "C:\repo path" "a\"b""#
+        );
+
+        let environment =
+            windows_environment_block(Some(r"C:\state dir")).expect("environment block");
+        let rendered_environment = String::from_utf16(&environment).expect("valid environment");
+        assert!(rendered_environment.contains("REPOGRAMMAR_DIR=C:\\state dir\0"));
+        assert!(rendered_environment.ends_with("\0\0"));
     }
 
     #[test]
