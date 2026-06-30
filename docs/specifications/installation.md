@@ -337,7 +337,12 @@ noninteractive live writes, and a dependency-light text wizard:
   they invoke and the binary their agents run are the same build. `-Prune`
   additionally removes PATH copies whose hash differs from the authority, after
   confirmation unless `-Yes` is passed, and never deletes copies that match the
-  authority;
+  authority. `-Purge` performs a full uninstall: it prints a plan, stops only the
+  repogrammar processes that run the binaries it is about to delete, runs
+  `uninstall --target all` to remove agent MCP entries and receipts, optionally
+  runs `uninit` on `-Project` to remove that repository's `.repogrammar` state,
+  and then deletes every repogrammar binary, worker asset, and the managed data
+  directory, after confirmation unless `-Yes` is passed;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,

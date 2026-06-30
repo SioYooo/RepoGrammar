@@ -13,6 +13,8 @@ param(
     [switch]$UninstallCommand,
     [switch]$Verify,
     [switch]$Prune,
+    [switch]$Purge,
+    [string]$Project = "",
     [switch]$Yes,
     [switch]$Help
 )
@@ -37,11 +39,17 @@ Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
   powershell -ExecutionPolicy Bypass -File install.ps1 -Verify
   powershell -ExecutionPolicy Bypass -File install.ps1 -Prune -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Purge -Project . -Yes
 
 -Verify reports, by SHA256, whether the repogrammar copies on PATH, the
 configured agent MCP servers, and any running serve processes match the managed
 authority binary. -Prune additionally removes PATH copies whose hash differs
 from the authority (add -Yes to skip the confirmation).
+-Purge fully removes RepoGrammar: it prints a plan, then stops repogrammar
+processes, runs uninstall (agent MCP entries and receipts), optionally runs
+uninit on -Project (the .repogrammar state), and deletes every repogrammar
+binary, worker asset, and the managed data directory. Add -Yes to skip the
+confirmation prompt.
 
 By default, the script downloads a prebuilt Windows x64 release artifact,
 verifies its checksum, installs repogrammar.exe into a user-writable command
@@ -588,6 +596,120 @@ function Invoke-VerifyInstall([bool]$DoPrune) {
     }
 }
 
+function Resolve-AnyRepogrammar {
+    $candidates = @((Join-Path $CommandDir "repogrammar.exe"), (Get-AuthorityBinary))
+    $candidates += Get-RepogrammarPathCopies
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Test-PurgeOwnedPath([string]$Candidate, $FileTargets) {
+    if ([string]::IsNullOrWhiteSpace($Candidate)) {
+        return $false
+    }
+    $lower = $Candidate.ToLowerInvariant()
+    foreach ($file in $FileTargets) {
+        if ($lower -eq $file.ToLowerInvariant()) {
+            return $true
+        }
+    }
+    foreach ($root in @($InstallDir, $CommandDir)) {
+        if ($root -and $lower.StartsWith($root.ToLowerInvariant().TrimEnd('\') + '\')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-Purge {
+    $commandBin = Join-Path $CommandDir "repogrammar.exe"
+    $commandWorkers = Join-Path $CommandDir "repogrammar-workers"
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin\repogrammar.exe"
+    $cargoGuard = Join-Path $env:USERPROFILE ".cargo\bin\repo-guard.exe"
+
+    $fileTargets = @()
+    foreach ($file in (@($commandBin, $cargoBin, $cargoGuard) + (Get-RepogrammarPathCopies))) {
+        if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            $fileTargets += (Resolve-Path -LiteralPath $file).Path
+        }
+    }
+    $fileTargets = @($fileTargets | Select-Object -Unique)
+
+    $dirTargets = @()
+    foreach ($dir in @($InstallDir, $commandWorkers)) {
+        if ($dir -and (Test-Path -LiteralPath $dir)) {
+            $dirTargets += $dir
+        }
+    }
+    $dirTargets = @($dirTargets | Select-Object -Unique)
+
+    Write-Output "RepoGrammar purge plan:"
+    Write-Output "  - Stop repogrammar processes that run the binaries listed below"
+    Write-Output "  - repogrammar uninstall --target all --scope global (remove agent MCP entries and receipts)"
+    if ($Project) {
+        Write-Output "  - repogrammar uninit --project $Project --yes (remove .repogrammar state)"
+    }
+    foreach ($dir in $dirTargets) { Write-Output "  - remove directory $dir" }
+    foreach ($file in $fileTargets) { Write-Output "  - remove file $file" }
+    Write-Output ""
+
+    if (!$Yes -and !(Confirm-DefaultNo "Proceed with purge? This permanently deletes the items above")) {
+        Write-Output "Cancelled. Nothing was removed."
+        return
+    }
+
+    try {
+        $running = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
+    } catch {
+        $running = @()
+    }
+    foreach ($proc in $running) {
+        if (Test-PurgeOwnedPath $proc.ExecutablePath $fileTargets) {
+            try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+
+    $rg = Resolve-AnyRepogrammar
+    if ($rg) {
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        try {
+            Invoke-WithInstallEnv {
+                & $rg uninstall --target all --scope global --yes 2>&1 | Out-Null
+                if ($Project -and (Test-Path -LiteralPath (Join-Path $Project ".repogrammar"))) {
+                    & $rg uninit --project $Project --yes 2>&1 | Out-Null
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+    } else {
+        Write-Output "No repogrammar binary found to run uninstall/uninit; removing files only."
+    }
+
+    foreach ($file in $fileTargets) {
+        try {
+            Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+            Write-Output "Removed $file"
+        } catch {
+            Write-Output "Failed to remove ${file}: $($_.Exception.Message)"
+        }
+    }
+    foreach ($dir in $dirTargets) {
+        try {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
+            Write-Output "Removed $dir"
+        } catch {
+            Write-Output "Failed to remove ${dir}: $($_.Exception.Message)"
+        }
+    }
+    Write-Output "Purge complete. Re-run with -InstallAndConfigure -FromSource -Yes to reinstall."
+}
+
 if ($Help) {
     Show-Usage
     exit 0
@@ -595,6 +717,11 @@ if ($Help) {
 
 if ($Verify -or $Prune) {
     Invoke-VerifyInstall ([bool]$Prune)
+    exit 0
+}
+
+if ($Purge) {
+    Invoke-Purge
     exit 0
 }
 

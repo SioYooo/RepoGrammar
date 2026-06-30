@@ -254,6 +254,54 @@ exit /B 1
     }
     Assert-PathExists (Join-Path $VerifyCommandDir "repogrammar.exe") "command copy must survive prune"
 
+    # -Purge removes binaries/workers/data under a fake home + restricted PATH, so
+    # it can never touch the developer's real install or running processes.
+    $PurgeHome = Join-Path $TempRoot "purge-home"
+    $PurgeCommandDir = Join-Path $TempRoot "purge-bin"
+    $PurgeInstallDir = Join-Path $TempRoot "purge-data"
+    $PurgeExtraDir = Join-Path $TempRoot "purge-extra"
+    New-Item -ItemType Directory -Force -Path $PurgeHome, $PurgeExtraDir | Out-Null
+    & powershell -ExecutionPolicy Bypass -File $Installer `
+        -InstallCliOnly `
+        -FromSource `
+        -SourceBinary $SourceBinary `
+        -CommandDir $PurgeCommandDir `
+        -InstallDir $PurgeInstallDir `
+        -Yes | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "purge setup install failed with exit code $LASTEXITCODE"
+    }
+    Set-Content -Path (Join-Path $PurgeExtraDir "repogrammar.exe") -Value "extra-copy"
+    $PurgeOut = Join-Path $TempRoot "purge.out"
+    $PurgePowerShellExe = (Get-Command powershell).Source
+    $SavedPurgeUserProfile = $env:USERPROFILE
+    $SavedPurgePath = $env:PATH
+    try {
+        $env:USERPROFILE = $PurgeHome
+        $env:PATH = "$PurgeCommandDir;$PurgeExtraDir"
+        & $PurgePowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -Purge `
+            -CommandDir $PurgeCommandDir `
+            -InstallDir $PurgeInstallDir `
+            -Yes *> $PurgeOut
+        $PurgeStatus = $LASTEXITCODE
+    } finally {
+        $env:USERPROFILE = $SavedPurgeUserProfile
+        $env:PATH = $SavedPurgePath
+    }
+    if ($PurgeStatus -ne 0) {
+        throw "purge run failed with exit code $PurgeStatus"
+    }
+    if (Test-Path $PurgeInstallDir) {
+        throw "purge did not remove the install data directory"
+    }
+    if (Test-Path (Join-Path $PurgeCommandDir "repogrammar.exe")) {
+        throw "purge did not remove the command binary"
+    }
+    if (Test-Path (Join-Path $PurgeExtraDir "repogrammar.exe")) {
+        throw "purge did not remove the extra PATH copy"
+    }
+
     $FailureCommandDir = Join-Path $TempRoot "failure-bin"
     $FailureInstallDir = Join-Path $TempRoot "failure-data"
     $FailureOut = Join-Path $TempRoot "failure.out"
