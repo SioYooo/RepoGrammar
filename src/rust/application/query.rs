@@ -95,7 +95,7 @@ pub fn query_preflight(
     match &status_report.status {
         RepositoryStatus::NotInitialized => fallback(
             "repository is not initialized",
-            "run repogrammar init",
+            "run repogrammar init --yes",
             operation.command_is_implemented(),
         ),
         RepositoryStatus::CorruptedManifest => {
@@ -116,7 +116,7 @@ pub fn query_preflight(
                         || active_generation == "not implemented"
                         || !inventory_indexing_is_readable(status_report.indexing) =>
                 {
-                    fallback("no active index generation", "run repogrammar index", true)
+                    fallback("no active index generation", "run repogrammar resync", true)
                 }
                 QueryPreflightOperation::ActiveIndexInventory => QueryPreflightReport::Ready,
                 QueryPreflightOperation::PatternFamilyQuery
@@ -124,7 +124,11 @@ pub fn query_preflight(
                         || active_generation == "not implemented"
                         || !inventory_indexing_is_readable(status_report.indexing) =>
                 {
-                    fallback("no active index generation", "run repogrammar index", false)
+                    fallback(
+                        "no active index generation",
+                        "run repogrammar resync",
+                        false,
+                    )
                 }
                 QueryPreflightOperation::PatternFamilyQuery => QueryPreflightReport::Ready,
             }
@@ -231,6 +235,8 @@ pub struct RepoShapeDiagnosticsReport {
     pub external_dependency_signal: DiagnosticSignal,
     pub thin_wrapper_risk: DiagnosticSignal,
     pub token_saving_risk: DiagnosticSignal,
+    pub token_saving_readiness: TokenSavingReadiness,
+    pub blocking_reasons: Vec<&'static str>,
     pub interpretation: &'static str,
 }
 
@@ -248,6 +254,25 @@ impl DiagnosticSignal {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenSavingReadiness {
+    Ready,
+    Partial,
+    Poor,
+    Unknown,
+}
+
+impl TokenSavingReadiness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Partial => "partial",
+            Self::Poor => "poor",
             Self::Unknown => "unknown",
         }
     }
@@ -370,6 +395,16 @@ pub struct ReadPlanItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadPlanLineRangeOmission {
+    pub purpose: ReadPlanPurpose,
+    pub path: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub reason: &'static str,
+    pub guidance: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPlan {
     pub items: Vec<ReadPlanItem>,
     pub estimated_tokens: usize,
@@ -377,6 +412,7 @@ pub struct ReadPlan {
     pub requires_source_before_edit: bool,
     pub selection_strategy: &'static str,
     pub budget_satisfied: bool,
+    pub line_range_omissions: Vec<ReadPlanLineRangeOmission>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -534,6 +570,18 @@ pub fn repo_shape_diagnostics(
     let abstention_rate = family_support_coverage.map(|coverage| (1.0 - coverage).max(0.0));
     let token_saving_risk = risk_from_density(local_pattern_density);
     let thin_wrapper_risk = risk_from_density(family_support_coverage);
+    let blocking_reasons = token_saving_blocking_reasons(
+        eligible_code_units,
+        family_count,
+        local_pattern_density,
+        family_support_coverage,
+    );
+    let token_saving_readiness = token_saving_readiness(
+        eligible_code_units,
+        family_count,
+        local_pattern_density,
+        family_support_coverage,
+    );
     Ok(RepoShapeDiagnosticsReport {
         active_generation: snapshot.generation_id,
         eligible_code_units,
@@ -546,6 +594,8 @@ pub fn repo_shape_diagnostics(
         external_dependency_signal: DiagnosticSignal::Unknown,
         thin_wrapper_risk,
         token_saving_risk,
+        token_saving_readiness,
+        blocking_reasons,
         interpretation:
             "RepoGrammar can provide integration-pattern context when repeated local patterns exist; third-party-heavy or thin-wrapper repositories may see lower token-saving potential.",
     })
@@ -731,7 +781,92 @@ pub fn build_read_plan(
         estimated_tokens,
         selection_strategy: "deterministic_read_plan_v1",
         items: selected,
+        line_range_omissions: Vec::new(),
     }
+}
+
+pub fn enrich_read_plan_line_ranges(
+    request: SourceSpanRenderRequest,
+    source_store: &impl SourceStore,
+    read_plan: &ReadPlan,
+) -> Result<ReadPlan, RepoGrammarError> {
+    let mut enriched = read_plan.clone();
+    enriched.line_range_omissions.clear();
+    for item in &mut enriched.items {
+        let source = match source_store.read_source(SourceReadRequest {
+            repository_root: request.repository_root.clone(),
+            path: item.path.clone(),
+            expected_content_hash: item.content_hash.clone(),
+            max_file_bytes: request.max_file_bytes,
+        }) {
+            Ok(source) => source,
+            Err(SourceStoreError::InvalidRequest(_)) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "stored read-plan source path is invalid".to_string(),
+                ));
+            }
+            Err(SourceStoreError::Missing(_)) | Err(SourceStoreError::HashMismatch(_)) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "stale_evidence",
+                    "source changed or disappeared; use normal Read/Grep for this span",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::TooLarge(_)) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "source_too_large",
+                    "source exceeds the configured read limit; use normal Read/Grep if needed",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::NonUtf8(_)) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "non_utf8_source",
+                    "source is not UTF-8; use normal tooling for this file",
+                ));
+                continue;
+            }
+            Err(SourceStoreError::Unavailable(_)) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "source_unavailable",
+                    "source store is unavailable; use normal Read/Grep for this span",
+                ));
+                continue;
+            }
+        };
+
+        if source.path != item.path || source.content_hash != item.content_hash {
+            return Err(RepoGrammarError::InvalidInput(
+                "source store returned mismatched source for read-plan span".to_string(),
+            ));
+        }
+
+        match line_range_for_span(&source.text, item.start_byte, item.end_byte) {
+            Ok((start_line, end_line)) => {
+                item.start_line = Some(start_line);
+                item.end_line = Some(end_line);
+            }
+            Err(RenderSourceSpanItemError::InvalidRange) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "invalid_source_range",
+                    "stored source range is invalid; use normal Read/Grep for this span",
+                ));
+            }
+            Err(RenderSourceSpanItemError::SpanTooLarge) => {
+                enriched.line_range_omissions.push(read_plan_line_omission(
+                    item,
+                    "source_span_too_large",
+                    "source span exceeds the configured render limit; use normal Read if needed",
+                ));
+            }
+        }
+    }
+    Ok(enriched)
 }
 
 pub fn render_source_spans(
@@ -967,11 +1102,51 @@ fn source_span_omission(
     }
 }
 
+fn read_plan_line_omission(
+    item: &ReadPlanItem,
+    reason: &'static str,
+    guidance: &'static str,
+) -> ReadPlanLineRangeOmission {
+    ReadPlanLineRangeOmission {
+        purpose: item.purpose,
+        path: item.path.clone(),
+        start_byte: item.start_byte,
+        end_byte: item.end_byte,
+        reason,
+        guidance,
+    }
+}
+
 fn line_numbered_span(
     source: &str,
     start_byte: usize,
     end_byte: usize,
 ) -> Result<(String, usize, usize), RenderSourceSpanItemError> {
+    let (start_line, end_line) = line_range_for_span(source, start_byte, end_byte)?;
+    let line_starts = source_line_starts(source);
+    let mut rendered = String::new();
+    for line_number in start_line..=end_line {
+        let line_start = line_starts[line_number - 1];
+        let line_end = line_starts
+            .get(line_number)
+            .copied()
+            .unwrap_or(source.len());
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        let mut line = &source[line_start..line_end];
+        line = line.strip_suffix('\n').unwrap_or(line);
+        line = line.strip_suffix('\r').unwrap_or(line);
+        rendered.push_str(&format!("{line_number}\t{line}"));
+    }
+    Ok((rendered, start_line, end_line))
+}
+
+fn line_range_for_span(
+    source: &str,
+    start_byte: usize,
+    end_byte: usize,
+) -> Result<(usize, usize), RenderSourceSpanItemError> {
     if start_byte >= end_byte || end_byte > source.len() {
         return Err(RenderSourceSpanItemError::InvalidRange);
     }
@@ -994,18 +1169,7 @@ fn line_numbered_span(
         .last()
         .map(|(line_number, _, _)| *line_number)
         .unwrap_or(start_line);
-
-    let mut rendered = String::new();
-    for (line_number, line_start, line_end) in selected {
-        if !rendered.is_empty() {
-            rendered.push('\n');
-        }
-        let mut line = &source[line_start..line_end];
-        line = line.strip_suffix('\n').unwrap_or(line);
-        line = line.strip_suffix('\r').unwrap_or(line);
-        rendered.push_str(&format!("{line_number}\t{line}"));
-    }
-    Ok((rendered, start_line, end_line))
+    Ok((start_line, end_line))
 }
 
 fn source_line_starts(source: &str) -> Vec<usize> {
@@ -1556,6 +1720,48 @@ fn risk_from_density(density: Option<f64>) -> DiagnosticSignal {
     }
 }
 
+fn token_saving_readiness(
+    eligible_code_units: usize,
+    family_count: usize,
+    local_pattern_density: Option<f64>,
+    family_support_coverage: Option<f64>,
+) -> TokenSavingReadiness {
+    if eligible_code_units == 0 {
+        return TokenSavingReadiness::Unknown;
+    }
+    if family_count == 0 {
+        return TokenSavingReadiness::Poor;
+    }
+    let density = local_pattern_density.unwrap_or(0.0);
+    let coverage = family_support_coverage.unwrap_or(0.0);
+    if density >= 0.35 && coverage >= 0.35 {
+        TokenSavingReadiness::Partial
+    } else {
+        TokenSavingReadiness::Poor
+    }
+}
+
+fn token_saving_blocking_reasons(
+    eligible_code_units: usize,
+    family_count: usize,
+    local_pattern_density: Option<f64>,
+    family_support_coverage: Option<f64>,
+) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    if eligible_code_units == 0 {
+        reasons.push("no_supported_units");
+    }
+    if family_count == 0 {
+        reasons.push("no_families");
+    }
+    if local_pattern_density.is_some_and(|density| density < 0.35)
+        || family_support_coverage.is_some_and(|coverage| coverage < 0.35)
+    {
+        reasons.push("low_pattern_density");
+    }
+    reasons
+}
+
 fn family_evidence_is_fresh(
     request: &FamilyEvidenceFreshnessRequest,
     source_store: &impl SourceStore,
@@ -1593,7 +1799,9 @@ fn insufficient_support_unknown(affected_claim: impl Into<String>) -> FamilyQuer
         class: UnknownClass::Blocking,
         reason: UnknownReasonCode::InsufficientSupport,
         affected_claim: affected_claim.into(),
-        recovery: Some("run repogrammar index after adding compatible implementations".to_string()),
+        recovery: Some(
+            "run repogrammar resync after adding compatible implementations".to_string(),
+        ),
     }
 }
 
@@ -2117,7 +2325,7 @@ mod tests {
             &status,
         ));
         assert_eq!(pattern.reason, "repository is not initialized");
-        assert_eq!(pattern.guidance, "run repogrammar init");
+        assert_eq!(pattern.guidance, "run repogrammar init --yes");
         assert!(!pattern.implemented);
 
         let inventory = fallback_report(query_preflight(
@@ -2125,7 +2333,7 @@ mod tests {
             &status,
         ));
         assert_eq!(inventory.reason, "repository is not initialized");
-        assert_eq!(inventory.guidance, "run repogrammar init");
+        assert_eq!(inventory.guidance, "run repogrammar init --yes");
         assert!(inventory.implemented);
     }
 
@@ -2184,7 +2392,7 @@ mod tests {
             ));
 
             assert_eq!(fallback.reason, "no active index generation");
-            assert_eq!(fallback.guidance, "run repogrammar index");
+            assert_eq!(fallback.guidance, "run repogrammar resync");
             assert!(fallback.implemented);
         }
     }
@@ -2616,6 +2824,7 @@ mod tests {
             requires_source_before_edit: false,
             selection_strategy: "deterministic_read_plan_v1",
             budget_satisfied: true,
+            line_range_omissions: Vec::new(),
         }
     }
 
@@ -2641,6 +2850,58 @@ mod tests {
         let hydrated = read_plan_with_rendered_spans(&read_plan, &report);
         assert!(!hydrated.source_snippets_included);
         assert_eq!(hydrated.items[0].start_line, None);
+    }
+
+    #[test]
+    fn read_plan_line_range_enrichment_is_metadata_only() {
+        let source = SourceText {
+            path: "src/a.ts".to_string(),
+            content_hash: semantic_fact().content_hash,
+            text: "first\nsecond\nthird\n".to_string(),
+        };
+        let read_plan = read_plan_for_source_span(6, 12);
+
+        let enriched = enrich_read_plan_line_ranges(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &StaticSourceStore { result: Ok(source) },
+            &read_plan,
+        )
+        .expect("enrich read plan");
+
+        assert!(!enriched.source_snippets_included);
+        assert_eq!(enriched.items[0].start_line, Some(2));
+        assert_eq!(enriched.items[0].end_line, Some(2));
+        assert!(!enriched.items[0].source_snippets_included);
+        assert!(enriched.line_range_omissions.is_empty());
+        let debug = format!("{enriched:?}");
+        assert!(!debug.contains("second"));
+    }
+
+    #[test]
+    fn read_plan_line_range_enrichment_keeps_stale_items_with_guidance() {
+        let read_plan = read_plan_for_source_span(6, 12);
+
+        let enriched = enrich_read_plan_line_ranges(
+            SourceSpanRenderRequest {
+                repository_root: "/repo".to_string(),
+                max_file_bytes: 1024,
+            },
+            &hash_mismatch_source_store("hash mismatch"),
+            &read_plan,
+        )
+        .expect("stale read plan is not a transport failure");
+
+        assert_eq!(enriched.items.len(), 1);
+        assert_eq!(enriched.items[0].start_line, None);
+        assert_eq!(enriched.items[0].end_line, None);
+        assert_eq!(enriched.line_range_omissions.len(), 1);
+        assert_eq!(enriched.line_range_omissions[0].reason, "stale_evidence");
+        assert!(enriched.line_range_omissions[0]
+            .guidance
+            .contains("Read/Grep"));
     }
 
     #[test]
@@ -2792,6 +3053,11 @@ mod tests {
         assert_eq!(diagnostics.token_saving_risk, DiagnosticSignal::Low);
         assert_eq!(diagnostics.thin_wrapper_risk, DiagnosticSignal::Low);
         assert_eq!(
+            diagnostics.token_saving_readiness,
+            TokenSavingReadiness::Partial
+        );
+        assert!(diagnostics.blocking_reasons.is_empty());
+        assert_eq!(
             diagnostics.external_dependency_signal,
             DiagnosticSignal::Unknown
         );
@@ -2811,6 +3077,14 @@ mod tests {
         assert_eq!(diagnostics.abstention_rate, None);
         assert_eq!(diagnostics.token_saving_risk, DiagnosticSignal::Unknown);
         assert_eq!(diagnostics.thin_wrapper_risk, DiagnosticSignal::Unknown);
+        assert_eq!(
+            diagnostics.token_saving_readiness,
+            TokenSavingReadiness::Unknown
+        );
+        assert_eq!(
+            diagnostics.blocking_reasons,
+            vec!["no_supported_units", "no_families"]
+        );
     }
 
     #[test]

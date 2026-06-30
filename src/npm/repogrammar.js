@@ -203,10 +203,14 @@ function listArchiveEntries(archivePath, platform = process.platform) {
 }
 
 function normalizeArchiveEntry(entry) {
-  if (entry.includes("\\") || entry.includes("://")) {
+  if (entry.includes("://")) {
     throw new Error(`unsafe release artifact path: ${entry}`);
   }
-  let normalized = entry.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+  let normalized = entry
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
   if (!normalized) {
     return null;
   }

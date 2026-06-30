@@ -134,11 +134,14 @@ Some unknowns block only specific claims:
 - Rust UNKNOWNs block only the affected claim. `rust_build_variant`,
   `rust_macro_expansion`, `rust_trait_dispatch`, `rust_module_resolution`, and
   `rust_family_membership` block the relevant internal RepoGrammar family
-  claim; a Cargo.toml build-script or target-specific `rust_build_variant`
-  UNKNOWN blocks Rust self-dogfood family emission for the repository until the
-  build variant is resolved. Unrelated optional call-shape details may remain
-  non-blocking metadata. Rust UNKNOWNs must not be guessed away by naming
-  convention or path similarity.
+  claim; a root `Cargo.toml` build-script or target-specific
+  `rust_build_variant` UNKNOWN blocks Rust self-dogfood family emission for the
+  repository until the build variant is resolved. Nested, fixture, or package
+  manifests must not globally block unrelated root Rust family claims; they
+  remain scoped to the affected package/crate/claim until provider-backed
+  package scope is implemented. Unrelated optional call-shape details may
+  remain non-blocking metadata. Rust UNKNOWNs must not be guessed away by
+  naming convention or path similarity.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

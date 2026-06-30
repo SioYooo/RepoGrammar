@@ -35,8 +35,8 @@ Metrics must be classified as `MEASURED`, `DERIVED`, `ESTIMATED`, or
 
 - Single `init` command for both installation and repository indexing: simpler
   but conflates machine and repository safety boundaries.
-- Raw progress percentages and ETAs: familiar but likely fabricated before a
-  reliable denominator exists.
+- Progress percentages or ETAs without a reliable denominator: familiar but
+  likely fabricated before exact work units exist.
 - Telemetry opt-in combined with research traces: simpler UX but weaker consent
   separation.
 

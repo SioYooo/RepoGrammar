@@ -19,6 +19,9 @@ allowed.
 - Temporary directories must be unique and cleaned up.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
+- Helper code used only by tests must be gated with `#[cfg(test)]` or an
+  equivalent test-only cfg so `cargo clippy --all-targets` does not compile it
+  as dead production code.
 - Symlink safety tests must assert rejection on hosts that can create symlinks.
   On Windows sessions that lack the symlink creation privilege, tests may exit
   early only after confirming the failure is the platform privilege or
@@ -88,6 +91,9 @@ allowed.
   `files`/`units` human and JSON output, no-active-generation fallback, broken
   active-generation pointers, product runtime wiring, and absence of source
   snippets or absolute paths in CLI output and stored metadata.
+  Progress renderer tests must also cover exact integer percentages and
+  interactive TTY progress as single-line carriage-return updates with one
+  final newline rather than one terminal line per event.
 - Auto-sync CLI tests must cover `autosync` defaulting to `status`,
   `enable/start/status/stop/disable/run` routing, `--poll-ms` and
   `--debounce-ms` validation, `--progress` compatibility, strict-gitignore
@@ -158,6 +164,10 @@ allowed.
   normalization, and invalid empty CSV entries, no-write
   `--print-config <target>` behavior for deferred registry targets, and no
   `.repogrammar/` mutation.
+  Managed-binary refresh tests must cover staging the new file, removing the
+  previous RepoGrammar-managed executable or managed command copy before
+  activation, and actionable failure guidance when that previous file cannot be
+  removed because a coding agent or MCP process may still hold it.
   Default tests must not invoke real `codex` or `claude` binaries; validate
   native integration through dry-run output, command-vector construction, fake
   configurators, fake prompts, and receipt behavior. Any real native-agent CLI
@@ -174,13 +184,14 @@ allowed.
   older unmanaged command files, missing-worker artifact rejection,
   release-workflow artifact and installer-script checksum contract checks,
   target/scope pass-through for comma-separated, `none`, and local-scope
-  install requests, and command removal. Default tests must not use wrapper
-  scripts to call real `codex` or `claude` binaries.
+  install requests, stale PATH prune failure propagation, and command removal.
+  Default tests must not use wrapper scripts to call real `codex` or `claude`
+  binaries.
   Windows PowerShell wrapper coverage must include `src/install/install.ps1`
   source-checkout `-FromSource` installation with an already built local binary,
   bundled worker asset installation, unmanaged command backup, no
-  `.repogrammar/` mutation, and nonzero propagation when delegated
-  `repogrammar install` fails.
+  `.repogrammar/` mutation, locked stale PATH prune failure propagation, and
+  nonzero propagation when delegated `repogrammar install` fails.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
   cover the full public-preview platform/artifact matrix, unsupported
@@ -417,11 +428,13 @@ allowed.
   metrics code.
 - Stats CLI tests must cover parseable `--json` output, missing-index fallback,
   allowed metric-kind vocabulary, local-pattern-density/family-coverage/
-  abstention diagnostics, thin-wrapper/token-saving risk, null measured
-  token-savings fields, unknown option rejection, and absence of source/path
-  leakage.
+  abstention diagnostics, thin-wrapper/token-saving risk, readiness/blocking
+  reasons, null measured token-savings fields, unknown option rejection, and
+  absence of source/path leakage.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
-  constructor rather than constructing impossible progress states directly.
+  constructor rather than constructing impossible progress states directly, and
+  must assert known-work percentages while preserving indeterminate output for
+  unknown work.
 
 ## Current coverage
 
@@ -433,6 +446,8 @@ worker request and NDJSON fixture coverage, Rust-side TypeScript semantic-worker
 process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
+explicit `init --yes --resync --autosync` bootstrap sequencing and failure
+preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
 TS/JS and Python file discovery filtering/hash/path-safety behavior, SQLite storage
 migration and generation-activation safety behavior, validated
@@ -450,6 +465,7 @@ class/reason token validation, internal semantic-fact freshness/readiness gating
 for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
+metadata-only read-plan line-range enrichment and omission guidance,
 read-only MCP `repogrammar_context` schema/JSON-RPC serving, schema-backed
 family-evidence `covered_claims` write/read validation and query selection,
 installer live-write gating through native MCP CLIs and managed receipts,
@@ -459,7 +475,7 @@ CPython AST Python worker structural parse and NDJSON smoke behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory
-projects, index/sync lock acquisition and doctor lock-state reporting, and
+projects, index/sync/resync lock acquisition and doctor lock-state reporting, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
 
 ## Required local gate

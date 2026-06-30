@@ -1,17 +1,22 @@
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
+use repogrammar::adapters::filesystem::discovery::{
+    is_default_excluded_directory_name, is_repogrammar_state_directory_name,
+    supported_language_for_path,
+};
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
 use repogrammar::adapters::parsing::RepoGrammarSourceParser;
 use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
+use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::autosync::{
     acquire_autosync_daemon, autosync_status, daemon_log_path, disable_autosync, enable_autosync,
-    stop_autosync, AutosyncReport, AutosyncRequest, AutosyncSettings,
+    record_autosync_run, stop_autosync, AutosyncReport, AutosyncRequest, AutosyncRunResult,
+    AutosyncSettings,
 };
 use repogrammar::application::indexing::{
-    discover_repository_files,
-    index_repository_with_discovery_parser_frameworks_families_and_store_with_progress,
-    index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress,
+    index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
+    index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::install::{
@@ -19,9 +24,10 @@ use repogrammar::application::install::{
     InstallExecutionOutcome, InstallRequest, InstallScope, McpSelfTestRunner, NativeAgentAction,
     NativeAgentConfigurator, MCP_SERVER_NAME,
 };
+use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::query::{
-    list_code_units, list_families_with_freshness, list_indexed_files,
-    lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
+    enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
+    list_indexed_files, lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
     FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
     IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan, RepoShapeDiagnosticsReport,
     SourceSpanRenderReport, SourceSpanRenderRequest,
@@ -46,11 +52,21 @@ use repogrammar::interfaces::mcp::{
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::ffi::{c_void, OsString};
 use std::fs;
 use std::io::IsTerminal;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+#[cfg(windows)]
+const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -69,6 +85,64 @@ fn main() {
 struct ProductCliRuntime;
 
 struct ProductInstallTelemetryPrompt;
+
+struct ProductProgressSink<'a> {
+    command: &'a str,
+    json_output: bool,
+    interactive: bool,
+    last_width: usize,
+}
+
+impl<'a> ProductProgressSink<'a> {
+    fn new(command: &'a str, json_output: bool, interactive: bool) -> Self {
+        Self {
+            command,
+            json_output,
+            interactive,
+            last_width: 0,
+        }
+    }
+
+    fn emit(&mut self, event: &ProgressEvent) {
+        if self.interactive {
+            let (frame, width) =
+                render_interactive_index_progress_event(self.command, event, self.last_width);
+            eprint!("{frame}");
+            self.last_width = width;
+        } else {
+            eprint!(
+                "{}",
+                render_index_progress_event(self.command, event, self.json_output)
+            );
+        }
+        let _ = std::io::stderr().flush();
+    }
+
+    fn finish(&mut self) {
+        if self.interactive && self.last_width > 0 {
+            eprintln!();
+            let _ = std::io::stderr().flush();
+            self.last_width = 0;
+        }
+    }
+}
+
+fn render_interactive_index_progress_event(
+    command: &str,
+    event: &ProgressEvent,
+    previous_width: usize,
+) -> (String, usize) {
+    let line = render_index_progress_event(command, event, false)
+        .trim_end_matches('\n')
+        .to_string();
+    let width = line.chars().count();
+    let mut frame = format!("\r{line}");
+    let padding = previous_width.saturating_sub(width);
+    if padding > 0 {
+        frame.push_str(&" ".repeat(padding));
+    }
+    (frame, width)
+}
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
     fn is_interactive(&self) -> bool {
@@ -104,6 +178,28 @@ fn read_prompt_response(prompt: &str) -> Result<String, String> {
     Ok(response)
 }
 
+/// One-line auto-sync summary written to `.repogrammar/logs/daemon.log` after a
+/// successful sync. Records files seen, code units indexed, elapsed time, and the
+/// activated generation so the daemon log shows what each sync did.
+fn format_autosync_sync_log(outcome: &IndexingOutcome, elapsed_ms: u128) -> String {
+    format!(
+        "autosync: synced {} file(s), {} unit(s) in {}ms (generation {})",
+        outcome.discovered_files,
+        outcome.indexed_units,
+        elapsed_ms,
+        outcome.active_generation.as_deref().unwrap_or("none")
+    )
+}
+
+fn append_autosync_daemon_log(path: Option<&Path>, line: &str) {
+    let Some(path) = path else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 impl ProductCliRuntime {
     fn store_for_status_request(
         &self,
@@ -131,27 +227,7 @@ impl ProductCliRuntime {
         &self,
         request: &CliAutosyncRequest,
     ) -> Result<String, RepoGrammarError> {
-        let report = discover_repository_files(
-            IndexingRequest {
-                repository_root: request.repository_root.clone(),
-                state_dir_override: request.state_dir_override.clone(),
-                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
-                strict_gitignore: request.strict_gitignore,
-            },
-            &FilesystemFileDiscovery,
-        )?;
-        let mut hasher = Sha256::new();
-        for file in report.files {
-            hasher.update(file.path.as_bytes());
-            hasher.update([0]);
-            hasher.update(file.content_hash.as_str().as_bytes());
-            hasher.update([0]);
-            hasher.update(file.size_bytes.to_string().as_bytes());
-            hasher.update([0]);
-            hasher.update(file.language.as_str().as_bytes());
-            hasher.update([0xff]);
-        }
-        Ok(format!("{:x}", hasher.finalize()))
+        repository_change_fingerprint(&request.repository_root, DEFAULT_MAX_FILE_BYTES)
     }
 
     fn run_autosync_loop(
@@ -159,6 +235,7 @@ impl ProductCliRuntime {
         request: CliAutosyncRequest,
     ) -> Result<AutosyncReport, RepoGrammarError> {
         let autosync_request = self.autosync_request(&request);
+        let log_path = daemon_log_path(&autosync_request).ok();
         let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
         let env_lookup = |key: &str| std::env::var(key).ok();
         let semantic_worker_executable =
@@ -202,11 +279,36 @@ impl ProductCliRuntime {
                 quiet: true,
                 stderr_is_terminal: false,
             };
+            let started = Instant::now();
             match self.index_repository("sync", sync_request) {
-                Ok(_) if !request.quiet => eprintln!("autosync: sync complete"),
-                Ok(_) => {}
+                Ok(outcome) => {
+                    let line = format_autosync_sync_log(&outcome, started.elapsed().as_millis());
+                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    if !request.quiet {
+                        eprintln!("{line}");
+                    }
+                    let _ = record_autosync_run(
+                        &autosync_request,
+                        AutosyncRunResult::Ok,
+                        outcome.active_generation.as_deref(),
+                        None,
+                    );
+                }
                 Err(error) => {
-                    eprintln!("autosync: sync failed: {error}");
+                    let line = format!(
+                        "autosync: sync failed after {}ms: {error}",
+                        started.elapsed().as_millis()
+                    );
+                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    if !request.quiet {
+                        eprintln!("{line}");
+                    }
+                    let _ = record_autosync_run(
+                        &autosync_request,
+                        AutosyncRunResult::Error,
+                        None,
+                        Some(&error.to_string()),
+                    );
                 }
             }
         }
@@ -226,50 +328,351 @@ impl ProductCliRuntime {
                 ..status
             });
         }
-        let log_path = daemon_log_path(&autosync_request)?;
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-            .map_err(|_| {
-                RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
-            })?;
-        let log_err = log.try_clone().map_err(|_| {
-            RepoGrammarError::InvalidInput("failed to open auto-sync log".to_string())
-        })?;
-        let mut command = Command::new(std::env::current_exe().map_err(|_| {
-            RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
-        })?);
-        command
-            .arg("autosync")
-            .arg("run")
-            .arg("--path")
-            .arg(&request.repository_root)
-            .arg("--poll-ms")
-            .arg(request.poll_ms.to_string())
-            .arg("--debounce-ms")
-            .arg(request.debounce_ms.to_string())
-            .arg("--quiet")
-            .current_dir(&request.repository_root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err));
-        if let Some(state_dir) = &request.state_dir_override {
-            command.env("REPOGRAMMAR_DIR", state_dir);
-        }
-        let child = command
-            .spawn()
-            .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))?;
+        let _log_path = daemon_log_path(&autosync_request)?;
+        let child_pid = spawn_autosync_daemon(request)?;
         Ok(AutosyncReport {
             state_dir: status.state_dir,
             enabled: true,
             running: true,
-            pid: Some(child.id()),
+            pid: Some(child_pid),
             poll_ms: request.poll_ms,
             debounce_ms: request.debounce_ms,
+            last_run: status.last_run,
             message: "auto-sync started".to_string(),
         })
     }
+}
+
+#[cfg(not(windows))]
+fn spawn_autosync_daemon(request: &CliAutosyncRequest) -> Result<u32, RepoGrammarError> {
+    let mut command = Command::new(std::env::current_exe().map_err(|_| {
+        RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+    })?);
+    command
+        .arg("autosync")
+        .arg("run")
+        .arg("--path")
+        .arg(&request.repository_root)
+        .arg("--poll-ms")
+        .arg(request.poll_ms.to_string())
+        .arg("--debounce-ms")
+        .arg(request.debounce_ms.to_string())
+        .arg("--quiet")
+        .current_dir(&request.repository_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(state_dir) = &request.state_dir_override {
+        command.env("REPOGRAMMAR_DIR", state_dir);
+    }
+    command
+        .spawn()
+        .map(|child| child.id())
+        .map_err(|_| RepoGrammarError::InvalidInput("failed to start auto-sync".to_string()))
+}
+
+#[cfg(windows)]
+fn spawn_autosync_daemon(request: &CliAutosyncRequest) -> Result<u32, RepoGrammarError> {
+    let executable = std::env::current_exe().map_err(|_| {
+        RepoGrammarError::InvalidInput("failed to resolve repogrammar executable".to_string())
+    })?;
+    let args = vec![
+        executable.as_os_str().to_os_string(),
+        OsString::from("autosync"),
+        OsString::from("run"),
+        OsString::from("--path"),
+        OsString::from(request.repository_root.as_str()),
+        OsString::from("--poll-ms"),
+        OsString::from(request.poll_ms.to_string()),
+        OsString::from("--debounce-ms"),
+        OsString::from(request.debounce_ms.to_string()),
+        OsString::from("--quiet"),
+    ];
+    let mut command_line = windows_command_line(&args);
+    let application_name = windows_null_terminated(executable.as_os_str());
+    let current_directory =
+        windows_null_terminated(Path::new(&request.repository_root).as_os_str());
+    let mut environment = windows_environment_block(request.state_dir_override.as_deref());
+    let environment_ptr = environment
+        .as_mut()
+        .map(|block| block.as_mut_ptr().cast::<c_void>())
+        .unwrap_or(std::ptr::null_mut());
+    let mut startup_info = StartupInfoW {
+        cb: std::mem::size_of::<StartupInfoW>() as u32,
+        ..Default::default()
+    };
+    let mut process_info = ProcessInformation::default();
+    let creation_flags = CREATE_NEW_PROCESS_GROUP
+        | DETACHED_PROCESS
+        | environment
+            .as_ref()
+            .map(|_| CREATE_UNICODE_ENVIRONMENT)
+            .unwrap_or(0);
+    let created = unsafe {
+        CreateProcessW(
+            application_name.as_ptr(),
+            command_line.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            creation_flags,
+            environment_ptr,
+            current_directory.as_ptr(),
+            &mut startup_info,
+            &mut process_info,
+        ) != 0
+    };
+    if !created {
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to start auto-sync".to_string(),
+        ));
+    }
+    unsafe {
+        let _ = CloseHandle(process_info.h_process);
+        let _ = CloseHandle(process_info.h_thread);
+    }
+    Ok(process_info.dw_process_id)
+}
+
+#[cfg(windows)]
+fn windows_command_line(args: &[OsString]) -> Vec<u16> {
+    let mut command_line = Vec::new();
+    for (index, arg) in args.iter().enumerate() {
+        if index > 0 {
+            command_line.push(b' ' as u16);
+        }
+        push_windows_quoted_arg(&mut command_line, arg);
+    }
+    command_line.push(0);
+    command_line
+}
+
+#[cfg(windows)]
+fn push_windows_quoted_arg(command_line: &mut Vec<u16>, arg: &OsString) {
+    let value = arg.as_os_str().encode_wide().collect::<Vec<_>>();
+    let needs_quotes = value.is_empty()
+        || value
+            .iter()
+            .any(|ch| *ch == b' ' as u16 || *ch == b'\t' as u16 || *ch == b'"' as u16);
+    if !needs_quotes {
+        command_line.extend(value);
+        return;
+    }
+
+    command_line.push(b'"' as u16);
+    let mut backslashes = 0_usize;
+    for ch in value {
+        if ch == b'\\' as u16 {
+            backslashes += 1;
+        } else if ch == b'"' as u16 {
+            command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2 + 1));
+            command_line.push(ch);
+            backslashes = 0;
+        } else {
+            command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
+            command_line.push(ch);
+            backslashes = 0;
+        }
+    }
+    command_line.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2));
+    command_line.push(b'"' as u16);
+}
+
+#[cfg(windows)]
+fn windows_null_terminated(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn windows_environment_block(state_dir_override: Option<&str>) -> Option<Vec<u16>> {
+    let state_dir = state_dir_override?;
+    let mut values = std::env::vars_os().collect::<Vec<_>>();
+    values.retain(|(key, _)| {
+        !key.to_string_lossy()
+            .eq_ignore_ascii_case("REPOGRAMMAR_DIR")
+    });
+    values.push((OsString::from("REPOGRAMMAR_DIR"), OsString::from(state_dir)));
+    values.sort_by_key(|(key, _)| key.to_string_lossy().to_ascii_uppercase());
+
+    let mut block = Vec::new();
+    for (key, value) in values {
+        block.extend(key.as_os_str().encode_wide());
+        block.push(b'=' as u16);
+        block.extend(value.as_os_str().encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    Some(block)
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct StartupInfoW {
+    cb: u32,
+    lp_reserved: *mut u16,
+    lp_desktop: *mut u16,
+    lp_title: *mut u16,
+    dw_x: u32,
+    dw_y: u32,
+    dw_x_size: u32,
+    dw_y_size: u32,
+    dw_x_count_chars: u32,
+    dw_y_count_chars: u32,
+    dw_fill_attribute: u32,
+    dw_flags: u32,
+    w_show_window: u16,
+    cb_reserved2: u16,
+    lp_reserved2: *mut u8,
+    h_std_input: *mut c_void,
+    h_std_output: *mut c_void,
+    h_std_error: *mut c_void,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct ProcessInformation {
+    h_process: *mut c_void,
+    h_thread: *mut c_void,
+    dw_process_id: u32,
+    dw_thread_id: u32,
+}
+
+#[cfg(windows)]
+const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateProcessW(
+        lp_application_name: *const u16,
+        lp_command_line: *mut u16,
+        lp_process_attributes: *mut c_void,
+        lp_thread_attributes: *mut c_void,
+        b_inherit_handles: i32,
+        dw_creation_flags: u32,
+        lp_environment: *mut c_void,
+        lp_current_directory: *const u16,
+        lp_startup_info: *mut StartupInfoW,
+        lp_process_information: *mut ProcessInformation,
+    ) -> i32;
+    fn CloseHandle(h_object: *mut c_void) -> i32;
+}
+
+fn repository_change_fingerprint(
+    repository_root: &str,
+    max_file_bytes: u64,
+) -> Result<String, RepoGrammarError> {
+    let root = PathBuf::from(repository_root);
+    let metadata = fs::symlink_metadata(&root).map_err(|_| {
+        RepoGrammarError::InvalidInput("repository root is not readable".to_string())
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RepoGrammarError::InvalidInput(
+            "repository root must be a real directory".to_string(),
+        ));
+    }
+    let canonical_root = fs::canonicalize(&root).map_err(|_| {
+        RepoGrammarError::InvalidInput("repository root is not readable".to_string())
+    })?;
+    let mut entries = Vec::new();
+    collect_change_fingerprint_entries(
+        &root,
+        &canonical_root,
+        PathBuf::new(),
+        max_file_bytes,
+        &mut entries,
+    )?;
+    entries.sort();
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.as_bytes());
+        hasher.update([0xff]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_change_fingerprint_entries(
+    root: &Path,
+    canonical_root: &Path,
+    relative_dir: PathBuf,
+    max_file_bytes: u64,
+    entries: &mut Vec<String>,
+) -> Result<(), RepoGrammarError> {
+    let directory = root.join(&relative_dir);
+    let mut children = fs::read_dir(&directory)
+        .map_err(|_| RepoGrammarError::InvalidInput("failed to read directory".to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput("failed to read directory entry".to_string())
+        })?;
+    children.sort_by_key(|entry| entry.file_name());
+
+    for child in children {
+        let relative = relative_dir.join(child.file_name());
+        let Some(relative_path) = repo_relative_string(&relative) else {
+            continue;
+        };
+        let metadata = match fs::symlink_metadata(child.path()) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            let name = relative.file_name().and_then(|value| value.to_str());
+            if is_repogrammar_state_directory_name(name) || is_default_excluded_directory_name(name)
+            {
+                continue;
+            }
+            match fs::canonicalize(child.path()) {
+                Ok(canonical) if canonical.starts_with(canonical_root) => {
+                    collect_change_fingerprint_entries(
+                        root,
+                        canonical_root,
+                        relative,
+                        max_file_bytes,
+                        entries,
+                    )?;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if !metadata.is_file() || metadata.len() > max_file_bytes {
+            continue;
+        }
+        let Some(language) = supported_language_for_path(&relative_path) else {
+            continue;
+        };
+        match fs::canonicalize(child.path()) {
+            Ok(canonical) if canonical.starts_with(canonical_root) => {}
+            _ => continue,
+        }
+        let modified = metadata.modified().ok().and_then(|value| {
+            value
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|duration| format!("{}.{:09}", duration.as_secs(), duration.subsec_nanos()))
+        });
+        entries.push(format!(
+            "{relative_path}\0{}\0{}\0{}",
+            metadata.len(),
+            modified.as_deref().unwrap_or("unknown"),
+            language.as_str()
+        ));
+    }
+    Ok(())
+}
+
+fn repo_relative_string(path: &Path) -> Option<String> {
+    let parts = path
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<Vec<_>>>()?;
+    Some(parts.join("/"))
 }
 
 impl CliRuntime for ProductCliRuntime {
@@ -287,7 +690,7 @@ impl CliRuntime for ProductCliRuntime {
         match status.status {
             RepositoryStatus::NotInitialized => {
                 return Err(RepoGrammarError::InvalidInput(
-                    "repository is not initialized; run repogrammar init".to_string(),
+                    "repository is not initialized; run repogrammar init --yes".to_string(),
                 ));
             }
             RepositoryStatus::CorruptedManifest => {
@@ -317,6 +720,8 @@ impl CliRuntime for ProductCliRuntime {
         };
         let framework_roles = SyntaxFrameworkRoleDetector;
         let parser = RepoGrammarSourceParser::default();
+        let rust_provider = CargoMetadataRustProvider::new("cargo")
+            .with_provider_version(env!("CARGO_PKG_VERSION"));
         let emit_progress = should_emit_progress(
             request.progress,
             request.json,
@@ -324,38 +729,41 @@ impl CliRuntime for ProductCliRuntime {
             request.stderr_is_terminal,
         );
         let json_progress = request.json;
-        let mut progress = |event| {
-            if emit_progress {
-                eprint!(
-                    "{}",
-                    render_index_progress_event(command, &event, json_progress)
-                );
-                let _ = std::io::stderr().flush();
+        let interactive_progress = emit_progress && !request.json && request.stderr_is_terminal;
+        let mut progress_sink =
+            ProductProgressSink::new(command, json_progress, interactive_progress);
+        let result = {
+            let mut progress = |event| {
+                if emit_progress {
+                    progress_sink.emit(&event);
+                }
+            };
+            if let Some(executable) = request.semantic_worker_executable {
+                let worker = TypeScriptSemanticWorkerBoundary::new(executable)
+                    .with_args(request.semantic_worker_args);
+                index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+                    indexing_request,
+                    &FilesystemFileDiscovery,
+                    &FilesystemSourceStore,
+                    &parser,
+                    (&framework_roles, &worker, &rust_provider),
+                    &store,
+                    &mut progress,
+                )
+            } else {
+                index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
+                    indexing_request,
+                    &FilesystemFileDiscovery,
+                    &FilesystemSourceStore,
+                    &parser,
+                    (&framework_roles, &rust_provider),
+                    &store,
+                    &mut progress,
+                )
             }
         };
-        if let Some(executable) = request.semantic_worker_executable {
-            let worker = TypeScriptSemanticWorkerBoundary::new(executable)
-                .with_args(request.semantic_worker_args);
-            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
-                indexing_request,
-                &FilesystemFileDiscovery,
-                &FilesystemSourceStore,
-                &parser,
-                (&framework_roles, &worker),
-                &store,
-                &mut progress,
-            )
-        } else {
-            index_repository_with_discovery_parser_frameworks_families_and_store_with_progress(
-                indexing_request,
-                &FilesystemFileDiscovery,
-                &FilesystemSourceStore,
-                &parser,
-                &framework_roles,
-                &store,
-                &mut progress,
-            )
-        }
+        progress_sink.finish();
+        result
     }
 
     fn repository_status(
@@ -461,6 +869,21 @@ impl CliRuntime for ProductCliRuntime {
             read_plan,
             include_source_spans,
             token_budget,
+        )
+    }
+
+    fn enrich_read_plan_line_ranges(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        enrich_read_plan_line_ranges(
+            SourceSpanRenderRequest {
+                repository_root: request.path,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &FilesystemSourceStore,
+            read_plan,
         )
     }
 
@@ -589,6 +1012,14 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
             token_budget,
         )
     }
+
+    fn enrich_read_plan_line_ranges(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        <Self as CliRuntime>::enrich_read_plan_line_ranges(self, request, read_plan)
+    }
 }
 
 fn run_serve_command(rest: &[String], runtime: &impl McpReadOnlyRuntime) -> i32 {
@@ -668,7 +1099,7 @@ impl ProductMcpSelfTester {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     fn with_timeout(timeout: std::time::Duration) -> Self {
         Self { timeout }
     }
@@ -922,6 +1353,7 @@ fn run_native_agent_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::application::progress::{ProgressStage, WorkUnits};
     use repogrammar::application::query::{
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
         SemanticFactReadinessRequest,
@@ -987,6 +1419,153 @@ mod tests {
         ];
         args.extend(extra.iter().map(|value| value.to_string()));
         args
+    }
+
+    #[test]
+    fn interactive_index_progress_rewrites_single_terminal_line() {
+        let long = ProgressEvent::new(
+            ProgressStage::FileScanning,
+            "stored file metadata",
+            WorkUnits::known(12, 236).expect("valid work"),
+        );
+        let (long_frame, long_width) = render_interactive_index_progress_event("sync", &long, 0);
+
+        assert!(long_frame.starts_with('\r'));
+        assert!(!long_frame.contains('\n'));
+        assert!(long_frame.contains("sync: [#-------------------] 5% 12/236 file_scanning"));
+
+        let short = ProgressEvent::new(ProgressStage::ProjectDiscovery, "done", WorkUnits::Unknown);
+        let (short_frame, short_width) =
+            render_interactive_index_progress_event("sync", &short, long_width);
+
+        assert!(short_frame.starts_with('\r'));
+        assert!(!short_frame.contains('\n'));
+        assert!(short_frame.contains("sync: [working] project_discovery: done"));
+        assert!(!short_frame.contains('%'));
+        assert!(short_frame.ends_with(&" ".repeat(long_width - short_width)));
+    }
+
+    #[test]
+    fn autosync_sync_log_summarizes_files_units_time_and_generation() {
+        let outcome = IndexingOutcome {
+            indexed_units: 42,
+            semantic_facts: 7,
+            discovered_files: 3,
+            skipped_paths: 1,
+            active_generation: Some("gen-000007".to_string()),
+            semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            format_autosync_sync_log(&outcome, 241),
+            "autosync: synced 3 file(s), 42 unit(s) in 241ms (generation gen-000007)"
+        );
+    }
+
+    #[test]
+    fn autosync_sync_log_handles_missing_generation() {
+        let outcome = IndexingOutcome {
+            indexed_units: 0,
+            semantic_facts: 0,
+            discovered_files: 0,
+            skipped_paths: 0,
+            active_generation: None,
+            semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            format_autosync_sync_log(&outcome, 5),
+            "autosync: synced 0 file(s), 0 unit(s) in 5ms (generation none)"
+        );
+    }
+
+    #[test]
+    fn autosync_daemon_log_append_is_direct_and_line_based() {
+        let workspace = TempWorkspace::new("autosync-log-append");
+        let log_path = workspace.path().join("daemon.log");
+
+        append_autosync_daemon_log(Some(&log_path), "autosync: first");
+        append_autosync_daemon_log(Some(&log_path), "autosync: second");
+        append_autosync_daemon_log(None, "autosync: ignored");
+
+        let contents = fs::read_to_string(log_path).expect("read daemon log");
+        assert_eq!(contents, "autosync: first\nautosync: second\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_daemon_spawn_helpers_quote_args_and_override_state_dir() {
+        let args = vec![
+            OsString::from(r"C:\Program Files\RepoGrammar\repogrammar.exe"),
+            OsString::from("--path"),
+            OsString::from(r"C:\repo path"),
+            OsString::from("a\"b"),
+        ];
+        let command_line = windows_command_line(&args);
+        let rendered =
+            String::from_utf16(&command_line[..command_line.len() - 1]).expect("valid utf16");
+        assert_eq!(
+            rendered,
+            r#""C:\Program Files\RepoGrammar\repogrammar.exe" --path "C:\repo path" "a\"b""#
+        );
+
+        let environment =
+            windows_environment_block(Some(r"C:\state dir")).expect("environment block");
+        let rendered_environment = String::from_utf16(&environment).expect("valid environment");
+        assert!(rendered_environment.contains("REPOGRAMMAR_DIR=C:\\state dir\0"));
+        assert!(rendered_environment.ends_with("\0\0"));
+    }
+
+    #[test]
+    fn autosync_change_fingerprint_tracks_supported_sources_and_skips_noise() {
+        let workspace = TempWorkspace::new("autosync-change-fingerprint");
+
+        let empty =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("empty fingerprint");
+
+        fs::create_dir_all(workspace.path().join(".repogrammar/logs")).expect("create state noise");
+        fs::write(
+            workspace.path().join(".repogrammar/logs/generated.ts"),
+            "export const ignored = true;\n",
+        )
+        .expect("write state noise");
+        let after_state_noise =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("state noise fingerprint");
+        assert_eq!(after_state_noise, empty);
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 1;\n",
+        )
+        .expect("write tracked source");
+        let after_source =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("source fingerprint");
+        assert_ne!(after_source, empty);
+
+        fs::write(workspace.path().join("notes.md"), "# ignored\n").expect("write ignored md");
+        fs::create_dir_all(workspace.path().join("node_modules/pkg")).expect("create excluded dir");
+        fs::write(
+            workspace.path().join("node_modules/pkg/index.ts"),
+            "export const ignored = true;\n",
+        )
+        .expect("write excluded source");
+        let after_excluded_noise =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("excluded noise fingerprint");
+        assert_eq!(after_excluded_noise, after_source);
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 12345;\n",
+        )
+        .expect("modify tracked source");
+        let after_modified =
+            repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
+                .expect("modified fingerprint");
+        assert_ne!(after_modified, after_source);
     }
 
     fn release_fixture_root() -> PathBuf {
@@ -1597,14 +2176,24 @@ mod tests {
         assert!(
             first["start_byte"].as_u64().expect("start") < first["end_byte"].as_u64().expect("end")
         );
-        assert!(
-            first["start_line"].is_null(),
-            "line ranges are intentionally unavailable until source-span rendering exists"
-        );
-        assert!(first["end_line"].is_null());
+        assert_read_plan_item_has_line_range(first);
+        assert!(read_plan["line_range_omissions"]
+            .as_array()
+            .expect("line range omissions")
+            .is_empty());
         assert_eq!(first["source_snippets_included"], false);
         assert!(!value.to_string().contains("def "));
         assert!(!value.to_string().contains("/tmp/"));
+    }
+
+    fn assert_read_plan_item_has_line_range(item: &Value) {
+        let start_line = item["start_line"].as_u64().expect("start line");
+        let end_line = item["end_line"].as_u64().expect("end line");
+        assert!(start_line > 0, "start line must be 1-based");
+        assert!(
+            end_line >= start_line,
+            "end line must be greater than or equal to start line"
+        );
     }
 
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
@@ -2833,7 +3422,7 @@ mod tests {
         assert_eq!(detail_json["status"], "ok");
         assert_eq!(detail_json["output"]["source_snippets_included"], false);
         assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
-        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+        assert_read_plan_item_has_line_range(&detail_json["read_plan"]["items"][0]);
 
         let spanned = run_with_runtime(
             cli_args(
@@ -2937,6 +3526,77 @@ mod tests {
             .expect("families")
             .is_empty());
         assert_no_claim_payload("families", &families_json);
+    }
+
+    #[test]
+    fn product_runtime_resync_records_cargo_metadata_project_model_without_build_script() {
+        let workspace = TempWorkspace::new("product-runtime-rust-cargo-metadata");
+        fs::create_dir_all(workspace.path().join("src")).expect("create src");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+        )
+        .expect("write manifest");
+        fs::write(
+            workspace.path().join("build.rs"),
+            "fn main() { std::fs::write(\"build-script-ran.txt\", \"ran\").unwrap(); }\n",
+        )
+        .expect("write build script");
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn demo() -> usize { 1 }\n",
+        )
+        .expect("write lib");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime).status,
+            0
+        );
+
+        let output = run_with_runtime(
+            cli_args(
+                "resync",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(
+            !workspace.path().join("build-script-ran.txt").exists(),
+            "resync must not execute Cargo build scripts"
+        );
+        let value = parse_machine_output("resync", &output, &workspace);
+        assert_eq!(value["command"], "resync");
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().any(|fact| {
+            fact.kind == "PROJECT_CONFIG"
+                && fact.certainty == "SEMANTIC"
+                && fact.origin_engine == "cargo_metadata"
+                && fact.origin_method == "cargo_metadata_no_deps_v1"
+                && fact.path == "Cargo.toml"
+                && fact.target.as_deref() == Some("cargo.package.demo_crate")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "cargo_metadata_no_deps=true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "build_scripts_executed=false")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "proc_macros_executed=false")
+        }));
     }
 
     #[test]
@@ -3230,7 +3890,7 @@ mod tests {
         assert_eq!(detail_json["status"], "ok");
         assert_eq!(detail_json["output"]["source_snippets_included"], false);
         assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
-        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+        assert_read_plan_item_has_line_range(&detail_json["read_plan"]["items"][0]);
         let members = detail_json["members"].as_array().expect("members");
         assert_eq!(members.len(), 5);
         assert!(members

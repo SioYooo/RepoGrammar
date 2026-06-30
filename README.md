@@ -23,9 +23,10 @@ RepoGrammar is designed to answer questions like:
 
 The output is meant to be small and auditable. Current family results expose
 metadata such as repo-relative paths, content hashes, byte ranges, support
-counts, variation labels, and `UNKNOWN` reasons. Source snippets are not
-returned by default. When explicitly requested, RepoGrammar can return bounded,
-line-numbered source spans selected from its hash-checked read plan.
+counts, line ranges when source hashes are fresh, variation labels, and
+`UNKNOWN` reasons. Source snippets are not returned by default. When explicitly
+requested, RepoGrammar can return bounded, line-numbered source spans selected
+from its hash-checked read plan.
 
 ## Current Scope
 
@@ -94,7 +95,7 @@ analysis.
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
 | Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
-| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |
+| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses explicit `init`/`resync`/`autosync` commands. |
 
 ## Install
 
@@ -174,7 +175,12 @@ The source path installs the built binary into RepoGrammar-managed user state
 and refreshes the user-writable `repogrammar` command without requiring a
 GitHub Release asset or published npm package. If that command path already
 contains an older unmanaged `repogrammar`, the installer backs it up before
-replacing it with the managed command.
+replacing it with the managed command. After install/update, the scripts compare
+other `repogrammar` copies on PATH by SHA256 and remove stale copies when
+`--yes` / `-Yes` is used; on Windows, `install.ps1 -Verify` reports the same
+state and `install.ps1 -Prune -Yes` runs the cleanup explicitly. If a stale
+copy cannot be removed because a process or permissions blocks deletion, the
+installer exits nonzero and leaves the stale copy listed for manual cleanup.
 
 Before the npm package is published, local npm dogfood can bypass release
 downloads with an already built binary:
@@ -208,10 +214,10 @@ From a repository you want to analyze:
 
 ```text
 repogrammar install
-repogrammar init
-repogrammar index
-repogrammar autosync start
+repogrammar init --yes --resync --autosync
 repogrammar status
+repogrammar autosync status
+repogrammar logs --component daemon --tail 20
 repogrammar families
 repogrammar find --project . --token-budget 8000 <target>
 repogrammar family --project . --mode compact <family-id>
@@ -223,18 +229,25 @@ Before a repository is initialized or before enough evidence exists, query
 commands return explicit fallback or `UNKNOWN` results rather than pretending an
 index or family claim exists.
 
-`repogrammar index` shows progress automatically in an interactive terminal.
-Use `repogrammar index --progress always` to force progress output, or
-`repogrammar index --progress never` for quiet scripts.
+`repogrammar install` wires machine-level agent MCP integration only.
+Repository analysis is always an explicit per-repository step:
+`repogrammar init --yes --resync --autosync` creates safe repo-local state,
+rebuilds the active static-analysis generation, and starts repository-local
+auto-sync in one explicit command. `resync` shows progress automatically in an
+interactive terminal. Use
+`repogrammar resync --progress always` to force progress output, or
+`repogrammar resync --progress never` for quiet scripts.
 
 `repogrammar autosync start` is optional but recommended for dogfooding. It
-enables repository-local auto-sync and starts a background worker that watches
-for file changes, debounces saves, and reuses the existing `sync` path. It does
-not run from `install`, does not initialize other repositories, and can be
-managed with:
+enables repository-local auto-sync and starts a background worker that tracks a
+lightweight supported-file metadata fingerprint, debounces saves, and reuses
+the existing `sync` path so newly added or modified files enter the next active
+generation without a manual `resync`. It does not run from `install`, does not
+initialize other repositories, and can be inspected or managed with:
 
 ```text
 repogrammar autosync status
+repogrammar logs --component daemon --tail 20
 repogrammar autosync stop
 repogrammar autosync disable
 ```
@@ -298,6 +311,17 @@ repogrammar telemetry off
 repogrammar telemetry export --json
 repogrammar telemetry purge --yes
 ```
+
+Local paired token experiments can record already-redacted host usage counts
+without manual token flags:
+
+```text
+repogrammar telemetry experiment-record --name <id> --usage-json usage.json
+```
+
+The usage file must contain only token counts plus optional success/test
+outcome metadata; raw prompts, source, paths, symbols, messages, patches, and
+query text are rejected.
 
 ## Limitations
 

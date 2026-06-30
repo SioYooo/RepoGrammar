@@ -8,8 +8,8 @@ Installation is three separate steps:
 1. install the `repogrammar` CLI binary;
 2. run `repogrammar install` to wire machine-level coding-agent MCP
    integration;
-3. run `repogrammar init` and `repogrammar index` inside each repository that
-   should have a local RepoGrammar index.
+3. run `repogrammar init --yes --resync --autosync` inside each repository
+   that should have a local RepoGrammar index and agent-session auto-sync.
 
 End users must not need Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, a
 local LLM, an embedding model, or cloud API keys to install and run the
@@ -72,8 +72,9 @@ around release artifacts and the product binary: it may download a prebuilt
 release artifact, verify its checksum, install or repair the user-writable
 `repogrammar` command, install bundled worker assets, call
 `repogrammar install`, call `repogrammar uninstall`, remove the local command
-path after confirmation, display PATH guidance, or build from source only when
-the user explicitly chooses the contributor source-build path. It must not
+path after confirmation, clean up stale `repogrammar` copies found on PATH,
+display PATH guidance, or build from source only when the user explicitly
+chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
 
@@ -90,11 +91,33 @@ but it must install the built binary into RepoGrammar-managed user state before
 refreshing the user-writable command path. It must pass
 `REPOGRAMMAR_INSTALL_DIR`, `REPOGRAMMAR_COMMAND_DIR`, and
 `REPOGRAMMAR_EXECUTABLE` consistently when delegating to `repogrammar install`.
+First-party installers must resolve the same default install data directory as
+the Rust installer (`$XDG_DATA_HOME/repogrammar`, otherwise
+`~/.local/share/repogrammar`), so release installs, source builds, and direct
+`repogrammar install` runs converge on one managed executable authority under
+that data directory's `bin`, and agent MCP entries written by any of them point
+at the same managed executable. `cargo install` and the npm launcher install to
+their own toolchain-managed locations; they are contributor and bypass
+acquisition paths, not the managed authority. See ADR-0014.
 Repeated CLI installation must replace existing RepoGrammar-managed installed
 executables and managed command copies rather than failing only because the
-destination file already exists. If replacement is blocked by an active process
-or permissions, wrappers must fail with actionable guidance instead of silently
-leaving a partial unmanaged command.
+destination file already exists. Replacement must stage the new file, remove
+the previous RepoGrammar-managed file, and then activate the staged file. If the
+previous file cannot be removed because an active coding agent or MCP process
+is using it, the install path must fail and tell the user to exit that agent
+before rerunning the install or build command; it must not keep an alternate
+new binary beside the old active one.
+After a successful CLI install/update action, first-party wrappers must scan the
+current PATH for additional `repogrammar` command copies and compare each copy's
+SHA256 with the managed installed executable authority. Copies whose hash
+differs from the authority are stale and must be removed after confirmation, or
+without prompting when the noninteractive `--yes` / `-Yes` flag is present. The
+managed authority and any matching command copy must be preserved. Explicit
+verify/prune commands may remain available for diagnosis and manual repair, but
+normal install/update paths must not require users to run a second cleanup
+command. If a requested stale-copy cleanup cannot remove one or more stale
+copies, the wrapper must exit nonzero with actionable guidance and leave the
+unremoved paths visible for manual repair.
 If the user-writable command path already contains an unmanaged
 `repogrammar`, the wrapper may back it up and replace it with the managed
 command because the user explicitly invoked CLI installation. It must not
@@ -172,10 +195,19 @@ writer, ownership receipt, uninstall inverse, and tests are implemented.
 `repogrammar install` and `repogrammar uninstall` configure agent integration
 only. They must not create, update, or delete `.repogrammar/`, and they must not
 remove project indexes, logs, caches, locks, or repository-local receipts.
-They must not run `init`, `index`, or `sync`.
+They must not run `init`, `index`, `sync`, or `resync`.
+Agent-safe bootstrap is explicit and per repository: after machine-level
+installation, an agent may run `repogrammar init --yes --resync --autosync`
+only when the user has allowed repo-local analysis state. Plain `init --yes`
+does not broaden `init` writes, does not index, does not start auto-sync, and
+does not imply telemetry consent. If a repository already has a readable active
+generation, an agent may run `repogrammar autosync start` separately when the
+user wants coding-agent edits to enter RepoGrammar results without repeated
+manual `resync`.
 
 Repository lifecycle state is owned by `repogrammar init`,
-`repogrammar index`, `repogrammar sync`, and `repogrammar uninit`.
+`repogrammar index`, `repogrammar sync`, `repogrammar resync`, and
+`repogrammar uninit`.
 
 ## Safety requirements
 
@@ -302,14 +334,31 @@ noninteractive live writes, and a dependency-light text wizard:
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, validates archive entry names before extraction,
   installs the bundled worker asset plus CLI, and can then launch agent wiring
-  or uninstall flows. In a source checkout, its interactive menu makes the
-  contributor source-build path first-class, and its noninteractive
-  `--from-source` mode supports dogfood before release artifacts exist;
+  or uninstall flows. Install/update paths also prune stale PATH copies whose
+  checksum differs from the managed executable authority. In a source checkout,
+  its interactive menu makes the contributor source-build path first-class, and
+  its noninteractive `--from-source` mode supports dogfood before release
+  artifacts exist;
 - `src/install/install.ps1` is the Windows preview installer wrapper for the
   Windows x86_64 artifact. It verifies checksums and validates zip entry names
   before extraction. In a source checkout, its interactive menu defaults to
   the contributor source-build path, and its noninteractive `-FromSource` mode
-  supports dogfood before release artifacts exist;
+  supports dogfood before release artifacts exist. Its `-Verify` switch is a
+  read-only report that compares, by SHA256, the `repogrammar` copies on PATH,
+  the configured agent MCP command targets, and any running serve processes
+  against the managed authority binary, so a user can confirm that the command
+  they invoke and the binary their agents run are the same build. `-Prune`
+  additionally removes PATH copies whose hash differs from the authority, after
+  confirmation unless `-Yes` is passed, and never deletes copies that match the
+  authority. If removal is blocked, the script exits nonzero and reports the
+  unremoved path. Install/update paths run the same stale PATH cleanup
+  automatically.
+  `-Purge` performs a full uninstall: it prints a plan, stops only the
+  repogrammar processes that run the binaries it is about to delete, runs
+  `uninstall --target all` to remove agent MCP entries and receipts, optionally
+  runs `uninit` on `-Project` to remove that repository's `.repogrammar` state,
+  and then deletes every repogrammar binary, worker asset, and the managed data
+  directory, after confirmation unless `-Yes` is passed;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
@@ -345,6 +394,16 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary.
+  When a RepoGrammar-managed agent entry already exists but records an executable
+  that no longer matches the current authority (for example after the install
+  data directory changed), install re-points that entry at the authority by
+  removing and re-adding the native entry and rewriting the receipt, instead of
+  skipping it. A managed entry already pointing at the authority stays untouched.
+  Repeated installs stage the new binary, delete the previous
+  RepoGrammar-managed binary or managed command copy, and then activate the new
+  file; if deletion is blocked by a running coding agent or MCP process, install
+  fails with guidance to exit that agent before rerunning the install or build
+  command.
   If the selected command path is the same executable currently running
   `repogrammar install` (for example a local Cargo-installed
   `repogrammar.exe` on PATH), the installer may copy that executable into
@@ -353,10 +412,18 @@ noninteractive live writes, and a dependency-light text wizard:
   during the same run, including wrapper flows that set
   `REPOGRAMMAR_EXECUTABLE` to a managed data-directory binary while launching
   `repogrammar install` through the user-writable command path; unrelated
-  existing command paths are still refused;
+  existing command paths are still refused. The installer likewise skips
+  replacing the managed installed executable under the data directory when that
+  file is the currently running process, instead of attempting an overwrite the
+  operating system would reject;
 - the `@sioyooo/repogrammar` launcher supports `npx @sioyooo/repogrammar ...`
   after package publication by downloading and caching the matching prebuilt
   release artifact, then delegating all behavior to the Rust binary;
+- install reports an advisory environment self-check: when multiple
+  `repogrammar` executables are discoverable on PATH, or when the PATH-resolved
+  `repogrammar` is not the RepoGrammar-managed command, it prints the conflicting
+  paths and convergence guidance. The self-check is advisory only and never
+  blocks or fails the install;
 - install runs a read-only MCP self-test before native agent configuration, with
   a bounded timeout that kills and reaps a hanging self-test process;
 - install writes one RepoGrammar-owned receipt per configured target under the

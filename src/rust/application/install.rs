@@ -287,18 +287,34 @@ pub fn execute_install(
     require_live_writer_support(&selected_targets, request.scope)?;
 
     let mut targets_to_configure = Vec::new();
-    let mut skipped_targets = Vec::new();
+    let mut managed_targets = Vec::new();
     for target in selected_targets {
         let path = receipt_path(context, target, request.scope);
         if path.is_file() {
             validate_receipt_ownership(&path, target, request.scope)?;
-            skipped_targets.push(target);
+            managed_targets.push(target);
         } else {
             targets_to_configure.push(target);
         }
     }
     let command_record = install_cli_command(context)?;
-    if targets_to_configure.is_empty() {
+
+    // A managed agent whose recorded executable still matches the current
+    // authority is left untouched; one that drifted (for example a binary
+    // recorded under a previous data directory) is reconfigured to the
+    // authority instead of being silently skipped.
+    let mut skipped_targets = Vec::new();
+    let mut targets_to_reconfigure = Vec::new();
+    for target in managed_targets {
+        let path = receipt_path(context, target, request.scope);
+        if receipt_targets_authority(&path, &command_record.executable_path) {
+            skipped_targets.push(target);
+        } else {
+            targets_to_reconfigure.push(target);
+        }
+    }
+
+    if targets_to_configure.is_empty() && targets_to_reconfigure.is_empty() {
         if let Err(error) =
             self_tester.self_test(&command_record.executable_path, &context.current_dir)
         {
@@ -329,7 +345,35 @@ pub fn execute_install(
     let mut configured_targets = Vec::new();
     let mut configured_instructions: Vec<(Option<String>, InstructionAction)> = Vec::new();
     let mut receipt_paths = Vec::new();
-    for target in targets_to_configure {
+
+    // Drop the stale native entry for each drifted target before re-adding it at
+    // the authority, because `mcp add` may reject or duplicate an existing name.
+    // Note: if a later step fails and the run rolls back, a reconfigured target
+    // is left unconfigured rather than restored to its drifted pointer; rerunning
+    // install reconfigures it cleanly.
+    for target in &targets_to_reconfigure {
+        if let Err(error) =
+            configurator.remove_mcp_server(*target, request.scope, &context.current_dir)
+        {
+            let rollback = rollback_install_run(
+                request,
+                context,
+                configurator,
+                &configured_targets,
+                &configured_instructions,
+                &receipt_paths,
+                &command_record,
+            );
+            return Err(install_rollback_error(error, rollback));
+        }
+    }
+
+    let targets_to_add: Vec<AgentTarget> = targets_to_reconfigure
+        .iter()
+        .copied()
+        .chain(targets_to_configure.iter().copied())
+        .collect();
+    for target in targets_to_add {
         let action = match configurator.add_mcp_server(
             target,
             request.scope,
@@ -408,7 +452,12 @@ pub fn execute_install(
         installed_executable_path: Some(command_record.executable_path),
         command_path: Some(command_record.command_path),
         command_on_path: command_record.command_on_path,
-        message: "agent MCP integration installed after self-test".to_string(),
+        message: if targets_to_reconfigure.is_empty() {
+            "agent MCP integration installed after self-test".to_string()
+        } else {
+            "agent MCP integration installed or migrated to the managed authority after self-test"
+                .to_string()
+        },
     })
 }
 
@@ -902,6 +951,9 @@ fn install_cli_command_with_current_process(
         command_path_is_managed_copy(&command_path, &installed_executable);
     let command_path_is_current_executable =
         command_path_matches_current_executable(&command_path, source, current_process_executable);
+    let installed_is_current_executable = current_process_executable
+        .map(|current| same_path(&installed_executable, current))
+        .unwrap_or(false);
     let should_refresh_command_copy = command_path.exists()
         && !same_path(&command_path, &installed_executable)
         && command_path_was_managed_copy
@@ -915,7 +967,7 @@ fn install_cli_command_with_current_process(
             "repogrammar command path already exists and is not managed by RepoGrammar".to_string(),
         ));
     }
-    if !same_path(source, &installed_executable) {
+    if !same_path(source, &installed_executable) && !installed_is_current_executable {
         if executable_existed {
             record.previous_executable = Some(read_file_bytes(
                 &installed_executable,
@@ -926,9 +978,10 @@ fn install_cli_command_with_current_process(
             record.previous_command_copy =
                 Some(read_file_bytes(&command_path, "repogrammar command")?);
         }
-        fs::copy(source, &installed_executable).map_err(|error| {
-            RepoGrammarError::InvalidInput(format!("failed to install RepoGrammar CLI: {error}"))
-        })?;
+        replace_managed_file(source, &installed_executable, "installed RepoGrammar CLI")
+            .inspect_err(|_| {
+                let _ = rollback_command_install(&record);
+            })?;
         record.created_executable = !executable_existed;
     }
 
@@ -979,9 +1032,46 @@ fn command_path_is_managed_copy(command_path: &Path, installed_executable: &Path
 }
 
 fn refresh_command_copy(source: &Path, destination: &Path) -> Result<(), RepoGrammarError> {
-    fs::copy(source, destination).map(|_| ()).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!("failed to refresh repogrammar command: {error}"))
+    replace_managed_file(source, destination, "repogrammar command")
+}
+
+fn replace_managed_file(
+    source: &Path,
+    destination: &Path,
+    label: &str,
+) -> Result<(), RepoGrammarError> {
+    let temporary = managed_replace_temp_path(destination);
+    fs::copy(source, &temporary).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to stage new {label}: {error}"))
+    })?;
+    if destination.exists() {
+        if let Err(error) = fs::remove_file(destination) {
+            let _ = fs::remove_file(&temporary);
+            return Err(previous_managed_file_removal_error(label, error));
+        }
+    }
+    fs::rename(&temporary, destination).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        RepoGrammarError::InvalidInput(format!("failed to activate new {label}: {error}"))
     })
+}
+
+fn managed_replace_temp_path(destination: &Path) -> PathBuf {
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(CLI_BINARY_NAME);
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    destination.with_file_name(format!("{file_name}.tmp-{}-{suffix}", std::process::id()))
+}
+
+fn previous_managed_file_removal_error(label: &str, error: std::io::Error) -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(format!(
+        "failed to remove previous {label}: {error}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
+    ))
 }
 
 fn rollback_install_run(
@@ -1073,7 +1163,7 @@ fn create_command_link_or_copy(source: &Path, destination: &Path) -> Result<(), 
     }
 }
 
-fn binary_name() -> &'static str {
+pub(crate) fn binary_name() -> &'static str {
     #[cfg(windows)]
     {
         "repogrammar.exe"
@@ -1085,9 +1175,22 @@ fn binary_name() -> &'static str {
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
+    if let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) {
+        return left == right;
+    }
+    // Fallback when canonicalization is unavailable (for example a path
+    // component does not exist, or the platform rejects the verbatim form):
+    // compare best-effort normalized lexical paths. This stays conservative by
+    // reporting a match only when both normalized forms are identical.
+    normalized_lexical_path(left) == normalized_lexical_path(right)
+}
+
+pub(crate) fn normalized_lexical_path(path: &Path) -> String {
+    let unified = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        unified.to_ascii_lowercase()
+    } else {
+        unified
     }
 }
 
@@ -1245,6 +1348,25 @@ fn remove_receipt(receipt_path: &Path) -> Result<(), RepoGrammarError> {
     fs::remove_file(receipt_path).map_err(|error| {
         RepoGrammarError::InvalidInput(format!("failed to remove install receipt: {error}"))
     })
+}
+
+fn receipt_executable_path(receipt_path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(receipt_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    value
+        .get("executable_path")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+/// True when the receipt's recorded executable still points at the current
+/// managed authority. A receipt that cannot be read, or whose recorded path has
+/// drifted from the authority, reports false so the caller reconfigures it.
+fn receipt_targets_authority(receipt_path: &Path, authority_executable: &str) -> bool {
+    match receipt_executable_path(receipt_path) {
+        Some(recorded) => same_path(Path::new(&recorded), Path::new(authority_executable)),
+        None => false,
+    }
 }
 
 fn receipt_instruction_file_path(receipt_path: &Path) -> Option<String> {
@@ -1964,6 +2086,97 @@ mod tests {
     }
 
     #[test]
+    fn install_skips_replacing_installed_executable_that_is_current_process() {
+        let workspace = TempInstallWorkspace::new("installed-is-current-exe");
+        let installed = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(installed.parent().expect("install bin")).expect("install bin");
+        fs::write(&installed, "running binary\n").expect("installed executable");
+        // The configured source differs from the managed installed executable,
+        // but the running process IS that installed executable.
+        fs::write(&workspace.context.executable_path, "new source\n").expect("source");
+
+        let record =
+            install_cli_command_with_current_process(&workspace.context, Some(installed.as_path()))
+                .expect("install must not fail when installed executable is the running process");
+
+        assert!(!record.created_executable);
+        assert!(record.previous_executable.is_none());
+        assert_eq!(
+            fs::read_to_string(&installed).expect("installed executable untouched"),
+            "running binary\n",
+            "must not overwrite the installed executable that is the current process"
+        );
+    }
+
+    #[test]
+    fn same_path_falls_back_to_lexical_when_canonicalize_unavailable() {
+        // Non-existent absolute paths cannot be canonicalized; identical lexical
+        // forms must still match, and distinct ones must not.
+        let path = Path::new("/repogrammar/does/not/exist/bin/repogrammar");
+        assert!(same_path(path, path));
+        let other = Path::new("/repogrammar/does/not/exist/bin/other");
+        assert!(!same_path(path, other));
+    }
+
+    #[test]
+    fn drifted_managed_install_reconfigures_to_authority() {
+        let workspace = TempInstallWorkspace::new("drifted-managed-reconfigure");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("initial install");
+
+        // Simulate a previous-layout install: rewrite each receipt's recorded
+        // executable to a stale path that no longer matches the authority.
+        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+            let path = receipt_path(&workspace.context, target, InstallScope::Global);
+            let mut value: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).expect("receipt"))
+                    .expect("receipt json");
+            value["executable_path"] = serde_json::json!("/stale/previous/bin/repogrammar");
+            fs::write(&path, format!("{value}\n")).expect("rewrite receipt");
+        }
+        configurator.actions.borrow_mut().clear();
+        self_test.calls.borrow_mut().clear();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("reconcile install");
+
+        assert_eq!(
+            outcome.configured_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert!(outcome.skipped_targets.is_empty());
+        let actions = configurator.actions.borrow();
+        let removes = actions
+            .iter()
+            .filter(|action| action.args.get(1).map(String::as_str) == Some("remove"))
+            .count();
+        let adds = actions
+            .iter()
+            .filter(|action| action.args.get(1).map(String::as_str) == Some("add"))
+            .count();
+        assert_eq!(removes, 2, "{actions:?}");
+        assert_eq!(adds, 2, "{actions:?}");
+        drop(actions);
+        assert_eq!(self_test.calls.borrow().len(), 1);
+        // Receipts now record the authority again, so a follow-up install skips.
+        let authority = workspace.data_dir.join("bin").join(binary_name());
+        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+            let path = receipt_path(&workspace.context, target, InstallScope::Global);
+            let recorded = receipt_executable_path(&path).expect("recorded executable");
+            assert!(same_path(Path::new(&recorded), &authority), "{recorded}");
+        }
+    }
+
+    #[test]
     fn failed_refresh_self_test_restores_existing_managed_binary_and_command_copy() {
         let workspace = TempInstallWorkspace::new("refresh-self-test-rollback");
         let request = InstallRequest {
@@ -2049,6 +2262,26 @@ mod tests {
             fs::read_to_string(workspace.command_path()).expect("command copy restored"),
             "old managed stub\n"
         );
+    }
+
+    #[test]
+    fn managed_file_replacement_refuses_when_previous_file_cannot_be_removed() {
+        let workspace = TempInstallWorkspace::new("managed-file-remove-refusal");
+        let destination = workspace.data_dir.join("bin").join(binary_name());
+        fs::create_dir_all(&destination).expect("directory occupying managed path");
+
+        let error = replace_managed_file(
+            Path::new(&workspace.context.executable_path),
+            &destination,
+            "installed RepoGrammar CLI",
+        )
+        .expect_err("managed replacement must remove the previous path first");
+
+        let message = error.to_string();
+        assert!(message.contains("failed to remove previous installed RepoGrammar CLI"));
+        assert!(message.contains("exit any running coding agent sessions"));
+        assert!(message.contains("rerun the install or build command"));
+        assert!(destination.is_dir());
     }
 
     #[test]

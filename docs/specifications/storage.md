@@ -423,6 +423,11 @@ RepoGrammar uses repo-local diagnostic logs:
 Logs must not contain source snippets, raw prompts, secrets, environment
 variables, raw error dumps, or unredacted absolute paths by default.
 Repo-local logs may include repo-relative paths; telemetry must not upload them.
+`repogrammar logs` reads these files through a bounded tail interface, defaults
+to `daemon.log`, redacts by default, and returns clean unavailable reports for
+missing, malformed, symlinked, or unreadable log files. `--since` is accepted
+for contract stability but may return the bounded tail with an unsupported
+filtering message until duration filtering is implemented.
 
 Supported log levels are `error`, `warn`, `info`, `debug`, and `trace`.
 `debug` and `trace` must not be enabled by default. Logs must rotate with a
@@ -452,16 +457,21 @@ yet. The lock must contain:
 ```
 
 `host` may be `null` when no local host identifier is available. The current
-`index` and `sync` implementation creates `index.lock` with atomic
-create-new semantics before discovery, holds it through validation and
-active-generation pointer update, and removes only the lock content it wrote.
-If lock metadata creation fails after the file is created, RepoGrammar must
-remove the partial `index.lock` before returning the write error. Stale-lock
-replacement also requires the lock bytes to match the inspected stale bytes
-before deletion, so a concurrently replaced lock is rechecked instead of
-removed. A live same-host lock is refused. A lock whose same-host process is
-confirmed dead may be replaced during acquisition; malformed, cross-host,
-cross-OS, or otherwise unknown locks are refused and surfaced by `doctor`.
+`index`, `sync`, and `resync` implementation creates `index.lock` before
+discovery, preferably by writing the complete metadata to a temporary file and
+publishing it atomically into place. On filesystems where that publish step is
+unavailable, it falls back to create-new semantics and still removes a partial
+`index.lock` if metadata writing fails. The lock is held through validation and
+active-generation pointer update, and successful runs remove only the lock
+content they wrote. Stale-lock replacement also requires the lock bytes to
+match the inspected stale bytes before deletion, so a concurrently replaced
+lock is rechecked instead of removed. A live same-host lock is refused. A lock
+whose same-host process is confirmed dead may be replaced during acquisition;
+same-host process checks must use native liveness probes on Windows as well as
+Unix so a dead nonzero PID can become a confirmed stale lock. PID values that
+cannot represent a positive process id on the current OS must not be passed to
+the native probe as a live owner. Malformed, cross-host, cross-OS, or otherwise
+unknown locks are refused and surfaced by `doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 
@@ -488,11 +498,13 @@ than failing noisily:
 ```text
 FALLBACK_TO_CODE_SEARCH
 reason: repository is not initialized
-guidance: run repogrammar init
+guidance: run repogrammar init --yes
 ```
 
-If the index is stale, RepoGrammar must either return a stale warning or refuse
-family claims whose evidence changed.
+If repository-local state exists but the active generation is missing or stale,
+RepoGrammar should guide users and agents to run `repogrammar resync`. If the
+index is stale, RepoGrammar must either return a stale warning or refuse family
+claims whose evidence changed.
 
 The current implementation performs only an internal semantic-fact
 claim-input readiness check over the active claim-input snapshot against current
@@ -501,14 +513,19 @@ fact with typed `StaleEvidence`.
 Repository-revision, worktree-wide, and persisted family freshness remain
 deferred.
 
-Auto-sync is optional. The baseline remains `init`, `index`, `sync`, freshness
-warnings in `status`, and freshness checks before MCP claims. When enabled with
-`repogrammar autosync start`, RepoGrammar stores `.repogrammar/autosync.json`,
-uses `.repogrammar/locks/daemon.lock` for the running worker, and writes
-diagnostics to `.repogrammar/logs/daemon.log`. The current worker detects
-changed discovery fingerprints and calls the existing full `sync` path after a
-debounce interval. Incremental changed-unit reparsing, affected-family stale
-marking, and lazy query-time recomputation remain future work.
+Auto-sync is optional. The baseline remains explicit repo-local bootstrap,
+freshness warnings in `status`, and freshness checks before MCP claims. For
+first setup, users and agents may run `repogrammar init --yes --resync --autosync`.
+When enabled with `repogrammar autosync start`, RepoGrammar stores
+`.repogrammar/autosync.json`, uses `.repogrammar/locks/daemon.lock` for the
+running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`. The
+current worker detects
+changed lightweight supported-file metadata fingerprints and calls the existing
+full `sync` path after a debounce interval. The detector is only a low-cost
+change trigger; the full sync remains responsible for content hashes,
+Git-ignore enforcement, parsing, semantic facts, and atomic generation
+activation. Incremental changed-unit reparsing, affected-family stale marking,
+and lazy query-time recomputation remain future work.
 
 ## Migration Strategy
 

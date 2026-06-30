@@ -169,12 +169,21 @@ v0.1 TS/JS and Python release fixture smoke gates. A v0.2 internal Rust
 self-dogfood slice now discovers `.rs`/`Cargo.toml`, uses Tree-sitter Rust for
 structural code units and typed UNKNOWNs, and can form conservative
 RepoGrammar-owned implementation families without running Cargo, rustc, build
-scripts, or macros. The Rust ports layer now also
-has a future Python semantic-provider contract for candidate-scoped requests,
-provider provenance assumptions, cache-key dimensions, and recoverable
-provider-unavailable `UNKNOWN`s, plus an internal planner for future Pyrefly
-framework-identity request scopes over active-generation snapshots, but no
-provider adapter execution is wired.
+scripts, or macros. Root `Cargo.toml` build-variant ambiguity can block
+repository-wide Rust self-dogfood families; nested fixture/package manifests
+remain scoped and must not globally block unrelated root Rust family support.
+The Rust ports layer now also has future Python, Rust, and TS/JS
+semantic-provider contracts for candidate-scoped requests, provider provenance
+assumptions, cache-key dimensions, and recoverable provider-unavailable
+`UNKNOWN`s, plus an internal planner for future Pyrefly framework-identity
+request scopes over active-generation snapshots, but no provider adapter
+execution is wired except the default-safe Rust Cargo metadata project-model
+stage. That adapter can parse `cargo metadata --format-version=1 --no-deps`
+output into owned `PROJECT_CONFIG` facts during `index`/`sync`/`resync` when
+same-generation `Cargo.toml` code units exist; it does not execute build
+scripts or proc macros and does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
+semantic-provider roadmap is tracked in
+`docs/plans/rust-tsjs-semantic-analysis-plan.md`.
 Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
 adapter execution, bounded framework-role propagation, or richer
@@ -296,6 +305,13 @@ evidence contracts remain validated together.
   target-centered call recovery in scoped phases.
 - Validate TypeScript worker tooling and package manager before adding
   TypeScript compiler API dependencies or semantic fact emission.
+- Implement the Rust provider-backed Cargo project model and rust-analyzer or
+  rustc-backed resolved-fact worker described in
+  `docs/plans/rust-tsjs-semantic-analysis-plan.md` before widening public Rust
+  family claims beyond RepoGrammar self-dogfood.
+- Implement the TS/JS provider-backed project model and Program/TypeChecker
+  worker described in `docs/plans/rust-tsjs-semantic-analysis-plan.md` before
+  widening public TS/JS family claims.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
   syntax-only extractor where the extra precision is justified.
 - Extend the TypeScript semantic worker version policy, generation matching, and

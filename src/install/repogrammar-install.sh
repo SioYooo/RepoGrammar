@@ -78,6 +78,10 @@ Environment:
   REPOGRAMMAR_WORKER_ROOT    Directory for bundled worker assets
   REPOGRAMMAR_VERSION        Release tag, or latest
   REPOGRAMMAR_USE_SOURCE_BUILD=1  Build from source instead of downloading
+
+Install/update actions also remove stale repogrammar copies found on PATH when
+their checksum differs from the managed installed executable. Use --yes to skip
+the cleanup confirmation.
 USAGE
 }
 
@@ -280,7 +284,7 @@ replace_file_from_temp() {
     fi
     if ! mv "$destination" "$backup"; then
       rm -f "$source"
-      die "failed to replace ${label} at ${destination}; close any running repogrammar or coding-agent process that may be using it and retry"
+      die "failed to remove previous ${label} at ${destination}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
     fi
   fi
   if ! mv "$source" "$destination"; then
@@ -291,7 +295,86 @@ replace_file_from_temp() {
     die "failed to install ${label} at ${destination}"
   fi
   if [[ -n "$backup" ]]; then
-    rm -f "$backup" || true
+    rm -f "$backup" || die "failed to delete previous ${label} at ${backup}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
+  fi
+}
+
+canonical_file_path() {
+  local path="$1"
+  local dir
+  local base
+  dir="$(cd -- "$(dirname -- "$path")" 2>/dev/null && pwd -P)" || {
+    printf "%s" "$path"
+    return
+  }
+  base="$(basename -- "$path")"
+  printf "%s/%s" "$dir" "$base"
+}
+
+prune_stale_path_copies() {
+  [[ -f "$INSTALLED_EXECUTABLE" ]] || return 0
+
+  local authority_hash
+  authority_hash="$(sha256_file "$INSTALLED_EXECUTABLE")"
+
+  local stale=()
+  local seen="
+"
+  local path_entries=()
+  local old_ifs="$IFS"
+  local dir
+  local candidate
+  local resolved
+  local copy_hash
+  IFS=':' read -r -a path_entries <<< "${PATH:-}"
+  IFS="$old_ifs"
+  for dir in "${path_entries[@]}"; do
+    [[ -n "$dir" ]] || {
+      continue
+    }
+    candidate="${dir%/}/repogrammar"
+    if [[ -f "$candidate" ]]; then
+      resolved="$(canonical_file_path "$candidate")"
+      case "$seen" in
+        *"
+${resolved}
+"*) ;;
+        *)
+          seen="${seen}${resolved}
+"
+          copy_hash="$(sha256_file "$candidate")"
+          if [[ "$copy_hash" != "$authority_hash" ]]; then
+            stale+=("$resolved")
+          fi
+          ;;
+      esac
+    fi
+  done
+
+  [[ "${#stale[@]}" -gt 0 ]] || return 0
+
+  printf "\nStale PATH copies (different build than the managed authority): %s\n" "${#stale[@]}"
+  local entry
+  for entry in "${stale[@]}"; do
+    printf "  %s\n" "$entry"
+  done
+
+  if ! prompt_default_no "Remove the stale PATH copies listed above?"; then
+    printf "Cancelled. No stale PATH copies removed.\n"
+    return 0
+  fi
+
+  local failed_count=0
+  for entry in "${stale[@]}"; do
+    if rm -f -- "$entry"; then
+      printf "Removed %s\n" "$entry"
+    else
+      printf "Failed to remove %s; exit any process using it, then rerun the installer.\n" "$entry" >&2
+      failed_count=$((failed_count + 1))
+    fi
+  done
+  if [[ "$failed_count" -gt 0 ]]; then
+    die "failed to remove ${failed_count} stale PATH copy/copies; see messages above"
   fi
 }
 
@@ -306,7 +389,7 @@ install_managed_cli_binary() {
 
   mkdir -p "$COMMAND_DIR"
   if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
-    rm -f "$COMMAND_PATH" || die "failed to replace repogrammar command at ${COMMAND_PATH}; close any running repogrammar or coding-agent process that may be using it and retry"
+    rm -f "$COMMAND_PATH" || die "failed to remove previous repogrammar command at ${COMMAND_PATH}; exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command"
   fi
   if ! ln -s "$INSTALLED_EXECUTABLE" "$COMMAND_PATH" 2>/dev/null; then
     local tmp_command="${COMMAND_PATH}.tmp.$$"
@@ -488,6 +571,7 @@ run_agent_install() {
 install_and_configure() {
   install_cli_binary
   run_agent_install
+  prune_stale_path_copies
   print_command_status
 }
 
@@ -613,13 +697,14 @@ run_menu() {
         USE_SOURCE_BUILD=1
       fi
       install_cli_binary
+      prune_stale_path_copies
       print_command_status
       ;;
     3) run_agent_install ;;
     4) uninstall_connected_agents ;;
     5) uninstall_command ;;
     6) uninstall_connected_agents; uninstall_command ;;
-    7) USE_SOURCE_BUILD=0; install_cli_binary; print_command_status ;;
+    7) USE_SOURCE_BUILD=0; install_cli_binary; prune_stale_path_copies; print_command_status ;;
     q|Q) printf "Cancelled. No changes made.\n" ;;
     *) printf "Invalid selection.\n" >&2; exit 2 ;;
   esac
@@ -629,7 +714,7 @@ main() {
   parse_args "$@"
   case "$ACTION" in
     print_target) detect_target; printf "\n" ;;
-    install_cli_only) install_cli_binary; print_command_status ;;
+    install_cli_only) install_cli_binary; prune_stale_path_copies; print_command_status ;;
     install_and_configure) install_and_configure ;;
     configure_agents) run_agent_install ;;
     uninstall_agents) uninstall_connected_agents ;;

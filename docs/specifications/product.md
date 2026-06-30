@@ -86,13 +86,20 @@ slices should add selective Pyrefly provider queries for plausible family
 candidates, Pyright cross-checks only for claim-upgrading facts, broader
 bounded role propagation, cross-function target-centered call recovery, richer
 EC-MVFI-lite family induction, and typed `UNKNOWN` governance.
-The current Rust code now has only the owned future Python provider port
-contract for request scope, provenance assumptions, cache keys, and recoverable
-provider-unavailable `UNKNOWN`s, plus an application-layer planner that can
-construct candidate-scoped Pyrefly framework-identity request envelopes for
-future adapters from in-memory facts or validated active-generation snapshots.
-It does not execute provider tools, store provider facts, or add production
-provider-backed Python semantics.
+The current Rust code now has owned future Python, Rust, and TS/JS provider
+port contracts for request scope, provenance assumptions, cache keys, and
+recoverable provider-unavailable `UNKNOWN`s, plus an application-layer planner
+that can construct candidate-scoped Pyrefly framework-identity request
+envelopes for future adapters from in-memory facts or validated
+active-generation snapshots. Apart from the Rust Cargo metadata project-model
+stage described below, it does not execute provider tools, store provider facts,
+or add production provider-backed Python, Rust, or TS/JS family support.
+The default product indexing path now wires the Rust Cargo metadata adapter as a
+safe project-model refresh stage when same-generation `Cargo.toml` code units
+exist. It can produce owned `PROJECT_CONFIG` facts and provider `UNKNOWN`s
+without executing build scripts or procedural macros, but it does not prove
+symbol/type/call semantics or family support. The Rust/TSJS semantic analysis
+roadmap is tracked in `docs/plans/rust-tsjs-semantic-analysis-plan.md`.
 The canonical algorithm contract is
 `docs/specifications/python-analysis.md`.
 
@@ -131,8 +138,9 @@ product tests when support is sufficient and no Rust-specific `UNKNOWN` blocks
 the claim. It must not be described as general Rust semantic analysis: the
 indexer does not run Cargo, rustc, build scripts, procedural macros, or
 whole-program trait/call resolution. Cargo build scripts and target-specific
-manifest sections are typed build-variant `UNKNOWN`s that block affected Rust
-self-dogfood families until resolved.
+root manifest sections are typed build-variant `UNKNOWN`s that block affected
+Rust self-dogfood families until resolved. Nested fixture/package manifests
+must not globally block unrelated root Rust family support.
 
 ## Public-preview support matrix
 
@@ -151,6 +159,8 @@ self-dogfood families until resolved.
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
+| Rust provider-backed project model | Preview | Default indexing can refresh Cargo metadata `PROJECT_CONFIG` facts for discovered manifests without build-script/proc-macro execution; rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
+| TS/JS provider-backed semantics | Planned preview | Provider ports exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 
@@ -219,11 +229,14 @@ metadata-first unless source spans are explicitly requested.
 
 `repogrammar stats --json` reports repo-shape diagnostics for local pattern
 density, family support coverage, abstention rate, and thin-wrapper/token-saving
-risk. These diagnostics explain when RepoGrammar can reduce context acquisition
-cost and when third-party-heavy or thin-wrapper repositories are unlikely to
-produce large savings. They are not measured token savings or causal claims.
-Measured token savings are reported only when a local paired baseline/treatment
-token experiment has comparable token counts and a measurement source.
+risk, plus token-saving readiness and concrete blocking reasons. These
+diagnostics explain when RepoGrammar can reduce context acquisition cost and
+when third-party-heavy or thin-wrapper repositories are unlikely to produce
+large savings. They are not measured token savings or causal claims. Measured
+token savings are reported only when a local paired baseline/treatment token
+experiment has comparable token counts and a measurement source; otherwise
+stats must mark the measurement kind as `ESTIMATED` and include a not-measured
+caveat.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
@@ -234,8 +247,11 @@ structural observations. The canonical taxonomy lives in
 ## Installation and telemetry boundaries
 
 Machine-level `install` and `uninstall` are separate from repository-level
-`init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
-dry-run friendly.
+`init`, `resync`, `autosync`, and `uninit`. Installer behavior must be
+reversible, scoped, and dry-run friendly. Repository bootstrap is explicit:
+`repogrammar init --yes --resync --autosync` creates repo-local analysis state,
+rebuilds the active generation, and starts auto-sync only when the user or
+agent has permission to do so.
 
 End-user installation must be binary-first. Public-preview users should be able
 to install and run the RepoGrammar CLI from a prebuilt release artifact without

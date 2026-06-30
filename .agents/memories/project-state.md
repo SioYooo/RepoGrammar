@@ -36,22 +36,25 @@
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
   compact/evidence/deep modes shared by CLI and MCP; compact is the default,
   evidence/deep use greedy metadata coverage selection, all matched modes
-  include read plans, and source snippets remain disabled unless callers
-  explicitly request bounded source spans. Supported Python members can
+  include read plans with hash-checked line ranges when source hashes are
+  fresh, and source snippets remain disabled unless callers explicitly request
+  bounded source spans. Supported Python members can
   preserve non-blocking subclaim
   `UNKNOWN`s, such as unresolved FastAPI dependency targets, as metadata-only
   family detail entries keyed by the concrete family id and subclaim without
   turning those subclaims into route-membership support. Read plans use
-  repo-relative paths, strict content hashes, byte ranges, purpose labels, and
-  estimated token costs. CLI `--include-source-spans` and MCP
+  repo-relative paths, strict content hashes, byte ranges, line ranges when
+  fresh, purpose labels, and estimated token costs. CLI
+  `--include-source-spans` and MCP
   `include_source_spans: true` render only selected hash-checked spans with
   line numbers and omit stale or unsupported spans with Read/Grep fallback
   guidance. Target source remains required before edits outside rendered
   ranges. `repogrammar stats --json` now reports
   repo-shape diagnostics for local pattern density, family support coverage,
   abstention rate, external dependency signal, and thin-wrapper/token-saving
-  risk, and reports measured token savings only when local paired
-  baseline/treatment experiment records are comparable. `index` and `sync` emit
+  risk, readiness/blocking reasons, and estimated potential read displacement,
+  and reports measured token savings only when local paired baseline/treatment
+  experiment records are comparable. `index`, `sync`, and `resync` emit
   typed stage progress to stderr while running, with exact counts when known
   and NDJSON progress available through `--json --progress always`.
   Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
@@ -60,8 +63,16 @@
   suite now includes family gates, parser adapters, installer actions, product
   tests, low-support abstention, macro/cfg blockers, trait-dispatch blockers,
   Cargo build-script non-execution/blocking, and bounded module-resolution/Cargo
-  target-dependency inventory.
-  `repogrammar autosync` now provides optional repo-local automatic sync:
+  target-dependency inventory. Root `Cargo.toml` build-variant UNKNOWN can block
+  repository-wide Rust self-dogfood family emission, but nested fixture/package
+  manifests must not globally block unrelated root Rust family support.
+  `repogrammar init --yes --resync --autosync` is now the explicit one-command
+  repository bootstrap: plain `init --yes` remains confirmation-only and does
+  not index, while the combined form initializes repo-local state, runs the
+  resync indexing path, then starts auto-sync only after a readable active
+  generation exists. `repogrammar logs` now reads bounded redacted tails from
+  repo-local component logs and reports clean unavailable states for missing or
+  unreadable logs. `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full
   `sync` path, while `status`, `stop`, `disable`, and foreground `run` manage
@@ -141,16 +152,24 @@
   `Session.scalars`, and async equivalents plus bounded propagation from
   `__init__`-assigned `self.session`/`self.db` attributes, with same-method
   receiver reassignment blocking
-  canonicalization. A Rust `ports::python_provider`
-  contract now exists for future candidate-scoped provider requests,
-  provenance assumptions, cache-key dimensions, and recoverable
-  provider-unavailable `UNKNOWN`s. The application layer can plan validated
-  Pyrefly framework-identity request scopes for plausible Python candidate
-  groups and skip parser-origin blocking `UNKNOWN`s for the planned claim, but
-  Pyrefly/Pyright/RightTyper execution, provider fact storage, and
-  provider-backed canonical evidence remain deferred. The planner can run over
+  canonicalization. Rust `ports::python_provider`, `ports::rust_provider`, and
+  `ports::tsjs_provider` contracts now exist for future candidate-scoped
+  provider requests, provenance assumptions, cache-key dimensions, and
+  recoverable provider-unavailable `UNKNOWN`s. The application layer can plan
+  validated Pyrefly framework-identity request scopes for plausible Python
+  candidate groups and skip parser-origin blocking `UNKNOWN`s for the planned
+  claim, but Pyrefly/Pyright/RightTyper execution, provider fact storage, and
+  provider-backed canonical evidence remain deferred. Except for the default
+  safe Rust Cargo metadata project-model stage, Rust/TSJS provider execution is
+  also deferred and tracked in
+  `docs/plans/rust-tsjs-semantic-analysis-plan.md`. The planner can run over
   active-generation snapshots without mutating semantic facts, family rows, or
   CLI/MCP output.
+  The Rust Cargo metadata provider adapter can parse
+  `cargo metadata --format-version=1 --no-deps` output into owned
+  `PROJECT_CONFIG` facts and recoverable provider `UNKNOWN`s during
+  `index`/`sync`/`resync` when same-generation `Cargo.toml` code units exist;
+  rust-analyzer/rustc/rustdoc JSON semantic providers remain deferred.
   The `dynamic-unknown` release fixture now exercises dynamic Pydantic model
   factories, dynamic import, `sys.path` mutation, dynamic call target,
   dynamic/unresolved decorator, and monkey-patch boundaries through product indexing/query paths;
@@ -181,7 +200,7 @@
   Python gitignore behavior in root and parent-worktree layouts, and explicit
   strict gitignore failure when Git ignore checks are unavailable. CLI/MCP
   query inputs share target and token-budget bounds.
-- Last updated: 2026-06-27
+- Last updated: 2026-06-29
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.
@@ -336,16 +355,20 @@ current builder emits `canonical` and `support`, plus one narrow Python
 framework-anchor support targets. Requested exception coverage and broader
 variation coverage are returned in `missing_claims` until later builders link
 evidence to those roles.
-`index` and `sync` acquire `.repogrammar/locks/index.lock` before discovery and
-hold it through validation and activation. Partial lock metadata write failures
-must remove the partial lock file. `unlock --force --yes` removes only confirmed
+`index`, `sync`, and `resync` acquire `.repogrammar/locks/index.lock` before
+discovery and hold it through validation and activation. Lock metadata is
+published as a complete record when the filesystem supports atomic publication,
+partial metadata write failures must remove the partial lock file, and
+same-host stale detection uses native process liveness on Windows and Unix so a
+dead nonzero PID can be replaced safely while impossible current-OS PID values
+are rejected before probing. `unlock --force --yes` removes only confirmed
 stale `index.lock`; active, unknown, invalid, daemon, and SQLite locks remain
 in place. Status and doctor JSON use explicit manifest/storage schema-version
 fields and do not expose ambiguous `schema_version` fields.
 The storage port and SQLite adapter can persist already-validated semantic facts
 and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default
-`index` and `sync` still report `semantic_worker: deferred`; when
+`index`, `sync`, and `resync` still report `semantic_worker: deferred`; when
 `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable, optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` supplies its argv vector, and accepted
 worker facts may be recorded before generation validation and activation.
@@ -420,6 +443,9 @@ Family query output, MCP `repogrammar_context` family responses, and
 context responses update only a repo-local aggregate under
 `.repogrammar/telemetry/local-metrics/`; this is not measured token savings,
 not causal evidence, and not part of anonymous telemetry upload payloads.
+Stats readiness and blocking reasons explain whether estimated displacement is
+plausible, but measured savings remain absent unless a comparable paired
+experiment exists.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright

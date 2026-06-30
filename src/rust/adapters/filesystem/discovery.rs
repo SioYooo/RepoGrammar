@@ -51,6 +51,18 @@ impl FileDiscovery for FilesystemFileDiscovery {
     }
 }
 
+pub fn supported_language_for_path(path: &str) -> Option<DiscoveredLanguage> {
+    language_for_path(path)
+}
+
+pub fn is_repogrammar_state_directory_name(name: Option<&str>) -> bool {
+    is_repogrammar_state_dir(name)
+}
+
+pub fn is_default_excluded_directory_name(name: Option<&str>) -> bool {
+    is_default_excluded_dir(name)
+}
+
 fn discover_files(
     request: FileDiscoveryRequest,
 ) -> Result<FileDiscoveryReport, FileDiscoveryError> {

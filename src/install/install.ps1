@@ -1,8 +1,8 @@
 param(
     [string]$Version = $(if ($env:REPOGRAMMAR_VERSION) { $env:REPOGRAMMAR_VERSION } else { "latest" }),
     [string]$Repo = $(if ($env:REPOGRAMMAR_REPO) { $env:REPOGRAMMAR_REPO } else { "SioYooo/RepoGrammar" }),
-    [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\RepoGrammar\bin" }),
-    [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "RepoGrammar" }),
+    [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:USERPROFILE ".local\bin" }),
+    [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } elseif ($env:XDG_DATA_HOME) { Join-Path $env:XDG_DATA_HOME "repogrammar" } else { Join-Path $env:USERPROFILE ".local\share\repogrammar" }),
     [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path $InstallDir "workers" }),
     [string]$SourceBinary = $(if ($env:REPOGRAMMAR_SOURCE_BINARY) { $env:REPOGRAMMAR_SOURCE_BINARY } else { "" }),
     [string]$Target = "all",
@@ -11,6 +11,10 @@ param(
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
     [switch]$UninstallCommand,
+    [switch]$Verify,
+    [switch]$Prune,
+    [switch]$Purge,
+    [string]$Project = "",
     [switch]$Yes,
     [switch]$Help
 )
@@ -33,6 +37,20 @@ Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -Target "codex,claude-code" -Scope global
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Verify
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Prune -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Purge -Project . -Yes
+
+-Verify reports, by SHA256, whether the repogrammar copies on PATH, the
+configured agent MCP servers, and any running serve processes match the managed
+authority binary. -Prune additionally removes PATH copies whose hash differs
+from the authority (add -Yes to skip the confirmation). Install/update actions
+run the same stale PATH cleanup after refreshing the managed command.
+-Purge fully removes RepoGrammar: it prints a plan, then stops repogrammar
+processes, runs uninstall (agent MCP entries and receipts), optionally runs
+uninit on -Project (the .repogrammar state), and deletes every repogrammar
+binary, worker asset, and the managed data directory. Add -Yes to skip the
+confirmation prompt.
 
 By default, the script downloads a prebuilt Windows x64 release artifact,
 verifies its checksum, installs repogrammar.exe into a user-writable command
@@ -188,7 +206,7 @@ function Install-TempFileReplacing([string]$TempPath, [string]$Destination, [str
             Move-Item -LiteralPath $Destination -Destination $backup -ErrorAction Stop
         } catch {
             Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
-            throw "failed to replace $Label at ${Destination}: $($_.Exception.Message). Close any running repogrammar or coding-agent process that may be using it and retry."
+            throw "failed to remove previous $Label at ${Destination}: $($_.Exception.Message). Exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command."
         }
     }
 
@@ -203,7 +221,11 @@ function Install-TempFileReplacing([string]$TempPath, [string]$Destination, [str
     }
 
     if ($backup -and (Test-Path -LiteralPath $backup)) {
-        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        try {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction Stop
+        } catch {
+            throw "failed to delete previous $Label at ${backup}: $($_.Exception.Message). Exit any running coding agent sessions that use RepoGrammar MCP, then rerun the install or build command."
+        }
     }
 }
 
@@ -381,19 +403,392 @@ function Remove-Command {
     Write-Output "Removed $command"
 }
 
+function Get-AuthorityBinary {
+    return Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
+}
+
+function Get-Sha256OrNull([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    }
+    return $null
+}
+
+function Get-RepogrammarPathCopies {
+    $copies = @()
+    $seen = @{}
+    foreach ($dir in ($env:PATH -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir "repogrammar.exe"
+        if (!(Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        try {
+            $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        } catch {
+            $resolved = $candidate
+        }
+        $key = $resolved.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+        $seen[$key] = $true
+        $copies += $resolved
+    }
+    return $copies
+}
+
+function Get-CodexMcpCommand {
+    $cfg = Join-Path $env:USERPROFILE ".codex\config.toml"
+    if (!(Test-Path -LiteralPath $cfg)) {
+        return $null
+    }
+    $inSection = $false
+    foreach ($line in (Get-Content -LiteralPath $cfg)) {
+        if ($line -match '^\s*\[mcp_servers\.repogrammar\]\s*$') {
+            $inSection = $true
+            continue
+        }
+        if ($inSection -and $line -match '^\s*\[') {
+            break
+        }
+        if ($inSection -and $line -match "^\s*command\s*=\s*['""](.+?)['""]\s*$") {
+            return $matches[1]
+        }
+    }
+    return $null
+}
+
+function Get-ClaudeMcpCommand {
+    $cfg = Join-Path $env:USERPROFILE ".claude.json"
+    if (!(Test-Path -LiteralPath $cfg)) {
+        return $null
+    }
+    try {
+        $json = Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+    if (($json.PSObject.Properties.Name -contains 'mcpServers') -and $json.mcpServers -and
+        ($json.mcpServers.PSObject.Properties.Name -contains 'repogrammar')) {
+        return $json.mcpServers.repogrammar.command
+    }
+    return $null
+}
+
+function Get-RepogrammarProcesses {
+    $procs = @()
+    try {
+        $list = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
+    } catch {
+        return $procs
+    }
+    foreach ($entry in $list) {
+        $procs += [PSCustomObject]@{
+            ProcessId = $entry.ProcessId
+            Path = $entry.ExecutablePath
+            CommandLine = $entry.CommandLine
+        }
+    }
+    return $procs
+}
+
+function Get-ServeProcessExecutables {
+    $procs = @()
+    foreach ($entry in (Get-RepogrammarProcesses)) {
+        if ($entry.CommandLine -and $entry.CommandLine -match '\bserve\b') {
+            $procs += [PSCustomObject]@{ ProcessId = $entry.ProcessId; Path = $entry.Path }
+        }
+    }
+    return $procs
+}
+
+function Get-RepogrammarProcessesUsingPath([string]$Path) {
+    $matches = @()
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $matches
+    }
+    try {
+        $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        $resolvedPath = $Path
+    }
+    foreach ($entry in (Get-RepogrammarProcesses)) {
+        if ([string]::IsNullOrWhiteSpace($entry.Path)) {
+            continue
+        }
+        try {
+            $entryPath = [System.IO.Path]::GetFullPath($entry.Path)
+        } catch {
+            $entryPath = $entry.Path
+        }
+        if ($entryPath.ToLowerInvariant() -eq $resolvedPath.ToLowerInvariant()) {
+            $matches += $entry
+        }
+    }
+    return $matches
+}
+
+function Write-StaleRemovalFailure([string]$Entry, [string]$Message) {
+    Write-Output "Failed to remove ${Entry}: $Message"
+    $usingProcesses = Get-RepogrammarProcessesUsingPath $Entry
+    if ($usingProcesses.Count -gt 0) {
+        $pids = ($usingProcesses | ForEach-Object { $_.ProcessId }) -join ", "
+        Write-Output "  Running repogrammar process(es) using it: PID $pids"
+    }
+    Write-Output "  Exit any process using it, then retry. If this copy came from cargo, run: cargo uninstall repogrammar"
+}
+
+function Format-HashTag([string]$Hash, [string]$AuthorityHash) {
+    if ([string]::IsNullOrWhiteSpace($Hash)) {
+        return "[missing]"
+    }
+    $short = $Hash.Substring(0, [Math]::Min(12, $Hash.Length))
+    if ($AuthorityHash -and ($Hash -eq $AuthorityHash)) {
+        return "[$short matches authority]"
+    }
+    return "[$short DIFFERENT build]"
+}
+
+function Invoke-VerifyInstall([bool]$DoPrune) {
+    $authority = Get-AuthorityBinary
+    $authorityHash = Get-Sha256OrNull $authority
+    Write-Output "RepoGrammar install verification"
+    Write-Output ""
+    if ($null -eq $authorityHash) {
+        Write-Output "Authority (managed binary): $authority [NOT INSTALLED]"
+        Write-Output "Install first, for example: install.ps1 -InstallAndConfigure -FromSource -Yes"
+        return
+    }
+    Write-Output "Authority (managed binary): $authority $(Format-HashTag $authorityHash $authorityHash)"
+    Write-Output ""
+
+    Write-Output "repogrammar on PATH:"
+    $copies = Get-RepogrammarPathCopies
+    $stale = @()
+    if ($copies.Count -eq 0) {
+        Write-Output "  (none)"
+    }
+    foreach ($copy in $copies) {
+        $copyHash = Get-Sha256OrNull $copy
+        Write-Output "  $copy $(Format-HashTag $copyHash $authorityHash)"
+        if ($copyHash -ne $authorityHash) {
+            $stale += $copy
+        }
+    }
+    Write-Output ""
+
+    Write-Output "Agent MCP servers point at:"
+    $codexCmd = Get-CodexMcpCommand
+    $claudeCmd = Get-ClaudeMcpCommand
+    if ($codexCmd) {
+        Write-Output "  codex  -> $codexCmd $(Format-HashTag (Get-Sha256OrNull $codexCmd) $authorityHash)"
+    } else {
+        Write-Output "  codex  -> (no RepoGrammar MCP entry)"
+    }
+    if ($claudeCmd) {
+        Write-Output "  claude -> $claudeCmd $(Format-HashTag (Get-Sha256OrNull $claudeCmd) $authorityHash)"
+    } else {
+        Write-Output "  claude -> (no RepoGrammar MCP entry)"
+    }
+    Write-Output ""
+
+    Write-Output "Running serve processes:"
+    $serves = Get-ServeProcessExecutables
+    if ($serves.Count -eq 0) {
+        Write-Output "  (none running)"
+    }
+    foreach ($entry in $serves) {
+        Write-Output "  PID $($entry.ProcessId) -> $($entry.Path) $(Format-HashTag (Get-Sha256OrNull $entry.Path) $authorityHash)"
+    }
+    Write-Output ""
+
+    $agentsConsistent = $true
+    foreach ($cmd in @($codexCmd, $claudeCmd)) {
+        if ($cmd -and ((Get-Sha256OrNull $cmd) -ne $authorityHash)) {
+            $agentsConsistent = $false
+        }
+    }
+    if ($agentsConsistent) {
+        Write-Output "OK: configured agents use the same build as the managed authority."
+    } else {
+        Write-Output "WARNING: an agent MCP entry points at a different build than the authority."
+        Write-Output "  Re-run: install.ps1 -InstallAndConfigure -FromSource -Yes to repoint agents."
+    }
+    if ($stale.Count -gt 0) {
+        Write-Output ""
+        Write-Output "Stale PATH copies (different build than the authority): $($stale.Count)"
+        foreach ($entry in $stale) {
+            Write-Output "  $entry"
+        }
+        if ($DoPrune) {
+            if (!$Yes -and !(Confirm-DefaultNo "Remove the stale PATH copies listed above?")) {
+                Write-Output "Cancelled. No copies removed."
+            } else {
+                $pruneFailures = @()
+                foreach ($entry in $stale) {
+                    try {
+                        Remove-Item -LiteralPath $entry -Force -ErrorAction Stop
+                        Write-Output "Removed $entry"
+                    } catch {
+                        $pruneFailures += $entry
+                        Write-StaleRemovalFailure $entry $_.Exception.Message
+                    }
+                }
+                if ($pruneFailures.Count -gt 0) {
+                    throw "failed to remove $($pruneFailures.Count) stale PATH copy/copies; see messages above."
+                }
+            }
+        } else {
+            Write-Output "Run with -Prune (add -Yes to skip the prompt) to remove these stale copies."
+        }
+    }
+}
+
+function Resolve-AnyRepogrammar {
+    $candidates = @((Join-Path $CommandDir "repogrammar.exe"), (Get-AuthorityBinary))
+    $candidates += Get-RepogrammarPathCopies
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Test-PurgeOwnedPath([string]$Candidate, $FileTargets) {
+    if ([string]::IsNullOrWhiteSpace($Candidate)) {
+        return $false
+    }
+    $lower = $Candidate.ToLowerInvariant()
+    foreach ($file in $FileTargets) {
+        if ($lower -eq $file.ToLowerInvariant()) {
+            return $true
+        }
+    }
+    foreach ($root in @($InstallDir, $CommandDir)) {
+        if ($root -and $lower.StartsWith($root.ToLowerInvariant().TrimEnd('\') + '\')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-Purge {
+    $commandBin = Join-Path $CommandDir "repogrammar.exe"
+    $commandWorkers = Join-Path $CommandDir "repogrammar-workers"
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin\repogrammar.exe"
+    $cargoGuard = Join-Path $env:USERPROFILE ".cargo\bin\repo-guard.exe"
+
+    $fileTargets = @()
+    foreach ($file in (@($commandBin, $cargoBin, $cargoGuard) + (Get-RepogrammarPathCopies))) {
+        if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            $fileTargets += (Resolve-Path -LiteralPath $file).Path
+        }
+    }
+    $fileTargets = @($fileTargets | Select-Object -Unique)
+
+    $dirTargets = @()
+    foreach ($dir in @($InstallDir, $commandWorkers)) {
+        if ($dir -and (Test-Path -LiteralPath $dir)) {
+            $dirTargets += $dir
+        }
+    }
+    $dirTargets = @($dirTargets | Select-Object -Unique)
+
+    Write-Output "RepoGrammar purge plan:"
+    Write-Output "  - Stop repogrammar processes that run the binaries listed below"
+    Write-Output "  - repogrammar uninstall --target all --scope global (remove agent MCP entries and receipts)"
+    if ($Project) {
+        Write-Output "  - repogrammar uninit --project $Project --yes (remove .repogrammar state)"
+    }
+    foreach ($dir in $dirTargets) { Write-Output "  - remove directory $dir" }
+    foreach ($file in $fileTargets) { Write-Output "  - remove file $file" }
+    Write-Output ""
+
+    if (!$Yes -and !(Confirm-DefaultNo "Proceed with purge? This permanently deletes the items above")) {
+        Write-Output "Cancelled. Nothing was removed."
+        return
+    }
+
+    try {
+        $running = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
+    } catch {
+        $running = @()
+    }
+    foreach ($proc in $running) {
+        if (Test-PurgeOwnedPath $proc.ExecutablePath $fileTargets) {
+            try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+
+    $rg = Resolve-AnyRepogrammar
+    if ($rg) {
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        try {
+            Invoke-WithInstallEnv {
+                & $rg uninstall --target all --scope global --yes 2>&1 | Out-Null
+                if ($Project -and (Test-Path -LiteralPath (Join-Path $Project ".repogrammar"))) {
+                    & $rg uninit --project $Project --yes 2>&1 | Out-Null
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+    } else {
+        Write-Output "No repogrammar binary found to run uninstall/uninit; removing files only."
+    }
+
+    foreach ($file in $fileTargets) {
+        try {
+            Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+            Write-Output "Removed $file"
+        } catch {
+            Write-Output "Failed to remove ${file}: $($_.Exception.Message)"
+        }
+    }
+    foreach ($dir in $dirTargets) {
+        try {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
+            Write-Output "Removed $dir"
+        } catch {
+            Write-Output "Failed to remove ${dir}: $($_.Exception.Message)"
+        }
+    }
+    Write-Output "Purge complete. Re-run with -InstallAndConfigure -FromSource -Yes to reinstall."
+}
+
 if ($Help) {
     Show-Usage
     exit 0
 }
 
+if ($Verify -or $Prune) {
+    Invoke-VerifyInstall ([bool]$Prune)
+    exit 0
+}
+
+if ($Purge) {
+    Invoke-Purge
+    exit 0
+}
+
 if ($InstallCliOnly) {
     Install-Cli
+    Invoke-VerifyInstall $true
     exit 0
 }
 
 if ($InstallAndConfigure) {
     Install-Cli
     Run-AgentInstall
+    Invoke-VerifyInstall $true
     exit 0
 }
 
@@ -419,12 +814,12 @@ if (Test-SourceCheckout) {
 Write-Output "q = cancel"
 $choice = Read-Host "Selection [1]"
 switch ($choice) {
-    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
-    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; break }
-    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; break }
+    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Invoke-VerifyInstall $true; break }
     "3" { Run-AgentInstall; break }
     "4" { Remove-Command; break }
-    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli } else { throw "invalid selection: $choice" }; break }
+    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli; Invoke-VerifyInstall $true } else { throw "invalid selection: $choice" }; break }
     "q" { Write-Output "Cancelled. No changes made."; break }
     "Q" { Write-Output "Cancelled. No changes made."; break }
     default { throw "invalid selection: $choice" }

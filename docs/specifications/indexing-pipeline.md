@@ -24,8 +24,8 @@ Repository files
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync` wiring. The current CLI can discover TS/JS/Python files, read
-source through a hash-checked repo-relative boundary, store repo-relative file
+`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python files,
+read source through a hash-checked repo-relative boundary, store repo-relative file
 metadata and structural code units in a generation-scoped SQLite database,
 validate that generation, and activate `.repogrammar/current-generation`. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
@@ -37,11 +37,18 @@ The current CLI can also discover `.rs` files and `Cargo.toml` manifests for
 RepoGrammar self-dogfooding. Rust parsing uses Tree-sitter Rust to extract
 structural modules, use items, structs, enums, traits, impl blocks, functions,
 methods, test functions, and macro syntax. Cargo manifests are bounded
-structural inventory only. This Rust path never runs Cargo, rustc, build
-scripts, proc macros, or project code.
+structural inventory only. The default safe Rust project-model substage can run
+`cargo metadata --format-version=1 --no-deps` after `Cargo.toml` code units are
+stored for the building generation, and it records only owned `PROJECT_CONFIG`
+facts or recoverable provider `UNKNOWN`s. It never executes build scripts, proc
+macros, rustc, rust-analyzer, rustdoc, or project code, and it cannot prove
+symbol/type/call semantics or family support. Root `Cargo.toml` build-variant
+ambiguity can block repository-wide Rust self-dogfood family support, but
+nested fixture/package manifests must not globally block unrelated root Rust
+families.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
-`index` and `sync` can also ask that worker for facts about the discovered
-repo-relative TS/JS file set. Optional worker arguments come from
+`index`, `sync`, and `resync` can also ask that worker for facts about the
+discovered repo-relative TS/JS file set. Optional worker arguments come from
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of strings, not a shell
 command line. Accepted facts are recorded only when they match the same building
 generation's indexed file, code-unit id, content hash, and byte range.
@@ -124,7 +131,9 @@ emits React-shaped semantic support. TypeScript worker facts are stored as
 bounded semantic context only unless a later ADR defines a role-specific support
 promotion path. This is a token-saving foundation, not full TS/JS semantic
 analysis, and TS/JS remains a transitional substrate rather than the official
-v0.1 target.
+v0.1 target. The future provider-backed path is tracked in
+`docs/plans/rust-tsjs-semantic-analysis-plan.md` and must use owned TS/JS
+provider facts before widening these claims.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
 node per code unit and conservative `contains` edges from module-like units to
 contained units and classes/impls/traits to methods. Module-like units include
@@ -366,10 +375,11 @@ context anchors.
 The official v0.1 language scope is Python-first, focused on FastAPI, pytest,
 SQLAlchemy, and Pydantic. The existing TypeScript/JavaScript path remains
 transitional substrate until a later ADR re-promotes it.
-The current Rust ports layer also defines a future Python semantic-provider
-boundary for candidate-scoped requests, provider provenance assumptions,
-cache-key dimensions, and recoverable provider-unavailable `UNKNOWN`s. Default
-indexing does not call a provider adapter. The application layer now includes
+The current Rust ports layer also defines future Python, Rust, and TS/JS
+semantic-provider boundaries for candidate-scoped requests, provider provenance
+assumptions, cache-key dimensions, and recoverable provider-unavailable
+`UNKNOWN`s. Default indexing does not call a provider adapter. The application
+layer now includes
 an internal planner for validated Pyrefly `ResolveFrameworkIdentity` request
 scopes over plausible Python family candidate groups. It skips parser-origin
 blocking `UNKNOWN`s that affect Python framework identity, import resolution,
@@ -378,6 +388,14 @@ validated active-generation claim-input snapshot used by query/family code.
 It does not execute those requests, persist provider facts, or expose them
 through CLI/MCP.
 No Pyrefly, Pyright, RightTyper, or runtime-trace adapter is implemented.
+The Rust Cargo metadata provider adapter is wired into the default product
+indexing path as a safe project-model refresh stage for repositories with
+same-generation `Cargo.toml` code units. It parses
+`cargo metadata --format-version=1 --no-deps` output into owned
+`PROJECT_CONFIG` facts, records provider `UNKNOWN`s when Cargo or project
+configuration is unavailable, and does not execute build scripts or procedural
+macros. These facts are context only: package metadata, targets, features, and
+dependencies do not directly prove family membership.
 
 ## Optional providers
 
@@ -434,10 +452,14 @@ marginal coverage per estimated token cost. Matched family queries also build
 a read plan from stored family evidence. Read-plan items carry repo-relative
 paths, strict content hashes, byte ranges, purpose labels, and estimated token
 cost; they do not contain absolute paths. Source text remains disabled by
-default. When the caller explicitly requests source spans, the query layer
-renders only selected read-plan spans through the hash-checked source-store
-boundary, fills line ranges for rendered spans, and omits stale or unsupported
-spans with fallback guidance.
+default. Before returning metadata-only output, the query layer attempts
+hash-checked line-range enrichment for read-plan items. Fresh sources should
+produce `start_line` and `end_line` without returning source text; stale,
+missing, hash-mismatched, too-large, non-UTF-8, unavailable, or invalid ranges
+must keep the item and add omission guidance. When the caller explicitly
+requests source spans, the query layer renders only selected read-plan spans
+through the hash-checked source-store boundary, fills line ranges for rendered
+spans, and omits stale or unsupported spans with fallback guidance.
 Family evidence records carry schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the current
 builder emits `canonical` and `support`, plus a narrow Python `variation`
@@ -488,9 +510,11 @@ Cargo/build variants, unresolved or conflicting external modules,
 macro/proc-macro expansion, and trait-object dispatch. Those facts are bounded
 evidence for RepoGrammar self-dogfood only; they are not provider-backed Rust
 semantics and do not imply general Rust target-language support. Cargo build
-scripts and target-specific manifest sections are repository build-variant
-UNKNOWNs that block affected Rust self-dogfood family claims until resolved;
-the indexer records them without executing Cargo or the build script.
+scripts and target-specific sections in the root manifest are repository
+build-variant UNKNOWNs that block affected Rust self-dogfood family claims until
+resolved; nested fixture/package manifests remain package/claim scoped and must
+not globally block unrelated root Rust families. The indexer records manifests
+without executing Cargo or build scripts.
 
 ## Classification
 
@@ -540,6 +564,10 @@ started by MCP serving or agent installation, and does not scan repositories
 that have not explicitly initialized RepoGrammar state.
 
 The current auto-sync worker is conservative and reuses the existing full
-`sync` path after detecting a changed discovery fingerprint and debouncing file
-changes. Incremental changed-unit reparsing, affected-family stale marking, and
-lazy query-time recomputation remain future work.
+`sync` path after detecting a changed lightweight supported-file metadata
+fingerprint and debouncing file changes. The detector avoids reading source
+contents during idle polling; the subsequent full `sync` remains authoritative
+for content hashes, Git-ignore enforcement, parser/provider facts, freshness,
+and active-generation activation. Incremental changed-unit reparsing,
+affected-family stale marking, and lazy query-time recomputation remain future
+work.

@@ -5,8 +5,9 @@ use crate::application::query::{
     read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
     validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
     FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown,
-    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem, SourceSpanRenderReport,
-    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
+    MAX_QUERY_TOKEN_BUDGET,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -96,6 +97,14 @@ pub trait McpReadOnlyRuntime {
     ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("source spans"))
     }
+
+    fn enrich_read_plan_line_ranges(
+        &self,
+        _request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        Ok(read_plan.clone())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +174,7 @@ struct ContextArguments {
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context. In initialized repositories, call this before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Source spans are metadata-only by default and require include_source_spans=true.",
+        "description": "Read-only RepoGrammar pattern-family context. In initialized repositories, call this before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. If state or analysis is missing and the user allows repo-local analysis state, ask to run repogrammar init --yes --resync --autosync. Default output is metadata-only with token-budgeted read_plan items and line ranges when sources are hash-fresh. Request include_source_spans=true only when bounded line-numbered source text is needed.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -239,20 +248,35 @@ pub fn handle_context_call(
             lookup_mode_for_operation(arguments.operation),
         ) {
             Ok(FamilyLookupReport::Found(family)) => {
-                let read_plan = build_read_plan(
+                let base_read_plan = build_read_plan(
                     &family,
                     arguments.target.as_deref(),
                     lookup_mode_for_operation(arguments.operation),
                     arguments.output_options,
                 );
+                let mut read_plan =
+                    match runtime.enrich_read_plan_line_ranges(request.clone(), &base_read_plan) {
+                        Ok(read_plan) => read_plan,
+                        Err(_) => {
+                            return Ok(fallback_value(
+                                arguments.operation,
+                                repository_status_unavailable_fallback(
+                                    QueryPreflightOperation::PatternFamilyQuery,
+                                ),
+                            ));
+                        }
+                    };
                 let source_spans = if arguments.include_source_spans {
                     match runtime.render_source_spans(
                         request.clone(),
                         &read_plan,
-                        arguments.include_source_spans,
+                        true,
                         arguments.output_options.token_budget,
                     ) {
-                        Ok(source_spans) => Some(source_spans),
+                        Ok(source_spans) => {
+                            read_plan = read_plan_with_rendered_spans(&read_plan, &source_spans);
+                            Some(source_spans)
+                        }
                         Err(_) => {
                             return Ok(fallback_value(
                                 arguments.operation,
@@ -266,14 +290,10 @@ pub fn handle_context_call(
                     None
                 };
                 let selected_evidence = select_family_evidence(&family, arguments.output_options);
-                let rendered_read_plan = source_spans
-                    .as_ref()
-                    .map(|rendered| read_plan_with_rendered_spans(&read_plan, rendered))
-                    .unwrap_or_else(|| read_plan.clone());
                 let estimated_potential = estimate_family_output_potential_token_savings(
                     &family,
                     &selected_evidence,
-                    &rendered_read_plan,
+                    &read_plan,
                     source_spans.as_ref(),
                 );
                 let _ =
@@ -409,7 +429,7 @@ fn handle_json_rpc_value_result(
                             "name": "repogrammar",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. Default output is metadata-only with token-budgeted read_plan items. Request include_source_spans=true only when bounded line-numbered source spans are needed. If output is UNKNOWN, stale, omitted, or insufficient, fall back to normal Read/Grep for the affected files.",
+                        "instructions": "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads for implementation-pattern analogues, family conformance, deviations, or repeated framework behavior. If the repository is not initialized or has no active generation and the user allows repo-local analysis state, run repogrammar init --yes --resync --autosync. Default output is metadata-only with token-budgeted read_plan items and line ranges when source hashes are fresh. Request include_source_spans=true only when bounded line-numbered source text is needed. If output is UNKNOWN, stale, omitted, or insufficient, fall back to normal Read/Grep for the affected files.",
                     }),
                 )),
                 should_shutdown: false,
@@ -597,18 +617,15 @@ fn fallback_value(
 fn family_detail_value(
     operation: McpOperation,
     family: &FamilyDetailReport,
-    base_read_plan: &ReadPlan,
+    read_plan: &ReadPlan,
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
     let selected_evidence = select_family_evidence(family, options);
-    let read_plan = source_spans
-        .map(|rendered| read_plan_with_rendered_spans(base_read_plan, rendered))
-        .unwrap_or_else(|| base_read_plan.clone());
     let estimated_potential = estimate_family_output_potential_token_savings(
         family,
         &selected_evidence,
-        &read_plan,
+        read_plan,
         source_spans,
     );
     let check = if operation == McpOperation::CheckConformance {
@@ -676,7 +693,7 @@ fn family_detail_value(
                 "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
-        "read_plan": read_plan_value(&read_plan),
+        "read_plan": read_plan_value(read_plan),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
         "check": check,
@@ -691,6 +708,18 @@ fn read_plan_value(read_plan: &ReadPlan) -> Value {
         "selection_strategy": read_plan.selection_strategy,
         "budget_satisfied": read_plan.budget_satisfied,
         "items": read_plan.items.iter().map(read_plan_item_value).collect::<Vec<_>>(),
+        "line_range_omissions": read_plan.line_range_omissions.iter().map(read_plan_line_range_omission_value).collect::<Vec<_>>(),
+    })
+}
+
+fn read_plan_line_range_omission_value(omission: &ReadPlanLineRangeOmission) -> Value {
+    json!({
+        "purpose": omission.purpose.as_str(),
+        "path": omission.path,
+        "start_byte": omission.start_byte,
+        "end_byte": omission.end_byte,
+        "reason": omission.reason,
+        "guidance": omission.guidance,
     })
 }
 
@@ -821,6 +850,14 @@ mod tests {
         let schema = tool_schema();
 
         assert_eq!(schema["name"], "repogrammar_context");
+        assert!(schema["description"]
+            .as_str()
+            .expect("tool description")
+            .contains("repogrammar init --yes --resync --autosync"));
+        assert!(schema["description"]
+            .as_str()
+            .expect("tool description")
+            .contains("line ranges"));
         assert_eq!(
             schema["inputSchema"]["properties"]["operation"]["enum"],
             json!([
@@ -884,7 +921,7 @@ mod tests {
 
         assert_eq!(response["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(response["reason"], "repository is not initialized");
-        assert_eq!(response["guidance"], "run repogrammar init");
+        assert_eq!(response["guidance"], "run repogrammar init --yes");
         assert_eq!(response["implemented"], false);
         assert_eq!(runtime.lookup_calls(), 0);
     }
@@ -902,7 +939,7 @@ mod tests {
 
         assert_eq!(response["status"], "FALLBACK_TO_CODE_SEARCH");
         assert_eq!(response["reason"], "no active index generation");
-        assert_eq!(response["guidance"], "run repogrammar index");
+        assert_eq!(response["guidance"], "run repogrammar resync");
         assert_eq!(runtime.lookup_calls(), 0);
     }
 
@@ -977,8 +1014,12 @@ mod tests {
         assert_eq!(response["read_plan"]["items"][0]["path"], "src/routes/a.ts");
         assert_eq!(response["read_plan"]["items"][0]["start_byte"], 0);
         assert_eq!(response["read_plan"]["items"][0]["end_byte"], 20);
-        assert_eq!(response["read_plan"]["items"][0]["start_line"], Value::Null);
-        assert_eq!(response["read_plan"]["items"][0]["end_line"], Value::Null);
+        assert_eq!(response["read_plan"]["items"][0]["start_line"], 1);
+        assert_eq!(response["read_plan"]["items"][0]["end_line"], 2);
+        assert!(response["read_plan"]["line_range_omissions"]
+            .as_array()
+            .expect("line range omissions")
+            .is_empty());
         assert_eq!(
             response["read_plan"]["items"][0]["content_hash"],
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -1247,6 +1288,18 @@ mod tests {
         let runtime = FakeMcpRuntime::ready_unknown();
         let context = context();
 
+        let initialize = handle_json_rpc_value(
+            &runtime,
+            &context,
+            json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"}),
+        );
+        let initialize_response = initialize.response.expect("initialize response");
+        let instructions = initialize_response["result"]["instructions"]
+            .as_str()
+            .expect("initialize instructions");
+        assert!(instructions.contains("repogrammar init --yes --resync --autosync"));
+        assert!(instructions.contains("line ranges"));
+
         let list = handle_json_rpc_value(
             &runtime,
             &context,
@@ -1458,6 +1511,21 @@ mod tests {
                 .clone()
                 .ok_or(RepoGrammarError::NotImplemented("source spans"))
         }
+
+        fn enrich_read_plan_line_ranges(
+            &self,
+            _request: RepositoryStatusRequest,
+            read_plan: &ReadPlan,
+        ) -> Result<ReadPlan, RepoGrammarError> {
+            let mut enriched = read_plan.clone();
+            for item in &mut enriched.items {
+                if item.path == "src/routes/a.ts" && item.start_byte == 0 && item.end_byte == 20 {
+                    item.start_line = Some(1);
+                    item.end_line = Some(2);
+                }
+            }
+            Ok(enriched)
+        }
     }
 
     fn unknown_report() -> FamilyLookupReport {
@@ -1468,7 +1536,7 @@ mod tests {
                 reason: UnknownReasonCode::InsufficientSupport,
                 affected_claim: "query target".to_string(),
                 recovery: Some(
-                    "run repogrammar index after adding compatible implementations".to_string(),
+                    "run repogrammar resync after adding compatible implementations".to_string(),
                 ),
             }],
         })

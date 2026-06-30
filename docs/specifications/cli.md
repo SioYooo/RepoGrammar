@@ -11,6 +11,7 @@ Project lifecycle:
 - `uninit`
 - `index`
 - `sync`
+- `resync`
 - `autosync`
 - `status`
 - `doctor`
@@ -104,15 +105,19 @@ All long-running commands must support:
 - `--quiet`
 - `--verbose`
 
-Long-running commands include repository initialization, indexing, sync,
+Long-running commands include repository initialization, indexing, sync, resync,
 `autosync run`, and MCP serving.
 
-For `index` and `sync`, human progress is emitted to stderr when
-`--progress always` is set, or when `--progress auto` detects an interactive
-stderr. `--quiet` and `--progress never` suppress progress. Final human or JSON
-results remain on stdout. When `--json --progress always` is used, progress
-events are emitted as NDJSON on stderr and the final command result remains a
-single JSON object on stdout.
+For `init`, `index`, `sync`, and `resync`, human progress is emitted to stderr
+when `--progress always` is set, or when `--progress auto` detects an
+interactive stderr. Known work renders an ASCII progress bar, exact integer
+percentage, and completed/total counts; unknown work remains indeterminate and
+does not display a percentage. `--quiet` and `--progress never` suppress
+progress. Interactive TTY progress rewrites a single terminal line and finishes
+with one newline; noninteractive plain-log progress remains append-only with one
+line per event. Final human or JSON results remain on stdout. When `--json
+--progress always` is used, progress events are emitted as NDJSON on stderr and
+the final command result remains a single JSON object on stdout.
 
 ## Repository state commands
 
@@ -131,6 +136,24 @@ contract used by `repogrammar status`. Re-running `init` in a repository with a
 readable active generation must therefore report `storage: available` and the
 active indexing mode such as `syntax_only_code_units`, rather than replaying
 bootstrap manifest placeholder values.
+`repogrammar init --yes` is accepted as an agent-safe noninteractive
+confirmation flag. It does not broaden `init` writes, does not run indexing,
+and does not make root `.gitignore` writes unless `--write-gitignore` is also
+present.
+
+`repogrammar init --yes --resync --autosync` is the explicit one-command
+repository bootstrap for users or agents that have permission to create
+repo-local analysis state. It must run the normal init path, then run the same
+static-analysis path as `repogrammar resync`, then start auto-sync only after a
+readable active generation exists. Plain `init --yes` remains confirmation-only
+and must not index. `init --yes --autosync` without `--resync` may start
+auto-sync only when status already reports a readable active generation;
+otherwise it must fail cleanly with guidance to run
+`repogrammar init --yes --resync --autosync`. JSON output for bootstrap must
+preserve the existing top-level init fields and include `resync` and
+`autosync` sub-results where applicable. If auto-sync start fails after a
+successful resync, the JSON error must preserve the valid `resync` sub-result
+and must not roll back the active generation.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -170,13 +193,13 @@ During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
-`repogrammar index` and `repogrammar sync` currently require an initialized
-repository-local state directory. The implemented bootstrap path runs TS/JS,
-bounded TS/JS project-config, and Python `.py` discovery, reads source through a
-repo-relative hash-checked boundary, store repo-relative file metadata and
-syntax-only code-unit records plus any syntax-origin framework-role fact records
-in a new generation-scoped SQLite database, validate the generation, and
-atomically activate
+`repogrammar index`, `repogrammar sync`, and `repogrammar resync` currently
+require an initialized repository-local state directory. The implemented
+bootstrap path runs TS/JS, bounded TS/JS project-config, and Python `.py`
+discovery, reads source through a repo-relative hash-checked boundary, stores
+repo-relative file metadata and syntax-only code-unit records plus any
+syntax-origin framework-role fact records in a new generation-scoped SQLite
+database, validates the generation, and atomically activates
 `.repogrammar/current-generation`. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
@@ -190,21 +213,33 @@ Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
 exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
 without running a semantic worker. These are bounded RepoGrammar support facts,
 not compiler/provider-backed facts.
+`resync` is an alias for `sync`: it is available for any initialized
+repository, rebuilds a new active generation through the same static-analysis
+path, and uses the invoked command name in CLI output. Public fallback and MCP
+guidance should prefer `resync` for missing, stale, or intentionally refreshed
+analysis because it names the user intent to rebuild static-analysis facts.
 Rust self-dogfood indexing may likewise add Tree-sitter-origin structural
 anchors, Cargo manifest inventory, Rust typed `UNKNOWN`s, and bounded internal
 `DATAFLOW_DERIVED` support facts for RepoGrammar-owned implementation roles.
 Those facts are not Cargo/rustc-backed semantics and do not imply general Rust
 target-language support.
-During a non-quiet run, `index` and `sync` emit progress for project discovery,
-file scanning, syntax parsing, local support-fact recording, semantic-worker
+During a non-quiet run, `init` emits repository-state initialization progress.
+`index`, `sync`, and `resync` emit progress for project discovery, file
+scanning, syntax parsing, local support-fact recording, semantic-worker
 deferred/running state, candidate/family construction, and persistence
-validation. Known work uses exact completed/total counts. Unknown work must
-remain explicit and must not display fabricated percentages or ETAs. Progress
-events must not include source snippets, source paths, content hashes, symbols,
-raw targets, or repository-identifying absolute paths.
+validation. Known work uses exact completed/total counts and exact integer
+percentages. Unknown work must remain explicit and must not display fabricated
+percentages or ETAs.
+Progress events must not include source snippets, source paths, content hashes,
+symbols, raw targets, or repository-identifying absolute paths.
+The product runtime also runs the default safe Rust Cargo metadata project-model
+substage during `index`, `sync`, and `resync` when same-generation `Cargo.toml`
+code units exist. It may add provider-backed `PROJECT_CONFIG` facts and typed
+provider `UNKNOWN`s, but package/crate/target/feature/dependency metadata cannot
+prove symbol/type/call semantics or family membership.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
-`index` and `sync` may run that worker after syntax-only code units are stored
-for the building generation.
+`index`, `sync`, and `resync` may run that worker after syntax-only code units
+are stored for the building generation.
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply an optional JSON array of
 non-blank string arguments. This is an argv contract, not shell parsing; worker
 arguments without `REPOGRAMMAR_TYPESCRIPT_WORKER` are invalid. Worker facts must
@@ -214,17 +249,19 @@ failures must fall back to syntax-only indexing with a typed
 `semantic_worker: fallback_*` status and sanitized warnings. A worker fact that
 conflicts with the indexed code-unit path, content hash, or range must abort the
 new generation rather than silently dropping or accepting stale evidence. If
-storage health is already unhealthy, index and sync must refuse and direct the
-user to `repogrammar doctor` rather than masking the corruption with a new
-generation. Before discovery, source reads, generation preparation, validation,
-and activation, both commands acquire `.repogrammar/locks/index.lock` and hold
-it through validation and activation.
+storage health is already unhealthy, index, sync, and resync must refuse and
+direct the user to `repogrammar doctor` rather than masking the corruption with
+a new generation. Before discovery, source reads, generation preparation,
+validation, and activation, all three commands acquire
+`.repogrammar/locks/index.lock` and hold it through validation and activation.
 `REPOGRAMMAR_STRICT_GITIGNORE=true` makes unavailable Git ignore checks a hard
-index/sync error; otherwise discovery keeps the warning fallback and continues.
+index/sync/resync error; otherwise discovery keeps the warning fallback and continues.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
-during acquisition. Successful runs remove only the lock content they wrote.
+during acquisition. Same-host liveness checks must use native process probes on
+Windows as well as Unix so a dead nonzero PID does not remain permanently
+unknown. Successful runs remove only the lock content they wrote.
 
 `repogrammar autosync` manages optional repository-local automatic sync. It
 supports subcommands:
@@ -238,16 +275,33 @@ supports subcommands:
 
 With no subcommand, `autosync` is equivalent to `autosync status`. `start`
 enables auto-sync for the current repository if needed and launches a
-background `repogrammar autosync run` worker. The worker polls the same
-discovery fingerprint used by indexing, debounces changes, and calls the
-existing `sync` implementation when indexed files change. It must not scan
-repositories that have not explicitly run `init`, and it must not be started by
-`install`, `serve`, MCP queries, or agent wiring. `run` is the foreground worker
-entrypoint used by `start`; it writes diagnostics to
-`.repogrammar/logs/daemon.log` when started in the background. `stop` terminates
+background `repogrammar autosync run` worker. The worker polls a lightweight
+supported-file metadata fingerprint, debounces changes, and calls the existing
+`sync` implementation when indexed files are added, removed, or modified. The
+lightweight detector must skip RepoGrammar state directories, default excluded
+directories, unsupported extensions, oversized files, symlinks, and paths
+outside the repository; the following full `sync` remains the authoritative
+content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
+step. It must not scan repositories that have not explicitly run `init`, and it
+must not be started by `install`, `serve`, MCP queries, or agent wiring. `run`
+is the foreground worker entrypoint used by `start`; it writes diagnostics to
+`.repogrammar/logs/daemon.log` when started in the background. After every sync
+the daemon always records a one-line summary to that log — files seen, code
+units indexed, elapsed milliseconds, and the activated generation
+(`autosync: synced N file(s), U unit(s) in Xms (generation G)`), or a failure
+line with the elapsed time — independent of `--quiet`, which only suppresses the
+interactive "watching"/"change detected" chatter. `stop` terminates
 the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `disable` requires the daemon to be stopped first and removes
 `.repogrammar/autosync.json`.
+
+After each sync attempt the daemon records a best-effort run state in
+`.repogrammar/autosync-run.json` (last sync time, result, synced generation,
+and any error). `autosync status` surfaces it as `last_sync_unix_seconds`,
+`last_sync_result`, optional `last_sync_generation`, and optional
+`last_sync_error`, so `running: true` can be distinguished from "actually synced
+recently". A missing or unreadable run-state file is reported as absent rather
+than failing the status read.
 
 `autosync` supports `--project <path>`, `--path <path>`, `--json`, `--quiet`,
 `--progress auto|always|never` for long-running command compatibility,
@@ -265,16 +319,21 @@ inspection-only. With `--force --yes`, it may remove only a confirmed stale
 `index.lock`; active, unknown, invalid, daemon, and SQLite locks must remain in
 place with a stable refusal reason.
 
-`repogrammar logs` reads repo-local diagnostic logs. It supports:
+`repogrammar logs` reads repo-local diagnostic logs from
+`.repogrammar/logs/<component>.log`. It supports:
 
-- `--tail`;
+- `--tail [n]`, defaulting to 100 lines and bounded by implementation limits;
 - `--since <duration>`;
 - `--component index|daemon|mcp|telemetry`;
 - `--redact`.
 
-Logs are diagnostic state, not telemetry. During bootstrap, `logs` exposes
-redacted metadata only; machine-readable output must not include source
-snippets or absolute paths.
+The default component is `daemon`. Missing, unreadable, non-file, symlinked, or
+malformed log files must return a clean unavailable report rather than panic.
+`--since` is accepted for contract stability but may return the bounded tail
+with a message that duration filtering is not implemented. Logs are diagnostic
+state, not telemetry. JSON output includes the selected `component` and the raw
+`component_filter` option value. `logs` redacts by default and
+machine-readable output must not include source snippets or absolute paths.
 
 ## Installer commands
 
@@ -322,12 +381,16 @@ writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install or receipt write fails.
 Re-running `install` refreshes only a RepoGrammar-managed command path and
 skips native agent add commands for already managed target receipts. When the
-selected command path is the same executable currently running the installer,
-such as a local Cargo-installed `repogrammar.exe` on PATH, the installer may
-copy that executable into RepoGrammar-managed user state and continue without
-overwriting that currently executing command path in the same run. Existing
-unrelated foreign command paths must still be refused rather than adopted
-silently.
+selected managed binary or managed command copy already exists, refresh stages
+the new file, removes the previous RepoGrammar-managed file, and then activates
+the new file. If the previous managed file cannot be removed because a running
+coding agent or MCP process still holds it, install must fail with guidance to
+exit that agent and rerun the install or build command. When the selected
+command path is the same executable currently running the installer, such as a
+local Cargo-installed `repogrammar.exe` on PATH, the installer may copy that
+executable into RepoGrammar-managed user state and continue without overwriting
+that currently executing command path in the same run. Existing unrelated
+foreign command paths must still be refused rather than adopted silently.
 `uninstall` removes only receipt-owned managed entries. `uninstall --target all
 --scope global --yes` removes every owned first-class agent receipt it finds,
 but refuses unmanaged or foreign receipts.
@@ -348,6 +411,8 @@ Install does not upload telemetry or run paired token-saving experiments.
 `repogrammar stats` reports repo-shape diagnostics for initialized repositories
 with an active readable generation. With `--json`, it must return a parseable
 object with `implemented: true`, the active generation, metric-kind vocabulary,
+top-level `token_saving_readiness`, `blocking_reasons`, `measurement_kind`, and
+`caveat` fields,
 `null` values for measured `token_savings`, `token_savings_ratio`,
 `measurement_source`, and `context_compression_ratio` unless a comparable local
 paired token experiment exists, and diagnostic metrics:
@@ -365,10 +430,17 @@ guessed. `stats` may report the repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
 Measured `token_savings` remains `null` unless a comparable paired experiment
-exists. The output must not include source snippets, query text, repository
-names, or absolute paths. If repository state or the active index is missing,
-`stats --json` uses the same missing-index fallback shape as implemented
-inventory commands and keeps `implemented: true`.
+exists. When only estimates exist, top-level `measurement_kind` must be
+`ESTIMATED`, `blocking_reasons` must include `no_paired_experiment`, and
+`caveat` must say the value is estimated potential only, not measured token
+savings. If repository shape is not ready for useful read-displacement
+estimates, `blocking_reasons` must also name concrete causes such as
+`no_supported_units`, `no_families`, or `low_pattern_density`. The output must
+not include source snippets, query text, repository names, or absolute paths.
+If repository state or the active index is missing, `stats --json` uses the
+same missing-index fallback shape as implemented inventory commands, keeps
+`implemented: true`, and still reports `token_saving_readiness: unknown`,
+`measurement_kind: ESTIMATED`, a not-measured caveat, and blocking reasons.
 
 `repogrammar telemetry` owns anonymous product telemetry consent, explicit
 upload, research trace consent, and local paired token experiment recording.
@@ -417,8 +489,20 @@ sessions and usually does not increase token usage. `--experiment-mode
 controlled-pair` records comparable baseline/treatment measurements and warns
 that users may spend additional time, tokens, and provider cost if they choose
 to run separate sessions. `--session baseline|treatment` identifies the
-measurement side. If treatment correctness fails, reports keep the raw token
-delta but mark the result invalid for product token-saving claims.
+measurement side. `experiment-record` accepts either explicit
+`--input-tokens`, `--output-tokens`, optional `--tool-tokens`, and `--success`
+flags, or `--usage-json <path>` pointing at a redacted local usage file.
+Usage-import files may contain only token counts, optional success, and
+optional test outcome, either at the top level or under `usage`; supported
+count names are `input_tokens`/`prompt_tokens`,
+`output_tokens`/`completion_tokens`, optional `tool_tokens`, and optional
+`total_tokens` for deriving tool tokens. Command-line values override imported
+values, and `tool_tokens` defaults to zero when neither a separate nor
+derivable tool-token count is present. Unsupported usage-import fields are
+rejected so raw prompt, message, source, path, symbol, patch, or query payloads
+cannot be accepted as token experiment input. If treatment correctness fails,
+reports keep the raw token delta but mark the result invalid for product
+token-saving claims.
 `experiment-export --json` is redacted by default and must not include the
 user-provided experiment name, session ids, raw token counts, prompts, paths,
 repository names, symbols, or source.
@@ -452,7 +536,7 @@ fallback guidance rather than panic or implicitly initialize the repository:
 ```text
 FALLBACK_TO_CODE_SEARCH
 reason: repository is not initialized
-guidance: run repogrammar init
+guidance: run repogrammar init --yes
 ```
 
 During the bootstrap, pattern-family query commands use this fallback shape only
@@ -486,7 +570,7 @@ stable JSON object to `stderr` rather than the human text block:
 {
   "status": "FALLBACK_TO_CODE_SEARCH",
   "reason": "repository is not initialized",
-  "guidance": "run repogrammar init",
+  "guidance": "run repogrammar init --yes",
   "command": "find",
   "implemented": false
 }
@@ -551,14 +635,20 @@ purpose, repo-relative path, strict content hash, byte range, optional line
 range, estimated token cost, a short reason, whether source is required before
 editing, and whether a source snippet was included for that item.
 `--include-source-spans` is the only CLI source-output opt-in. When absent,
-line fields may remain `null` and `source_snippets_included` is false. When
-present, RepoGrammar renders only selected read-plan spans through the
-hash-checked source-store boundary, fills line ranges for rendered spans, and
-places line-numbered text under a separate `source_spans` block. Stale,
-missing, hash-mismatched, too-large, unsupported, dynamic, insufficient, or
-conflicting cases must omit rendered spans and tell the user to use normal
-Read/Grep for the affected file or claim. The read plan must never include
-absolute paths or a claim that editing is safe outside listed ranges.
+RepoGrammar still attempts hash-checked metadata-only line-range enrichment for
+read-plan items and keeps `source_snippets_included` false. Fresh source hashes
+should therefore produce `start_line` and `end_line` without returning source
+text. Stale, missing, hash-mismatched, too-large, non-UTF-8, unavailable, or
+invalid ranges must preserve the read-plan item and add `line_range_omissions`
+guidance telling the user to use normal Read/Grep for the affected span. When
+`--include-source-spans` is present, RepoGrammar renders only selected
+read-plan spans through the hash-checked source-store boundary, fills line
+ranges for rendered spans, and places line-numbered text under a separate
+`source_spans` block. Stale, missing, hash-mismatched, too-large, unsupported,
+dynamic, insufficient, or conflicting cases must omit rendered spans and tell
+the user to use normal Read/Grep for the affected file or claim. The read plan
+must never include absolute paths or a claim that editing is safe outside
+listed ranges.
 `--token-budget <n>` validates a positive bounded integer and implies
 `--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
@@ -597,14 +687,16 @@ creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
 lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
-repo-local lifecycle information without claiming parser/mining support.
+repo-local lifecycle information without claiming parser/mining support; `logs`
+returns a bounded redacted tail for selected repo-local component logs.
 `index` and `sync` currently create syntax-only SQLite generations from the
 TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
 the Python `.py` discovery/CPython AST structural extractor. Their JSON output
-includes `generation_id`, `discovered_files`, `stored_files`, the actual
-`indexed_units` count, the actual `semantic_facts` count, `indexing:
-syntax_only_code_units`, `parser: syntax_only`, `semantic_worker`, and `mining:
-deferred`. The structural extractors can also produce syntax-origin
+includes `generation_id`, `active_generation`, `discovered_files`,
+`stored_files`, the actual `indexed_units` count, the actual `semantic_facts`
+count, `indexing: syntax_only_code_units`, `parser: syntax_only`,
+`semantic_worker`, and `mining: deferred`. The structural extractors can also
+produce syntax-origin
 framework-role fact records for recognized Express, React, Jest/Vitest, Next.js,
 Fastify, Prisma, Drizzle, FastAPI, pytest, Pydantic, and SQLAlchemy code-unit
 shapes; these may increase `semantic_facts` while `semantic_worker: deferred`
@@ -636,10 +728,12 @@ return missing-index fallback before an active generation exists, typed
 when EC-MVFI-lite has written supported family rows. Stored family detail now
 uses compact/evidence/deep output modes. Compact is the default and omits
 evidence records; all modes include a read plan; evidence and deep remain
-metadata-first and include source snippets only when `--include-source-spans`
-is explicitly requested. `stats` reads the active index/family substrate to report local
-pattern density, family support coverage, abstention rate, and
-thin-wrapper/token-saving risk without reporting measured token savings.
+metadata-first, include default read-plan line ranges when hashes are fresh,
+and include source snippets only when `--include-source-spans` is explicitly
+requested. `stats` reads the active index/family substrate to report local
+pattern density, family support coverage, abstention rate,
+thin-wrapper/token-saving risk, readiness/blocking reasons, and estimated
+potential read displacement without reporting measured token savings.
 `serve` runs the read-only MCP
 `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent

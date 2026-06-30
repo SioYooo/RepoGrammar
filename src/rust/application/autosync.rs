@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const AUTOSYNC_CONFIG_FILE: &str = "autosync.json";
 const DAEMON_LOCK_FILE: &str = "daemon.lock";
+const AUTOSYNC_RUN_FILE: &str = "autosync-run.json";
 const AUTOSYNC_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +54,32 @@ pub struct AutosyncReport {
     pub pid: Option<u32>,
     pub poll_ms: u64,
     pub debounce_ms: u64,
+    pub last_run: Option<AutosyncRunReport>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosyncRunResult {
+    Ok,
+    Error,
+}
+
+impl AutosyncRunResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AutosyncRunResult::Ok => "ok",
+            AutosyncRunResult::Error => "error",
+        }
+    }
+}
+
+/// Last recorded auto-sync run, written by the daemon after each sync attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutosyncRunReport {
+    pub last_sync_unix_seconds: u64,
+    pub result: AutosyncRunResult,
+    pub synced_generation: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -242,7 +268,78 @@ fn autosync_status_for_state(
         pid: lock.pid.filter(|_| lock.running),
         poll_ms: config.settings.poll_ms,
         debounce_ms: config.settings.debounce_ms,
+        last_run: read_run_state(&state.state_dir),
         message: message.to_string(),
+    })
+}
+
+/// Record the outcome of one daemon sync attempt. Best-effort: callers ignore
+/// errors so a failed status write never aborts the daemon.
+pub fn record_autosync_run(
+    request: &AutosyncRequest,
+    result: AutosyncRunResult,
+    synced_generation: Option<&str>,
+    error: Option<&str>,
+) -> Result<(), RepoGrammarError> {
+    let state = require_initialized_state(request)?;
+    write_run_state(&state.state_dir, result, synced_generation, error)
+}
+
+fn run_state_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(AUTOSYNC_RUN_FILE)
+}
+
+fn write_run_state(
+    state_dir: &Path,
+    result: AutosyncRunResult,
+    synced_generation: Option<&str>,
+    error: Option<&str>,
+) -> Result<(), RepoGrammarError> {
+    let path = run_state_path(state_dir);
+    let tmp = path.with_extension("tmp");
+    let last_sync_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let value = json!({
+        "schema_version": AUTOSYNC_SCHEMA_VERSION,
+        "last_sync_unix_seconds": last_sync_unix_seconds,
+        "result": result.as_str(),
+        "synced_generation": synced_generation,
+        "error": error,
+    });
+    fs::write(&tmp, value.to_string())
+        .map_err(|_| invalid_input("failed to write auto-sync run state"))?;
+    fs::rename(&tmp, path).map_err(|_| invalid_input("failed to replace auto-sync run state"))
+}
+
+fn read_run_state(state_dir: &Path) -> Option<AutosyncRunReport> {
+    let text = read_limited_text(&run_state_path(state_dir)).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    if value.get("schema_version").and_then(Value::as_u64) != Some(AUTOSYNC_SCHEMA_VERSION) {
+        return None;
+    }
+    let last_sync_unix_seconds = value
+        .get("last_sync_unix_seconds")
+        .and_then(Value::as_u64)?;
+    let result = match value.get("result").and_then(Value::as_str)? {
+        "ok" => AutosyncRunResult::Ok,
+        "error" => AutosyncRunResult::Error,
+        _ => return None,
+    };
+    let synced_generation = value
+        .get("synced_generation")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let error = value
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(AutosyncRunReport {
+        last_sync_unix_seconds,
+        result,
+        synced_generation,
+        error,
     })
 }
 
@@ -390,14 +487,7 @@ fn process_is_running(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
-            .map(|output| {
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
-            })
-            .unwrap_or(false)
+        windows_process_is_running(pid)
     }
 }
 
@@ -406,19 +496,80 @@ fn terminate_process(pid: u32) -> Result<(), RepoGrammarError> {
     let status = std::process::Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
+    #[cfg(unix)]
+    {
+        status
+            .map_err(|_| invalid_input("failed to stop auto-sync process"))
+            .and_then(|status| {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(invalid_input("failed to stop auto-sync process"))
+                }
+            })
+    }
     #[cfg(windows)]
-    let status = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string()])
-        .status();
-    status
-        .map_err(|_| invalid_input("failed to stop auto-sync process"))
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err(invalid_input("failed to stop auto-sync process"))
-            }
-        })
+    {
+        if windows_terminate_process(pid) {
+            Ok(())
+        } else {
+            Err(invalid_input("failed to stop auto-sync process"))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_is_running(pid: u32) -> bool {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    let Some(handle) = open_process(PROCESS_QUERY_LIMITED_INFORMATION, pid) else {
+        return false;
+    };
+    let mut exit_code = 0_u32;
+    let ok = unsafe { GetExitCodeProcess(handle.0, &mut exit_code) != 0 };
+    ok && exit_code == STILL_ACTIVE
+}
+
+#[cfg(windows)]
+fn windows_terminate_process(pid: u32) -> bool {
+    const PROCESS_TERMINATE: u32 = 0x0001;
+
+    let Some(handle) = open_process(PROCESS_TERMINATE, pid) else {
+        return false;
+    };
+    unsafe { TerminateProcess(handle.0, 1) != 0 }
+}
+
+#[cfg(windows)]
+fn open_process(access: u32, pid: u32) -> Option<WindowsProcessHandle> {
+    let handle = unsafe { OpenProcess(access, 0, pid) };
+    (!handle.is_null()).then_some(WindowsProcessHandle(handle))
+}
+
+#[cfg(windows)]
+struct WindowsProcessHandle(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for WindowsProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenProcess(
+        dw_desired_access: u32,
+        b_inherit_handle: i32,
+        dw_process_id: u32,
+    ) -> *mut std::ffi::c_void;
+    fn GetExitCodeProcess(h_process: *mut std::ffi::c_void, lp_exit_code: *mut u32) -> i32;
+    fn TerminateProcess(h_process: *mut std::ffi::c_void, u_exit_code: u32) -> i32;
+    fn CloseHandle(h_object: *mut std::ffi::c_void) -> i32;
 }
 
 fn invalid_input(message: impl Into<String>) -> RepoGrammarError {
@@ -433,6 +584,37 @@ mod tests {
 
     fn request(workspace: &TempWorkspace) -> AutosyncRequest {
         AutosyncRequest::new(workspace.path().display().to_string())
+    }
+
+    #[test]
+    fn current_process_is_reported_running() {
+        assert!(process_is_running(std::process::id()));
+    }
+
+    #[test]
+    fn run_state_round_trips_ok_and_error() {
+        let workspace = TempWorkspace::new("autosync-run-roundtrip");
+        let dir = workspace.path();
+        write_run_state(dir, AutosyncRunResult::Ok, Some("gen-000007"), None)
+            .expect("write ok run state");
+        let state = read_run_state(dir).expect("read run state");
+        assert_eq!(state.result, AutosyncRunResult::Ok);
+        assert_eq!(state.synced_generation.as_deref(), Some("gen-000007"));
+        assert!(state.error.is_none());
+        assert!(state.last_sync_unix_seconds > 0);
+
+        write_run_state(dir, AutosyncRunResult::Error, None, Some("boom"))
+            .expect("write error run state");
+        let state = read_run_state(dir).expect("read run state");
+        assert_eq!(state.result, AutosyncRunResult::Error);
+        assert_eq!(state.error.as_deref(), Some("boom"));
+        assert!(state.synced_generation.is_none());
+    }
+
+    #[test]
+    fn read_run_state_is_none_when_absent() {
+        let workspace = TempWorkspace::new("autosync-run-absent");
+        assert!(read_run_state(workspace.path()).is_none());
     }
 
     #[test]

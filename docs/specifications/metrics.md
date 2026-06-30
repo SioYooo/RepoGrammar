@@ -44,6 +44,22 @@ repogrammar telemetry experiment-stop --name <id>
 repogrammar telemetry experiment-report --name <id> --json
 ```
 
+`experiment-record` also accepts a redacted local usage import:
+
+```text
+repogrammar telemetry experiment-record --name <id> --usage-json <path>
+```
+
+The usage JSON may contain only token counts, optional success, and optional
+test outcome. Counts may appear at the top level or under `usage`; accepted
+count names are `input_tokens`/`prompt_tokens`,
+`output_tokens`/`completion_tokens`, optional `tool_tokens`, and optional
+`total_tokens` for deriving `tool_tokens`. Command-line token and success
+flags override imported values. If no separate or derivable tool-token count is
+reported, `tool_tokens` defaults to zero. Unsupported fields are rejected so a
+raw host response containing prompts, messages, source, paths, symbols, or
+patches cannot become an experiment record.
+
 `--experiment-mode record-existing` records token counts from sessions the user
 already performed. `--experiment-mode controlled-pair` records a comparable
 baseline/treatment pair and must warn that the user may spend extra time,
@@ -76,13 +92,20 @@ token-saving-risk values. It may also report the repo-local aggregate
 `estimated_potential_token_savings` with `measurement_kind: ESTIMATED`,
 `event_count`, aggregate estimated baseline/returned token counts, and the
 caveat that it is not measured token savings.
+Top-level stats output must also report `token_saving_readiness`,
+`blocking_reasons`, `measurement_kind`, and `caveat`. When no comparable paired
+experiment exists, top-level `measurement_kind` remains `ESTIMATED`,
+`blocking_reasons` includes `no_paired_experiment`, and the caveat states that
+the value is estimated potential only, not measured token savings.
 
 Stats output is allowed to include aggregate counts and diagnostic ratios, but
 it must not include source snippets, query text, repository names, absolute
 paths, content hashes, byte ranges, or causal token-savings claims. Source-span
 usage may be counted only as aggregate/bucketed values. Missing repository
 state or a missing active index should use the standard parseable fallback
-rather than inventing repository metrics.
+rather than inventing repository metrics, while still reporting unknown
+readiness, estimated measurement kind, a not-measured caveat, and blocking
+reasons.
 `stats --json` never opens a telemetry network connection. When anonymous
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics
