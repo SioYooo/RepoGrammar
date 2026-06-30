@@ -6,7 +6,7 @@ use crate::error::RepoGrammarError;
 use crate::ports::index_store::{IndexStore, StorageInspection};
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +39,8 @@ const ROOT_GITIGNORE_SECTION: &str = "# BEGIN RepoGrammar local state\n\
 .repogrammar-*/\n\
 # END RepoGrammar local state\n";
 const LIFECYCLE_TEXT_MAX_BYTES: u64 = 1024 * 1024;
+const LOG_TAIL_MAX_BYTES: u64 = 1024 * 1024;
+const LOG_TAIL_MAX_LINES: usize = 10_000;
 const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const BOOTSTRAP_STORAGE_STATUSES: &[&str] = &["not_implemented"];
 const BOOTSTRAP_INDEXING_STATUSES: &[&str] = &["not_implemented"];
@@ -1191,6 +1193,7 @@ pub fn repository_logs(
     request: RepositoryLogsRequest,
 ) -> Result<RepositoryLogsReport, RepoGrammarError> {
     validate_log_component(request.component.as_deref())?;
+    let component = request.component.as_deref().unwrap_or("daemon");
     let resolved = resolve_state_dir(&request.path, request.state_dir_override.as_deref())?;
     let status = status_for_resolved_state(&resolved, None)?;
     if matches!(status.status, RepositoryStatus::NotInitialized) {
@@ -1212,13 +1215,159 @@ pub fn repository_logs(
         });
     }
 
+    let log_path = resolved
+        .absolute
+        .join("logs")
+        .join(format!("{component}.log"));
+    let metadata = match fs::symlink_metadata(&log_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Ok(RepositoryLogsReport {
+                state_dir: resolved.relative,
+                available: false,
+                redacted: request.redact,
+                entries: Vec::new(),
+                message: format!("repo-local logs unavailable: {component} log is not a file"),
+            });
+        }
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Ok(RepositoryLogsReport {
+                state_dir: resolved.relative,
+                available: false,
+                redacted: request.redact,
+                entries: Vec::new(),
+                message: format!("repo-local logs unavailable: {component} log is missing"),
+            });
+        }
+    };
+    let tail = request.tail.unwrap_or(100).min(LOG_TAIL_MAX_LINES);
+    let mut entries = match read_log_tail_lines(&log_path, &metadata, tail) {
+        Ok(entries) => entries,
+        Err(_) => {
+            return Ok(RepositoryLogsReport {
+                state_dir: resolved.relative,
+                available: false,
+                redacted: request.redact,
+                entries: Vec::new(),
+                message: format!("repo-local logs unavailable: {component} log is unreadable"),
+            });
+        }
+    };
+    if request.redact {
+        entries = entries
+            .into_iter()
+            .map(|entry| redact_log_line(&entry))
+            .collect();
+    }
+    let message = if request.since.is_some() {
+        "repo-local logs returned as bounded tail; --since filtering is not supported yet"
+            .to_string()
+    } else {
+        "repo-local logs returned as bounded tail".to_string()
+    };
+
     Ok(RepositoryLogsReport {
         state_dir: resolved.relative,
-        available: false,
+        available: true,
         redacted: request.redact,
-        entries: Vec::new(),
-        message: "repo-local log streaming is not implemented yet".to_string(),
+        entries,
+        message,
     })
+}
+
+fn read_log_tail_lines(
+    path: &Path,
+    metadata: &fs::Metadata,
+    tail: usize,
+) -> Result<Vec<String>, ()> {
+    if tail == 0 {
+        return Ok(Vec::new());
+    }
+    let start = metadata.len().saturating_sub(LOG_TAIL_MAX_BYTES);
+    let mut file = fs::File::open(path).map_err(|_| ())?;
+    file.seek(SeekFrom::Start(start)).map_err(|_| ())?;
+    let mut buffer = Vec::new();
+    file.take(LOG_TAIL_MAX_BYTES + 1)
+        .read_to_end(&mut buffer)
+        .map_err(|_| ())?;
+    if buffer.len() as u64 > LOG_TAIL_MAX_BYTES {
+        return Err(());
+    }
+    let mut text = String::from_utf8(buffer).map_err(|_| ())?;
+    if start > 0 {
+        text = text
+            .split_once('\n')
+            .map(|(_, rest)| rest.to_string())
+            .unwrap_or_default();
+    }
+    let lines = text
+        .lines()
+        .map(str::to_string)
+        .rev()
+        .take(tail)
+        .collect::<Vec<_>>();
+    Ok(lines.into_iter().rev().collect())
+}
+
+fn redact_log_line(line: &str) -> String {
+    line.split_whitespace()
+        .map(redact_log_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_log_token(token: &str) -> String {
+    let trimmed = token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    });
+    if is_absolute_path_token(trimmed) {
+        return "<redacted-path>".to_string();
+    }
+    if is_hash_token(trimmed) {
+        return "<redacted-hash>".to_string();
+    }
+    redact_sha256_hashes(token)
+}
+
+fn redact_sha256_hashes(token: &str) -> String {
+    let mut output = String::new();
+    let mut rest = token;
+    while let Some(position) = rest.find("sha256:") {
+        output.push_str(&rest[..position]);
+        let hash_start = position + "sha256:".len();
+        let hash_end = hash_start + 64;
+        if rest.len() >= hash_end
+            && rest.as_bytes()[hash_start..hash_end]
+                .iter()
+                .all(u8::is_ascii_hexdigit)
+        {
+            output.push_str("sha256:<redacted>");
+            rest = &rest[hash_end..];
+        } else {
+            output.push_str("sha256:");
+            rest = &rest[hash_start..];
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+fn is_hash_token(token: &str) -> bool {
+    token.len() == 64 && token.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn is_absolute_path_token(token: &str) -> bool {
+    if token.starts_with('/') {
+        return token.len() > 1;
+    }
+    let mut chars = token.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2683,24 +2832,69 @@ mod tests {
     }
 
     #[test]
-    fn logs_placeholder_is_redacted_and_does_not_expose_paths() {
+    fn logs_tail_is_bounded_redacted_and_does_not_expose_paths() {
         let workspace = TempWorkspace::new("repository-logs");
         init_repository(init_request(workspace.path())).expect("init repository");
+        let log_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("logs")
+            .join("index.log");
+        fs::write(
+            &log_path,
+            format!(
+                "first line\nabsolute path would be {}\nhash sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+                workspace.path().display()
+            ),
+        )
+        .expect("write log");
 
         let report = repository_logs(RepositoryLogsRequest {
             path: root_string(workspace.path()),
             state_dir_override: None,
             component: Some("index".to_string()),
-            tail: Some(20),
+            tail: Some(2),
             since: Some("1h".to_string()),
             redact: true,
         })
         .expect("logs report");
 
-        assert!(!report.available);
+        assert!(report.available);
         assert!(report.redacted);
-        assert!(report.entries.is_empty());
+        assert_eq!(report.entries.len(), 2);
+        assert!(!report.entries.iter().any(|entry| entry == "first line"));
+        assert!(report
+            .entries
+            .iter()
+            .any(|entry| entry.contains("<redacted-path>")));
+        assert!(report
+            .entries
+            .iter()
+            .any(|entry| entry.contains("sha256:<redacted>")));
         assert!(!report.message.contains(&root_string(workspace.path())));
+        assert!(report
+            .message
+            .contains("--since filtering is not supported"));
+    }
+
+    #[test]
+    fn logs_missing_file_is_cleanly_unavailable() {
+        let workspace = TempWorkspace::new("repository-logs-missing");
+        init_repository(init_request(workspace.path())).expect("init repository");
+
+        let report = repository_logs(RepositoryLogsRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            component: Some("daemon".to_string()),
+            tail: None,
+            since: None,
+            redact: true,
+        })
+        .expect("logs report");
+
+        assert!(!report.available);
+        assert!(report.entries.is_empty());
+        assert!(report.message.contains("daemon log is missing"));
     }
 
     #[test]

@@ -36,22 +36,25 @@
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
   compact/evidence/deep modes shared by CLI and MCP; compact is the default,
   evidence/deep use greedy metadata coverage selection, all matched modes
-  include read plans, and source snippets remain disabled unless callers
-  explicitly request bounded source spans. Supported Python members can
+  include read plans with hash-checked line ranges when source hashes are
+  fresh, and source snippets remain disabled unless callers explicitly request
+  bounded source spans. Supported Python members can
   preserve non-blocking subclaim
   `UNKNOWN`s, such as unresolved FastAPI dependency targets, as metadata-only
   family detail entries keyed by the concrete family id and subclaim without
   turning those subclaims into route-membership support. Read plans use
-  repo-relative paths, strict content hashes, byte ranges, purpose labels, and
-  estimated token costs. CLI `--include-source-spans` and MCP
+  repo-relative paths, strict content hashes, byte ranges, line ranges when
+  fresh, purpose labels, and estimated token costs. CLI
+  `--include-source-spans` and MCP
   `include_source_spans: true` render only selected hash-checked spans with
   line numbers and omit stale or unsupported spans with Read/Grep fallback
   guidance. Target source remains required before edits outside rendered
   ranges. `repogrammar stats --json` now reports
   repo-shape diagnostics for local pattern density, family support coverage,
   abstention rate, external dependency signal, and thin-wrapper/token-saving
-  risk, and reports measured token savings only when local paired
-  baseline/treatment experiment records are comparable. `index`, `sync`, and `resync` emit
+  risk, readiness/blocking reasons, and estimated potential read displacement,
+  and reports measured token savings only when local paired baseline/treatment
+  experiment records are comparable. `index`, `sync`, and `resync` emit
   typed stage progress to stderr while running, with exact counts when known
   and NDJSON progress available through `--json --progress always`.
   Rust self-dogfood uses Tree-sitter Rust only for structural `.rs` unit
@@ -63,7 +66,13 @@
   target-dependency inventory. Root `Cargo.toml` build-variant UNKNOWN can block
   repository-wide Rust self-dogfood family emission, but nested fixture/package
   manifests must not globally block unrelated root Rust family support.
-  `repogrammar autosync` now provides optional repo-local automatic sync:
+  `repogrammar init --yes --resync --autosync` is now the explicit one-command
+  repository bootstrap: plain `init --yes` remains confirmation-only and does
+  not index, while the combined form initializes repo-local state, runs the
+  resync indexing path, then starts auto-sync only after a readable active
+  generation exists. `repogrammar logs` now reads bounded redacted tails from
+  repo-local component logs and reports clean unavailable states for missing or
+  unreadable logs. `repogrammar autosync` now provides optional repo-local automatic sync:
   `autosync start` enables and launches a background worker that polls the
   existing discovery fingerprint, debounces saves, and reuses the current full
   `sync` path, while `status`, `stop`, `disable`, and foreground `run` manage
@@ -430,6 +439,9 @@ Family query output, MCP `repogrammar_context` family responses, and
 context responses update only a repo-local aggregate under
 `.repogrammar/telemetry/local-metrics/`; this is not measured token savings,
 not causal evidence, and not part of anonymous telemetry upload payloads.
+Stats readiness and blocking reasons explain whether estimated displacement is
+plausible, but measured savings remain absent unless a comparable paired
+experiment exists.
 
 Tree-sitter integration, TypeScript compiler API integration,
 provider-backed Python project-configuration semantics, Pyrefly/Pyright

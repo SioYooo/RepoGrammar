@@ -26,8 +26,8 @@ use repogrammar::application::install::{
 };
 use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::query::{
-    list_code_units, list_families_with_freshness, list_indexed_files,
-    lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
+    enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
+    list_indexed_files, lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
     FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
     IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan, RepoShapeDiagnosticsReport,
     SourceSpanRenderReport, SourceSpanRenderRequest,
@@ -665,6 +665,21 @@ impl CliRuntime for ProductCliRuntime {
         )
     }
 
+    fn enrich_read_plan_line_ranges(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        enrich_read_plan_line_ranges(
+            SourceSpanRenderRequest {
+                repository_root: request.path,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &FilesystemSourceStore,
+            read_plan,
+        )
+    }
+
     fn repo_shape_diagnostics(
         &self,
         request: RepositoryStatusRequest,
@@ -789,6 +804,14 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
             include_source_spans,
             token_budget,
         )
+    }
+
+    fn enrich_read_plan_line_ranges(
+        &self,
+        request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        <Self as CliRuntime>::enrich_read_plan_line_ranges(self, request, read_plan)
     }
 }
 
@@ -1909,14 +1932,24 @@ mod tests {
         assert!(
             first["start_byte"].as_u64().expect("start") < first["end_byte"].as_u64().expect("end")
         );
-        assert!(
-            first["start_line"].is_null(),
-            "line ranges are intentionally unavailable until source-span rendering exists"
-        );
-        assert!(first["end_line"].is_null());
+        assert_read_plan_item_has_line_range(first);
+        assert!(read_plan["line_range_omissions"]
+            .as_array()
+            .expect("line range omissions")
+            .is_empty());
         assert_eq!(first["source_snippets_included"], false);
         assert!(!value.to_string().contains("def "));
         assert!(!value.to_string().contains("/tmp/"));
+    }
+
+    fn assert_read_plan_item_has_line_range(item: &Value) {
+        let start_line = item["start_line"].as_u64().expect("start line");
+        let end_line = item["end_line"].as_u64().expect("end line");
+        assert!(start_line > 0, "start line must be 1-based");
+        assert!(
+            end_line >= start_line,
+            "end line must be greater than or equal to start line"
+        );
     }
 
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
@@ -3145,7 +3178,7 @@ mod tests {
         assert_eq!(detail_json["status"], "ok");
         assert_eq!(detail_json["output"]["source_snippets_included"], false);
         assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
-        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+        assert_read_plan_item_has_line_range(&detail_json["read_plan"]["items"][0]);
 
         let spanned = run_with_runtime(
             cli_args(
@@ -3613,7 +3646,7 @@ mod tests {
         assert_eq!(detail_json["status"], "ok");
         assert_eq!(detail_json["output"]["source_snippets_included"], false);
         assert_eq!(detail_json["read_plan"]["source_snippets_included"], false);
-        assert!(detail_json["read_plan"]["items"][0]["start_line"].is_null());
+        assert_read_plan_item_has_line_range(&detail_json["read_plan"]["items"][0]);
         let members = detail_json["members"].as_array().expect("members");
         assert_eq!(members.len(), 5);
         assert!(members

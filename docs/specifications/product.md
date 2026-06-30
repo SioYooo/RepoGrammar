@@ -229,11 +229,14 @@ metadata-first unless source spans are explicitly requested.
 
 `repogrammar stats --json` reports repo-shape diagnostics for local pattern
 density, family support coverage, abstention rate, and thin-wrapper/token-saving
-risk. These diagnostics explain when RepoGrammar can reduce context acquisition
-cost and when third-party-heavy or thin-wrapper repositories are unlikely to
-produce large savings. They are not measured token savings or causal claims.
-Measured token savings are reported only when a local paired baseline/treatment
-token experiment has comparable token counts and a measurement source.
+risk, plus token-saving readiness and concrete blocking reasons. These
+diagnostics explain when RepoGrammar can reduce context acquisition cost and
+when third-party-heavy or thin-wrapper repositories are unlikely to produce
+large savings. They are not measured token savings or causal claims. Measured
+token savings are reported only when a local paired baseline/treatment token
+experiment has comparable token counts and a measurement source; otherwise
+stats must mark the measurement kind as `ESTIMATED` and include a not-measured
+caveat.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
@@ -244,8 +247,11 @@ structural observations. The canonical taxonomy lives in
 ## Installation and telemetry boundaries
 
 Machine-level `install` and `uninstall` are separate from repository-level
-`init`, `index`, and `sync`. Installer behavior must be reversible, scoped, and
-dry-run friendly.
+`init`, `resync`, `autosync`, and `uninit`. Installer behavior must be
+reversible, scoped, and dry-run friendly. Repository bootstrap is explicit:
+`repogrammar init --yes --resync --autosync` creates repo-local analysis state,
+rebuilds the active generation, and starts auto-sync only when the user or
+agent has permission to do so.
 
 End-user installation must be binary-first. Public-preview users should be able
 to install and run the RepoGrammar CLI from a prebuilt release artifact without

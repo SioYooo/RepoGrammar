@@ -8,10 +8,8 @@ Installation is three separate steps:
 1. install the `repogrammar` CLI binary;
 2. run `repogrammar install` to wire machine-level coding-agent MCP
    integration;
-3. run `repogrammar init --yes` and `repogrammar resync` inside each repository
-   that should have a local RepoGrammar index, then optionally run
-   `repogrammar autosync start` when an agent session should keep new and
-   modified files indexed automatically.
+3. run `repogrammar init --yes --resync --autosync` inside each repository
+   that should have a local RepoGrammar index and agent-session auto-sync.
 
 End users must not need Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, a
 local LLM, an embedding model, or cloud API keys to install and run the
@@ -187,12 +185,13 @@ only. They must not create, update, or delete `.repogrammar/`, and they must not
 remove project indexes, logs, caches, locks, or repository-local receipts.
 They must not run `init`, `index`, `sync`, or `resync`.
 Agent-safe bootstrap is explicit and per repository: after machine-level
-installation, an agent may run `repogrammar init --yes` only when the user has
-allowed repo-local analysis state, then run `repogrammar resync` to rebuild the
-active static-analysis generation. If the user also wants coding-agent edits to
-enter RepoGrammar results without repeated manual `resync`, the agent may run
-`repogrammar autosync start` after the first successful `resync`. `init --yes`
-does not broaden `init` writes and does not imply telemetry consent.
+installation, an agent may run `repogrammar init --yes --resync --autosync`
+only when the user has allowed repo-local analysis state. Plain `init --yes`
+does not broaden `init` writes, does not index, does not start auto-sync, and
+does not imply telemetry consent. If a repository already has a readable active
+generation, an agent may run `repogrammar autosync start` separately when the
+user wants coding-agent edits to enter RepoGrammar results without repeated
+manual `resync`.
 
 Repository lifecycle state is owned by `repogrammar init`,
 `repogrammar index`, `repogrammar sync`, `repogrammar resync`, and

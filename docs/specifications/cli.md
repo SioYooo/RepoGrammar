@@ -139,11 +139,21 @@ bootstrap manifest placeholder values.
 `repogrammar init --yes` is accepted as an agent-safe noninteractive
 confirmation flag. It does not broaden `init` writes, does not run indexing,
 and does not make root `.gitignore` writes unless `--write-gitignore` is also
-present. Agent bootstrap guidance may recommend `repogrammar init --yes`
-followed by `repogrammar resync` for a repository whose user has allowed
-repo-local analysis state, then `repogrammar autosync start` when the user wants
-new or modified files from an agent session to enter later RepoGrammar results
-without manual `resync`.
+present.
+
+`repogrammar init --yes --resync --autosync` is the explicit one-command
+repository bootstrap for users or agents that have permission to create
+repo-local analysis state. It must run the normal init path, then run the same
+static-analysis path as `repogrammar resync`, then start auto-sync only after a
+readable active generation exists. Plain `init --yes` remains confirmation-only
+and must not index. `init --yes --autosync` without `--resync` may start
+auto-sync only when status already reports a readable active generation;
+otherwise it must fail cleanly with guidance to run
+`repogrammar init --yes --resync --autosync`. JSON output for bootstrap must
+preserve the existing top-level init fields and include `resync` and
+`autosync` sub-results where applicable. If auto-sync start fails after a
+successful resync, the JSON error must preserve the valid `resync` sub-result
+and must not roll back the active generation.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -307,16 +317,20 @@ inspection-only. With `--force --yes`, it may remove only a confirmed stale
 `index.lock`; active, unknown, invalid, daemon, and SQLite locks must remain in
 place with a stable refusal reason.
 
-`repogrammar logs` reads repo-local diagnostic logs. It supports:
+`repogrammar logs` reads repo-local diagnostic logs from
+`.repogrammar/logs/<component>.log`. It supports:
 
-- `--tail`;
+- `--tail [n]`, defaulting to 100 lines and bounded by implementation limits;
 - `--since <duration>`;
 - `--component index|daemon|mcp|telemetry`;
 - `--redact`.
 
-Logs are diagnostic state, not telemetry. During bootstrap, `logs` exposes
-redacted metadata only; machine-readable output must not include source
-snippets or absolute paths.
+The default component is `daemon`. Missing, unreadable, non-file, symlinked, or
+malformed log files must return a clean unavailable report rather than panic.
+`--since` is accepted for contract stability but may return the bounded tail
+with a message that duration filtering is not implemented. Logs are diagnostic
+state, not telemetry. `logs` redacts by default and machine-readable output must
+not include source snippets or absolute paths.
 
 ## Installer commands
 
@@ -394,6 +408,8 @@ Install does not upload telemetry or run paired token-saving experiments.
 `repogrammar stats` reports repo-shape diagnostics for initialized repositories
 with an active readable generation. With `--json`, it must return a parseable
 object with `implemented: true`, the active generation, metric-kind vocabulary,
+top-level `token_saving_readiness`, `blocking_reasons`, `measurement_kind`, and
+`caveat` fields,
 `null` values for measured `token_savings`, `token_savings_ratio`,
 `measurement_source`, and `context_compression_ratio` unless a comparable local
 paired token experiment exists, and diagnostic metrics:
@@ -411,10 +427,17 @@ guessed. `stats` may report the repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
 Measured `token_savings` remains `null` unless a comparable paired experiment
-exists. The output must not include source snippets, query text, repository
-names, or absolute paths. If repository state or the active index is missing,
-`stats --json` uses the same missing-index fallback shape as implemented
-inventory commands and keeps `implemented: true`.
+exists. When only estimates exist, top-level `measurement_kind` must be
+`ESTIMATED`, `blocking_reasons` must include `no_paired_experiment`, and
+`caveat` must say the value is estimated potential only, not measured token
+savings. If repository shape is not ready for useful read-displacement
+estimates, `blocking_reasons` must also name concrete causes such as
+`no_supported_units`, `no_families`, or `low_pattern_density`. The output must
+not include source snippets, query text, repository names, or absolute paths.
+If repository state or the active index is missing, `stats --json` uses the
+same missing-index fallback shape as implemented inventory commands, keeps
+`implemented: true`, and still reports `token_saving_readiness: unknown`,
+`measurement_kind: ESTIMATED`, a not-measured caveat, and blocking reasons.
 
 `repogrammar telemetry` owns anonymous product telemetry consent, explicit
 upload, research trace consent, and local paired token experiment recording.
@@ -609,14 +632,20 @@ purpose, repo-relative path, strict content hash, byte range, optional line
 range, estimated token cost, a short reason, whether source is required before
 editing, and whether a source snippet was included for that item.
 `--include-source-spans` is the only CLI source-output opt-in. When absent,
-line fields may remain `null` and `source_snippets_included` is false. When
-present, RepoGrammar renders only selected read-plan spans through the
-hash-checked source-store boundary, fills line ranges for rendered spans, and
-places line-numbered text under a separate `source_spans` block. Stale,
-missing, hash-mismatched, too-large, unsupported, dynamic, insufficient, or
-conflicting cases must omit rendered spans and tell the user to use normal
-Read/Grep for the affected file or claim. The read plan must never include
-absolute paths or a claim that editing is safe outside listed ranges.
+RepoGrammar still attempts hash-checked metadata-only line-range enrichment for
+read-plan items and keeps `source_snippets_included` false. Fresh source hashes
+should therefore produce `start_line` and `end_line` without returning source
+text. Stale, missing, hash-mismatched, too-large, non-UTF-8, unavailable, or
+invalid ranges must preserve the read-plan item and add `line_range_omissions`
+guidance telling the user to use normal Read/Grep for the affected span. When
+`--include-source-spans` is present, RepoGrammar renders only selected
+read-plan spans through the hash-checked source-store boundary, fills line
+ranges for rendered spans, and places line-numbered text under a separate
+`source_spans` block. Stale, missing, hash-mismatched, too-large, unsupported,
+dynamic, insufficient, or conflicting cases must omit rendered spans and tell
+the user to use normal Read/Grep for the affected file or claim. The read plan
+must never include absolute paths or a claim that editing is safe outside
+listed ranges.
 `--token-budget <n>` validates a positive bounded integer and implies
 `--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
@@ -655,7 +684,8 @@ creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
 lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
-repo-local lifecycle information without claiming parser/mining support.
+repo-local lifecycle information without claiming parser/mining support; `logs`
+returns a bounded redacted tail for selected repo-local component logs.
 `index` and `sync` currently create syntax-only SQLite generations from the
 TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
 the Python `.py` discovery/CPython AST structural extractor. Their JSON output
@@ -694,10 +724,12 @@ return missing-index fallback before an active generation exists, typed
 when EC-MVFI-lite has written supported family rows. Stored family detail now
 uses compact/evidence/deep output modes. Compact is the default and omits
 evidence records; all modes include a read plan; evidence and deep remain
-metadata-first and include source snippets only when `--include-source-spans`
-is explicitly requested. `stats` reads the active index/family substrate to report local
-pattern density, family support coverage, abstention rate, and
-thin-wrapper/token-saving risk without reporting measured token savings.
+metadata-first, include default read-plan line ranges when hashes are fresh,
+and include source snippets only when `--include-source-spans` is explicitly
+requested. `stats` reads the active index/family substrate to report local
+pattern density, family support coverage, abstention rate,
+thin-wrapper/token-saving risk, readiness/blocking reasons, and estimated
+potential read displacement without reporting measured token savings.
 `serve` runs the read-only MCP
 `repogrammar_context` stdio boundary and reuses the same query preflight and
 FamilyStore-backed lookup path. Commands that install or uninstall agent

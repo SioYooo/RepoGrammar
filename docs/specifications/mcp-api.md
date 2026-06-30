@@ -92,15 +92,16 @@ FALLBACK_TO_CODE_SEARCH
 reason: repository is not initialized
 guidance: run repogrammar init --yes
 ```
-For agent-safe bootstrap, MCP guidance may recommend `repogrammar init --yes`
-only after the user has allowed repo-local RepoGrammar state. The MCP server
-itself remains read-only and must not run `init`, `resync`, `autosync start`,
-or any other repository writer. If repository state exists but no readable
-active generation exists, guidance should tell the agent to run
-`repogrammar resync` rather than claiming analysis has run. After the first
-successful `resync`, guidance may recommend `repogrammar autosync start` when a
-coding-agent session should keep newly added or modified files indexed without
-manual `resync`.
+For agent-safe bootstrap, MCP guidance may recommend
+`repogrammar init --yes --resync --autosync` only after the user has allowed
+repo-local RepoGrammar state. The MCP server itself remains read-only and must
+not run `init`, `resync`, `autosync start`, or any other repository writer. If
+repository state exists but no readable active generation exists, guidance
+should tell the agent to run `repogrammar resync` rather than claiming analysis
+has run. When a coding-agent session should keep newly added or modified files
+indexed without manual `resync`, guidance should prefer the combined bootstrap
+command for first setup or `repogrammar autosync start` after an already
+successful `resync`.
 
 If an index is stale, MCP responses must include a stale warning or refuse
 family claims whose evidence changed. Freshness checks must compare the active
@@ -131,8 +132,12 @@ the existing `find_analogues`, `show_family`, `explain_deviation`, and
 `check_conformance` operations. It contains suggested target, canonical,
 support, and variation/exception spans by repo-relative path, strict content
 hash, byte range, estimated token cost, and purpose. When source spans are not
-requested, line ranges may remain `null` and `source_snippets_included` remains
-`false`. When `include_source_spans: true` is requested, RepoGrammar renders
+requested, RepoGrammar still attempts metadata-only line-range enrichment after
+source-store path and content-hash validation. Fresh hashes should return
+`start_line` and `end_line` while `source_snippets_included` remains `false`.
+Stale, missing, hash-mismatched, too-large, non-UTF-8, unavailable, or invalid
+ranges must preserve the read-plan item and add `line_range_omissions`
+guidance. When `include_source_spans: true` is requested, RepoGrammar renders
 only selected read-plan spans after source-store path and content-hash
 validation, fills line ranges for rendered spans, and returns line-numbered
 text under a separate `source_spans` object. The read plan never includes
@@ -221,11 +226,12 @@ conformance, deviations, or repeated framework behavior. Agents must fall back
 to normal Read/Grep when RepoGrammar returns `UNKNOWN`, stale/omitted spans, or
 insufficient support.
 When RepoGrammar returns missing-state fallback and the user has allowed
-repo-local analysis state, agents may run `repogrammar init --yes` followed by
-`repogrammar resync`. When RepoGrammar reports missing or stale analysis for an
-already initialized repository, agents may run `repogrammar resync`. When a
-session should keep agent-written files available to later RepoGrammar queries,
-agents may run `repogrammar autosync start` after a successful `resync`.
+repo-local analysis state, agents may run
+`repogrammar init --yes --resync --autosync`. When RepoGrammar reports missing
+or stale analysis for an already initialized repository, agents may run
+`repogrammar resync`. When a session should keep agent-written files available
+to later RepoGrammar queries after a successful `resync`, agents may run
+`repogrammar autosync start`.
 When Rust self-dogfood families or conservative TS/JS
 Express/Jest/Vitest/Next/Fastify/Prisma/Drizzle families are present, MCP
 returns them through the same metadata-only/read-plan contract as Python

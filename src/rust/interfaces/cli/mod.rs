@@ -16,7 +16,8 @@ use crate::application::query::{
     FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
     FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
     IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    RepoShapeDiagnosticsReport, SelectedFamilyEvidence, SourceSpanRenderReport,
+    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, SelectedFamilyEvidence,
+    SourceSpanRenderReport, TokenSavingReadiness,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -177,6 +178,14 @@ pub trait CliRuntime {
         _token_budget: Option<usize>,
     ) -> Result<SourceSpanRenderReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("source spans"))
+    }
+
+    fn enrich_read_plan_line_ranges(
+        &self,
+        _request: RepositoryStatusRequest,
+        read_plan: &ReadPlan,
+    ) -> Result<ReadPlan, RepoGrammarError> {
+        Ok(read_plan.clone())
     }
 
     fn repo_shape_diagnostics(
@@ -466,8 +475,8 @@ fn usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  init [--project <path>] [--yes] [--write-gitignore] [--json] [--progress auto|always|never]",
-        "      Create safe repo-local state under .repogrammar/ without indexing; --yes is accepted for agent scripts.",
+        "  init [--project <path>] [--yes] [--resync] [--autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
+        "      Create safe repo-local state; optionally resync and start autosync in one agent-safe command.",
         "  uninit [--project <path>] --yes [--json]",
         "      Remove RepoGrammar repo-local state after explicit confirmation.",
         "  index [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
@@ -514,9 +523,7 @@ fn usage() -> String {
         "      Remove only RepoGrammar-owned agent integration receipts.",
         "",
         "Agent-safe repository bootstrap:",
-        "  repogrammar init --yes",
-        "  repogrammar resync",
-        "  repogrammar autosync start",
+        "  repogrammar init --yes --resync --autosync",
         "      install wires agents; init/resync/autosync remain explicit per-repository analysis steps.",
         "",
         "Metrics:",
@@ -543,16 +550,18 @@ fn help_text(lines: &[&str]) -> String {
 fn command_usage(command: &str) -> Option<String> {
     match command {
         "init" => Some(help_text(&[
-            "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+            "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--resync] [--autosync] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
             "",
             "Creates repository-local RepoGrammar state under .repogrammar/ by default.",
-            "It does not index source code. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
+            "Without --resync it does not index source code. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
             "--yes is accepted as an agent-safe noninteractive confirmation flag; it does not broaden init writes.",
-            "Run repogrammar resync after init to build or refresh static-analysis facts; run repogrammar autosync start when a coding agent should keep them fresh during edits.",
+            "Use --resync to build or refresh static-analysis facts; add --autosync to keep them fresh during an agent editing session.",
             "",
             "Options:",
             "  --project <path>, --path <path>     Repository root to initialize. Defaults to the current directory.",
             "  --yes                              Accepted no-op confirmation flag for noninteractive agent bootstrap.",
+            "  --resync                           Build or refresh the active index after init succeeds.",
+            "  --autosync                         Start repo-local autosync after init; requires --resync or an existing active generation.",
             "  --write-gitignore                  Add a marker-fenced .gitignore entry in the repository root.",
             "  --json                             Emit machine-readable output.",
             "  --progress auto|always|never       Control progress output.",
@@ -994,7 +1003,7 @@ where
                 lookup_mode_for_command(command),
             ) {
                 Ok(report) if options.json => {
-                    let source_spans = match maybe_render_source_spans(
+                    let prepared_output = match prepare_family_output(
                         runtime,
                         request.clone(),
                         &report,
@@ -1020,7 +1029,7 @@ where
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
                         options.output_options(),
-                        source_spans.as_ref(),
+                        prepared_output.as_ref(),
                     );
                     CliOutput::success(family_lookup_json(
                         command,
@@ -1028,11 +1037,11 @@ where
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
                         options.output_options(),
-                        source_spans.as_ref(),
+                        prepared_output.as_ref(),
                     ))
                 }
                 Ok(report) => {
-                    let source_spans = match maybe_render_source_spans(
+                    let prepared_output = match prepare_family_output(
                         runtime,
                         request.clone(),
                         &report,
@@ -1058,7 +1067,7 @@ where
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
                         options.output_options(),
-                        source_spans.as_ref(),
+                        prepared_output.as_ref(),
                     );
                     CliOutput::success(family_lookup_human(
                         command,
@@ -1066,7 +1075,7 @@ where
                         options.target.as_deref(),
                         lookup_mode_for_command(command),
                         options.output_options(),
-                        source_spans.as_ref(),
+                        prepared_output.as_ref(),
                     ))
                 }
                 Err(_) => query_fallback(
@@ -1097,7 +1106,12 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
     }
 }
 
-fn maybe_render_source_spans(
+struct PreparedFamilyOutput {
+    read_plan: ReadPlan,
+    source_spans: Option<SourceSpanRenderReport>,
+}
+
+fn prepare_family_output(
     runtime: &impl CliRuntime,
     request: RepositoryStatusRequest,
     report: &FamilyLookupReport,
@@ -1105,22 +1119,24 @@ fn maybe_render_source_spans(
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
     include_source_spans: bool,
-) -> Result<Option<SourceSpanRenderReport>, RepoGrammarError> {
-    if !include_source_spans {
-        return Ok(None);
-    }
+) -> Result<Option<PreparedFamilyOutput>, RepoGrammarError> {
     let FamilyLookupReport::Found(family) = report else {
         return Ok(None);
     };
-    let read_plan = build_read_plan(family, target, mode, options);
-    runtime
-        .render_source_spans(
-            request,
-            &read_plan,
-            include_source_spans,
-            options.token_budget,
-        )
-        .map(Some)
+    let base_read_plan = build_read_plan(family, target, mode, options);
+    let mut read_plan = runtime.enrich_read_plan_line_ranges(request.clone(), &base_read_plan)?;
+    let source_spans = if include_source_spans {
+        let rendered =
+            runtime.render_source_spans(request, &read_plan, true, options.token_budget)?;
+        read_plan = read_plan_with_rendered_spans(&read_plan, &rendered);
+        Some(rendered)
+    } else {
+        None
+    };
+    Ok(Some(PreparedFamilyOutput {
+        read_plan,
+        source_spans,
+    }))
 }
 
 fn record_family_query_estimated_potential_token_savings(
@@ -1129,12 +1145,13 @@ fn record_family_query_estimated_potential_token_savings(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
-    source_spans: Option<&SourceSpanRenderReport>,
+    prepared_output: Option<&PreparedFamilyOutput>,
 ) {
     let FamilyLookupReport::Found(family) = report else {
         return;
     };
-    let output_components = family_output_components(family, target, mode, options, source_spans);
+    let output_components =
+        family_output_components(family, target, mode, options, prepared_output);
     let _ = record_estimated_potential_token_savings(
         request,
         &output_components.estimated_potential_token_savings,
@@ -1325,15 +1342,16 @@ fn family_lookup_human(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
-    source_spans: Option<&SourceSpanRenderReport>,
+    prepared_output: Option<&PreparedFamilyOutput>,
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
             let output_components =
-                family_output_components(family, target, mode, options, source_spans);
+                family_output_components(family, target, mode, options, prepared_output);
             let selected_evidence = &output_components.selected_evidence;
             let read_plan = &output_components.read_plan;
             let estimated_potential = &output_components.estimated_potential_token_savings;
+            let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
             let snippets = if read_plan.source_snippets_included {
                 "included"
             } else {
@@ -1475,11 +1493,11 @@ fn family_lookup_json(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
-    source_spans: Option<&SourceSpanRenderReport>,
+    prepared_output: Option<&PreparedFamilyOutput>,
 ) -> String {
     match report {
         FamilyLookupReport::Found(family) => {
-            family_detail_json(command, family, target, mode, options, source_spans)
+            family_detail_json(command, family, target, mode, options, prepared_output)
         }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
@@ -1497,12 +1515,14 @@ fn family_detail_json(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
-    source_spans: Option<&SourceSpanRenderReport>,
+    prepared_output: Option<&PreparedFamilyOutput>,
 ) -> String {
-    let output_components = family_output_components(family, target, mode, options, source_spans);
+    let output_components =
+        family_output_components(family, target, mode, options, prepared_output);
     let selected_evidence = &output_components.selected_evidence;
     let read_plan = &output_components.read_plan;
     let estimated_potential = &output_components.estimated_potential_token_savings;
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     let check = if command == "check" {
         Some(json!({
             "advisory_status": "UNKNOWN",
@@ -1585,13 +1605,13 @@ fn family_output_components(
     target: Option<&str>,
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
-    source_spans: Option<&SourceSpanRenderReport>,
+    prepared_output: Option<&PreparedFamilyOutput>,
 ) -> FamilyOutputComponents {
     let selected_evidence = select_family_evidence(family, options);
-    let base_read_plan = build_read_plan(family, target, mode, options);
-    let read_plan = source_spans
-        .map(|rendered| read_plan_with_rendered_spans(&base_read_plan, rendered))
-        .unwrap_or(base_read_plan);
+    let read_plan = prepared_output
+        .map(|prepared| prepared.read_plan.clone())
+        .unwrap_or_else(|| build_read_plan(family, target, mode, options));
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     let estimated_potential_token_savings = estimate_family_output_potential_token_savings(
         family,
         &selected_evidence,
@@ -1629,6 +1649,17 @@ fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyE
         output.push_str(&format!(
             "read_plan_additional_items: {}\n",
             read_plan.items.len() - limit
+        ));
+    }
+    for omission in &read_plan.line_range_omissions {
+        output.push_str(&format!(
+            "read_plan_line_range_omitted: {}\tpath: {}\trange: {}-{}\treason: {}\tguidance: {}\n",
+            omission.purpose.as_str(),
+            omission.path,
+            omission.start_byte,
+            omission.end_byte,
+            omission.reason,
+            omission.guidance
         ));
     }
 }
@@ -1700,6 +1731,18 @@ fn read_plan_json(read_plan: &ReadPlan) -> serde_json::Value {
         "selection_strategy": read_plan.selection_strategy,
         "budget_satisfied": read_plan.budget_satisfied,
         "items": read_plan.items.iter().map(read_plan_item_json).collect::<Vec<_>>(),
+        "line_range_omissions": read_plan.line_range_omissions.iter().map(read_plan_line_range_omission_json).collect::<Vec<_>>(),
+    })
+}
+
+fn read_plan_line_range_omission_json(omission: &ReadPlanLineRangeOmission) -> serde_json::Value {
+    json!({
+        "purpose": omission.purpose.as_str(),
+        "path": omission.path,
+        "start_byte": omission.start_byte,
+        "end_byte": omission.end_byte,
+        "reason": omission.reason,
+        "guidance": omission.guidance,
     })
 }
 
@@ -2482,13 +2525,7 @@ where
             let fallback = repository_status_unavailable_fallback(
                 QueryPreflightOperation::ActiveIndexInventory,
             );
-            return query_fallback(
-                "stats",
-                options.json,
-                fallback.reason,
-                fallback.guidance,
-                fallback.implemented,
-            );
+            return stats_fallback(options.json, fallback.reason, fallback.guidance);
         }
     };
 
@@ -2497,13 +2534,7 @@ where
         &status_report,
     ) {
         QueryPreflightReport::Fallback(fallback) => {
-            return query_fallback(
-                "stats",
-                options.json,
-                fallback.reason,
-                fallback.guidance,
-                fallback.implemented,
-            );
+            return stats_fallback(options.json, fallback.reason, fallback.guidance);
         }
         QueryPreflightReport::Ready => {}
     }
@@ -2525,12 +2556,10 @@ where
                 );
                 CliOutput::success(stats_json(&report, measurement.as_ref(), &estimated_rollup))
             }
-            Err(_) => query_fallback(
-                "stats",
+            Err(_) => stats_fallback(
                 true,
                 "repository status is unavailable",
                 "run repogrammar doctor",
-                true,
             ),
         };
     }
@@ -2541,12 +2570,10 @@ where
                 estimated_potential_token_savings_rollup(request).unwrap_or_default();
             CliOutput::success(stats_human(&report, &estimated_rollup))
         }
-        Err(_) => query_fallback(
-            "stats",
+        Err(_) => stats_fallback(
             false,
             "repository status is unavailable",
             "run repogrammar doctor",
-            true,
         ),
     }
 }
@@ -2602,12 +2629,43 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
     Ok(options)
 }
 
+const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = "estimated potential only; not measured token savings";
+
+fn stats_fallback(json: bool, reason: &str, guidance: &str) -> CliOutput {
+    if json {
+        return CliOutput::failure(
+            2,
+            json_line(json!({
+                "status": "FALLBACK_TO_CODE_SEARCH",
+                "reason": reason,
+                "guidance": guidance,
+                "command": "stats",
+                "implemented": true,
+                "token_saving_readiness": TokenSavingReadiness::Unknown.as_str(),
+                "blocking_reasons": stats_fallback_blocking_reasons(reason),
+                "measurement_kind": "ESTIMATED",
+                "caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+            })),
+        );
+    }
+
+    query_fallback("stats", false, reason, guidance, true)
+}
+
+fn stats_fallback_blocking_reasons(reason: &str) -> Vec<&'static str> {
+    if reason.contains("active index") || reason.contains("initialized") {
+        vec!["no_active_generation"]
+    } else {
+        vec!["repository_status_unavailable"]
+    }
+}
+
 fn stats_human(
     report: &RepoShapeDiagnosticsReport,
     estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
 ) -> String {
     format!(
-        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
+        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
         report.active_generation,
         report.eligible_code_units,
         report.family_count,
@@ -2619,8 +2677,11 @@ fn stats_human(
         report.external_dependency_signal.as_str(),
         report.thin_wrapper_risk.as_str(),
         report.token_saving_risk.as_str(),
+        report.token_saving_readiness.as_str(),
+        stats_blocking_reasons_human(report.blocking_reasons.iter().copied()),
         estimated_rollup.total_estimated_potential_token_savings,
         estimated_rollup.event_count,
+        ESTIMATED_TOKEN_SAVING_CAVEAT,
         estimated_rollup.measurement_kind.as_str(),
         estimated_rollup.caveat,
         report.interpretation
@@ -2632,19 +2693,37 @@ fn stats_json(
     measurement: Option<&crate::application::telemetry::ExperimentReport>,
     estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
 ) -> String {
-    let measurement_status = if measurement
+    let paired_measurement_available = measurement
         .and_then(|measurement| measurement.token_savings)
-        .is_some()
-    {
+        .is_some();
+    let measurement_status = if paired_measurement_available {
         "paired_measurement_available"
     } else {
         "no_paired_measurement"
     };
+    let measurement_kind = if paired_measurement_available {
+        "MEASURED"
+    } else {
+        "ESTIMATED"
+    };
+    let caveat = if paired_measurement_available {
+        "paired measurement available; estimated potential remains diagnostic"
+    } else {
+        ESTIMATED_TOKEN_SAVING_CAVEAT
+    };
+    let blocking_reasons = stats_blocking_reasons(
+        report.blocking_reasons.iter().copied(),
+        paired_measurement_available,
+    );
     json_line(json!({
         "command": "stats",
         "status": "ok",
         "implemented": true,
         "active_generation": report.active_generation,
+        "token_saving_readiness": report.token_saving_readiness.as_str(),
+        "blocking_reasons": blocking_reasons,
+        "measurement_kind": measurement_kind,
+        "caveat": caveat,
         "metrics": {
             "local_pattern_density": report.local_pattern_density,
             "family_support_coverage": report.family_support_coverage,
@@ -2679,6 +2758,34 @@ fn stats_json(
         "interpretation": report.interpretation,
         "claim": "diagnostic only; token saving depends on repeated repo-local patterns and is not measured token savings",
     }))
+}
+
+fn stats_blocking_reasons<I>(reasons: I, paired_measurement_available: bool) -> Vec<&'static str>
+where
+    I: IntoIterator<Item = &'static str>,
+{
+    let mut output = Vec::new();
+    for reason in reasons {
+        if !output.contains(&reason) {
+            output.push(reason);
+        }
+    }
+    if !paired_measurement_available && !output.contains(&"no_paired_experiment") {
+        output.push("no_paired_experiment");
+    }
+    output
+}
+
+fn stats_blocking_reasons_human<I>(reasons: I) -> String
+where
+    I: IntoIterator<Item = &'static str>,
+{
+    let reasons = stats_blocking_reasons(reasons, false);
+    if reasons.is_empty() {
+        "none".to_string()
+    } else {
+        reasons.join(",")
+    }
 }
 
 fn diagnostic_signal_json(signal: DiagnosticSignal) -> serde_json::Value {
@@ -3905,21 +4012,120 @@ where
 
     match init_repository(request) {
         Ok(outcome) => {
-            let status = runtime
+            let mut status = runtime
                 .repository_status(RepositoryStatusRequest {
-                    path: repository_root,
-                    state_dir_override,
+                    path: repository_root.clone(),
+                    state_dir_override: state_dir_override.clone(),
                 })
                 .ok();
+            if !options.resync && !options.autosync {
+                let progress = init_progress_stderr(options);
+                if options.json {
+                    return CliOutput::success_with_stderr(
+                        init_outcome_json(&outcome, status.as_ref()),
+                        progress,
+                    );
+                }
+                return CliOutput::success_with_stderr(
+                    init_outcome_human(&outcome, status.as_ref()),
+                    progress,
+                );
+            }
+
+            if options.autosync
+                && !options.resync
+                && !init_status_has_readable_active_generation(status.as_ref())
+            {
+                return init_bootstrap_failure(
+                    options,
+                    InitBootstrapState {
+                        outcome: &outcome,
+                        status: status.as_ref(),
+                        resync_outcome: None,
+                        autosync_report: None,
+                    },
+                    "autosync",
+                    "autosync start requires an active index generation",
+                    "run repogrammar init --yes --resync --autosync",
+                );
+            }
+
+            let mut resync_outcome = None;
+            if options.resync {
+                let index_request = match build_cli_index_request(options, current_dir, env_lookup)
+                {
+                    Ok(request) => request,
+                    Err(error) => return lifecycle_error("init", options.json, error),
+                };
+                match runtime.index_repository("resync", index_request) {
+                    Ok(outcome) => {
+                        resync_outcome = Some(outcome);
+                        status = runtime
+                            .repository_status(RepositoryStatusRequest {
+                                path: repository_root.clone(),
+                                state_dir_override: state_dir_override.clone(),
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        return init_bootstrap_failure(
+                            options,
+                            InitBootstrapState {
+                                outcome: &outcome,
+                                status: status.as_ref(),
+                                resync_outcome: None,
+                                autosync_report: None,
+                            },
+                            "resync",
+                            &error.to_string(),
+                            "run repogrammar doctor, then retry repogrammar init --yes --resync --autosync",
+                        );
+                    }
+                }
+            }
+
+            let mut autosync_report = None;
+            if options.autosync {
+                let autosync_request = build_cli_autosync_request(options, current_dir, env_lookup);
+                match runtime.autosync(AutosyncCommand::Start, autosync_request) {
+                    Ok(report) => autosync_report = Some(report),
+                    Err(error) => {
+                        return init_bootstrap_failure(
+                            options,
+                            InitBootstrapState {
+                                outcome: &outcome,
+                                status: status.as_ref(),
+                                resync_outcome: resync_outcome.as_ref(),
+                                autosync_report: None,
+                            },
+                            "autosync",
+                            &error.to_string(),
+                            "run repogrammar autosync start after resolving the reported issue",
+                        );
+                    }
+                }
+            }
+
             let progress = init_progress_stderr(options);
             if options.json {
                 CliOutput::success_with_stderr(
-                    init_outcome_json(&outcome, status.as_ref()),
+                    init_bootstrap_json(
+                        options,
+                        &outcome,
+                        status.as_ref(),
+                        resync_outcome.as_ref(),
+                        autosync_report.as_ref(),
+                    ),
                     progress,
                 )
             } else {
                 CliOutput::success_with_stderr(
-                    init_outcome_human(&outcome, status.as_ref()),
+                    init_bootstrap_human(
+                        &outcome,
+                        status.as_ref(),
+                        resync_outcome.as_ref(),
+                        autosync_report.as_ref(),
+                    ),
                     progress,
                 )
             }
@@ -4014,35 +4220,11 @@ fn handle_index<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    let semantic_worker_executable =
-        env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
-    let semantic_worker_args = match semantic_worker_args_from_env_lookup(env_lookup) {
-        Ok(args) => args,
+    let request = match build_cli_index_request(options, current_dir, env_lookup) {
+        Ok(request) => request,
         Err(error) => {
-            return lifecycle_error(command, options.json, RepoGrammarError::InvalidInput(error));
+            return lifecycle_error(command, options.json, error);
         }
-    };
-    if semantic_worker_executable.is_none() && !semantic_worker_args.is_empty() {
-        return lifecycle_error(
-            command,
-            options.json,
-            RepoGrammarError::InvalidInput(
-                "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON requires REPOGRAMMAR_TYPESCRIPT_WORKER"
-                    .to_string(),
-            ),
-        );
-    }
-    let request = CliIndexRequest {
-        repository_root: repository_root(current_dir, options.project_path.as_deref()),
-        state_dir_override: state_dir_override(env_lookup),
-        max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
-        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
-        semantic_worker_executable,
-        semantic_worker_args,
-        progress: options.progress,
-        json: options.json,
-        quiet: options.quiet,
-        stderr_is_terminal: std::io::stderr().is_terminal(),
     };
 
     match runtime.index_repository(command, request) {
@@ -4064,20 +4246,111 @@ fn handle_autosync<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    let request = CliAutosyncRequest {
-        repository_root: repository_root(current_dir, options.project_path.as_deref()),
-        state_dir_override: state_dir_override(env_lookup),
-        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
-        poll_ms: options.poll_ms,
-        debounce_ms: options.debounce_ms,
-        json: options.json,
-        quiet: options.quiet,
-    };
+    let request = build_autosync_request(
+        options.project_path.as_deref(),
+        options.json,
+        options.quiet,
+        options.poll_ms,
+        options.debounce_ms,
+        current_dir,
+        env_lookup,
+    );
     match runtime.autosync(options.command, request) {
         Ok(report) if options.json => CliOutput::success(autosync_json(options.command, &report)),
         Ok(report) => CliOutput::success(autosync_human(options.command, &report, options)),
         Err(error) => lifecycle_error("autosync", options.json, error),
     }
+}
+
+fn build_cli_index_request<F>(
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+) -> Result<CliIndexRequest, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let semantic_worker_executable =
+        env_lookup("REPOGRAMMAR_TYPESCRIPT_WORKER").filter(|value| !value.trim().is_empty());
+    let semantic_worker_args =
+        semantic_worker_args_from_env_lookup(env_lookup).map_err(RepoGrammarError::InvalidInput)?;
+    if semantic_worker_executable.is_none() && !semantic_worker_args.is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON requires REPOGRAMMAR_TYPESCRIPT_WORKER"
+                .to_string(),
+        ));
+    }
+    Ok(CliIndexRequest {
+        repository_root: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+        max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
+        semantic_worker_executable,
+        semantic_worker_args,
+        progress: options.progress,
+        json: options.json,
+        quiet: options.quiet,
+        stderr_is_terminal: std::io::stderr().is_terminal(),
+    })
+}
+
+fn build_cli_autosync_request<F>(
+    options: &LifecycleOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+) -> CliAutosyncRequest
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let settings = AutosyncSettings::default();
+    build_autosync_request(
+        options.project_path.as_deref(),
+        options.json,
+        options.quiet,
+        settings.poll_ms,
+        settings.debounce_ms,
+        current_dir,
+        env_lookup,
+    )
+}
+
+fn build_autosync_request<F>(
+    project_path: Option<&str>,
+    json: bool,
+    quiet: bool,
+    poll_ms: u64,
+    debounce_ms: u64,
+    current_dir: &Path,
+    env_lookup: &F,
+) -> CliAutosyncRequest
+where
+    F: Fn(&str) -> Option<String>,
+{
+    CliAutosyncRequest {
+        repository_root: repository_root(current_dir, project_path),
+        state_dir_override: state_dir_override(env_lookup),
+        strict_gitignore: env_flag_enabled(env_lookup, "REPOGRAMMAR_STRICT_GITIGNORE"),
+        poll_ms,
+        debounce_ms,
+        json,
+        quiet,
+    }
+}
+
+fn init_status_has_readable_active_generation(status: Option<&RepositoryStatusReport>) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    let RepositoryStatus::Initialized { active_generation } = &status.status else {
+        return false;
+    };
+    active_generation != "none"
+        && active_generation != "not implemented"
+        && matches!(
+            status.indexing,
+            RepositoryImplementationStatus::FileManifestOnly
+                | RepositoryImplementationStatus::SyntaxOnlyCodeUnits
+        )
 }
 
 pub fn semantic_worker_args_from_env_lookup<F>(env_lookup: &F) -> Result<Vec<String>, String>
@@ -4240,6 +4513,8 @@ struct LifecycleOptions {
     progress: ProgressMode,
     write_gitignore: bool,
     yes: bool,
+    resync: bool,
+    autosync: bool,
     force: bool,
 }
 
@@ -4253,6 +4528,8 @@ impl Default for LifecycleOptions {
             progress: ProgressMode::Auto,
             write_gitignore: false,
             yes: false,
+            resync: false,
+            autosync: false,
             force: false,
         }
     }
@@ -4386,6 +4663,14 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
             }
             "--yes" if matches!(command, "init" | "uninit" | "unlock") => {
                 options.yes = true;
+                index += 1;
+            }
+            "--resync" if command == "init" => {
+                options.resync = true;
+                index += 1;
+            }
+            "--autosync" if command == "init" => {
+                options.autosync = true;
                 index += 1;
             }
             "--force" if command == "unlock" => {
@@ -4782,7 +5067,14 @@ fn init_outcome_json(
     outcome: &RepositoryInitOutcome,
     status: Option<&RepositoryStatusReport>,
 ) -> String {
-    json_line(json!({
+    json_line(init_outcome_value(outcome, status))
+}
+
+fn init_outcome_value(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+) -> serde_json::Value {
+    json!({
         "command": "init",
         "status": "initialized",
         "state_dir": outcome.state_dir,
@@ -4792,7 +5084,96 @@ fn init_outcome_json(
         "storage": implementation_status(init_storage_status(outcome, status)),
         "indexing": implementation_status(init_indexing_status(outcome, status)),
         "repaired_entries": outcome.repaired_entries,
-    }))
+    })
+}
+
+fn init_bootstrap_json(
+    options: &LifecycleOptions,
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+    resync_outcome: Option<&IndexingOutcome>,
+    autosync_report: Option<&AutosyncReport>,
+) -> String {
+    let mut value = init_outcome_value(outcome, status);
+    value["bootstrap"] = json!({
+        "resync_requested": resync_outcome.is_some(),
+        "autosync_requested": autosync_report.is_some(),
+    });
+    value["resync"] = resync_outcome
+        .map(|outcome| index_outcome_value("resync", outcome, options))
+        .unwrap_or(Value::Null);
+    value["autosync"] = autosync_report
+        .map(|report| autosync_value(AutosyncCommand::Start, report))
+        .unwrap_or(Value::Null);
+    json_line(value)
+}
+
+fn init_bootstrap_human(
+    outcome: &RepositoryInitOutcome,
+    status: Option<&RepositoryStatusReport>,
+    resync_outcome: Option<&IndexingOutcome>,
+    autosync_report: Option<&AutosyncReport>,
+) -> String {
+    let mut output = init_outcome_human(outcome, status);
+    if let Some(outcome) = resync_outcome {
+        output.push_str(&format!(
+            "resync: complete\nactive_generation: {}\nindexed_units: {}\n",
+            outcome.active_generation.as_deref().unwrap_or("none"),
+            outcome.indexed_units
+        ));
+    }
+    if let Some(report) = autosync_report {
+        output.push_str(&format!(
+            "autosync: started\nrunning: {}\nenabled: {}\n",
+            report.running, report.enabled
+        ));
+    }
+    output
+}
+
+struct InitBootstrapState<'a> {
+    outcome: &'a RepositoryInitOutcome,
+    status: Option<&'a RepositoryStatusReport>,
+    resync_outcome: Option<&'a IndexingOutcome>,
+    autosync_report: Option<&'a AutosyncReport>,
+}
+
+fn init_bootstrap_failure(
+    options: &LifecycleOptions,
+    state: InitBootstrapState<'_>,
+    failed_step: &str,
+    reason: &str,
+    guidance: &str,
+) -> CliOutput {
+    if options.json {
+        let mut value = init_outcome_value(state.outcome, state.status);
+        value["status"] = json!("error");
+        value["failed_step"] = json!(failed_step);
+        value["reason"] = json!(reason);
+        value["guidance"] = json!(guidance);
+        value["resync"] = state
+            .resync_outcome
+            .map(|outcome| index_outcome_value("resync", outcome, options))
+            .unwrap_or(Value::Null);
+        value["autosync"] = state
+            .autosync_report
+            .map(|report| autosync_value(AutosyncCommand::Start, report))
+            .unwrap_or(Value::Null);
+        return CliOutput::failure(2, json_line(value));
+    }
+
+    CliOutput::failure(
+        2,
+        format!(
+            "{}{failed_step}: error\nreason: {reason}\nguidance: {guidance}\n",
+            init_bootstrap_human(
+                state.outcome,
+                state.status,
+                state.resync_outcome,
+                state.autosync_report
+            )
+        ),
+    )
 }
 
 fn init_storage_status(
@@ -4863,7 +5244,15 @@ fn index_outcome_json(
     outcome: &IndexingOutcome,
     options: &LifecycleOptions,
 ) -> String {
-    json_line(json!({
+    json_line(index_outcome_value(command, outcome, options))
+}
+
+fn index_outcome_value(
+    command: &str,
+    outcome: &IndexingOutcome,
+    options: &LifecycleOptions,
+) -> serde_json::Value {
+    json!({
         "command": command,
         "status": "complete",
         "generation_id": outcome.active_generation,
@@ -4878,7 +5267,7 @@ fn index_outcome_json(
         "mining": "deferred",
         "progress": options.progress.as_str(),
         "warnings": outcome.warnings,
-    }))
+    })
 }
 
 fn status_human(report: &RepositoryStatusReport) -> String {
@@ -5155,7 +5544,11 @@ fn autosync_human(
 }
 
 fn autosync_json(command: AutosyncCommand, report: &AutosyncReport) -> String {
-    json_line(json!({
+    json_line(autosync_value(command, report))
+}
+
+fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_json::Value {
+    json!({
         "command": "autosync",
         "subcommand": command.as_str(),
         "status": "complete",
@@ -5172,7 +5565,7 @@ fn autosync_json(command: AutosyncCommand, report: &AutosyncReport) -> String {
             "error": run.error,
         })),
         "message": report.message,
-    }))
+    })
 }
 
 fn repository_status_value(status: &RepositoryStatus) -> &'static str {
@@ -5800,6 +6193,21 @@ mod tests {
             }
         }
 
+        fn enrich_read_plan_line_ranges(
+            &self,
+            _request: RepositoryStatusRequest,
+            read_plan: &ReadPlan,
+        ) -> Result<ReadPlan, RepoGrammarError> {
+            let mut enriched = read_plan.clone();
+            for item in &mut enriched.items {
+                if item.path == "src/routes/a.ts" && item.start_byte == 0 && item.end_byte == 20 {
+                    item.start_line = Some(1);
+                    item.end_line = Some(2);
+                }
+            }
+            Ok(enriched)
+        }
+
         fn repo_shape_diagnostics(
             &self,
             _request: RepositoryStatusRequest,
@@ -5816,8 +6224,126 @@ mod tests {
                 external_dependency_signal: DiagnosticSignal::Unknown,
                 thin_wrapper_risk: DiagnosticSignal::Low,
                 token_saving_risk: DiagnosticSignal::Low,
+                token_saving_readiness: TokenSavingReadiness::Partial,
+                blocking_reasons: Vec::new(),
                 interpretation:
                     "RepoGrammar can provide integration-pattern context when repeated local patterns exist; third-party-heavy or thin-wrapper repositories may see lower token-saving potential.",
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct BootstrapRuntime {
+        index_calls: Cell<usize>,
+        autosync_calls: Cell<usize>,
+        indexed: Cell<bool>,
+        active_before_index: bool,
+        fail_index: bool,
+        fail_autosync: bool,
+        last_index_command: RefCell<Option<String>>,
+    }
+
+    impl BootstrapRuntime {
+        fn active_before_index() -> Self {
+            Self {
+                active_before_index: true,
+                ..Self::default()
+            }
+        }
+
+        fn fail_autosync() -> Self {
+            Self {
+                fail_autosync: true,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl CliRuntime for BootstrapRuntime {
+        fn index_repository(
+            &self,
+            command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            self.index_calls.set(self.index_calls.get() + 1);
+            self.last_index_command.replace(Some(command.to_string()));
+            if self.fail_index {
+                return Err(RepoGrammarError::InvalidInput(
+                    "synthetic resync failure".to_string(),
+                ));
+            }
+            self.indexed.set(true);
+            Ok(IndexingOutcome {
+                indexed_units: 3,
+                semantic_facts: 0,
+                discovered_files: 2,
+                skipped_paths: 0,
+                active_generation: Some("gen-000001".to_string()),
+                semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            let active = self.indexed.get() || self.active_before_index;
+            Ok(RepositoryStatusReport {
+                state_dir: DEFAULT_STATE_DIR.to_string(),
+                status: RepositoryStatus::Initialized {
+                    active_generation: if active {
+                        "gen-000001".to_string()
+                    } else {
+                        "none".to_string()
+                    },
+                },
+                manifest: RepositoryManifestStatus::Valid,
+                manifest_schema_version: Some(1),
+                missing_subdirs: Vec::new(),
+                storage: if active {
+                    RepositoryImplementationStatus::Available
+                } else {
+                    RepositoryImplementationStatus::NotImplemented
+                },
+                indexing: if active {
+                    RepositoryImplementationStatus::SyntaxOnlyCodeUnits
+                } else {
+                    RepositoryImplementationStatus::NotImplemented
+                },
+                storage_inspection: None,
+                storage_error: None,
+            })
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("bootstrap tests do not call doctor")
+        }
+
+        fn autosync(
+            &self,
+            command: AutosyncCommand,
+            request: CliAutosyncRequest,
+        ) -> Result<AutosyncReport, RepoGrammarError> {
+            self.autosync_calls.set(self.autosync_calls.get() + 1);
+            assert_eq!(command, AutosyncCommand::Start);
+            if self.fail_autosync {
+                return Err(RepoGrammarError::InvalidInput(
+                    "synthetic autosync failure".to_string(),
+                ));
+            }
+            Ok(AutosyncReport {
+                state_dir: DEFAULT_STATE_DIR.to_string(),
+                enabled: true,
+                running: true,
+                pid: Some(1234),
+                poll_ms: request.poll_ms,
+                debounce_ms: request.debounce_ms,
+                last_run: None,
+                message: "autosync start ok".to_string(),
             })
         }
     }
@@ -6044,12 +6570,26 @@ mod tests {
             .stdout
             .contains("autosync <status|enable|start|stop|disable|run>"));
         assert!(output.stdout.contains("resync [--project <path>]"));
-        assert!(output.stdout.contains("repogrammar init --yes"));
-        assert!(output.stdout.contains("repogrammar resync"));
+        assert!(output
+            .stdout
+            .contains("repogrammar init --yes --resync --autosync"));
         assert!(output.stdout.contains("install [--target <agent[,agent]>]"));
         assert!(output
             .stdout
             .contains("telemetry <status|on|off|export|upload|purge|research-*|experiment-*>"));
+    }
+
+    #[test]
+    fn init_help_lists_combined_bootstrap_options() {
+        let output = run(["help", "init"]);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(output.stdout.contains("[--resync] [--autosync]"));
+        assert!(output.stdout.contains("Use --resync"));
+        assert!(output
+            .stdout
+            .contains("requires --resync or an existing active generation"));
     }
 
     #[test]
@@ -6869,8 +7409,12 @@ mod tests {
         assert_eq!(value["read_plan"]["items"][0]["path"], "src/routes/a.ts");
         assert_eq!(value["read_plan"]["items"][0]["start_byte"], 0);
         assert_eq!(value["read_plan"]["items"][0]["end_byte"], 20);
-        assert_eq!(value["read_plan"]["items"][0]["start_line"], Value::Null);
-        assert_eq!(value["read_plan"]["items"][0]["end_line"], Value::Null);
+        assert_eq!(value["read_plan"]["items"][0]["start_line"], 1);
+        assert_eq!(value["read_plan"]["items"][0]["end_line"], 2);
+        assert!(value["read_plan"]["line_range_omissions"]
+            .as_array()
+            .expect("line range omissions")
+            .is_empty());
         assert_eq!(
             value["read_plan"]["items"][0]["content_hash"],
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -7506,8 +8050,14 @@ mod tests {
     fn init_yes_is_agent_safe_confirmation_only() {
         let workspace = TempWorkspace::new("cli-init-agent-safe-yes");
         let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
 
-        let output = run_with_context(["init", "--yes", "--json"], workspace.path(), &env);
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
 
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
@@ -7517,6 +8067,137 @@ mod tests {
         assert_eq!(value["root_gitignore_updated"], false);
         assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
         assert!(!workspace.path().join(".gitignore").exists());
+        assert_eq!(runtime.index_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+    }
+
+    #[test]
+    fn init_resync_runs_index_and_reports_subresult() {
+        let workspace = TempWorkspace::new("cli-init-resync");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--resync", "--progress", "never", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.index_calls.get(), 1);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+        assert_eq!(
+            runtime.last_index_command.borrow().as_deref(),
+            Some("resync")
+        );
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["command"], "init");
+        assert_eq!(value["resync"]["command"], "resync");
+        assert_eq!(value["resync"]["progress"], "never");
+        assert_eq!(value["resync"]["generation_id"], "gen-000001");
+        assert_eq!(value["bootstrap"]["resync_requested"], true);
+        assert_eq!(value["bootstrap"]["autosync_requested"], false);
+        assert_eq!(value["autosync"], Value::Null);
+    }
+
+    #[test]
+    fn init_autosync_without_active_generation_requires_resync() {
+        let workspace = TempWorkspace::new("cli-init-autosync-needs-resync");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert_eq!(runtime.index_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("init error JSON");
+        assert_eq!(value["command"], "init");
+        assert_eq!(value["status"], "error");
+        assert_eq!(value["failed_step"], "autosync");
+        assert_eq!(
+            value["guidance"],
+            "run repogrammar init --yes --resync --autosync"
+        );
+    }
+
+    #[test]
+    fn init_resync_autosync_starts_after_resync() {
+        let workspace = TempWorkspace::new("cli-init-bootstrap-complete");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--resync", "--autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.index_calls.get(), 1);
+        assert_eq!(runtime.autosync_calls.get(), 1);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["resync"]["generation_id"], "gen-000001");
+        assert_eq!(value["autosync"]["subcommand"], "start");
+        assert_eq!(value["autosync"]["running"], true);
+        assert_eq!(value["bootstrap"]["resync_requested"], true);
+        assert_eq!(value["bootstrap"]["autosync_requested"], true);
+    }
+
+    #[test]
+    fn init_autosync_can_use_existing_active_generation() {
+        let workspace = TempWorkspace::new("cli-init-autosync-existing-index");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::active_before_index();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.index_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 1);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["resync"], Value::Null);
+        assert_eq!(value["autosync"]["running"], true);
+    }
+
+    #[test]
+    fn init_preserves_resync_subresult_when_autosync_fails() {
+        let workspace = TempWorkspace::new("cli-init-autosync-failure");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::fail_autosync();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--resync", "--autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert_eq!(runtime.index_calls.get(), 1);
+        assert_eq!(runtime.autosync_calls.get(), 1);
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("init error JSON");
+        assert_eq!(value["failed_step"], "autosync");
+        assert_eq!(value["resync"]["generation_id"], "gen-000001");
+        assert_eq!(value["autosync"], Value::Null);
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("synthetic autosync failure"));
     }
 
     #[test]
@@ -8409,7 +9090,12 @@ mod tests {
         assert_eq!(value["paths"], "repo_relative_only");
         assert_eq!(value["redacted"], true);
         assert_eq!(value["component_filter"], "index");
-        assert!(value["entries"].as_array().expect("entries").is_empty());
+        let entries = value["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0]
+            .as_str()
+            .expect("log entry")
+            .contains("<redacted-path>"));
     }
 
     #[test]

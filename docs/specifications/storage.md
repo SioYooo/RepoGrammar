@@ -423,6 +423,11 @@ RepoGrammar uses repo-local diagnostic logs:
 Logs must not contain source snippets, raw prompts, secrets, environment
 variables, raw error dumps, or unredacted absolute paths by default.
 Repo-local logs may include repo-relative paths; telemetry must not upload them.
+`repogrammar logs` reads these files through a bounded tail interface, defaults
+to `daemon.log`, redacts by default, and returns clean unavailable reports for
+missing, malformed, symlinked, or unreadable log files. `--since` is accepted
+for contract stability but may return the bounded tail with an unsupported
+filtering message until duration filtering is implemented.
 
 Supported log levels are `error`, `warn`, `info`, `debug`, and `trace`.
 `debug` and `trace` must not be enabled by default. Logs must rotate with a
@@ -503,11 +508,13 @@ fact with typed `StaleEvidence`.
 Repository-revision, worktree-wide, and persisted family freshness remain
 deferred.
 
-Auto-sync is optional. The baseline remains `init`, `index`, `sync`, freshness
-warnings in `status`, and freshness checks before MCP claims. When enabled with
-`repogrammar autosync start`, RepoGrammar stores `.repogrammar/autosync.json`,
-uses `.repogrammar/locks/daemon.lock` for the running worker, and writes
-diagnostics to `.repogrammar/logs/daemon.log`. The current worker detects
+Auto-sync is optional. The baseline remains explicit repo-local bootstrap,
+freshness warnings in `status`, and freshness checks before MCP claims. For
+first setup, users and agents may run `repogrammar init --yes --resync --autosync`.
+When enabled with `repogrammar autosync start`, RepoGrammar stores
+`.repogrammar/autosync.json`, uses `.repogrammar/locks/daemon.lock` for the
+running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`. The
+current worker detects
 changed lightweight supported-file metadata fingerprints and calls the existing
 full `sync` path after a debounce interval. The detector is only a low-cost
 change trigger; the full sync remains responsible for content hashes,

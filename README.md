@@ -23,9 +23,10 @@ RepoGrammar is designed to answer questions like:
 
 The output is meant to be small and auditable. Current family results expose
 metadata such as repo-relative paths, content hashes, byte ranges, support
-counts, variation labels, and `UNKNOWN` reasons. Source snippets are not
-returned by default. When explicitly requested, RepoGrammar can return bounded,
-line-numbered source spans selected from its hash-checked read plan.
+counts, line ranges when source hashes are fresh, variation labels, and
+`UNKNOWN` reasons. Source snippets are not returned by default. When explicitly
+requested, RepoGrammar can return bounded, line-numbered source spans selected
+from its hash-checked read plan.
 
 ## Current Scope
 
@@ -94,7 +95,7 @@ analysis.
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
 | Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
-| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses `init`/`index`. |
+| Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses explicit `init`/`resync`/`autosync` commands. |
 
 ## Install
 
@@ -208,10 +209,10 @@ From a repository you want to analyze:
 
 ```text
 repogrammar install
-repogrammar init --yes
-repogrammar resync
-repogrammar autosync start
+repogrammar init --yes --resync --autosync
 repogrammar status
+repogrammar autosync status
+repogrammar logs --component daemon --tail 20
 repogrammar families
 repogrammar find --project . --token-budget 8000 <target>
 repogrammar family --project . --mode compact <family-id>
@@ -225,9 +226,10 @@ index or family claim exists.
 
 `repogrammar install` wires machine-level agent MCP integration only.
 Repository analysis is always an explicit per-repository step:
-`repogrammar init --yes` creates safe repo-local state, and
-`repogrammar resync` rebuilds the active static-analysis generation. `resync`
-shows progress automatically in an interactive terminal. Use
+`repogrammar init --yes --resync --autosync` creates safe repo-local state,
+rebuilds the active static-analysis generation, and starts repository-local
+auto-sync in one explicit command. `resync` shows progress automatically in an
+interactive terminal. Use
 `repogrammar resync --progress always` to force progress output, or
 `repogrammar resync --progress never` for quiet scripts.
 
@@ -236,10 +238,11 @@ enables repository-local auto-sync and starts a background worker that tracks a
 lightweight supported-file metadata fingerprint, debounces saves, and reuses
 the existing `sync` path so newly added or modified files enter the next active
 generation without a manual `resync`. It does not run from `install`, does not
-initialize other repositories, and can be managed with:
+initialize other repositories, and can be inspected or managed with:
 
 ```text
 repogrammar autosync status
+repogrammar logs --component daemon --tail 20
 repogrammar autosync stop
 repogrammar autosync disable
 ```

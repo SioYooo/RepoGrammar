@@ -427,9 +427,9 @@ allowed.
   metrics code.
 - Stats CLI tests must cover parseable `--json` output, missing-index fallback,
   allowed metric-kind vocabulary, local-pattern-density/family-coverage/
-  abstention diagnostics, thin-wrapper/token-saving risk, null measured
-  token-savings fields, unknown option rejection, and absence of source/path
-  leakage.
+  abstention diagnostics, thin-wrapper/token-saving risk, readiness/blocking
+  reasons, null measured token-savings fields, unknown option rejection, and
+  absence of source/path leakage.
 - Progress tests must cover invalid known-work counts through the `WorkUnits`
   constructor rather than constructing impossible progress states directly, and
   must assert known-work percentages while preserving indeterminate output for
@@ -445,6 +445,8 @@ worker request and NDJSON fixture coverage, Rust-side TypeScript semantic-worker
 process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
+explicit `init --yes --resync --autosync` bootstrap sequencing and failure
+preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
 TS/JS and Python file discovery filtering/hash/path-safety behavior, SQLite storage
 migration and generation-activation safety behavior, validated
@@ -462,6 +464,7 @@ class/reason token validation, internal semantic-fact freshness/readiness gating
 for fresh supported facts, stale evidence, missing source, weak certainty,
 conflicting facts, and `UNKNOWN` fact kind, conservative EC-MVFI-lite family
 builder gating, FamilyStore-backed query `UNKNOWN`/detail rendering,
+metadata-only read-plan line-range enrichment and omission guidance,
 read-only MCP `repogrammar_context` schema/JSON-RPC serving, schema-backed
 family-evidence `covered_claims` write/read validation and query selection,
 installer live-write gating through native MCP CLIs and managed receipts,

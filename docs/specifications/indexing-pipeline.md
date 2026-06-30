@@ -452,10 +452,14 @@ marginal coverage per estimated token cost. Matched family queries also build
 a read plan from stored family evidence. Read-plan items carry repo-relative
 paths, strict content hashes, byte ranges, purpose labels, and estimated token
 cost; they do not contain absolute paths. Source text remains disabled by
-default. When the caller explicitly requests source spans, the query layer
-renders only selected read-plan spans through the hash-checked source-store
-boundary, fills line ranges for rendered spans, and omits stale or unsupported
-spans with fallback guidance.
+default. Before returning metadata-only output, the query layer attempts
+hash-checked line-range enrichment for read-plan items. Fresh sources should
+produce `start_line` and `end_line` without returning source text; stale,
+missing, hash-mismatched, too-large, non-UTF-8, unavailable, or invalid ranges
+must keep the item and add omission guidance. When the caller explicitly
+requests source spans, the query layer renders only selected read-plan spans
+through the hash-checked source-store boundary, fills line ranges for rendered
+spans, and omits stale or unsupported spans with fallback guidance.
 Family evidence records carry schema-backed `covered_claims` labels from the
 allowlist `canonical`, `support`, `variation`, and `exception`; the current
 builder emits `canonical` and `support`, plus a narrow Python `variation`
