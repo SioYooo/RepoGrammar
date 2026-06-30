@@ -1088,10 +1088,12 @@ enum LockProcessState {
 
 #[cfg(unix)]
 fn process_state(pid: u32) -> LockProcessState {
+    const MAX_POSITIVE_PID_T: u32 = i32::MAX as u32;
+
     if pid == std::process::id() {
         return LockProcessState::Live;
     }
-    if pid == 0 {
+    if pid == 0 || pid > MAX_POSITIVE_PID_T {
         return LockProcessState::Dead;
     }
     match std::process::Command::new("kill")

@@ -360,10 +360,11 @@ discovery and hold it through validation and activation. Lock metadata is
 published as a complete record when the filesystem supports atomic publication,
 partial metadata write failures must remove the partial lock file, and
 same-host stale detection uses native process liveness on Windows and Unix so a
-dead nonzero PID can be replaced safely. `unlock --force --yes` removes only
-confirmed stale `index.lock`; active, unknown, invalid, daemon, and SQLite
-locks remain in place. Status and doctor JSON use explicit manifest/storage
-schema-version fields and do not expose ambiguous `schema_version` fields.
+dead nonzero PID can be replaced safely while impossible current-OS PID values
+are rejected before probing. `unlock --force --yes` removes only confirmed
+stale `index.lock`; active, unknown, invalid, daemon, and SQLite locks remain
+in place. Status and doctor JSON use explicit manifest/storage schema-version
+fields and do not expose ambiguous `schema_version` fields.
 The storage port and SQLite adapter can persist already-validated semantic facts
 and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default

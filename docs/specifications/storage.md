@@ -468,9 +468,10 @@ match the inspected stale bytes before deletion, so a concurrently replaced
 lock is rechecked instead of removed. A live same-host lock is refused. A lock
 whose same-host process is confirmed dead may be replaced during acquisition;
 same-host process checks must use native liveness probes on Windows as well as
-Unix so a dead nonzero PID can become a confirmed stale lock. Malformed,
-cross-host, cross-OS, or otherwise unknown locks are refused and surfaced by
-`doctor`.
+Unix so a dead nonzero PID can become a confirmed stale lock. PID values that
+cannot represent a positive process id on the current OS must not be passed to
+the native probe as a live owner. Malformed, cross-host, cross-OS, or otherwise
+unknown locks are refused and surfaced by `doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 

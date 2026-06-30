@@ -64,9 +64,10 @@ analysis rules.
   activation. They should publish complete lock metadata atomically when the
   filesystem supports it, must clean up partial lock metadata writes, must use
   native same-host process liveness on Windows and Unix before replacing stale
-  locks, and may remove only the lock bytes they wrote. `unlock --force --yes`
-  may remove confirmed stale `index.lock` only; active, unknown, invalid,
-  daemon, and SQLite locks must not be deleted.
+  locks, must reject impossible current-OS PID values before probing, and may
+  remove only the lock bytes they wrote. `unlock --force --yes` may remove
+  confirmed stale `index.lock` only; active, unknown, invalid, daemon, and
+  SQLite locks must not be deleted.
 - Status and doctor JSON must keep manifest schema version and storage schema
   version separate. Do not reintroduce ambiguous `schema_version` fields in
   status output or `doctor.checks`.
