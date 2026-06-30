@@ -457,16 +457,20 @@ yet. The lock must contain:
 ```
 
 `host` may be `null` when no local host identifier is available. The current
-`index` and `sync` implementation creates `index.lock` with atomic
-create-new semantics before discovery, holds it through validation and
-active-generation pointer update, and removes only the lock content it wrote.
-If lock metadata creation fails after the file is created, RepoGrammar must
-remove the partial `index.lock` before returning the write error. Stale-lock
-replacement also requires the lock bytes to match the inspected stale bytes
-before deletion, so a concurrently replaced lock is rechecked instead of
-removed. A live same-host lock is refused. A lock whose same-host process is
-confirmed dead may be replaced during acquisition; malformed, cross-host,
-cross-OS, or otherwise unknown locks are refused and surfaced by `doctor`.
+`index`, `sync`, and `resync` implementation creates `index.lock` before
+discovery, preferably by writing the complete metadata to a temporary file and
+publishing it atomically into place. On filesystems where that publish step is
+unavailable, it falls back to create-new semantics and still removes a partial
+`index.lock` if metadata writing fails. The lock is held through validation and
+active-generation pointer update, and successful runs remove only the lock
+content they wrote. Stale-lock replacement also requires the lock bytes to
+match the inspected stale bytes before deletion, so a concurrently replaced
+lock is rechecked instead of removed. A live same-host lock is refused. A lock
+whose same-host process is confirmed dead may be replaced during acquisition;
+same-host process checks must use native liveness probes on Windows as well as
+Unix so a dead nonzero PID can become a confirmed stale lock. Malformed,
+cross-host, cross-OS, or otherwise unknown locks are refused and surfaced by
+`doctor`.
 
 `repogrammar unlock` must not be a blind delete command. It must:
 

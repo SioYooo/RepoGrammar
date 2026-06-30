@@ -259,7 +259,9 @@ index/sync/resync error; otherwise discovery keeps the warning fallback and cont
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
-during acquisition. Successful runs remove only the lock content they wrote.
+during acquisition. Same-host liveness checks must use native process probes on
+Windows as well as Unix so a dead nonzero PID does not remain permanently
+unknown. Successful runs remove only the lock content they wrote.
 
 `repogrammar autosync` manages optional repository-local automatic sync. It
 supports subcommands:

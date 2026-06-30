@@ -413,22 +413,18 @@ pub fn acquire_index_lock(
     ensure_state_path_can_be_directory(&resolved.absolute)?;
     let locks_dir = require_locks_dir(&resolved.absolute)?;
     let lock_path = locks_dir.join(INDEX_LOCK_FILE);
-    let contents = current_index_lock_metadata().to_json();
+    let metadata = current_index_lock_metadata();
+    let contents = metadata.to_json();
 
     for _attempt in 0..2 {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(file) => {
-                write_index_lock_contents(file, &lock_path, &contents)?;
+        match create_index_lock_atomically(&lock_path, &contents, &metadata.token)? {
+            CreateIndexLockResult::Acquired => {
                 return Ok(IndexLockGuard {
                     path: lock_path,
                     contents,
                 });
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            CreateIndexLockResult::AlreadyExists => {
                 let inspection = inspect_index_lock_path_with_contents(&lock_path);
                 match inspection.state {
                     IndexLockState::Stale => {
@@ -460,17 +456,68 @@ pub fn acquire_index_lock(
                     IndexLockState::Missing => continue,
                 }
             }
-            Err(_) => {
-                return Err(invalid_input(
-                    "failed to create repository-local index lock",
-                ));
-            }
         }
     }
 
     Err(invalid_input(
         "index lock changed during acquisition; retry repogrammar index",
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateIndexLockResult {
+    Acquired,
+    AlreadyExists,
+}
+
+fn create_index_lock_atomically(
+    lock_path: &Path,
+    contents: &str,
+    token: &str,
+) -> Result<CreateIndexLockResult, RepoGrammarError> {
+    let tmp_path = temporary_index_lock_path(lock_path, token);
+    let tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map_err(|_| invalid_input("failed to create repository-local index lock temp file"))?;
+    write_index_lock_contents(tmp_file, &tmp_path, contents)?;
+
+    let link_result = match fs::hard_link(&tmp_path, lock_path) {
+        Ok(()) => CreateIndexLockResult::Acquired,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            CreateIndexLockResult::AlreadyExists
+        }
+        Err(_) => create_index_lock_with_exclusive_open(lock_path, contents)?,
+    };
+    let _ = fs::remove_file(&tmp_path);
+    Ok(link_result)
+}
+
+fn temporary_index_lock_path(lock_path: &Path, token: &str) -> PathBuf {
+    lock_path.with_file_name(format!("{INDEX_LOCK_FILE}.{token}.tmp"))
+}
+
+fn create_index_lock_with_exclusive_open(
+    lock_path: &Path,
+    contents: &str,
+) -> Result<CreateIndexLockResult, RepoGrammarError> {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(file) => {
+            write_index_lock_contents(file, lock_path, contents)?;
+            Ok(CreateIndexLockResult::Acquired)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(CreateIndexLockResult::AlreadyExists)
+        }
+        Err(_) => Err(invalid_input(
+            "failed to create repository-local index lock",
+        )),
+    }
 }
 
 fn write_index_lock_contents<W: Write>(
@@ -1065,15 +1112,78 @@ fn process_state(pid: u32) -> LockProcessState {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn process_state(pid: u32) -> LockProcessState {
     if pid == std::process::id() {
-        LockProcessState::Live
-    } else if pid == 0 {
-        LockProcessState::Dead
-    } else {
-        LockProcessState::Unknown
+        return LockProcessState::Live;
     }
+    if pid == 0 {
+        return LockProcessState::Dead;
+    }
+    windows_process_state(pid)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_state(pid: u32) -> LockProcessState {
+    if pid == std::process::id() {
+        return LockProcessState::Live;
+    }
+    if pid == 0 {
+        return LockProcessState::Dead;
+    }
+    LockProcessState::Unknown
+}
+
+#[cfg(windows)]
+fn windows_process_state(pid: u32) -> LockProcessState {
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+            LockProcessState::Dead
+        } else {
+            LockProcessState::Unknown
+        };
+    }
+    let handle = WindowsProcessHandle(handle);
+    let mut exit_code = 0_u32;
+    let ok = unsafe { GetExitCodeProcess(handle.0, &mut exit_code) != 0 };
+    if !ok {
+        return LockProcessState::Unknown;
+    }
+    if exit_code == STILL_ACTIVE {
+        LockProcessState::Live
+    } else {
+        LockProcessState::Dead
+    }
+}
+
+#[cfg(windows)]
+struct WindowsProcessHandle(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for WindowsProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenProcess(
+        desired_access: u32,
+        inherit_handle: i32,
+        process_id: u32,
+    ) -> *mut std::ffi::c_void;
+    fn GetExitCodeProcess(process: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
+    fn GetLastError() -> u32;
+    fn CloseHandle(h_object: *mut std::ffi::c_void) -> i32;
 }
 
 fn current_host() -> Option<String> {
@@ -1947,6 +2057,10 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn definitely_dead_pid() -> u32 {
+        u32::MAX
+    }
+
     #[test]
     fn index_generation_policy_preserves_previous_valid_index() {
         let policy = IndexGenerationPolicy::default();
@@ -2673,7 +2787,9 @@ mod tests {
             .as_str()
             .expect("version")
             .is_empty());
-        assert!(!value["token"].as_str().expect("token").is_empty());
+        let token = value["token"].as_str().expect("token");
+        assert!(!token.is_empty());
+        assert!(!temporary_index_lock_path(&lock_path, token).exists());
 
         drop(guard);
         assert!(!lock_path.exists());
@@ -2750,6 +2866,13 @@ mod tests {
     }
 
     #[test]
+    fn process_state_identifies_current_process_and_dead_pid() {
+        assert_eq!(process_state(std::process::id()), LockProcessState::Live);
+        assert_eq!(process_state(0), LockProcessState::Dead);
+        assert_eq!(process_state(definitely_dead_pid()), LockProcessState::Dead);
+    }
+
+    #[test]
     fn index_lock_refuses_live_lock_and_doctor_reports_it() {
         let workspace = TempWorkspace::new("repository-index-lock-live");
         init_repository(init_request(workspace.path())).expect("init repository");
@@ -2822,6 +2945,46 @@ mod tests {
 
         let guard =
             acquire_index_lock(&root_string(workspace.path()), None).expect("replace stale lock");
+
+        let contents = fs::read_to_string(&lock_path).expect("read replacement lock");
+        let value: serde_json::Value = serde_json::from_str(&contents).expect("lock JSON");
+        assert_eq!(value["pid"], std::process::id());
+
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn index_lock_replaces_confirmed_dead_same_host_pid_lock() {
+        let Some(host) = current_host() else {
+            return;
+        };
+        let workspace = TempWorkspace::new("repository-index-lock-dead-pid");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        let stale = IndexLockMetadata {
+            pid: definitely_dead_pid(),
+            host: Some(host),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "dead-pid-token".to_string(),
+        };
+        fs::write(&lock_path, stale.to_json()).expect("write dead pid lock");
+
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockStale));
+
+        let guard = acquire_index_lock(&root_string(workspace.path()), None)
+            .expect("replace dead pid lock");
 
         let contents = fs::read_to_string(&lock_path).expect("read replacement lock");
         let value: serde_json::Value = serde_json::from_str(&contents).expect("lock JSON");
