@@ -39,6 +39,14 @@ sharing violation (`os error 32`).
   points outside the authority, with convergence guidance. No new top-level
   command is added; the CLI stays pattern-family-first and the self-check rides
   on `install`.
+- Idempotent reconcile. When an agent already has a RepoGrammar-managed MCP
+  entry whose recorded executable drifted from the current authority, `install`
+  re-points it (native remove then add, receipt rewrite) instead of skipping it,
+  so a single `install` migrates agents after the authority moves and no manual
+  uninstall/reinstall sequence is required. An entry already at the authority is
+  left untouched. If a reconcile run rolls back, the drifted entry is left
+  unconfigured rather than restored to its stale pointer; rerunning `install`
+  reconfigures it.
 - Self-lock safety stays within the existing replacement contract (stage, remove
   the previous managed file, then activate; fail with guidance when a live agent
   or MCP process holds the file). The installer additionally skips replacing any

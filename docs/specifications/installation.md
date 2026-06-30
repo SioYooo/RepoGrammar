@@ -366,6 +366,11 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary.
+  When a RepoGrammar-managed agent entry already exists but records an executable
+  that no longer matches the current authority (for example after the install
+  data directory changed), install re-points that entry at the authority by
+  removing and re-adding the native entry and rewriting the receipt, instead of
+  skipping it. A managed entry already pointing at the authority stays untouched.
   Repeated installs stage the new binary, delete the previous
   RepoGrammar-managed binary or managed command copy, and then activate the new
   file; if deletion is blocked by a running coding agent or MCP process, install

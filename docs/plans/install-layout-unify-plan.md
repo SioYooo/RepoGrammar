@@ -70,6 +70,20 @@ Each slice is one atomic commit including its tests and documentation.
   top-level `status`.
 - Tests + `docs/specifications/cli.md` / `installation.md` update.
 
+### Slice 5 — install reconciles drifted managed agent entries
+
+- `src/rust/application/install.rs`: `execute_install` re-points a managed agent
+  whose receipt `executable_path` drifted from the current authority (native
+  remove + add, receipt rewrite) instead of skipping it; an entry already at the
+  authority stays skipped. Removes the need for a manual uninstall/reinstall to
+  migrate agents after the authority moves.
+- Tests + `docs/specifications/installation.md` + `ADR-0014` update.
+- npm positioning (#2): the `@sioyooo/repogrammar` npm package is a launcher that
+  downloads a release artifact and delegates to the Rust binary; it does not write
+  a competing managed authority, and any on-PATH copy is already surfaced by the
+  Slice 2 self-check. No npm code change is required; it stays a documented bypass
+  like `cargo install`.
+
 ## Verification (gates completion of every code slice)
 
 - `cargo fmt --all -- --check`

@@ -287,18 +287,34 @@ pub fn execute_install(
     require_live_writer_support(&selected_targets, request.scope)?;
 
     let mut targets_to_configure = Vec::new();
-    let mut skipped_targets = Vec::new();
+    let mut managed_targets = Vec::new();
     for target in selected_targets {
         let path = receipt_path(context, target, request.scope);
         if path.is_file() {
             validate_receipt_ownership(&path, target, request.scope)?;
-            skipped_targets.push(target);
+            managed_targets.push(target);
         } else {
             targets_to_configure.push(target);
         }
     }
     let command_record = install_cli_command(context)?;
-    if targets_to_configure.is_empty() {
+
+    // A managed agent whose recorded executable still matches the current
+    // authority is left untouched; one that drifted (for example a binary
+    // recorded under a previous data directory) is reconfigured to the
+    // authority instead of being silently skipped.
+    let mut skipped_targets = Vec::new();
+    let mut targets_to_reconfigure = Vec::new();
+    for target in managed_targets {
+        let path = receipt_path(context, target, request.scope);
+        if receipt_targets_authority(&path, &command_record.executable_path) {
+            skipped_targets.push(target);
+        } else {
+            targets_to_reconfigure.push(target);
+        }
+    }
+
+    if targets_to_configure.is_empty() && targets_to_reconfigure.is_empty() {
         if let Err(error) =
             self_tester.self_test(&command_record.executable_path, &context.current_dir)
         {
@@ -329,7 +345,35 @@ pub fn execute_install(
     let mut configured_targets = Vec::new();
     let mut configured_instructions: Vec<(Option<String>, InstructionAction)> = Vec::new();
     let mut receipt_paths = Vec::new();
-    for target in targets_to_configure {
+
+    // Drop the stale native entry for each drifted target before re-adding it at
+    // the authority, because `mcp add` may reject or duplicate an existing name.
+    // Note: if a later step fails and the run rolls back, a reconfigured target
+    // is left unconfigured rather than restored to its drifted pointer; rerunning
+    // install reconfigures it cleanly.
+    for target in &targets_to_reconfigure {
+        if let Err(error) =
+            configurator.remove_mcp_server(*target, request.scope, &context.current_dir)
+        {
+            let rollback = rollback_install_run(
+                request,
+                context,
+                configurator,
+                &configured_targets,
+                &configured_instructions,
+                &receipt_paths,
+                &command_record,
+            );
+            return Err(install_rollback_error(error, rollback));
+        }
+    }
+
+    let targets_to_add: Vec<AgentTarget> = targets_to_reconfigure
+        .iter()
+        .copied()
+        .chain(targets_to_configure.iter().copied())
+        .collect();
+    for target in targets_to_add {
         let action = match configurator.add_mcp_server(
             target,
             request.scope,
@@ -408,7 +452,12 @@ pub fn execute_install(
         installed_executable_path: Some(command_record.executable_path),
         command_path: Some(command_record.command_path),
         command_on_path: command_record.command_on_path,
-        message: "agent MCP integration installed after self-test".to_string(),
+        message: if targets_to_reconfigure.is_empty() {
+            "agent MCP integration installed after self-test".to_string()
+        } else {
+            "agent MCP integration installed or migrated to the managed authority after self-test"
+                .to_string()
+        },
     })
 }
 
@@ -1301,6 +1350,25 @@ fn remove_receipt(receipt_path: &Path) -> Result<(), RepoGrammarError> {
     })
 }
 
+fn receipt_executable_path(receipt_path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(receipt_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    value
+        .get("executable_path")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+/// True when the receipt's recorded executable still points at the current
+/// managed authority. A receipt that cannot be read, or whose recorded path has
+/// drifted from the authority, reports false so the caller reconfigures it.
+fn receipt_targets_authority(receipt_path: &Path, authority_executable: &str) -> bool {
+    match receipt_executable_path(receipt_path) {
+        Some(recorded) => same_path(Path::new(&recorded), Path::new(authority_executable)),
+        None => false,
+    }
+}
+
 fn receipt_instruction_file_path(receipt_path: &Path) -> Option<String> {
     let contents = fs::read_to_string(receipt_path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
@@ -2048,6 +2116,64 @@ mod tests {
         assert!(same_path(path, path));
         let other = Path::new("/repogrammar/does/not/exist/bin/other");
         assert!(!same_path(path, other));
+    }
+
+    #[test]
+    fn drifted_managed_install_reconfigures_to_authority() {
+        let workspace = TempInstallWorkspace::new("drifted-managed-reconfigure");
+        let request = InstallRequest {
+            target: AgentTarget::AllSupported,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            telemetry_enabled: false,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("initial install");
+
+        // Simulate a previous-layout install: rewrite each receipt's recorded
+        // executable to a stale path that no longer matches the authority.
+        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+            let path = receipt_path(&workspace.context, target, InstallScope::Global);
+            let mut value: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).expect("receipt"))
+                    .expect("receipt json");
+            value["executable_path"] = serde_json::json!("/stale/previous/bin/repogrammar");
+            fs::write(&path, format!("{value}\n")).expect("rewrite receipt");
+        }
+        configurator.actions.borrow_mut().clear();
+        self_test.calls.borrow_mut().clear();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("reconcile install");
+
+        assert_eq!(
+            outcome.configured_targets,
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        assert!(outcome.skipped_targets.is_empty());
+        let actions = configurator.actions.borrow();
+        let removes = actions
+            .iter()
+            .filter(|action| action.args.get(1).map(String::as_str) == Some("remove"))
+            .count();
+        let adds = actions
+            .iter()
+            .filter(|action| action.args.get(1).map(String::as_str) == Some("add"))
+            .count();
+        assert_eq!(removes, 2, "{actions:?}");
+        assert_eq!(adds, 2, "{actions:?}");
+        drop(actions);
+        assert_eq!(self_test.calls.borrow().len(), 1);
+        // Receipts now record the authority again, so a follow-up install skips.
+        let authority = workspace.data_dir.join("bin").join(binary_name());
+        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+            let path = receipt_path(&workspace.context, target, InstallScope::Global);
+            let recorded = receipt_executable_path(&path).expect("recorded executable");
+            assert!(same_path(Path::new(&recorded), &authority), "{recorded}");
+        }
     }
 
     #[test]
