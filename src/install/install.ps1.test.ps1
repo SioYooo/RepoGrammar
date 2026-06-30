@@ -279,6 +279,80 @@ exit /B 1
     }
     Assert-PathExists (Join-Path $VerifyCommandDir "repogrammar.exe") "command copy must survive prune"
 
+    if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+        $LockedPruneCommandDir = Join-Path $TempRoot "locked-prune-bin"
+        $LockedPruneInstallDir = Join-Path $TempRoot "locked-prune-data"
+        $LockedPruneStaleDir = Join-Path $TempRoot "locked-prune-stale"
+        $LockedPruneOut = Join-Path $TempRoot "locked-prune.out"
+        $LockedReady = Join-Path $TempRoot "locked-prune.ready"
+        New-Item -ItemType Directory -Force -Path $LockedPruneStaleDir | Out-Null
+        Invoke-InstallerWithPath $LockedPruneCommandDir {
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallCliOnly `
+                -FromSource `
+                -SourceBinary $SourceBinary `
+                -CommandDir $LockedPruneCommandDir `
+                -InstallDir $LockedPruneInstallDir `
+                -Yes | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "locked-prune setup install failed with exit code $LASTEXITCODE"
+        }
+        $LockedStale = Join-Path $LockedPruneStaleDir "repogrammar.exe"
+        Set-Content -Path $LockedStale -Value "stale-bytes"
+        $LockJob = Start-Job -ScriptBlock {
+            param([string]$Path, [string]$Ready)
+            $stream = [System.IO.File]::Open(
+                $Path,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read
+            )
+            try {
+                Set-Content -Path $Ready -Value "ready"
+                Start-Sleep -Seconds 30
+            } finally {
+                $stream.Dispose()
+            }
+        } -ArgumentList $LockedStale, $LockedReady
+        try {
+            for ($i = 0; $i -lt 100 -and !(Test-Path $LockedReady); $i++) {
+                Start-Sleep -Milliseconds 50
+            }
+            if (!(Test-Path $LockedReady)) {
+                throw "locked-prune helper did not acquire the stale copy"
+            }
+            $SavedLockedPath = $env:PATH
+            $PreviousLockedErrorActionPreference = $ErrorActionPreference
+            try {
+                $env:PATH = "$LockedPruneCommandDir;$LockedPruneStaleDir"
+                $ErrorActionPreference = "Continue"
+                & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                    -Verify `
+                    -Prune `
+                    -CommandDir $LockedPruneCommandDir `
+                    -InstallDir $LockedPruneInstallDir `
+                    -Yes *> $LockedPruneOut
+                $LockedPruneStatus = $LASTEXITCODE
+            } finally {
+                $env:PATH = $SavedLockedPath
+                $ErrorActionPreference = $PreviousLockedErrorActionPreference
+            }
+        } finally {
+            if ($LockJob) {
+                Stop-Job $LockJob -ErrorAction SilentlyContinue
+                Wait-Job $LockJob -Timeout 5 -ErrorAction SilentlyContinue | Out-Null
+                Remove-Job $LockJob -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if ($LockedPruneStatus -eq 0) {
+            throw "locked stale PATH copy prune unexpectedly succeeded"
+        }
+        Assert-Contains $LockedPruneOut "Failed to remove"
+        Assert-Contains $LockedPruneOut "failed to remove 1 stale PATH copy/copies"
+        Assert-PathExists $LockedStale "failed prune should leave the locked stale copy in place"
+    }
+
     # Normal install/update paths run the same stale PATH cleanup automatically.
     $AutoPruneCommandDir = Join-Path $TempRoot "auto-prune-bin"
     $AutoPruneInstallDir = Join-Path $TempRoot "auto-prune-data"

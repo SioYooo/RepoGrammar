@@ -178,7 +178,9 @@ contains an older unmanaged `repogrammar`, the installer backs it up before
 replacing it with the managed command. After install/update, the scripts compare
 other `repogrammar` copies on PATH by SHA256 and remove stale copies when
 `--yes` / `-Yes` is used; on Windows, `install.ps1 -Verify` reports the same
-state and `install.ps1 -Prune -Yes` runs the cleanup explicitly.
+state and `install.ps1 -Prune -Yes` runs the cleanup explicitly. If a stale
+copy cannot be removed because a process or permissions blocks deletion, the
+installer exits nonzero and leaves the stale copy listed for manual cleanup.
 
 Before the npm package is published, local npm dogfood can bypass release
 downloads with an already built binary:

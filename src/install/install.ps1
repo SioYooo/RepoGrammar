@@ -481,7 +481,7 @@ function Get-ClaudeMcpCommand {
     return $null
 }
 
-function Get-ServeProcessExecutables {
+function Get-RepogrammarProcesses {
     $procs = @()
     try {
         $list = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
@@ -489,11 +489,59 @@ function Get-ServeProcessExecutables {
         return $procs
     }
     foreach ($entry in $list) {
-        if ($entry.CommandLine -and $entry.CommandLine -match '\bserve\b') {
-            $procs += [PSCustomObject]@{ ProcessId = $entry.ProcessId; Path = $entry.ExecutablePath }
+        $procs += [PSCustomObject]@{
+            ProcessId = $entry.ProcessId
+            Path = $entry.ExecutablePath
+            CommandLine = $entry.CommandLine
         }
     }
     return $procs
+}
+
+function Get-ServeProcessExecutables {
+    $procs = @()
+    foreach ($entry in (Get-RepogrammarProcesses)) {
+        if ($entry.CommandLine -and $entry.CommandLine -match '\bserve\b') {
+            $procs += [PSCustomObject]@{ ProcessId = $entry.ProcessId; Path = $entry.Path }
+        }
+    }
+    return $procs
+}
+
+function Get-RepogrammarProcessesUsingPath([string]$Path) {
+    $matches = @()
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $matches
+    }
+    try {
+        $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        $resolvedPath = $Path
+    }
+    foreach ($entry in (Get-RepogrammarProcesses)) {
+        if ([string]::IsNullOrWhiteSpace($entry.Path)) {
+            continue
+        }
+        try {
+            $entryPath = [System.IO.Path]::GetFullPath($entry.Path)
+        } catch {
+            $entryPath = $entry.Path
+        }
+        if ($entryPath.ToLowerInvariant() -eq $resolvedPath.ToLowerInvariant()) {
+            $matches += $entry
+        }
+    }
+    return $matches
+}
+
+function Write-StaleRemovalFailure([string]$Entry, [string]$Message) {
+    Write-Output "Failed to remove ${Entry}: $Message"
+    $usingProcesses = Get-RepogrammarProcessesUsingPath $Entry
+    if ($usingProcesses.Count -gt 0) {
+        $pids = ($usingProcesses | ForEach-Object { $_.ProcessId }) -join ", "
+        Write-Output "  Running repogrammar process(es) using it: PID $pids"
+    }
+    Write-Output "  Exit any process using it, then retry. If this copy came from cargo, run: cargo uninstall repogrammar"
 }
 
 function Format-HashTag([string]$Hash, [string]$AuthorityHash) {
@@ -582,13 +630,18 @@ function Invoke-VerifyInstall([bool]$DoPrune) {
             if (!$Yes -and !(Confirm-DefaultNo "Remove the stale PATH copies listed above?")) {
                 Write-Output "Cancelled. No copies removed."
             } else {
+                $pruneFailures = @()
                 foreach ($entry in $stale) {
                     try {
                         Remove-Item -LiteralPath $entry -Force -ErrorAction Stop
                         Write-Output "Removed $entry"
                     } catch {
-                        Write-Output "Failed to remove ${entry}: $($_.Exception.Message). Exit any process using it, then retry."
+                        $pruneFailures += $entry
+                        Write-StaleRemovalFailure $entry $_.Exception.Message
                     }
+                }
+                if ($pruneFailures.Count -gt 0) {
+                    throw "failed to remove $($pruneFailures.Count) stale PATH copy/copies; see messages above."
                 }
             }
         } else {

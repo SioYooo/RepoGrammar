@@ -115,7 +115,9 @@ without prompting when the noninteractive `--yes` / `-Yes` flag is present. The
 managed authority and any matching command copy must be preserved. Explicit
 verify/prune commands may remain available for diagnosis and manual repair, but
 normal install/update paths must not require users to run a second cleanup
-command.
+command. If a requested stale-copy cleanup cannot remove one or more stale
+copies, the wrapper must exit nonzero with actionable guidance and leave the
+unremoved paths visible for manual repair.
 If the user-writable command path already contains an unmanaged
 `repogrammar`, the wrapper may back it up and replace it with the managed
 command because the user explicitly invoked CLI installation. It must not
@@ -348,7 +350,9 @@ noninteractive live writes, and a dependency-light text wizard:
   they invoke and the binary their agents run are the same build. `-Prune`
   additionally removes PATH copies whose hash differs from the authority, after
   confirmation unless `-Yes` is passed, and never deletes copies that match the
-  authority. Install/update paths run the same stale PATH cleanup automatically.
+  authority. If removal is blocked, the script exits nonzero and reports the
+  unremoved path. Install/update paths run the same stale PATH cleanup
+  automatically.
   `-Purge` performs a full uninstall: it prints a plan, stops only the
   repogrammar processes that run the binaries it is about to delete, runs
   `uninstall --target all` to remove agent MCP entries and receipts, optionally

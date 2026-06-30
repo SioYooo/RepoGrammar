@@ -105,6 +105,35 @@ if [[ -e "${AUTO_PRUNE_STALE_DIR}/repogrammar" ]]; then
 fi
 test -x "${AUTO_PRUNE_COMMAND_DIR}/repogrammar"
 
+if [[ "$(id -u)" -ne 0 ]]; then
+  FAIL_PRUNE_COMMAND_DIR="${TMP_ROOT}/fail-prune-bin"
+  FAIL_PRUNE_INSTALL_DIR="${TMP_ROOT}/fail-prune-data"
+  FAIL_PRUNE_STALE_DIR="${TMP_ROOT}/fail-prune-stale"
+  mkdir -p "$FAIL_PRUNE_STALE_DIR"
+  printf 'stale\n' > "${FAIL_PRUNE_STALE_DIR}/repogrammar"
+  chmod +x "${FAIL_PRUNE_STALE_DIR}/repogrammar"
+  chmod 555 "$FAIL_PRUNE_STALE_DIR"
+  set +e
+  PATH="${FAIL_PRUNE_COMMAND_DIR}:${FAIL_PRUNE_STALE_DIR}:${SYSTEM_PATH}" \
+  REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$FAIL_PRUNE_COMMAND_DIR" \
+  REPOGRAMMAR_INSTALL_DIR="$FAIL_PRUNE_INSTALL_DIR" \
+  "$INSTALLER" --install-cli-only --yes >"${TMP_ROOT}/fail-prune.out" 2>"${TMP_ROOT}/fail-prune.err"
+  FAIL_PRUNE_STATUS=$?
+  set -e
+  chmod 755 "$FAIL_PRUNE_STALE_DIR"
+  if [[ "$FAIL_PRUNE_STATUS" -eq 0 ]]; then
+    echo "failed stale PATH prune unexpectedly succeeded" >&2
+    exit 1
+  fi
+  grep -q "Failed to remove" "${TMP_ROOT}/fail-prune.err"
+  grep -q "failed to remove 1 stale PATH copy/copies" "${TMP_ROOT}/fail-prune.err"
+  if [[ ! -e "${FAIL_PRUNE_STALE_DIR}/repogrammar" ]]; then
+    echo "failed stale PATH prune should leave the stale copy in place" >&2
+    exit 1
+  fi
+fi
+
 STATE_REPO="${TMP_ROOT}/state-boundary-repo"
 STATE_COMMAND_DIR="${TMP_ROOT}/state-boundary-bin"
 STATE_INSTALL_DIR="${TMP_ROOT}/state-boundary-data"

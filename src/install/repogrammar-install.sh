@@ -364,13 +364,18 @@ ${resolved}
     return 0
   fi
 
+  local failed_count=0
   for entry in "${stale[@]}"; do
     if rm -f -- "$entry"; then
       printf "Removed %s\n" "$entry"
     else
       printf "Failed to remove %s; exit any process using it, then rerun the installer.\n" "$entry" >&2
+      failed_count=$((failed_count + 1))
     fi
   done
+  if [[ "$failed_count" -gt 0 ]]; then
+    die "failed to remove ${failed_count} stale PATH copy/copies; see messages above"
+  fi
 }
 
 install_managed_cli_binary() {

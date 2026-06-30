@@ -14,6 +14,9 @@
   extraction and reject unsafe or unexpected paths even when the checksum
   matches. The npm launcher also validates release tags/cache containment and
   stages binary+worker cache updates before swapping them into place.
+- Installer wrapper stale-PATH cleanup now exits nonzero when a requested prune
+  cannot remove an outdated `repogrammar` copy, instead of reporting a
+  successful install or prune with the stale executable still ahead on PATH.
 
 ### Added
 
