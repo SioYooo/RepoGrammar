@@ -202,6 +202,58 @@ exit /B 1
     }
     Assert-Contains $Backups[0].FullName "foreign"
 
+    # -Verify reports build consistency by SHA256; -Prune removes only PATH copies
+    # whose hash differs from the authority. The child runs with a PATH limited to
+    # the test directories so it can never touch real repogrammar copies.
+    $VerifyHome = Join-Path $TempRoot "verify-home"
+    $VerifyCommandDir = Join-Path $TempRoot "verify-bin"
+    $VerifyInstallDir = Join-Path $TempRoot "verify-data"
+    $VerifyStaleDir = Join-Path $TempRoot "verify-stale"
+    New-Item -ItemType Directory -Force -Path $VerifyHome, $VerifyStaleDir | Out-Null
+    & powershell -ExecutionPolicy Bypass -File $Installer `
+        -InstallCliOnly `
+        -FromSource `
+        -SourceBinary $SourceBinary `
+        -CommandDir $VerifyCommandDir `
+        -InstallDir $VerifyInstallDir `
+        -Yes | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "verify setup install failed with exit code $LASTEXITCODE"
+    }
+    Set-Content -Path (Join-Path $VerifyStaleDir "repogrammar.exe") -Value "stale-bytes"
+    $AuthorityBin = Join-Path (Join-Path $VerifyInstallDir "bin") "repogrammar.exe"
+    $CodexDir = Join-Path $VerifyHome ".codex"
+    New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
+    Set-Content -Path (Join-Path $CodexDir "config.toml") `
+        -Value "[mcp_servers.repogrammar]`ncommand = '$AuthorityBin'`nargs = [`"serve`"]"
+    $VerifyOut = Join-Path $TempRoot "verify.out"
+    $VerifyPowerShellExe = (Get-Command powershell).Source
+    $SavedVerifyUserProfile = $env:USERPROFILE
+    $SavedVerifyPath = $env:PATH
+    try {
+        $env:USERPROFILE = $VerifyHome
+        $env:PATH = "$VerifyCommandDir;$VerifyStaleDir"
+        & $VerifyPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -Verify `
+            -Prune `
+            -CommandDir $VerifyCommandDir `
+            -InstallDir $VerifyInstallDir `
+            -Yes *> $VerifyOut
+        $VerifyStatus = $LASTEXITCODE
+    } finally {
+        $env:USERPROFILE = $SavedVerifyUserProfile
+        $env:PATH = $SavedVerifyPath
+    }
+    if ($VerifyStatus -ne 0) {
+        throw "verify run failed with exit code $VerifyStatus"
+    }
+    Assert-Contains $VerifyOut "matches authority"
+    Assert-Contains $VerifyOut "OK: configured agents use the same build"
+    if (Test-Path (Join-Path $VerifyStaleDir "repogrammar.exe")) {
+        throw "stale PATH copy was not pruned"
+    }
+    Assert-PathExists (Join-Path $VerifyCommandDir "repogrammar.exe") "command copy must survive prune"
+
     $FailureCommandDir = Join-Path $TempRoot "failure-bin"
     $FailureInstallDir = Join-Path $TempRoot "failure-data"
     $FailureOut = Join-Path $TempRoot "failure.out"

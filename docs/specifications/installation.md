@@ -330,7 +330,14 @@ noninteractive live writes, and a dependency-light text wizard:
   Windows x86_64 artifact. It verifies checksums and validates zip entry names
   before extraction. In a source checkout, its interactive menu defaults to
   the contributor source-build path, and its noninteractive `-FromSource` mode
-  supports dogfood before release artifacts exist;
+  supports dogfood before release artifacts exist. Its `-Verify` switch is a
+  read-only report that compares, by SHA256, the `repogrammar` copies on PATH,
+  the configured agent MCP command targets, and any running serve processes
+  against the managed authority binary, so a user can confirm that the command
+  they invoke and the binary their agents run are the same build. `-Prune`
+  additionally removes PATH copies whose hash differs from the authority, after
+  confirmation unless `-Yes` is passed, and never deletes copies that match the
+  authority;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,

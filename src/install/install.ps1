@@ -11,6 +11,8 @@ param(
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
     [switch]$UninstallCommand,
+    [switch]$Verify,
+    [switch]$Prune,
     [switch]$Yes,
     [switch]$Help
 )
@@ -33,6 +35,13 @@ Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -Target "codex,claude-code" -Scope global
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Verify
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Prune -Yes
+
+-Verify reports, by SHA256, whether the repogrammar copies on PATH, the
+configured agent MCP servers, and any running serve processes match the managed
+authority binary. -Prune additionally removes PATH copies whose hash differs
+from the authority (add -Yes to skip the confirmation).
 
 By default, the script downloads a prebuilt Windows x64 release artifact,
 verifies its checksum, installs repogrammar.exe into a user-writable command
@@ -385,8 +394,207 @@ function Remove-Command {
     Write-Output "Removed $command"
 }
 
+function Get-AuthorityBinary {
+    return Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
+}
+
+function Get-Sha256OrNull([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    }
+    return $null
+}
+
+function Get-RepogrammarPathCopies {
+    $copies = @()
+    $seen = @{}
+    foreach ($dir in ($env:PATH -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir "repogrammar.exe"
+        if (!(Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        try {
+            $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        } catch {
+            $resolved = $candidate
+        }
+        $key = $resolved.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+        $seen[$key] = $true
+        $copies += $resolved
+    }
+    return $copies
+}
+
+function Get-CodexMcpCommand {
+    $cfg = Join-Path $env:USERPROFILE ".codex\config.toml"
+    if (!(Test-Path -LiteralPath $cfg)) {
+        return $null
+    }
+    $inSection = $false
+    foreach ($line in (Get-Content -LiteralPath $cfg)) {
+        if ($line -match '^\s*\[mcp_servers\.repogrammar\]\s*$') {
+            $inSection = $true
+            continue
+        }
+        if ($inSection -and $line -match '^\s*\[') {
+            break
+        }
+        if ($inSection -and $line -match "^\s*command\s*=\s*['""](.+?)['""]\s*$") {
+            return $matches[1]
+        }
+    }
+    return $null
+}
+
+function Get-ClaudeMcpCommand {
+    $cfg = Join-Path $env:USERPROFILE ".claude.json"
+    if (!(Test-Path -LiteralPath $cfg)) {
+        return $null
+    }
+    try {
+        $json = Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+    if (($json.PSObject.Properties.Name -contains 'mcpServers') -and $json.mcpServers -and
+        ($json.mcpServers.PSObject.Properties.Name -contains 'repogrammar')) {
+        return $json.mcpServers.repogrammar.command
+    }
+    return $null
+}
+
+function Get-ServeProcessExecutables {
+    $procs = @()
+    try {
+        $list = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
+    } catch {
+        return $procs
+    }
+    foreach ($entry in $list) {
+        if ($entry.CommandLine -and $entry.CommandLine -match '\bserve\b') {
+            $procs += [PSCustomObject]@{ ProcessId = $entry.ProcessId; Path = $entry.ExecutablePath }
+        }
+    }
+    return $procs
+}
+
+function Format-HashTag([string]$Hash, [string]$AuthorityHash) {
+    if ([string]::IsNullOrWhiteSpace($Hash)) {
+        return "[missing]"
+    }
+    $short = $Hash.Substring(0, [Math]::Min(12, $Hash.Length))
+    if ($AuthorityHash -and ($Hash -eq $AuthorityHash)) {
+        return "[$short matches authority]"
+    }
+    return "[$short DIFFERENT build]"
+}
+
+function Invoke-VerifyInstall([bool]$DoPrune) {
+    $authority = Get-AuthorityBinary
+    $authorityHash = Get-Sha256OrNull $authority
+    Write-Output "RepoGrammar install verification"
+    Write-Output ""
+    if ($null -eq $authorityHash) {
+        Write-Output "Authority (managed binary): $authority [NOT INSTALLED]"
+        Write-Output "Install first, for example: install.ps1 -InstallAndConfigure -FromSource -Yes"
+        return
+    }
+    Write-Output "Authority (managed binary): $authority $(Format-HashTag $authorityHash $authorityHash)"
+    Write-Output ""
+
+    Write-Output "repogrammar on PATH:"
+    $copies = Get-RepogrammarPathCopies
+    $stale = @()
+    if ($copies.Count -eq 0) {
+        Write-Output "  (none)"
+    }
+    foreach ($copy in $copies) {
+        $copyHash = Get-Sha256OrNull $copy
+        Write-Output "  $copy $(Format-HashTag $copyHash $authorityHash)"
+        if ($copyHash -ne $authorityHash) {
+            $stale += $copy
+        }
+    }
+    Write-Output ""
+
+    Write-Output "Agent MCP servers point at:"
+    $codexCmd = Get-CodexMcpCommand
+    $claudeCmd = Get-ClaudeMcpCommand
+    if ($codexCmd) {
+        Write-Output "  codex  -> $codexCmd $(Format-HashTag (Get-Sha256OrNull $codexCmd) $authorityHash)"
+    } else {
+        Write-Output "  codex  -> (no RepoGrammar MCP entry)"
+    }
+    if ($claudeCmd) {
+        Write-Output "  claude -> $claudeCmd $(Format-HashTag (Get-Sha256OrNull $claudeCmd) $authorityHash)"
+    } else {
+        Write-Output "  claude -> (no RepoGrammar MCP entry)"
+    }
+    Write-Output ""
+
+    Write-Output "Running serve processes:"
+    $serves = Get-ServeProcessExecutables
+    if ($serves.Count -eq 0) {
+        Write-Output "  (none running)"
+    }
+    foreach ($entry in $serves) {
+        Write-Output "  PID $($entry.ProcessId) -> $($entry.Path) $(Format-HashTag (Get-Sha256OrNull $entry.Path) $authorityHash)"
+    }
+    Write-Output ""
+
+    $agentsConsistent = $true
+    foreach ($cmd in @($codexCmd, $claudeCmd)) {
+        if ($cmd -and ((Get-Sha256OrNull $cmd) -ne $authorityHash)) {
+            $agentsConsistent = $false
+        }
+    }
+    if ($agentsConsistent) {
+        Write-Output "OK: configured agents use the same build as the managed authority."
+    } else {
+        Write-Output "WARNING: an agent MCP entry points at a different build than the authority."
+        Write-Output "  Re-run: install.ps1 -InstallAndConfigure -FromSource -Yes to repoint agents."
+    }
+    if ($stale.Count -gt 0) {
+        Write-Output ""
+        Write-Output "Stale PATH copies (different build than the authority): $($stale.Count)"
+        foreach ($entry in $stale) {
+            Write-Output "  $entry"
+        }
+        if ($DoPrune) {
+            if (!$Yes -and !(Confirm-DefaultNo "Remove the stale PATH copies listed above?")) {
+                Write-Output "Cancelled. No copies removed."
+            } else {
+                foreach ($entry in $stale) {
+                    try {
+                        Remove-Item -LiteralPath $entry -Force -ErrorAction Stop
+                        Write-Output "Removed $entry"
+                    } catch {
+                        Write-Output "Failed to remove ${entry}: $($_.Exception.Message). Exit any process using it, then retry."
+                    }
+                }
+            }
+        } else {
+            Write-Output "Run with -Prune (add -Yes to skip the prompt) to remove these stale copies."
+        }
+    }
+}
+
 if ($Help) {
     Show-Usage
+    exit 0
+}
+
+if ($Verify -or $Prune) {
+    Invoke-VerifyInstall ([bool]$Prune)
     exit 0
 }
 
