@@ -182,9 +182,17 @@ building generation's indexed path/hash/range aborts the new generation.
 All generation-scoped writes for indexed files, code units, IR nodes/edges, and
 semantic facts require `status = 'building'`; validated, active, or failed
 generations are immutable even if a caller still holds an old generation handle.
-Generation validation transitions only `building` to `validated`, may recheck an
-already `validated` generation without changing it, and must not downgrade or
-reactivate an `active` generation.
+Within a building generation, recording an indexed file for an unchanged
+path/hash/size/language tuple is idempotent. Recording the same path with
+changed metadata runs as one SQLite transaction: existing path-scoped code
+units, IR, evidence, semantic facts, family memberships, and dependency rows are
+removed through foreign-key cascades, and any derived record that depended on
+that path is marked dirty before the cascade. The dirty marker is conservative;
+it is not cleared by merely inserting the replacement file row, so activation
+still requires a future recompute/clear step instead of silently reusing stale
+support. Generation validation transitions only `building` to `validated`, may
+recheck an already `validated` generation without changing it, and must not
+downgrade or reactivate an `active` generation.
 Bootstrap manifest validation parses `manifest.json` as JSON rather than
 matching literal text. Field order and formatting are not meaningful, but
 `schema_version`, non-empty `repogrammar_version`, `state`, `storage.status`,
@@ -373,6 +381,12 @@ file size, IR node references to same-generation code units, IR edge references
 to same-generation IR nodes, family/member/slot/evidence generation binding,
 family-evidence presence for non-`UNKNOWN` family classifications, and
 validation before activation.
+Path replacement in a building generation is transactional and fail-closed:
+unchanged file metadata is treated as an idempotent no-op, while changed file
+metadata marks dependent derived records dirty before replacing the file row and
+letting path-scoped rows cascade. Dirty markers intentionally block activation
+until a later bounded recomputation path can remove or rebuild the affected
+derived records.
 The current storage schema version is `6`. Existing pre-release schema `1`,
 `2`, `3`, `4`, and `5` generation databases are treated as stale and must be
 rebuilt rather than silently upgraded in place.
