@@ -415,10 +415,11 @@ impl IndexStore for SqliteIndexStore {
             return Ok(());
         }
         if existing_file.is_some() {
-            mark_dependents_dirty_for_replaced_path(
+            mark_dependents_dirty_for_path(
                 &transaction,
                 &generation.generation_id,
                 &file.path,
+                "path_replaced",
             )?;
             transaction
                 .execute(
@@ -441,6 +442,33 @@ impl IndexStore for SqliteIndexStore {
                 ],
             )
             .map_err(sql_unavailable)?;
+        transaction.commit().map_err(sql_unavailable)?;
+        Ok(())
+    }
+
+    fn remove_indexed_file(
+        &self,
+        generation: &GenerationHandle,
+        path: &str,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(path)?;
+        let mut connection = self.open_existing_generation(&generation.generation_id)?;
+        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
+        let transaction = connection.transaction().map_err(sql_unavailable)?;
+        if indexed_file_metadata(&transaction, &generation.generation_id, path)?.is_some() {
+            mark_dependents_dirty_for_path(
+                &transaction,
+                &generation.generation_id,
+                path,
+                "path_removed",
+            )?;
+            transaction
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![generation.generation_id, path],
+                )
+                .map_err(sql_unavailable)?;
+        }
         transaction.commit().map_err(sql_unavailable)?;
         Ok(())
     }
@@ -1339,19 +1367,21 @@ fn indexed_file_metadata(
         .map_err(sql_unavailable)
 }
 
-fn mark_dependents_dirty_for_replaced_path(
+fn mark_dependents_dirty_for_path(
     connection: &Connection,
     generation_id: &str,
     path: &str,
+    reason: &str,
 ) -> Result<(), IndexStoreError> {
+    validate_index_text_field(reason, "dirty record reason")?;
     connection
         .execute(
             "INSERT OR IGNORE INTO dirty_records \
              (generation_id, record_kind, record_id, reason, marked_at_generation_id) \
-             SELECT generation_id, record_kind, record_id, 'path_replaced', ?1 \
+             SELECT generation_id, record_kind, record_id, ?3, ?1 \
              FROM derived_record_dependencies \
              WHERE generation_id = ?1 AND path = ?2",
-            params![generation_id, path],
+            params![generation_id, path, reason],
         )
         .map_err(sql_unavailable)?;
     Ok(())
@@ -4018,6 +4048,189 @@ mod tests {
     }
 
     #[test]
+    fn missing_indexed_file_removal_is_idempotent() {
+        let workspace = TempWorkspace::new("sqlite-missing-path-removal");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+
+        store
+            .remove_indexed_file(&generation, "src/missing.ts")
+            .expect("missing file removal is idempotent");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let indexed_file_count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM indexed_files WHERE generation_id = ?1",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("indexed file count");
+        let dirty_count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM dirty_records WHERE generation_id = ?1",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("dirty count");
+
+        assert_eq!(indexed_file_count, 1);
+        assert_eq!(dirty_count, 0);
+    }
+
+    #[test]
+    fn removed_indexed_file_cascades_path_records_and_marks_dependents_dirty() {
+        let workspace = TempWorkspace::new("sqlite-removed-path-dirty");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+
+        store
+            .remove_indexed_file(&generation, "src/a.ts")
+            .expect("remove indexed file");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let removed_file_rows: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed file rows");
+        let retained_file_rows: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = 'src/b.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("retained file rows");
+        let removed_path_units: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path code units");
+        let retained_path_units: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND path = 'src/b.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("retained path code units");
+        let removed_path_evidence: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM evidence \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path evidence");
+        let retained_path_evidence: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM evidence \
+                 WHERE generation_id = ?1 AND path = 'src/b.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("retained path evidence");
+        let removed_path_dependencies: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM derived_record_dependencies \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path dependencies");
+        let dirty_rows = connection
+            .prepare(
+                "SELECT record_kind, record_id, reason \
+                 FROM dirty_records \
+                 WHERE generation_id = ?1 \
+                 ORDER BY record_kind, record_id",
+            )
+            .expect("prepare dirty query")
+            .query_map(params![generation.generation_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("query dirty records")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect dirty rows");
+
+        assert_eq!(removed_file_rows, 0);
+        assert_eq!(retained_file_rows, 1);
+        assert_eq!(removed_path_units, 0);
+        assert_eq!(retained_path_units, 1);
+        assert_eq!(removed_path_evidence, 0);
+        assert_eq!(retained_path_evidence, 1);
+        assert_eq!(removed_path_dependencies, 0);
+        assert_eq!(
+            dirty_rows,
+            vec![
+                (
+                    "family".to_string(),
+                    family().family_id,
+                    "path_removed".to_string(),
+                ),
+                (
+                    "family_evidence".to_string(),
+                    family_evidence("src/a.ts").evidence_id,
+                    "path_removed".to_string(),
+                ),
+                (
+                    "semantic_evidence".to_string(),
+                    semantic_fact("src/a.ts").evidence_id,
+                    "path_removed".to_string(),
+                ),
+                (
+                    "semantic_fact".to_string(),
+                    semantic_fact("src/a.ts").fact_id,
+                    "path_removed".to_string(),
+                ),
+            ]
+        );
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("dirty removal must block activation");
+        assert!(format!("{error:?}").contains("dirty records"));
+    }
+
+    #[test]
     fn dirty_records_block_active_family_reads() {
         let (_workspace, store, generation) = store_with_active_family("sqlite-dirty-family-read");
         let connection = store
@@ -5486,6 +5699,10 @@ mod tests {
             .expect_err("validated generation must reject indexed-file writes");
         assert_invalid_state(error);
         let error = store
+            .remove_indexed_file(&generation, "src/a.ts")
+            .expect_err("validated generation must reject indexed-file removal");
+        assert_invalid_state(error);
+        let error = store
             .record_code_unit(&generation, &code_unit("src/a.ts"))
             .expect_err("validated generation must reject code-unit writes");
         assert_invalid_state(error);
@@ -5496,6 +5713,10 @@ mod tests {
         let error = store
             .record_indexed_file(&generation, &file("src/c.ts"))
             .expect_err("active generation must reject indexed-file writes");
+        assert_invalid_state(error);
+        let error = store
+            .remove_indexed_file(&generation, "src/a.ts")
+            .expect_err("active generation must reject indexed-file removal");
         assert_invalid_state(error);
         let error = store
             .record_code_unit(&generation, &code_unit("src/a.ts"))
@@ -5519,6 +5740,10 @@ mod tests {
         let error = store
             .record_indexed_file(&failed, &file("src/b.ts"))
             .expect_err("failed generation must reject indexed-file writes");
+        assert_invalid_state(error);
+        let error = store
+            .remove_indexed_file(&failed, "src/a.ts")
+            .expect_err("failed generation must reject indexed-file removal");
         assert_invalid_state(error);
         let error = store
             .record_code_unit(&failed, &code_unit("src/a.ts"))

@@ -78,8 +78,10 @@ allowed.
   graph rejection before activation, derived-record dependency persistence for
   semantic and family evidence, idempotent unchanged indexed-file rewrites,
   changed-path replacement that cascades stale path-scoped rows and marks
-  derived dependents dirty, active dirty-record refusal, active
-  dependency/hash mismatch refusal, atomic rollback of failed fact writes,
+  derived dependents dirty, removed-path deletion that is idempotent for absent
+  paths and marks existing derived dependents dirty before cascading stale rows,
+  active dirty-record refusal, active dependency/hash mismatch refusal, atomic
+  rollback of failed fact writes,
   building-generation write gates for indexed files, code units, IR nodes/edges,
   and semantic facts, validation/activation transition guards that do not
   downgrade active generations, read-only active `files`/`units` listing order

@@ -18,7 +18,8 @@
   family or semantic reads when dirty rows or dependency/hash mismatches are
   present. Re-recording an unchanged indexed file is now idempotent, while
   replacing a changed path removes stale path-scoped records and marks derived
-  dependents dirty in the same SQLite transaction.
+  dependents dirty in the same SQLite transaction. Removed indexed paths now
+  use the same fail-closed path-scoped cascade and dirty-marker behavior.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,
