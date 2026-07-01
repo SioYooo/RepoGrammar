@@ -110,9 +110,11 @@ repositories with no discovered `Cargo.toml`, skip this substage. The provider r
 workspace/package/target/feature/dependency metadata into owned
 `PROJECT_CONFIG` semantic facts, and returns recoverable `UNKNOWN`s for
 unavailable Cargo, unreadable project configuration, or missing manifest
-candidates. It does not execute build scripts or procedural macros, and its
-facts do not prove Rust symbols, types, calls, trait dispatch, dataflow, borrow
-facts, or family support.
+candidates. Absolute manifest paths returned by Cargo are scoped against the
+canonical project root before they are accepted, so symlink-equivalent roots do
+not become missing candidates. It does not execute build scripts or procedural
+macros, and its facts do not prove Rust symbols, types, calls, trait dispatch,
+dataflow, borrow facts, or family support.
 
 Future Rust adapters must translate Cargo/rustc/rust-analyzer/rustdoc objects
 into RepoGrammar-owned `SemanticFact`, `Evidence`, `Provenance`, and

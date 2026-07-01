@@ -468,11 +468,21 @@ fn repo_relative_metadata_path(
             "cargo metadata path must be repo-relative or under project root".to_string(),
         ));
     }
-    let relative = path.strip_prefix(project_root).map_err(|_| {
-        CargoMetadataProviderError::ProtocolViolation(
-            "cargo metadata path must stay under project root".to_string(),
-        )
-    })?;
+    let relative = match path.strip_prefix(project_root) {
+        Ok(relative) => relative,
+        Err(_) => {
+            let canonical_root = std::fs::canonicalize(project_root).map_err(|_| {
+                CargoMetadataProviderError::ProtocolViolation(
+                    "cargo metadata path must stay under project root".to_string(),
+                )
+            })?;
+            path.strip_prefix(&canonical_root).map_err(|_| {
+                CargoMetadataProviderError::ProtocolViolation(
+                    "cargo metadata path must stay under project root".to_string(),
+                )
+            })?
+        }
+    };
     let path = slash_path(relative)?;
     validate_repo_relative_path(&path).map_err(|_| {
         CargoMetadataProviderError::ProtocolViolation(
@@ -529,7 +539,8 @@ fn stable_token(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
-    use crate::test_support::TempWorkspace;
+    use crate::test_support::{create_test_symlink_dir, TempWorkspace};
+    use std::fs;
 
     fn hash(character: char) -> ContentHash {
         ContentHash::new(format!("sha256:{}", character.to_string().repeat(64)))
@@ -658,6 +669,44 @@ mod tests {
             .facts
             .iter()
             .any(|fact| fact.evidence.provenance.path == "Cargo.toml"));
+    }
+
+    #[test]
+    fn absolute_manifest_paths_accept_canonical_project_root_equivalents() {
+        let workspace = TempWorkspace::new("cargo-metadata-canonical-root");
+        let actual_root = workspace.path().join("actual");
+        fs::create_dir_all(&actual_root).expect("actual root");
+        let linked_root = workspace.path().join("linked");
+        if !create_test_symlink_dir(&actual_root, &linked_root) {
+            return;
+        }
+        let manifest_path = actual_root
+            .canonicalize()
+            .expect("canonical root")
+            .join("Cargo.toml")
+            .display()
+            .to_string();
+
+        let output = parse_cargo_metadata_output(
+            &sample_metadata(
+                &manifest_path.replace('\\', "\\\\"),
+                "crates/member/Cargo.toml",
+            ),
+            &linked_root,
+            request(vec![
+                candidate("Cargo.toml", 0),
+                candidate("crates/member/Cargo.toml", 20),
+            ]),
+            "1.88.0",
+        )
+        .expect("canonical manifest under symlink-equivalent root should parse");
+
+        assert!(output.unknowns.is_empty());
+        assert!(output.facts.iter().any(|fact| {
+            fact.evidence.provenance.path == "Cargo.toml"
+                && fact.target.as_ref().map(|target| target.as_str())
+                    == Some("cargo.package.root_crate")
+        }));
     }
 
     #[test]
