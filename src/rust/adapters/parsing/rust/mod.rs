@@ -45,7 +45,7 @@ impl SourceParser for RustSyntaxParser {
         }
         let mut parser = Parser::new();
         parser
-            .set_language(&tree_sitter_rust::language())
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|error| ParseError::Internal(format!("load Rust grammar: {error}")))?;
         let Some(tree) = parser.parse(document.text, None) else {
             return Err(ParseError::Internal(

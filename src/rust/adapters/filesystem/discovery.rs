@@ -454,7 +454,18 @@ fn repo_relative_string(path: &Path) -> Option<String> {
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let digest = Sha256::digest(bytes);
+    bytes_to_lower_hex(digest.as_ref())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 #[cfg(test)]

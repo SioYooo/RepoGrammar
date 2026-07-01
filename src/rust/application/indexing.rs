@@ -1372,8 +1372,19 @@ fn rust_provider_dimension_hash(
         hasher.update(b":");
         hasher.update(candidate.range.end_byte.to_string().as_bytes());
     }
-    ContentHash::new(format!("sha256:{:x}", hasher.finalize()))
+    let digest = hasher.finalize();
+    ContentHash::new(format!("sha256:{}", bytes_to_lower_hex(digest.as_ref())))
         .expect("sha2 digest formats as strict sha256 hash")
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 fn rust_provider_unknown_facts(
