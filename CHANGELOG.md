@@ -12,7 +12,11 @@
   evidence, preserving typed `InsufficientSupport` instead of inflating it into
   a family claim. The partial-context resolver now preserves embedded paths,
   `path:line`, `path:start-end`, symbol hints, residue terms, candidates, and
-  advisory `check` metadata without proof-like conformance fields.
+  advisory `check` metadata without proof-like conformance fields. The mutable
+  storage schema now records derived-record dependencies and dirty-record
+  markers, reports their active counts through status/doctor, and refuses active
+  family or semantic reads when dirty rows or dependency/hash mismatches are
+  present.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

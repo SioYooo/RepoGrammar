@@ -73,8 +73,9 @@ The repository-local state directory uses this normal mutable-index layout:
 
 `manifest.json` records lifecycle metadata. `repogrammar.sqlite` is the mutable
 repository index database. It stores `index_generations` rows, indexed files,
-code units, IR, semantic facts, family rows, and evidence for all retained
-generations; the active generation is the single row with `status = 'active'`.
+code units, IR, semantic facts, family rows, evidence, derived-record
+dependency metadata, and dirty-record markers for all retained generations; the
+active generation is the single row with `status = 'active'`.
 Normal `index`, `sync`, `resync`, `status`, `doctor`, `files`, `units`, family
 queries, and `prune` operate on this top-level database and do not write a
 `.repogrammar/current-generation` pointer or create `.repogrammar/generations/`
@@ -156,7 +157,10 @@ mutable database read-only, select the single active `index_generations` row,
 validate the schema and storage health, and recheck stored repo-relative paths,
 strict content hashes, languages, unit ids, byte ranges, IR node/edge
 references, semantic fact kind/certainty tokens, assumptions JSON, and
-same-generation evidence before returning records.
+same-generation evidence before returning records. They also reject active
+dirty records and derived-record dependency rows whose stored path/hash no
+longer matches the active indexed-file row, so dirty or dependency-mismatched
+records cannot support family or semantic-fact output.
 The query application layer can run an internal file-hash freshness and
 claim-input readiness gate over snapshot semantic facts using the current
 source-store hash boundary. That gate does not require a storage schema bump,
@@ -347,26 +351,30 @@ PRAGMA temp_store=MEMORY;
 
 The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,
-family members, variation slots, and evidence links. The current `index` and
-`sync` command path populates indexed files, syntax-only code units,
+family members, variation slots, evidence links, derived-record dependency
+rows, and dirty-record markers. The current `index` and `sync` command path
+populates indexed files, syntax-only code units,
 CodeUnit-derived IR nodes, conservative IR containment edges, optional
 semantic-worker facts, and exact-anchor Python `DATAFLOW_DERIVED` support facts
 derived in the application layer. The storage ports also expose semantic-fact
 and family evidence writers for frontend and claim-builder integration. These
 writers accept only building generations and require evidence to match an
 indexed code unit's repository-relative path, content hash, and byte range in
-the same generation. Family evidence rows must be linked to a family and must
-declare covered family-claim labels explicitly; semantic fact evidence rows must
-remain unlinked to a family. Generation validation must reject malformed
-semantic or family evidence rows before activation. The storage
+the same generation. They also write `derived_record_dependencies` rows for
+semantic facts, semantic evidence, family evidence, and the supported family
+record that depends on each family-evidence path/hash. Family evidence rows must
+be linked to a family and must declare covered family-claim labels explicitly;
+semantic fact evidence rows must remain unlinked to a family. Generation
+validation must reject malformed semantic or family evidence rows, mismatched
+derived dependencies, or active dirty records before activation. The storage
 adapter enforces foreign keys, repo-relative paths at the Rust port boundary,
 matching file/code-unit content hashes, code-unit byte ranges bounded by indexed
 file size, IR node references to same-generation code units, IR edge references
 to same-generation IR nodes, family/member/slot/evidence generation binding,
 family-evidence presence for non-`UNKNOWN` family classifications, and
 validation before activation.
-The current storage schema version is `5`. Existing pre-release schema `1`,
-`2`, `3`, and `4` generation databases are treated as stale and must be
+The current storage schema version is `6`. Existing pre-release schema `1`,
+`2`, `3`, `4`, and `5` generation databases are treated as stale and must be
 rebuilt rather than silently upgraded in place.
 The database must later store repository revision, worktree hash, language
 adapter versions, freshness metadata, canonical templates, exception records,
@@ -384,6 +392,7 @@ Schema work should keep separate tables for:
 - fingerprints and candidate groups;
 - pattern families and templates;
 - variations, exceptions, and counterexamples;
+- derived record dependencies and dirty-record markers;
 - source evidence.
 
 The production SQLite dependency is `rusqlite` with bundled SQLite enabled.
@@ -392,12 +401,15 @@ domain code must use RepoGrammar-owned storage port types.
 
 `repogrammar status` must show journal mode when an active generation exists
 and must distinguish the bootstrap manifest schema from the active SQLite
-storage schema in both human and JSON output.
+storage schema in both human and JSON output. Status should also report active
+derived dependency and dirty-record counts when storage can be inspected.
 `repogrammar doctor` must run SQLite integrity checks, verify schema version,
 verify active generation consistency, report missing storage layout without
 recreating it, and report lock state. Doctor JSON must distinguish
 `checks.manifest_schema_version` from `checks.storage_schema_version` and must
-not emit an ambiguous `checks.schema_version` field.
+not emit an ambiguous `checks.schema_version` field. Doctor JSON should expose
+the same dependency and dirty-record counts under `checks` for reviewer
+diagnostics.
 
 ## Index Generations
 
