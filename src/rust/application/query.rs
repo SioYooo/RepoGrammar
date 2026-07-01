@@ -680,6 +680,8 @@ pub fn lookup_family(
             unknowns: vec![insufficient_support_unknown("query target")],
         }));
     };
+    let active_generation = active.generation_id;
+    let mut matches = Vec::new();
     for family in active.families {
         let Some(active_family) = store
             .show_family(&family.family_id)
@@ -687,12 +689,24 @@ pub fn lookup_family(
         else {
             continue;
         };
-        if family_matches_target(&active_family, target, mode) {
-            return Ok(FamilyLookupReport::Found(family_detail(active_family)));
+        if let Some(target_match) = family_target_match(&active_family, target, mode) {
+            matches.push(FamilyTargetMatch {
+                family: active_family,
+                target_match,
+            });
         }
     }
+    if let Some(unknown) = ambiguous_target_unknown(&matches) {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation,
+            unknowns: vec![unknown],
+        }));
+    }
+    if let Some(matched) = matches.into_iter().next() {
+        return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
+    }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
-        active_generation: active.generation_id,
+        active_generation,
         unknowns: vec![insufficient_support_unknown("query target")],
     }))
 }
@@ -711,6 +725,8 @@ pub fn lookup_family_with_freshness(
             unknowns: vec![insufficient_support_unknown("query target")],
         }));
     };
+    let active_generation = active.generation_id;
+    let mut matches = Vec::new();
     for family in active.families {
         let Some(active_family) = store
             .show_family(&family.family_id)
@@ -718,22 +734,34 @@ pub fn lookup_family_with_freshness(
         else {
             continue;
         };
-        if !family_matches_target(&active_family, target, mode) {
+        let Some(target_match) = family_target_match(&active_family, target, mode) else {
             continue;
-        }
-        if family_evidence_is_fresh(&request, source_store, &active_family)? {
-            return Ok(FamilyLookupReport::Found(family_detail(active_family)));
+        };
+        matches.push(FamilyTargetMatch {
+            family: active_family,
+            target_match,
+        });
+    }
+    if let Some(unknown) = ambiguous_target_unknown(&matches) {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation,
+            unknowns: vec![unknown],
+        }));
+    }
+    if let Some(matched) = matches.into_iter().next() {
+        if family_evidence_is_fresh(&request, source_store, &matched.family)? {
+            return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
         }
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
-            active_generation: active.generation_id,
+            active_generation,
             unknowns: vec![stale_evidence_unknown(format!(
                 "{}:evidence_freshness",
-                active_family.family.family_id
+                matched.family.family.family_id
             ))],
         }));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
-        active_generation: active.generation_id,
+        active_generation,
         unknowns: vec![insufficient_support_unknown("query target")],
     }))
 }
@@ -1660,29 +1688,81 @@ fn family_unknown_from_variation_slot(
     })
 }
 
-fn family_matches_target(family: &ActiveFamily, target: &str, mode: FamilyLookupMode) -> bool {
+struct FamilyTargetMatch {
+    family: ActiveFamily,
+    target_match: TargetMatchKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetMatchKind {
+    ExactFamilyId,
+    ExactMemberId,
+    ExactMemberRole,
+    EvidencePath,
+}
+
+fn family_target_match(
+    family: &ActiveFamily,
+    target: &str,
+    mode: FamilyLookupMode,
+) -> Option<TargetMatchKind> {
     match mode {
-        FamilyLookupMode::ExactFamilyId => family.family.family_id == target,
+        FamilyLookupMode::ExactFamilyId => {
+            (family.family.family_id == target).then_some(TargetMatchKind::ExactFamilyId)
+        }
         FamilyLookupMode::ExactMemberId => family
             .members
             .iter()
-            .any(|member| member.code_unit_id == target),
+            .any(|member| member.code_unit_id == target)
+            .then_some(TargetMatchKind::ExactMemberId),
         FamilyLookupMode::FuzzyQuery => {
-            family.family.family_id == target
-                || family
-                    .members
-                    .iter()
-                    .any(|member| member.code_unit_id == target || member.role == target)
-                || family
-                    .evidence
-                    .iter()
-                    .any(|evidence| path_matches_target(&evidence.path, target))
+            if family.family.family_id == target {
+                Some(TargetMatchKind::ExactFamilyId)
+            } else if family
+                .members
+                .iter()
+                .any(|member| member.code_unit_id == target)
+            {
+                Some(TargetMatchKind::ExactMemberId)
+            } else if family.members.iter().any(|member| member.role == target) {
+                Some(TargetMatchKind::ExactMemberRole)
+            } else if family
+                .evidence
+                .iter()
+                .any(|evidence| path_matches_target(&evidence.path, target))
+            {
+                Some(TargetMatchKind::EvidencePath)
+            } else {
+                None
+            }
         }
     }
 }
 
 fn path_matches_target(path: &str, target: &str) -> bool {
     path == target || (target.contains('/') && path.ends_with(&format!("/{target}")))
+}
+
+fn ambiguous_target_unknown(matches: &[FamilyTargetMatch]) -> Option<FamilyQueryUnknown> {
+    let mut candidate_family_ids = matches
+        .iter()
+        .filter(|matched| matched.target_match == TargetMatchKind::EvidencePath)
+        .map(|matched| matched.family.family.family_id.as_str())
+        .collect::<Vec<_>>();
+    candidate_family_ids.sort_unstable();
+    candidate_family_ids.dedup();
+    if candidate_family_ids.len() <= 1 {
+        return None;
+    }
+    Some(FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::InsufficientSupport,
+        affected_claim: "query target ambiguity".to_string(),
+        recovery: Some(format!(
+            "narrow the target to one exact family id or member id; candidate families: {}",
+            candidate_family_ids.join(", ")
+        )),
+    })
 }
 
 fn python_family_eligible_unit(unit: &IndexedCodeUnitRecord) -> bool {
@@ -1965,7 +2045,7 @@ mod tests {
 
     struct FakeFamilyStore {
         active: ActiveFamilies,
-        family: Option<ActiveFamily>,
+        families: Vec<ActiveFamily>,
     }
 
     impl FakeFamilyStore {
@@ -1975,7 +2055,7 @@ mod tests {
                     generation_id: "gen-000001".to_string(),
                     families: Vec::new(),
                 },
-                family: None,
+                families: Vec::new(),
             }
         }
 
@@ -2010,12 +2090,19 @@ mod tests {
                     note: "DOMINANT_PATTERN support evidence".to_string(),
                 }],
             };
+            Self::with_families(vec![family])
+        }
+
+        fn with_families(families: Vec<ActiveFamily>) -> Self {
             Self {
                 active: ActiveFamilies {
-                    generation_id: family.generation_id.clone(),
-                    families: vec![family.family.clone()],
+                    generation_id: "gen-000001".to_string(),
+                    families: families
+                        .iter()
+                        .map(|family| family.family.clone())
+                        .collect(),
                 },
-                family: Some(family),
+                families,
             }
         }
     }
@@ -2059,9 +2146,9 @@ mod tests {
 
         fn show_family(&self, family_id: &str) -> Result<Option<ActiveFamily>, StoreError> {
             Ok(self
-                .family
-                .as_ref()
-                .filter(|family| family.family.family_id == family_id)
+                .families
+                .iter()
+                .find(|family| family.family.family_id == family_id)
                 .cloned())
         }
     }
@@ -2145,6 +2232,33 @@ mod tests {
         }
     }
 
+    fn active_family_with_evidence(family_id: &str, path: &str, index: usize) -> ActiveFamily {
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: format!("unit:{path}#handler:{index}"),
+                role: format!("role:{index}"),
+            }],
+            variation_slots: Vec::new(),
+            evidence: vec![IndexedFamilyEvidenceRecord {
+                evidence_id: format!("family-evidence:{index:06}"),
+                family_id: family_id.to_string(),
+                code_unit_id: format!("unit:{path}#handler:{index}"),
+                covered_claims: vec!["canonical".to_string(), "support".to_string()],
+                path: path.to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte: index,
+                end_byte: index + 20,
+                note: "support evidence".to_string(),
+            }],
+        }
+    }
+
     fn family_detail_with_evidence(
         evidence: Vec<IndexedFamilyEvidenceRecord>,
     ) -> FamilyDetailReport {
@@ -2218,7 +2332,7 @@ mod tests {
                 generation_id: family.generation_id.clone(),
                 families: vec![family.family.clone()],
             },
-            family: Some(family),
+            families: vec![family],
         }
     }
 
@@ -2537,6 +2651,109 @@ mod tests {
             assert!(!debug.contains("/repo"));
             assert!(!debug.contains("function"));
         }
+    }
+
+    #[test]
+    fn fuzzy_path_lookup_abstains_when_path_matches_multiple_families() {
+        let first = active_family_with_evidence(
+            "family:rust:mcp_handler:tool_call",
+            "src/rust/interfaces/mcp/mod.rs",
+            0,
+        );
+        let first_family_id = first.family.family_id.clone();
+        let first_member_id = first.members[0].code_unit_id.clone();
+        let second = active_family_with_evidence(
+            "family:rust:mcp_handler:initialize",
+            "src/rust/interfaces/mcp/mod.rs",
+            1,
+        );
+        let second_family_id = second.family.family_id.clone();
+        let store = FakeFamilyStore::with_families(vec![second, first]);
+
+        let lookup = lookup_family(
+            &store,
+            Some("src/rust/interfaces/mcp/mod.rs"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup family");
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("ambiguous path lookup must not return the first family");
+        };
+        assert_eq!(report.active_generation, "gen-000001");
+        assert_eq!(report.unknowns[0].class, UnknownClass::Blocking);
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+        assert_eq!(report.unknowns[0].affected_claim, "query target ambiguity");
+        let recovery = report.unknowns[0]
+            .recovery
+            .as_deref()
+            .expect("ambiguity recovery");
+        assert!(recovery.contains(&first_family_id));
+        assert!(recovery.contains(&second_family_id));
+        assert!(recovery.contains("exact family id or member id"));
+
+        let exact_family = lookup_family(
+            &store,
+            Some(&first_family_id),
+            FamilyLookupMode::ExactFamilyId,
+        )
+        .expect("exact family lookup");
+        let FamilyLookupReport::Found(report) = exact_family else {
+            panic!("exact family id must remain exact");
+        };
+        assert_eq!(report.family_id, first_family_id);
+
+        let exact_member = lookup_family(
+            &store,
+            Some(&first_member_id),
+            FamilyLookupMode::ExactMemberId,
+        )
+        .expect("exact member lookup");
+        let FamilyLookupReport::Found(report) = exact_member else {
+            panic!("exact member id must remain exact");
+        };
+        assert_eq!(report.family_id, first_family_id);
+    }
+
+    #[test]
+    fn fuzzy_path_lookup_with_freshness_abstains_before_stale_claims_when_ambiguous() {
+        let store = FakeFamilyStore::with_families(vec![
+            active_family_with_evidence(
+                "family:rust:mcp_handler:tool_call",
+                "src/rust/interfaces/mcp/mod.rs",
+                0,
+            ),
+            active_family_with_evidence(
+                "family:rust:mcp_handler:initialize",
+                "src/rust/interfaces/mcp/mod.rs",
+                1,
+            ),
+        ]);
+        let source_store = FamilyEvidenceSourceStore {
+            path: "src/rust/interfaces/mcp/mod.rs".to_string(),
+            result: Err(SourceStoreError::HashMismatch(
+                "source content changed after discovery".to_string(),
+            )),
+        };
+
+        let lookup = lookup_family_with_freshness(
+            family_freshness_request(),
+            &store,
+            &source_store,
+            Some("src/rust/interfaces/mcp/mod.rs"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup with freshness");
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("ambiguous path lookup must not produce a family claim");
+        };
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+        assert_eq!(report.unknowns[0].affected_claim, "query target ambiguity");
     }
 
     #[test]
@@ -3135,6 +3352,19 @@ mod tests {
             report.unknowns[0].recovery.as_deref(),
             Some("run repogrammar sync")
         );
+
+        let lookup = lookup_family_with_freshness(
+            family_freshness_request(),
+            &store,
+            &source_store,
+            Some("routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup with freshness");
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("stale fuzzy path evidence must block public detail");
+        };
+        assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
 
         let families =
             list_families_with_freshness(family_freshness_request(), &store, &source_store)

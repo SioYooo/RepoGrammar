@@ -121,6 +121,12 @@ facts, raw snapshot contents, or treat framework heuristics as family evidence.
 The MCP call handler reuses the same application query preflight and
 FamilyStore-backed lookup path as the CLI rather than inventing a parallel
 contract.
+For `find_analogues`, `explain_deviation`, and `check_conformance`, fuzzy path
+or path-suffix targets that match evidence in multiple families must abstain
+with typed `UNKNOWN` instead of returning whichever family appears first in
+storage order. The unknown uses reason `InsufficientSupport`, affected claim
+`query target ambiguity`, and recovery guidance that names the candidate family
+ids and asks the caller to narrow the query to an exact family id or member id.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
 unknowns, output metadata, and a `read_plan` without evidence records;

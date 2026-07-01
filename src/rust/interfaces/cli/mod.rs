@@ -32,6 +32,7 @@ use crate::application::repository::{
     RepositoryStatusRequest, RepositoryUninitOutcome, RepositoryUninitRequest,
     RepositoryUnlockReport, RepositoryUnlockRequest,
 };
+use crate::application::storage::DEFAULT_RETAINED_INACTIVE_GENERATIONS;
 use crate::application::telemetry::{
     estimated_potential_token_savings_rollup, experiment_export, experiment_purge,
     experiment_record, experiment_report, experiment_report_json, experiment_start,
@@ -47,6 +48,7 @@ use crate::application::telemetry::{
 };
 use crate::core::model::EstimatedPotentialTokenSavings;
 use crate::error::RepoGrammarError;
+use crate::ports::index_store::{GenerationPruneReport, GenerationPruneRequest};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::IsTerminal;
@@ -138,6 +140,14 @@ pub trait CliRuntime {
         _request: CliAutosyncRequest,
     ) -> Result<AutosyncReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("autosync"))
+    }
+
+    fn prune_generations(
+        &self,
+        _request: RepositoryStatusRequest,
+        _prune: GenerationPruneRequest,
+    ) -> Result<GenerationPruneReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("prune"))
     }
 
     fn indexed_files(
@@ -487,6 +497,8 @@ fn usage() -> String {
         "      Rebuild the active index and static-analysis facts for any initialized repository.",
         "  autosync <status|enable|start|stop|disable|run> [options]",
         "      Manage optional repo-local automatic sync. Use `autosync start`, not `--start`.",
+        "  prune [--project <path>] [--keep <n>] [--dry-run] [--yes] [--json]",
+        "      Remove old inactive index generations while preserving the active generation.",
         "  status [--project <path>] [--json]",
         "      Report repository state, active generation, schema, and storage health.",
         "  doctor [--project <path>] [--json]",
@@ -603,6 +615,20 @@ fn command_usage(command: &str) -> Option<String> {
             "  --progress auto|always|never       Accepted for long-running command compatibility.",
             "  --poll-ms <n>                      Poll interval, 100 through 600000 milliseconds.",
             "  --debounce-ms <n>                  Debounce interval, 0 through 60000 milliseconds.",
+        ])),
+        "prune" => Some(help_text(&[
+            "Usage: repogrammar prune [--project <path>|--path <path>] [--keep <n>] [--dry-run] [--yes] [--json] [--quiet|--verbose]",
+            "",
+            "Removes old inactive index generation directories. The active generation is always preserved.",
+            "Destructive runs require --yes. Use --dry-run to inspect candidates without deleting.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --keep <n>                         Number of newest inactive generations to keep. Defaults to 2 and may be 0.",
+            "  --dry-run                          Report prune candidates without deleting directories.",
+            "  --yes                              Required unless --dry-run is present.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
         ])),
         "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.")),
         "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.")),
@@ -840,6 +866,7 @@ fn is_project_lifecycle_command(command: &str) -> bool {
             | "sync"
             | "resync"
             | "autosync"
+            | "prune"
             | "status"
             | "doctor"
             | "unlock"
@@ -884,6 +911,12 @@ where
     if command == "autosync" {
         return match parse_autosync_options(rest) {
             Ok(options) => handle_autosync(&options, current_dir, env_lookup, runtime),
+            Err(error) => CliOutput::failure(2, format!("{error}\n")),
+        };
+    }
+    if command == "prune" {
+        return match parse_prune_options(rest) {
+            Ok(options) => handle_prune(&options, current_dir, env_lookup, runtime),
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         };
     }
@@ -4177,6 +4210,7 @@ fn handle_status<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
+    let _accepted_verbosity_flags = (options.quiet, options.verbose);
     let request = RepositoryStatusRequest {
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
@@ -4207,6 +4241,31 @@ where
         Ok(report) if options.json => CliOutput::success(doctor_json(&report)),
         Ok(report) => CliOutput::success(doctor_human(&report)),
         Err(error) => lifecycle_error("doctor", options.json, error),
+    }
+}
+
+fn handle_prune<F>(
+    options: &PruneOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    let prune_request = GenerationPruneRequest {
+        keep_inactive: options.keep_inactive,
+        dry_run: options.dry_run,
+    };
+
+    match runtime.prune_generations(request, prune_request) {
+        Ok(report) if options.json => CliOutput::success(prune_report_json(&report)),
+        Ok(report) => CliOutput::success(prune_report_human(&report)),
+        Err(error) => lifecycle_error("prune", options.json, error),
     }
 }
 
@@ -4518,6 +4577,17 @@ struct LifecycleOptions {
     force: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PruneOptions {
+    project_path: Option<String>,
+    keep_inactive: usize,
+    dry_run: bool,
+    yes: bool,
+    json: bool,
+    quiet: bool,
+    verbose: bool,
+}
+
 impl Default for LifecycleOptions {
     fn default() -> Self {
         Self {
@@ -4531,6 +4601,20 @@ impl Default for LifecycleOptions {
             resync: false,
             autosync: false,
             force: false,
+        }
+    }
+}
+
+impl Default for PruneOptions {
+    fn default() -> Self {
+        Self {
+            project_path: None,
+            keep_inactive: DEFAULT_RETAINED_INACTIVE_GENERATIONS,
+            dry_run: false,
+            yes: false,
+            json: false,
+            quiet: false,
+            verbose: false,
         }
     }
 }
@@ -4683,6 +4767,54 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
             }
             other => return Err(format!("unknown {command} option: {other}")),
         }
+    }
+    Ok(options)
+}
+
+fn parse_prune_options(rest: &[String]) -> Result<PruneOptions, String> {
+    let mut options = PruneOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--project" | "--path" => {
+                let value = option_value(rest, index, rest[index].as_str(), "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--keep" => {
+                let value = option_value(rest, index, "--keep", "a non-negative integer")?;
+                options.keep_inactive = parse_nonnegative_usize(value, "--keep")?;
+                index += 2;
+            }
+            "--dry-run" => {
+                options.dry_run = true;
+                index += 1;
+            }
+            "--yes" => {
+                options.yes = true;
+                index += 1;
+            }
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" => {
+                options.quiet = true;
+                index += 1;
+            }
+            "--verbose" => {
+                options.verbose = true;
+                index += 1;
+            }
+            value if !value.starts_with('-') => {
+                set_project_path(&mut options.project_path, value)?;
+                index += 1;
+            }
+            other => return Err(format!("unknown prune option: {other}")),
+        }
+    }
+    if !options.dry_run && !options.yes {
+        return Err("prune requires --yes unless --dry-run is present".to_string());
     }
     Ok(options)
 }
@@ -4988,6 +5120,12 @@ fn parse_positive_usize(value: &str, option: &str) -> Result<usize, String> {
     Ok(parsed)
 }
 
+fn parse_nonnegative_usize(value: &str, option: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .map_err(|_| format!("{option} requires a non-negative integer"))
+}
+
 fn set_project_path(target: &mut Option<String>, value: &str) -> Result<(), String> {
     if target.is_some() {
         return Err(format!("unexpected positional argument: {value}"));
@@ -5269,6 +5407,55 @@ fn index_outcome_value(
         "progress": options.progress.as_str(),
         "warnings": outcome.warnings,
     })
+}
+
+fn prune_report_human(report: &GenerationPruneReport) -> String {
+    let status = if report.dry_run {
+        "dry_run"
+    } else {
+        "complete"
+    };
+    let mut output = format!(
+        "prune: {status}\nactive_generation: {}\nkeep_inactive: {}\nretained_inactive_generations: {}\ncandidate_generations: {}\ndeleted_generations: {}\n",
+        report.active_generation,
+        report.keep_inactive,
+        report.retained_inactive_generations.len(),
+        report.candidate_generations.len(),
+        report.deleted_generations.len()
+    );
+    for generation in &report.retained_inactive_generations {
+        output.push_str("retained_inactive_generation: ");
+        output.push_str(generation);
+        output.push('\n');
+    }
+    for generation in &report.candidate_generations {
+        output.push_str(if report.dry_run {
+            "would_delete_generation: "
+        } else {
+            "candidate_generation: "
+        });
+        output.push_str(generation);
+        output.push('\n');
+    }
+    for generation in &report.deleted_generations {
+        output.push_str("deleted_generation: ");
+        output.push_str(generation);
+        output.push('\n');
+    }
+    output
+}
+
+fn prune_report_json(report: &GenerationPruneReport) -> String {
+    json_line(json!({
+        "command": "prune",
+        "status": if report.dry_run { "dry_run" } else { "complete" },
+        "active_generation": report.active_generation,
+        "keep_inactive": report.keep_inactive,
+        "dry_run": report.dry_run,
+        "retained_inactive_generations": report.retained_inactive_generations,
+        "candidate_generations": report.candidate_generations,
+        "deleted_generations": report.deleted_generations,
+    }))
 }
 
 fn status_human(report: &RepositoryStatusReport) -> String {
@@ -6005,6 +6192,61 @@ mod tests {
             _request: RepositoryDoctorRequest,
         ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
             unreachable!("index command should not request doctor through CLI test runtime")
+        }
+    }
+
+    #[derive(Default)]
+    struct PruneRuntime {
+        last_request: RefCell<Option<RepositoryStatusRequest>>,
+        last_prune: RefCell<Option<GenerationPruneRequest>>,
+    }
+
+    impl CliRuntime for PruneRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            unreachable!("prune command should not index")
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("prune command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("prune command should not request doctor through CLI test runtime")
+        }
+
+        fn prune_generations(
+            &self,
+            request: RepositoryStatusRequest,
+            prune: GenerationPruneRequest,
+        ) -> Result<GenerationPruneReport, RepoGrammarError> {
+            self.last_request.replace(Some(request));
+            self.last_prune.replace(Some(prune));
+            Ok(GenerationPruneReport {
+                active_generation: "gen-000004".to_string(),
+                keep_inactive: prune.keep_inactive,
+                retained_inactive_generations: if prune.keep_inactive == 0 {
+                    Vec::new()
+                } else {
+                    vec!["gen-000003".to_string()]
+                },
+                candidate_generations: vec!["gen-000001".to_string(), "gen-000002".to_string()],
+                deleted_generations: if prune.dry_run {
+                    Vec::new()
+                } else {
+                    vec!["gen-000001".to_string(), "gen-000002".to_string()]
+                },
+                dry_run: prune.dry_run,
+            })
         }
     }
 
@@ -6790,6 +7032,103 @@ mod tests {
         assert_eq!(value["command"], "resync");
         assert_eq!(value["semantic_worker"], "complete");
         assert_eq!(value["semantic_facts"], 2);
+    }
+
+    #[test]
+    fn prune_json_dry_run_reports_candidates_without_absolute_paths() {
+        let workspace = TempWorkspace::new("cli-prune-dry-run");
+        let env = |_: &str| None;
+        let runtime = PruneRuntime::default();
+        let output = run_with_context_and_runtime(
+            ["prune", "--dry-run", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stderr.is_empty());
+        let request = runtime
+            .last_request
+            .borrow()
+            .clone()
+            .expect("status request");
+        assert!(request
+            .path
+            .starts_with(workspace.path().to_string_lossy().as_ref()));
+        let prune = runtime.last_prune.borrow().expect("prune request");
+        assert_eq!(prune.keep_inactive, DEFAULT_RETAINED_INACTIVE_GENERATIONS);
+        assert!(prune.dry_run);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("prune JSON");
+        assert_eq!(value["command"], "prune");
+        assert_eq!(value["status"], "dry_run");
+        assert_eq!(value["active_generation"], "gen-000004");
+        assert_eq!(
+            value["keep_inactive"],
+            DEFAULT_RETAINED_INACTIVE_GENERATIONS
+        );
+        assert_eq!(value["candidate_generations"][0], "gen-000001");
+        assert_eq!(value["deleted_generations"].as_array().unwrap().len(), 0);
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn prune_requires_yes_without_dry_run() {
+        let workspace = TempWorkspace::new("cli-prune-requires-yes");
+        let env = |_: &str| None;
+        let runtime = PruneRuntime::default();
+
+        let output = run_with_context_and_runtime(["prune"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output
+            .stderr
+            .contains("prune requires --yes unless --dry-run is present"));
+        assert!(runtime.last_prune.borrow().is_none());
+    }
+
+    #[test]
+    fn prune_human_with_yes_reports_deleted_generations() {
+        let workspace = TempWorkspace::new("cli-prune-human");
+        let env = |_: &str| None;
+        let runtime = PruneRuntime::default();
+        let output = run_with_context_and_runtime(
+            ["prune", "--yes", "--keep", "0"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        let prune = runtime.last_prune.borrow().expect("prune request");
+        assert_eq!(prune.keep_inactive, 0);
+        assert!(!prune.dry_run);
+        assert!(output.stdout.contains("prune: complete\n"));
+        assert!(output.stdout.contains("active_generation: gen-000004\n"));
+        assert!(output.stdout.contains("deleted_generation: gen-000001\n"));
+        assert!(output.stdout.contains("deleted_generation: gen-000002\n"));
+    }
+
+    #[test]
+    fn prune_rejects_invalid_keep_value() {
+        let workspace = TempWorkspace::new("cli-prune-invalid-keep");
+        let env = |_: &str| None;
+        let runtime = PruneRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["prune", "--dry-run", "--keep", "not-a-number"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output
+            .stderr
+            .contains("--keep requires a non-negative integer"));
+        assert!(runtime.last_prune.borrow().is_none());
     }
 
     #[test]

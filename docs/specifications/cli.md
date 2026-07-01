@@ -13,6 +13,7 @@ Project lifecycle:
 - `sync`
 - `resync`
 - `autosync`
+- `prune`
 - `status`
 - `doctor`
 - `unlock`
@@ -162,6 +163,18 @@ confirmation, root `.gitignore` must remain untouched.
 `repogrammar uninit` removes repository-local RepoGrammar state. It is the only
 command that may remove `.repogrammar/`; `repogrammar uninstall` must not remove
 project indexes. `uninit` must make logs deletion explicit.
+
+`repogrammar prune` removes old inactive index generations from
+`.repogrammar/generations/` while preserving the active generation referenced by
+`.repogrammar/current-generation`. The default retention policy is active plus
+the newest 2 inactive generations. `--keep <n>` overrides the inactive
+generation count and may be `0`. Destructive prune runs require `--yes`;
+`--dry-run` reports candidates without deleting. Human and JSON output must
+report the active generation, retained inactive generation IDs, candidate
+generation IDs, deleted generation IDs, `dry_run`, and `keep_inactive` without
+exposing absolute paths. Prune must refuse unhealthy storage, missing or corrupt
+active-generation pointers, symlinked generation directories, generation entries
+that are not directories, and concurrent active-generation changes.
 
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
@@ -622,7 +635,12 @@ operand as their target. `family <target>` is an exact family-id lookup.
 and `check` may use fuzzy matching over supported query-safe path suffixes,
 exact member roles, and exact ids, but must not treat short substrings such as a
 framework name, classification label, or directory fragment as a successful
-family match. Query targets must be non-empty, at most 8192 bytes, and free of
+family match. When a fuzzy path or path suffix matches evidence in multiple
+families, the command must return typed `UNKNOWN` instead of selecting the first
+stored family. That unknown uses `InsufficientSupport`, affected claim
+`query target ambiguity`, and recovery guidance that tells the caller to narrow
+the target to an exact family id or member id while naming the candidate family
+ids. Query targets must be non-empty, at most 8192 bytes, and free of
 control characters. Matched family output defaults to `--mode compact`: family
 id, classification, support, members, variation slots, typed unknowns, selected
 output metadata, a `read_plan`, and no evidence records or source snippets.
@@ -686,9 +704,12 @@ The bootstrap recognizes the command surface and required options. `init`
 creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
 lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
-directory. `status`, `doctor`, `unlock`, and `logs` expose human and JSON-safe
-repo-local lifecycle information without claiming parser/mining support; `logs`
-returns a bounded redacted tail for selected repo-local component logs.
+directory. `prune --yes` removes only old inactive generation directories after
+storage health and active-generation checks; `prune --dry-run` reports the same
+candidates without writes. `status`, `doctor`, `unlock`, and `logs` expose
+human and JSON-safe repo-local lifecycle information without claiming
+parser/mining support; `logs` returns a bounded redacted tail for selected
+repo-local component logs.
 `index` and `sync` currently create syntax-only SQLite generations from the
 TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
 the Python `.py` discovery/CPython AST structural extractor. Their JSON output

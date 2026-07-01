@@ -1254,7 +1254,7 @@ mod tests {
         let inherited_pipe = executable_script(
             &workspace,
             "inherited-pipe.sh",
-            "#!/bin/sh\nexec 3>&1\n( /bin/sleep 1 >&3 2>&3 ) &\nexec 3>&-\nexit 0\n",
+            "#!/bin/sh\nexec 3>&1\n/usr/bin/nohup /bin/sleep 1 >&3 2>&3 </dev/null &\nexec 3>&-\nexit 0\n",
         );
 
         let error = TypeScriptSemanticWorkerBoundary::new(inherited_pipe.display().to_string())
@@ -1272,7 +1272,7 @@ mod tests {
         let inherited_pipe = executable_script(
             &workspace,
             "timeout-inherited-pipe.sh",
-            "#!/bin/sh\nexec 3>&1\n( /bin/sleep 1 >&3 2>&3 ) &\nexec 3>&-\n/bin/sleep 1\n",
+            "#!/bin/sh\nexec 3>&1\n/usr/bin/nohup /bin/sleep 1 >&3 2>&3 </dev/null &\nexec 3>&-\n/bin/sleep 1\n",
         );
         let worker = TypeScriptSemanticWorkerBoundary::new(inherited_pipe.display().to_string())
             .with_timeout(Duration::from_millis(20));
