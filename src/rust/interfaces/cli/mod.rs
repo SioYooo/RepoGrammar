@@ -50,7 +50,7 @@ use crate::core::model::EstimatedPotentialTokenSavings;
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
     GenerationPruneReport, GenerationPruneRequest, IndexCompactReport, IndexCompactRequest,
-    IndexStorageSizeReport,
+    IndexStorageLayout, IndexStorageSizeReport,
 };
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -5738,6 +5738,7 @@ fn compact_reclaimed_bytes(report: &IndexCompactReport) -> u64 {
 
 fn status_human(report: &RepositoryStatusReport) -> String {
     let mut output = String::new();
+    let storage_inspection = report.storage_inspection.as_ref();
     output.push_str(report.status.as_human_message());
     output.push('\n');
     output.push_str(&format!("state_dir: {}\n", report.state_dir));
@@ -5748,43 +5749,59 @@ fn status_human(report: &RepositoryStatusReport) -> String {
     ));
     output.push_str(&format!(
         "storage_schema_version: {}\n",
-        report
-            .storage_inspection
-            .as_ref()
+        storage_inspection
             .and_then(|inspection| inspection.schema_version)
             .map(|version| version.to_string())
             .unwrap_or_else(|| "none".to_string())
     ));
     output.push_str(&format!(
+        "storage_layout: {}\n",
+        storage_inspection
+            .map(|inspection| storage_layout(inspection.layout))
+            .unwrap_or("none")
+    ));
+    output.push_str(&format!(
+        "mutable_database_present: {}\n",
+        optional_human_bool(
+            storage_inspection.map(|inspection| inspection.mutable_database_present)
+        )
+    ));
+    output.push_str(&format!(
+        "legacy_generation_layout_present: {}\n",
+        optional_human_bool(
+            storage_inspection.map(|inspection| inspection.legacy_generation_layout_present)
+        )
+    ));
+    output.push_str(&format!(
+        "wal_bytes: {}\n",
+        optional_human_u64(storage_inspection.and_then(|inspection| inspection.wal_bytes))
+    ));
+    output.push_str(&format!(
+        "shm_bytes: {}\n",
+        optional_human_u64(storage_inspection.and_then(|inspection| inspection.shm_bytes))
+    ));
+    output.push_str(&format!(
         "journal_mode: {}\n",
-        report
-            .storage_inspection
-            .as_ref()
+        storage_inspection
             .and_then(|inspection| inspection.journal_mode.as_deref())
             .unwrap_or("not_implemented")
     ));
     output.push_str(&format!(
         "integrity_check: {}\n",
-        report
-            .storage_inspection
-            .as_ref()
+        storage_inspection
             .and_then(|inspection| inspection.integrity_check.as_deref())
             .unwrap_or("not_implemented")
     ));
     output.push_str(&format!(
         "dependency_records: {}\n",
-        report
-            .storage_inspection
-            .as_ref()
+        storage_inspection
             .and_then(|inspection| inspection.dependency_record_count)
             .map(|count| count.to_string())
             .unwrap_or_else(|| "none".to_string())
     ));
     output.push_str(&format!(
         "dirty_records: {}\n",
-        report
-            .storage_inspection
-            .as_ref()
+        storage_inspection
             .and_then(|inspection| inspection.dirty_record_count)
             .map(|count| count.to_string())
             .unwrap_or_else(|| "none".to_string())
@@ -5836,6 +5853,11 @@ fn status_json(report: &RepositoryStatusReport) -> String {
         "active_generation": active_generation,
         "manifest_schema_version": report.manifest_schema_version,
         "storage_schema_version": storage_inspection.and_then(|inspection| inspection.schema_version),
+        "storage_layout": storage_inspection.map(|inspection| storage_layout(inspection.layout)),
+        "mutable_database_present": storage_inspection.map(|inspection| inspection.mutable_database_present),
+        "legacy_generation_layout_present": storage_inspection.map(|inspection| inspection.legacy_generation_layout_present),
+        "wal_bytes": storage_inspection.and_then(|inspection| inspection.wal_bytes),
+        "shm_bytes": storage_inspection.and_then(|inspection| inspection.shm_bytes),
         "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
         "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
         "foreign_keys_enabled": storage_inspection.and_then(|inspection| inspection.foreign_keys_enabled),
@@ -5891,6 +5913,11 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
             "indexing": implementation_status(report.status.indexing),
             "manifest_schema_version": report.status.manifest_schema_version,
             "storage_schema_version": storage_inspection.and_then(|inspection| inspection.schema_version),
+            "storage_layout": storage_inspection.map(|inspection| storage_layout(inspection.layout)),
+            "mutable_database_present": storage_inspection.map(|inspection| inspection.mutable_database_present),
+            "legacy_generation_layout_present": storage_inspection.map(|inspection| inspection.legacy_generation_layout_present),
+            "wal_bytes": storage_inspection.and_then(|inspection| inspection.wal_bytes),
+            "shm_bytes": storage_inspection.and_then(|inspection| inspection.shm_bytes),
             "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
             "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
             "dependency_records": storage_inspection.and_then(|inspection| inspection.dependency_record_count),
@@ -6084,6 +6111,29 @@ fn implementation_status(status: RepositoryImplementationStatus) -> &'static str
     }
 }
 
+fn storage_layout(layout: IndexStorageLayout) -> &'static str {
+    match layout {
+        IndexStorageLayout::Empty => "empty",
+        IndexStorageLayout::Mutable => "mutable",
+        IndexStorageLayout::Legacy => "legacy",
+        IndexStorageLayout::MutableWithLegacy => "mutable_with_legacy",
+    }
+}
+
+fn optional_human_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    }
+}
+
+fn optional_human_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
 fn doctor_severity(severity: RepositoryDoctorSeverity) -> &'static str {
     match severity {
         RepositoryDoctorSeverity::Info => "info",
@@ -6112,6 +6162,8 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::StorageReady => "STORAGE_READY",
         RepositoryDoctorCode::StorageInvalid => "STORAGE_INVALID",
         RepositoryDoctorCode::StorageNoActiveGeneration => "STORAGE_NO_ACTIVE_GENERATION",
+        RepositoryDoctorCode::StorageLegacyLayout => "STORAGE_LEGACY_LAYOUT",
+        RepositoryDoctorCode::StorageMixedLayout => "STORAGE_MIXED_LAYOUT",
         RepositoryDoctorCode::IndexingNotImplemented => "INDEXING_NOT_IMPLEMENTED",
         RepositoryDoctorCode::IndexingFileManifestOnly => "INDEXING_FILE_MANIFEST_ONLY",
         RepositoryDoctorCode::IndexingSyntaxOnlyCodeUnits => "INDEXING_SYNTAX_ONLY_CODE_UNITS",
@@ -9528,6 +9580,11 @@ mod tests {
         assert!(value.get("schema_version").is_none());
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
+        assert_eq!(value["storage_layout"], "empty");
+        assert_eq!(value["mutable_database_present"], false);
+        assert_eq!(value["legacy_generation_layout_present"], false);
+        assert_eq!(value["wal_bytes"], Value::Null);
+        assert_eq!(value["shm_bytes"], Value::Null);
         assert_eq!(value["storage"], "available");
         assert_eq!(value["indexing"], "not_implemented");
 
@@ -9540,6 +9597,11 @@ mod tests {
         assert!(value["checks"].get("schema_version").is_none());
         assert_eq!(value["checks"]["manifest_schema_version"], 1);
         assert_eq!(value["checks"]["storage_schema_version"], Value::Null);
+        assert_eq!(value["checks"]["storage_layout"], "empty");
+        assert_eq!(value["checks"]["mutable_database_present"], false);
+        assert_eq!(value["checks"]["legacy_generation_layout_present"], false);
+        assert_eq!(value["checks"]["wal_bytes"], Value::Null);
+        assert_eq!(value["checks"]["shm_bytes"], Value::Null);
         assert!(value["findings"]
             .as_array()
             .expect("findings")
@@ -9563,6 +9625,11 @@ mod tests {
         assert!(value.get("schema_version").is_none());
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
+        assert_eq!(value["storage_layout"], Value::Null);
+        assert_eq!(value["mutable_database_present"], Value::Null);
+        assert_eq!(value["legacy_generation_layout_present"], Value::Null);
+        assert_eq!(value["wal_bytes"], Value::Null);
+        assert_eq!(value["shm_bytes"], Value::Null);
         assert_eq!(value["journal_mode"], Value::Null);
         assert_eq!(value["integrity_check"], Value::Null);
         assert_eq!(value["storage"], "unhealthy");
@@ -9579,6 +9646,14 @@ mod tests {
         assert!(value["checks"].get("schema_version").is_none());
         assert_eq!(value["checks"]["manifest_schema_version"], 1);
         assert_eq!(value["checks"]["storage_schema_version"], Value::Null);
+        assert_eq!(value["checks"]["storage_layout"], Value::Null);
+        assert_eq!(value["checks"]["mutable_database_present"], Value::Null);
+        assert_eq!(
+            value["checks"]["legacy_generation_layout_present"],
+            Value::Null
+        );
+        assert_eq!(value["checks"]["wal_bytes"], Value::Null);
+        assert_eq!(value["checks"]["shm_bytes"], Value::Null);
         assert_eq!(value["checks"]["storage"], "unhealthy");
         assert!(value["findings"]
             .as_array()
@@ -9704,6 +9779,13 @@ mod tests {
         assert!(human_status
             .stdout
             .contains(&format!("storage_schema_version: {STORAGE_SCHEMA_VERSION}")));
+        assert!(human_status.stdout.contains("storage_layout: mutable"));
+        assert!(human_status
+            .stdout
+            .contains("mutable_database_present: true"));
+        assert!(human_status
+            .stdout
+            .contains("legacy_generation_layout_present: false"));
         assert!(!human_status
             .stdout
             .lines()
@@ -9720,6 +9802,11 @@ mod tests {
         assert!(value.get("schema_version").is_none());
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], STORAGE_SCHEMA_VERSION);
+        assert_eq!(value["storage_layout"], "mutable");
+        assert_eq!(value["mutable_database_present"], true);
+        assert_eq!(value["legacy_generation_layout_present"], false);
+        assert!(value["wal_bytes"].as_u64().is_some());
+        assert!(value["shm_bytes"].as_u64().is_some());
         assert_eq!(value["journal_mode"], "wal");
         assert_eq!(value["integrity_check"], "ok");
         assert_eq!(value["storage"], "available");
@@ -9737,12 +9824,134 @@ mod tests {
             value["checks"]["storage_schema_version"],
             STORAGE_SCHEMA_VERSION
         );
+        assert_eq!(value["checks"]["storage_layout"], "mutable");
+        assert_eq!(value["checks"]["mutable_database_present"], true);
+        assert_eq!(value["checks"]["legacy_generation_layout_present"], false);
+        assert!(value["checks"]["wal_bytes"].as_u64().is_some());
+        assert!(value["checks"]["shm_bytes"].as_u64().is_some());
         assert_eq!(value["checks"]["integrity_check"], "ok");
         assert!(value["findings"]
             .as_array()
             .expect("findings")
             .iter()
             .any(|finding| finding["code"] == "INDEXING_SYNTAX_ONLY_CODE_UNITS"));
+    }
+
+    fn move_mutable_database_to_legacy_layout(workspace: &TempWorkspace) {
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        let database = state.join("repogrammar.sqlite");
+        let connection = Connection::open(&database).expect("open mutable database");
+        connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                ))
+            })
+            .expect("checkpoint mutable database before legacy move");
+        drop(connection);
+        for sidecar in ["repogrammar.sqlite-wal", "repogrammar.sqlite-shm"] {
+            let sidecar_path = state.join(sidecar);
+            if sidecar_path.exists() {
+                fs::remove_file(&sidecar_path).expect("remove mutable sidecar");
+            }
+        }
+        let legacy_generation = state.join("generations").join("gen-000001");
+        fs::create_dir_all(&legacy_generation).expect("create legacy generation directory");
+        fs::rename(database, legacy_generation.join("repogrammar.sqlite"))
+            .expect("move mutable database into legacy generation directory");
+        fs::write(state.join("current-generation"), "gen-000001\n")
+            .expect("write legacy current generation pointer");
+    }
+
+    #[test]
+    fn status_and_doctor_report_mutable_with_legacy_layout() {
+        let workspace = TempWorkspace::new("cli-storage-mutable-with-legacy");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.js"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        fs::create_dir_all(state.join("generations").join("gen-999999"))
+            .expect("create legacy generation directory");
+        fs::write(state.join("current-generation"), "gen-999999\n")
+            .expect("write legacy current generation pointer");
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["storage"], "available");
+        assert_eq!(value["storage_layout"], "mutable_with_legacy");
+        assert_eq!(value["mutable_database_present"], true);
+        assert_eq!(value["legacy_generation_layout_present"], true);
+        assert!(value["wal_bytes"].as_u64().is_some());
+        assert!(value["shm_bytes"].as_u64().is_some());
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["storage"], "available");
+        assert_eq!(value["checks"]["storage_layout"], "mutable_with_legacy");
+        assert_eq!(value["checks"]["mutable_database_present"], true);
+        assert_eq!(value["checks"]["legacy_generation_layout_present"], true);
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_MIXED_LAYOUT"));
+        assert!(!value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_INVALID"));
+    }
+
+    #[test]
+    fn status_and_doctor_report_legacy_layout_without_mutable_database() {
+        let workspace = TempWorkspace::new("cli-storage-legacy-layout");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.js"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        move_mutable_database_to_legacy_layout(&workspace);
+
+        let status =
+            run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["storage"], "available");
+        assert_eq!(value["storage_layout"], "legacy");
+        assert_eq!(value["mutable_database_present"], false);
+        assert_eq!(value["legacy_generation_layout_present"], true);
+        assert_eq!(value["wal_bytes"], Value::Null);
+        assert_eq!(value["shm_bytes"], Value::Null);
+
+        let doctor =
+            run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("doctor JSON");
+        assert_eq!(value["checks"]["storage"], "available");
+        assert_eq!(value["checks"]["storage_layout"], "legacy");
+        assert_eq!(value["checks"]["mutable_database_present"], false);
+        assert_eq!(value["checks"]["legacy_generation_layout_present"], true);
+        assert!(value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "STORAGE_LEGACY_LAYOUT"));
     }
 
     #[test]

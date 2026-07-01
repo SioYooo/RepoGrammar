@@ -2567,8 +2567,9 @@ mod tests {
     use crate::ports::file_discovery::GitIgnoreStatus;
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-        ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
-        IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection, STORAGE_SCHEMA_VERSION,
+        ActiveSemanticFacts, GenerationHandle, IndexStorageLayout, IndexStore, IndexStoreError,
+        IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
+        STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity, ParserProjectContext};
     use crate::ports::semantic_worker::{
@@ -6619,6 +6620,11 @@ extraPaths = ["src/lib", "C:/secret"]
 
             fn inspect(&self) -> Result<StorageInspection, IndexStoreError> {
                 Ok(StorageInspection {
+                    layout: IndexStorageLayout::Mutable,
+                    mutable_database_present: true,
+                    legacy_generation_layout_present: false,
+                    wal_bytes: Some(0),
+                    shm_bytes: Some(0),
                     active_generation: Some(self.active_generation.borrow().clone()),
                     schema_version: Some(STORAGE_SCHEMA_VERSION),
                     code_unit_count: Some(0),

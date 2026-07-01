@@ -199,12 +199,15 @@ It must not delete source files, user files, or legacy generation directories.
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
 manifest schema version, storage schema version, journal mode,
-active derived dependency count, active dirty-record count, storage/indexing
-implementation status, missing subdirectories, and relevant warning states.
-Status JSON must use `manifest_schema_version` and
-`storage_schema_version`; it must not use an ambiguous top-level
-`schema_version` field. When storage is wired, it must also report SQLite
-integrity status and unhealthy storage states without exposing absolute paths.
+storage layout, mutable-database presence, legacy generation-layout presence,
+mutable WAL/SHM sidecar byte counts, active derived dependency count, active
+dirty-record count, storage/indexing implementation status, missing
+subdirectories, and relevant warning states. Status JSON must use
+`manifest_schema_version` and `storage_schema_version`; it must not use an
+ambiguous top-level `schema_version` field. When storage is wired, it must also
+report SQLite integrity status and unhealthy storage states without exposing
+absolute paths. When mutable and legacy layouts coexist, status must report the
+mixed layout while retaining the mutable database as the active read source.
 Manifest status must be based on parsed JSON fields, not literal text layout,
 so valid reordered manifests are accepted and malformed required fields are
 reported as corrupted.
@@ -213,7 +216,8 @@ reported as corrupted.
 manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
 configuration. Once SQLite exists, it must also check database integrity,
-schema version, journal mode, and active generation consistency.
+schema version, journal mode, active generation consistency, storage layout,
+and mutable WAL/SHM sidecar state.
 Doctor must validate generated lifecycle hygiene without mutating state:
 `.repogrammar/.gitignore`, `receipts/init.json`, `.git/info/exclude`, and root
 `.gitignore` RepoGrammar marker sections must be reported as missing or invalid
@@ -224,7 +228,12 @@ Doctor JSON must use `checks.manifest_schema_version` and
 `checks.storage_schema_version`; it must not expose an ambiguous
 `checks.schema_version` field. When storage can be inspected, doctor JSON also
 reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
-storage diagnostics are machine-readable.
+storage diagnostics are machine-readable. It must also report
+`checks.storage_layout`, `checks.mutable_database_present`,
+`checks.legacy_generation_layout_present`, `checks.wal_bytes`, and
+`checks.shm_bytes`. Legacy-only storage and mixed mutable-plus-legacy storage
+must produce explicit doctor findings without treating the legacy files as
+authoritative when a mutable database is present.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
@@ -756,8 +765,9 @@ maintenance through `PRAGMA optimize` and passive WAL checkpointing. There is
 no automatic `VACUUM`; full database compaction is available only through the
 explicit confirmation-gated `repogrammar compact --yes` command, with
 `compact --dry-run --json` for non-mutating size inspection.
-`status`,
-`doctor`, `unlock`, and `logs` expose
+`status` and `doctor` expose storage layout diagnostics, mutable/legacy
+presence, mutable sidecar byte counts, and active dirty/dependency counts.
+`unlock` and `logs` expose
 human and JSON-safe repo-local lifecycle information without claiming
 parser/mining support; `logs` returns a bounded redacted tail for selected
 repo-local component logs.

@@ -14,9 +14,9 @@ use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
     ActiveSemanticFacts, GenerationHandle, GenerationPruneReport, GenerationPruneRequest,
     GenerationRetentionStore, IndexCompactReport, IndexCompactRequest, IndexMaintenanceStore,
-    IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
-    STORAGE_SCHEMA_VERSION,
+    IndexStorageLayout, IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
+    IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -69,6 +69,37 @@ impl SqliteIndexStore {
 
     fn current_generation_path(&self) -> PathBuf {
         self.state_dir.join(CURRENT_GENERATION_FILE)
+    }
+
+    fn legacy_generation_layout_present(&self) -> Result<bool, IndexStoreError> {
+        match fs::symlink_metadata(self.current_generation_path()) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(unavailable("failed to inspect current-generation pointer")),
+        }
+        match fs::symlink_metadata(self.generations_dir()) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(unavailable("failed to inspect generations directory")),
+        }
+    }
+
+    fn mutable_sidecar_sizes(
+        &self,
+        mutable_database_present: bool,
+    ) -> Result<(Option<u64>, Option<u64>), IndexStoreError> {
+        if !mutable_database_present {
+            return Ok((None, None));
+        }
+        let wal_bytes = optional_regular_file_size(
+            &self.state_dir.join(format!("{DATABASE_FILE}-wal")),
+            "repository index WAL sidecar",
+        )?;
+        let shm_bytes = optional_regular_file_size(
+            &self.state_dir.join(format!("{DATABASE_FILE}-shm")),
+            "repository index SHM sidecar",
+        )?;
+        Ok((Some(wal_bytes), Some(shm_bytes)))
     }
 
     fn generation_dir(&self, generation_id: &str) -> PathBuf {
@@ -981,6 +1012,8 @@ impl IndexStore for SqliteIndexStore {
     fn inspect(&self) -> Result<StorageInspection, IndexStoreError> {
         self.ensure_layout()?;
         if let Some(connection) = self.try_open_mutable_database()? {
+            let legacy_generation_layout_present = self.legacy_generation_layout_present()?;
+            let (wal_bytes, shm_bytes) = self.mutable_sidecar_sizes(true)?;
             let active_generation = active_generation_id(&connection)?;
             if let Some(generation_id) = &active_generation {
                 if generation_status(&connection, generation_id)?.as_deref() != Some("active") {
@@ -989,14 +1022,34 @@ impl IndexStore for SqliteIndexStore {
                     ));
                 }
             }
-            return inspect_connection(&connection, active_generation.as_deref());
+            let mut inspection = inspect_connection(&connection, active_generation.as_deref())?;
+            inspection.layout = if legacy_generation_layout_present {
+                IndexStorageLayout::MutableWithLegacy
+            } else {
+                IndexStorageLayout::Mutable
+            };
+            inspection.mutable_database_present = true;
+            inspection.legacy_generation_layout_present = legacy_generation_layout_present;
+            inspection.wal_bytes = wal_bytes;
+            inspection.shm_bytes = shm_bytes;
+            return Ok(inspection);
         }
 
+        let legacy_generation_layout_present = self.legacy_generation_layout_present()?;
         let current = self.current_generation_path();
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(StorageInspection {
+                    layout: if legacy_generation_layout_present {
+                        IndexStorageLayout::Legacy
+                    } else {
+                        IndexStorageLayout::Empty
+                    },
+                    mutable_database_present: false,
+                    legacy_generation_layout_present,
+                    wal_bytes: None,
+                    shm_bytes: None,
                     active_generation: None,
                     schema_version: None,
                     code_unit_count: None,
@@ -1027,7 +1080,13 @@ impl IndexStore for SqliteIndexStore {
                 "current-generation does not point at an active generation".to_string(),
             ));
         }
-        inspect_connection(&connection, Some(&generation_id))
+        let mut inspection = inspect_connection(&connection, Some(&generation_id))?;
+        inspection.layout = IndexStorageLayout::Legacy;
+        inspection.mutable_database_present = false;
+        inspection.legacy_generation_layout_present = true;
+        inspection.wal_bytes = None;
+        inspection.shm_bytes = None;
+        Ok(inspection)
     }
 }
 
@@ -2459,6 +2518,11 @@ fn inspect_connection(
         };
 
     Ok(StorageInspection {
+        layout: IndexStorageLayout::Empty,
+        mutable_database_present: false,
+        legacy_generation_layout_present: false,
+        wal_bytes: None,
+        shm_bytes: None,
         active_generation: active_generation.map(str::to_string),
         schema_version,
         code_unit_count,
