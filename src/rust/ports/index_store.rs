@@ -101,8 +101,21 @@ pub struct ActiveClaimInputSnapshot {
     pub semantic_facts: Vec<IndexedSemanticFactRecord>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexStorageLayout {
+    Empty,
+    Mutable,
+    Legacy,
+    MutableWithLegacy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageInspection {
+    pub layout: IndexStorageLayout,
+    pub mutable_database_present: bool,
+    pub legacy_generation_layout_present: bool,
+    pub wal_bytes: Option<u64>,
+    pub shm_bytes: Option<u64>,
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
     pub code_unit_count: Option<u64>,

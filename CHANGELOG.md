@@ -26,7 +26,10 @@
   `repogrammar compact --dry-run --json` and `repogrammar compact --yes`
   commands now report mutable SQLite database/WAL/SHM size metadata, require the
   index lock, validate the active generation, and reserve full `VACUUM` for
-  confirmation-gated compaction with a truncating WAL checkpoint only.
+  confirmation-gated compaction with a truncating WAL checkpoint only. Status
+  and doctor now also report storage layout (`empty`, `mutable`, `legacy`, or
+  `mutable_with_legacy`), mutable-database presence, legacy layout presence, and
+  WAL/SHM sidecar byte counts when a mutable database exists.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

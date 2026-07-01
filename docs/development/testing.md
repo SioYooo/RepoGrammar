@@ -40,9 +40,10 @@ allowed.
   human and JSON status/doctor output, explicit status
   `manifest_schema_version` and `storage_schema_version` fields, explicit
   doctor `checks.manifest_schema_version` and `checks.storage_schema_version`
-  fields, no ambiguous status or doctor `schema_version` fields, JSON-parsed
-  manifest validation with reordered valid fields and invalid required fields,
-  corrupted manifests,
+  fields, status/doctor storage layout, mutable-database presence,
+  legacy-generation-layout presence, and WAL/SHM sidecar fields, no ambiguous
+  status or doctor `schema_version` fields, JSON-parsed manifest validation
+  with reordered valid fields and invalid required fields, corrupted manifests,
   missing subdirs, diagnostic-only doctor findings for missing or invalid
   `.repogrammar/.gitignore`, `.git/info/exclude`, root `.gitignore` markers,
   and `receipts/init.json`,
@@ -95,7 +96,9 @@ allowed.
   keeping dry-runs mutation-free, and still covers the legacy directory fallback
   refusal cases for symlinked or non-directory generation entries, missing or
   corrupt active-generation pointers, and symlinked or malformed
-  active-generation pointers. Explicit compact coverage must include
+  active-generation pointers. Status/doctor coverage must include empty,
+  mutable, legacy-only, and mutable-plus-legacy storage layout diagnostics.
+  Explicit compact coverage must include
   `compact --dry-run --json` size reporting without writes, `compact --yes`
   active-generation preservation and before/after size reporting, and refusal
   of unsafe active database states such as dirty records.

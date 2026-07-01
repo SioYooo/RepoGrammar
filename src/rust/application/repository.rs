@@ -3,7 +3,7 @@
 use crate::adapters::filesystem::git::{GitContext, GitContextResolution};
 use crate::application::progress::{initialization_stages, ProgressStage};
 use crate::error::RepoGrammarError;
-use crate::ports::index_store::{IndexStore, StorageInspection};
+use crate::ports::index_store::{IndexStorageLayout, IndexStore, StorageInspection};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -276,6 +276,8 @@ pub enum RepositoryDoctorCode {
     StorageReady,
     StorageInvalid,
     StorageNoActiveGeneration,
+    StorageLegacyLayout,
+    StorageMixedLayout,
     IndexingNotImplemented,
     IndexingFileManifestOnly,
     IndexingSyntaxOnlyCodeUnits,
@@ -618,6 +620,24 @@ fn doctor_findings_for_status(status: &RepositoryStatusReport) -> Vec<Repository
                 code: RepositoryDoctorCode::StorageNotImplemented,
                 detail: "SQLite storage is not wired for this command".to_string(),
             });
+        }
+    }
+
+    if let Some(inspection) = &status.storage_inspection {
+        match inspection.layout {
+            IndexStorageLayout::Legacy => findings.push(RepositoryDoctorFinding {
+                severity: RepositoryDoctorSeverity::Warning,
+                code: RepositoryDoctorCode::StorageLegacyLayout,
+                detail: "SQLite storage is using the legacy generation-directory layout"
+                    .to_string(),
+            }),
+            IndexStorageLayout::MutableWithLegacy => findings.push(RepositoryDoctorFinding {
+                severity: RepositoryDoctorSeverity::Warning,
+                code: RepositoryDoctorCode::StorageMixedLayout,
+                detail: "mutable SQLite storage is authoritative while legacy generation layout files are still present"
+                    .to_string(),
+            }),
+            IndexStorageLayout::Empty | IndexStorageLayout::Mutable => {}
         }
     }
 

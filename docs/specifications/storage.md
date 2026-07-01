@@ -85,6 +85,12 @@ read/prune fallback only when the mutable top-level database is absent. `cache/`
 contains derived parser, semantic-worker, fingerprint, and token-count caches.
 `logs/`, `locks/`, `telemetry/`, `tmp/`, and `receipts/` are repo-local
 diagnostic and lifecycle state.
+Status and doctor storage inspection must classify this state as `empty`,
+`mutable`, `legacy`, or `mutable_with_legacy`, report whether the mutable
+database and legacy generation layout are present, and expose WAL/SHM sidecar
+byte counts when the mutable database exists. When mutable and legacy layouts
+coexist, the mutable database remains authoritative and legacy paths are
+diagnostic only.
 
 ## Git Hygiene
 
@@ -442,15 +448,18 @@ domain code must use RepoGrammar-owned storage port types.
 
 `repogrammar status` must show journal mode when an active generation exists
 and must distinguish the bootstrap manifest schema from the active SQLite
-storage schema in both human and JSON output. Status should also report active
-derived dependency and dirty-record counts when storage can be inspected.
+storage schema in both human and JSON output. Status should also report storage
+layout, mutable database presence, legacy generation layout presence, mutable
+WAL/SHM sidecar byte counts, and active derived dependency and dirty-record
+counts when storage can be inspected.
 `repogrammar doctor` must run SQLite integrity checks, verify schema version,
 verify active generation consistency, report missing storage layout without
-recreating it, and report lock state. Doctor JSON must distinguish
+recreating it, report legacy-only or mixed mutable-plus-legacy layouts, and
+report lock state. Doctor JSON must distinguish
 `checks.manifest_schema_version` from `checks.storage_schema_version` and must
 not emit an ambiguous `checks.schema_version` field. Doctor JSON should expose
-the same dependency and dirty-record counts under `checks` for reviewer
-diagnostics.
+the same layout, sidecar, dependency, and dirty-record counts under `checks` for
+reviewer diagnostics.
 
 ## Index Generations
 

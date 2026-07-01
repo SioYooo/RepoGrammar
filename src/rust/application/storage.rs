@@ -529,7 +529,7 @@ mod tests {
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-        ActiveSemanticFacts, STORAGE_SCHEMA_VERSION,
+        ActiveSemanticFacts, IndexStorageLayout, STORAGE_SCHEMA_VERSION,
     };
 
     struct FakeStore;
@@ -647,6 +647,11 @@ mod tests {
 
         fn inspect(&self) -> Result<StorageInspection, IndexStoreError> {
             Ok(StorageInspection {
+                layout: IndexStorageLayout::Mutable,
+                mutable_database_present: true,
+                legacy_generation_layout_present: false,
+                wal_bytes: Some(0),
+                shm_bytes: Some(0),
                 active_generation: Some("gen-000001".to_string()),
                 schema_version: Some(STORAGE_SCHEMA_VERSION),
                 code_unit_count: Some(0),
