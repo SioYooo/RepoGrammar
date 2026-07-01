@@ -61,7 +61,7 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLowerInvariant()
           "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
         shell: pwsh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
           path: |
