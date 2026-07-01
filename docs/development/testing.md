@@ -127,7 +127,9 @@ allowed.
   `InsufficientSupport`, exact family/member lookup versus fuzzy
   find/explain/check lookup, deterministic local `PARTIAL_CONTEXT` for a
   uniquely resolved indexed target without family evidence, ambiguity abstention
-  before partial context, short-substring false-match rejection, stale
+  before partial context, path-plus-symbol targets, root-file targets,
+  `path:line` and `path:start-end` target forms, advisory partial `check`
+  output without proof-like fields, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
   mode behavior, target and token-budget validation, greedy evidence coverage
   metadata, default read plans with repo-relative paths, content hashes, byte

@@ -1515,15 +1515,27 @@ fn family_partial_context_human(
         "not_included"
     };
     let mut output = format!(
-        "{command}: PARTIAL_CONTEXT\nactive_generation: {}\nresolved_target: {}\tpath: {}\tcode_unit_id: {}\tmatch_kind: {}\nestimated_read_plan_tokens: {}\nsource_snippets: {}\nread_plan_requires_source_before_edit: {}\n",
+        "{command}: PARTIAL_CONTEXT\nactive_generation: {}\nresolved_target: {}\tkind: {}\tpath: {}\tline: {}\tbyte_range: {}\tcode_unit_id: {}\tconfidence: {}\tmatch_kind: {}\nestimated_read_plan_tokens: {}\nsource_snippets: {}\nread_plan_requires_source_before_edit: {}\n",
         report.active_generation,
         report.resolved_target.original_target,
+        report.resolved_target.kind,
         report.resolved_target.path,
+        report
+            .resolved_target
+            .line
+            .map(|line| line.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        report
+            .resolved_target
+            .byte_range
+            .map(|(start, end)| format!("{start}-{end}"))
+            .unwrap_or_else(|| "none".to_string()),
         report
             .resolved_target
             .code_unit_id
             .as_deref()
             .unwrap_or("none"),
+        report.resolved_target.confidence,
         report.resolved_target.match_kind,
         read_plan.estimated_tokens,
         snippets,
@@ -1532,6 +1544,10 @@ fn family_partial_context_human(
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
         push_source_spans_human(&mut output, source_spans);
+    }
+    if command == "check" {
+        output.push_str("advisory_status: UNKNOWN\n");
+        output.push_str("advisory_reason: runtime equivalence remains unproven\n");
     }
     for unknown in &report.unknowns {
         push_unknown_human(&mut output, unknown);
@@ -1599,7 +1615,7 @@ fn family_partial_context_json(
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&report.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    json_line(json!({
+    let mut value = json!({
         "command": command,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
@@ -1616,7 +1632,11 @@ fn family_partial_context_json(
         "read_plan": read_plan_json(read_plan),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
-    }))
+    });
+    if command == "check" {
+        value["check"] = check_advisory_json();
+    }
+    json_line(value)
 }
 
 fn family_detail_json(
@@ -1634,11 +1654,7 @@ fn family_detail_json(
     let estimated_potential = &output_components.estimated_potential_token_savings;
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     let check = if command == "check" {
-        Some(json!({
-            "advisory_status": "UNKNOWN",
-            "reason": "runtime equivalence remains unproven",
-            "fail_on": "none",
-        }))
+        Some(check_advisory_json())
     } else {
         None
     };
@@ -1738,9 +1754,26 @@ fn family_output_components(
 fn resolved_target_json(target: &ResolvedQueryTarget) -> serde_json::Value {
     json!({
         "original_target": target.original_target,
+        "kind": target.kind,
         "path": target.path,
+        "line": target.line,
+        "byte_range": target.byte_range.map(|(start, end)| json!({"start": start, "end": end})),
+        "family_id": target.family_id,
         "code_unit_id": target.code_unit_id,
+        "symbol_hints": target.symbol_hints,
+        "residue_terms": target.residue_terms,
+        "candidate_paths": target.candidate_paths,
+        "candidate_family_ids": target.candidate_family_ids,
+        "candidate_code_unit_ids": target.candidate_code_unit_ids,
+        "confidence": target.confidence,
         "match_kind": target.match_kind,
+    })
+}
+
+fn check_advisory_json() -> serde_json::Value {
+    json!({
+        "advisory_status": "UNKNOWN",
+        "reason": "runtime equivalence remains unproven",
     })
 }
 
@@ -7792,7 +7825,13 @@ mod tests {
             serde_json::from_str(output.stdout.trim()).expect("partial context JSON");
         assert_eq!(value["command"], "find");
         assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolved_target"]["kind"], "code_unit");
         assert_eq!(value["resolved_target"]["path"], "a.ts");
+        assert_eq!(value["resolved_target"]["line"], Value::Null);
+        assert_eq!(value["resolved_target"]["byte_range"], Value::Null);
+        assert_eq!(value["resolved_target"]["family_id"], Value::Null);
+        assert_eq!(value["resolved_target"]["candidate_paths"][0], "a.ts");
+        assert_eq!(value["resolved_target"]["confidence"], "exact");
         assert_eq!(value["read_plan"]["source_snippets_included"], false);
         assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
         assert_eq!(value["read_plan"]["items"][0]["path"], "a.ts");
@@ -7804,6 +7843,38 @@ mod tests {
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!output.stdout.contains("export const"));
+    }
+
+    #[test]
+    fn family_check_json_partial_context_remains_advisory_without_proof_fields() {
+        let workspace = TempWorkspace::new("cli-check-partial-context");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let output = run_with_context_and_runtime(
+            ["check", "a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("partial check JSON");
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
+        assert_eq!(
+            value["check"]["reason"],
+            "runtime equivalence remains unproven"
+        );
+        assert!(value["check"].get("fail_on").is_none());
+        assert!(value["check"].get("pass").is_none());
+        assert!(value["check"].get("conforms").is_none());
     }
 
     #[test]
@@ -8235,6 +8306,9 @@ mod tests {
             value["check"]["reason"],
             "runtime equivalence remains unproven"
         );
+        assert!(value["check"].get("fail_on").is_none());
+        assert!(value["check"].get("pass").is_none());
+        assert!(value["check"].get("conforms").is_none());
     }
 
     #[test]

@@ -10,7 +10,9 @@
   support retained only as fallback. Query commands now return
   `PARTIAL_CONTEXT` for a uniquely resolved indexed target that lacks family
   evidence, preserving typed `InsufficientSupport` instead of inflating it into
-  a family claim.
+  a family claim. The partial-context resolver now preserves embedded paths,
+  `path:line`, `path:start-end`, symbol hints, residue terms, candidates, and
+  advisory `check` metadata without proof-like conformance fields.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,
