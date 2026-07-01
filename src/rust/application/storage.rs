@@ -619,6 +619,8 @@ mod tests {
                 active_generation: Some("gen-000001".to_string()),
                 schema_version: Some(STORAGE_SCHEMA_VERSION),
                 code_unit_count: Some(0),
+                dependency_record_count: Some(0),
+                dirty_record_count: Some(0),
                 journal_mode: Some("wal".to_string()),
                 foreign_keys_enabled: Some(true),
                 busy_timeout_ms: Some(5_000),

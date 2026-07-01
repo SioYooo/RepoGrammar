@@ -75,7 +75,9 @@ allowed.
   indexed-file paths, semantic-fact/evidence storage with same-generation
   code-unit path/hash/range validation, IR node/edge storage with
   same-generation code-unit/node validation, malformed semantic evidence and IR
-  graph rejection before activation, atomic rollback of failed fact writes,
+  graph rejection before activation, derived-record dependency persistence for
+  semantic and family evidence, active dirty-record refusal, active
+  dependency/hash mismatch refusal, atomic rollback of failed fact writes,
   building-generation write gates for indexed files, code units, IR nodes/edges,
   and semantic facts, validation/activation transition guards that do not
   downgrade active generations, read-only active `files`/`units` listing order

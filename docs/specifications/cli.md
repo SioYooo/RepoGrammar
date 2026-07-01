@@ -183,8 +183,9 @@ directories.
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
 manifest schema version, storage schema version, journal mode,
-storage/indexing implementation status, missing subdirectories, and relevant
-warning states. Status JSON must use `manifest_schema_version` and
+active derived dependency count, active dirty-record count, storage/indexing
+implementation status, missing subdirectories, and relevant warning states.
+Status JSON must use `manifest_schema_version` and
 `storage_schema_version`; it must not use an ambiguous top-level
 `schema_version` field. When storage is wired, it must also report SQLite
 integrity status and unhealthy storage states without exposing absolute paths.
@@ -205,7 +206,9 @@ rather than silently repaired. JSON output must expose this as
 `checks.locks` with `pass`, `warning`, `fail`, or `not_applicable`.
 Doctor JSON must use `checks.manifest_schema_version` and
 `checks.storage_schema_version`; it must not expose an ambiguous
-`checks.schema_version` field.
+`checks.schema_version` field. When storage can be inspected, doctor JSON also
+reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
+storage diagnostics are machine-readable.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.

@@ -5613,6 +5613,24 @@ fn status_human(report: &RepositoryStatusReport) -> String {
             .unwrap_or("not_implemented")
     ));
     output.push_str(&format!(
+        "dependency_records: {}\n",
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.dependency_record_count)
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    ));
+    output.push_str(&format!(
+        "dirty_records: {}\n",
+        report
+            .storage_inspection
+            .as_ref()
+            .and_then(|inspection| inspection.dirty_record_count)
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    ));
+    output.push_str(&format!(
         "active_generation: {}\n",
         match &report.status {
             RepositoryStatus::Initialized { active_generation } => active_generation.as_str(),
@@ -5662,6 +5680,8 @@ fn status_json(report: &RepositoryStatusReport) -> String {
         "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
         "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
         "foreign_keys_enabled": storage_inspection.and_then(|inspection| inspection.foreign_keys_enabled),
+        "dependency_records": storage_inspection.and_then(|inspection| inspection.dependency_record_count),
+        "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         "storage": implementation_status(report.storage),
         "indexing": implementation_status(report.indexing),
         "storage_error": report.storage_error,
@@ -5714,6 +5734,8 @@ fn doctor_json(report: &RepositoryDoctorReport) -> String {
             "storage_schema_version": storage_inspection.and_then(|inspection| inspection.schema_version),
             "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
             "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
+            "dependency_records": storage_inspection.and_then(|inspection| inspection.dependency_record_count),
+            "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         },
         "findings": findings,
     }))

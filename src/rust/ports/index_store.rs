@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 5;
+pub const STORAGE_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -106,6 +106,8 @@ pub struct StorageInspection {
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
     pub code_unit_count: Option<u64>,
+    pub dependency_record_count: Option<u64>,
+    pub dirty_record_count: Option<u64>,
     pub journal_mode: Option<String>,
     pub foreign_keys_enabled: Option<bool>,
     pub busy_timeout_ms: Option<u32>,

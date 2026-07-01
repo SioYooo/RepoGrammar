@@ -670,6 +670,22 @@ impl IndexStore for SqliteIndexStore {
                 ],
             )
             .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &transaction,
+            &generation.generation_id,
+            "semantic_fact",
+            &fact.fact_id,
+            &fact.path,
+            fact.content_hash.as_str(),
+        )?;
+        record_derived_dependency(
+            &transaction,
+            &generation.generation_id,
+            "semantic_evidence",
+            &fact.evidence_id,
+            &fact.path,
+            fact.content_hash.as_str(),
+        )?;
         transaction.commit().map_err(sql_unavailable)?;
         Ok(())
     }
@@ -756,6 +772,16 @@ impl IndexStore for SqliteIndexStore {
         if semantic_evidence_violation_count(&connection, &generation.generation_id)? != 0 {
             return Err(IndexStoreError::InvalidState(
                 "semantic fact evidence is inconsistent with indexed code units".to_string(),
+            ));
+        }
+        if derived_dependency_violation_count(&connection, &generation.generation_id)? != 0 {
+            return Err(IndexStoreError::InvalidState(
+                "derived record dependencies are inconsistent with indexed files".to_string(),
+            ));
+        }
+        if dirty_record_count(&connection, &generation.generation_id)? != 0 {
+            return Err(IndexStoreError::InvalidState(
+                "dirty records cannot support an active generation".to_string(),
             ));
         }
         if ir_graph_violation_count(&connection, &generation.generation_id)? != 0 {
@@ -855,6 +881,8 @@ impl IndexStore for SqliteIndexStore {
                     active_generation: None,
                     schema_version: None,
                     code_unit_count: None,
+                    dependency_record_count: None,
+                    dirty_record_count: None,
                     journal_mode: None,
                     foreign_keys_enabled: None,
                     busy_timeout_ms: None,
@@ -1182,7 +1210,7 @@ fn record_family_evidence_sqlite(
     validate_family_evidence_covered_claims(&evidence.covered_claims)?;
     validate_repo_relative_path(&evidence.path)?;
     validate_index_text_field(&evidence.note, "family evidence note")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
+    let mut connection = store.open_existing_generation(&generation.generation_id)?;
     require_building_generation(&connection, &generation.generation_id, "family evidence")?;
     require_family_row(&connection, &generation.generation_id, &evidence.family_id)?;
     let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
@@ -1216,7 +1244,8 @@ fn record_family_evidence_sqlite(
         ));
     }
     let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
-    connection
+    let transaction = connection.transaction().map_err(sql_unavailable)?;
+    transaction
         .execute(
             "INSERT INTO evidence \
              (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
@@ -1233,6 +1262,47 @@ fn record_family_evidence_sqlite(
                 end_byte,
                 evidence.note,
             ],
+        )
+        .map_err(sql_unavailable)?;
+    record_derived_dependency(
+        &transaction,
+        &generation.generation_id,
+        "family",
+        &evidence.family_id,
+        &evidence.path,
+        evidence.content_hash.as_str(),
+    )?;
+    record_derived_dependency(
+        &transaction,
+        &generation.generation_id,
+        "family_evidence",
+        &evidence.evidence_id,
+        &evidence.path,
+        evidence.content_hash.as_str(),
+    )?;
+    transaction.commit().map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn record_derived_dependency(
+    connection: &Connection,
+    generation_id: &str,
+    record_kind: &str,
+    record_id: &str,
+    path: &str,
+    content_hash: &str,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(record_kind, "derived dependency record kind")?;
+    validate_index_text_field(record_id, "derived dependency record id")?;
+    validate_repo_relative_path(path)?;
+    ContentHash::new(content_hash.to_string())
+        .map_err(|_| invalid_record("derived dependency content hash is invalid"))?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO derived_record_dependencies \
+             (generation_id, record_kind, record_id, path, content_hash) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![generation_id, record_kind, record_id, path, content_hash],
         )
         .map_err(sql_unavailable)?;
     Ok(())
@@ -2089,6 +2159,16 @@ fn validate_generation_for_read(
             "semantic fact evidence is inconsistent with indexed code units".to_string(),
         ));
     }
+    if derived_dependency_violation_count(connection, generation_id)? != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "derived record dependencies are inconsistent with indexed files".to_string(),
+        ));
+    }
+    if dirty_record_count(connection, generation_id)? != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "dirty records cannot support an active generation".to_string(),
+        ));
+    }
     if ir_graph_violation_count(connection, generation_id)? != 0 {
         return Err(IndexStoreError::InvalidState(
             "IR graph is inconsistent with indexed code units".to_string(),
@@ -2121,25 +2201,38 @@ fn inspect_connection(
     let integrity_check = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(sql_unavailable)?;
-    let code_unit_count = if let Some(active_generation) = active_generation {
-        let count = connection
-            .query_row(
-                "SELECT count(*) FROM code_units WHERE generation_id = ?1",
-                params![active_generation],
-                |row| row.get::<_, i64>(0),
+    let (code_unit_count, dependency_record_count, dirty_record_count) =
+        if let Some(active_generation) = active_generation {
+            (
+                Some(active_generation_table_count(
+                    connection,
+                    "code_units",
+                    active_generation,
+                    "code unit",
+                )?),
+                Some(active_generation_table_count(
+                    connection,
+                    "derived_record_dependencies",
+                    active_generation,
+                    "dependency record",
+                )?),
+                Some(active_generation_table_count(
+                    connection,
+                    "dirty_records",
+                    active_generation,
+                    "dirty record",
+                )?),
             )
-            .map_err(sql_unavailable)?;
-        Some(u64::try_from(count).map_err(|_| {
-            IndexStoreError::InvalidState("code unit count is outside valid range".to_string())
-        })?)
-    } else {
-        None
-    };
+        } else {
+            (None, None, None)
+        };
 
     Ok(StorageInspection {
         active_generation: active_generation.map(str::to_string),
         schema_version,
         code_unit_count,
+        dependency_record_count,
+        dirty_record_count,
         journal_mode: Some(journal_mode),
         foreign_keys_enabled: Some(foreign_keys == 1),
         busy_timeout_ms: Some(busy_timeout_ms),
@@ -2150,6 +2243,34 @@ fn inspect_connection(
         }),
         integrity_check: Some(integrity_check),
     })
+}
+
+fn active_generation_table_count(
+    connection: &Connection,
+    table: &str,
+    generation_id: &str,
+    label: &str,
+) -> Result<u64, IndexStoreError> {
+    let table_exists = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
+            params![table],
+            |row| row.get::<_, u32>(0),
+        )
+        .map_err(sql_unavailable)?
+        == 1;
+    if !table_exists {
+        return Ok(0);
+    }
+    let count = connection
+        .query_row(
+            &format!("SELECT count(*) FROM {table} WHERE generation_id = ?1"),
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    u64::try_from(count)
+        .map_err(|_| IndexStoreError::InvalidState(format!("{label} count is outside valid range")))
 }
 
 fn all_required_tables_exist(connection: &Connection) -> Result<bool, IndexStoreError> {
@@ -2402,6 +2523,114 @@ fn semantic_evidence_violation_count(
             "semantic evidence violation count is outside valid range".to_string(),
         )
     })
+}
+
+fn derived_dependency_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let row_violation_count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM derived_record_dependencies \
+             LEFT JOIN indexed_files \
+               ON indexed_files.generation_id = derived_record_dependencies.generation_id \
+              AND indexed_files.path = derived_record_dependencies.path \
+             WHERE derived_record_dependencies.generation_id = ?1 \
+               AND (indexed_files.path IS NULL \
+                    OR derived_record_dependencies.content_hash <> indexed_files.content_hash)",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    let payload_violation_count =
+        derived_dependency_payload_violation_count(connection, generation_id)?;
+    let total = row_violation_count
+        .checked_add(payload_violation_count)
+        .ok_or_else(|| {
+            IndexStoreError::InvalidState("derived dependency violation count overflow".to_string())
+        })?;
+    usize::try_from(total).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "derived dependency violation count is outside valid range".to_string(),
+        )
+    })
+}
+
+fn derived_dependency_payload_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<i64, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT record_kind, record_id, path, content_hash \
+             FROM derived_record_dependencies \
+             WHERE generation_id = ?1",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut count = 0i64;
+    for row in rows {
+        let (record_kind, record_id, path, content_hash) = row.map_err(sql_unavailable)?;
+        let valid =
+            validate_stored_semantic_text_field("stored dependency record kind", &record_kind)
+                .and_then(|()| {
+                    validate_stored_semantic_text_field("stored dependency record id", &record_id)
+                })
+                .and_then(|()| validate_stored_repo_relative_path(&path, "stored dependency path"))
+                .and_then(|()| {
+                    ContentHash::new(content_hash).map(|_| ()).map_err(|_| {
+                        IndexStoreError::InvalidState(
+                            "stored dependency content hash is invalid".to_string(),
+                        )
+                    })
+                })
+                .is_ok();
+        if !valid {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn dirty_record_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT record_kind, record_id, reason \
+             FROM dirty_records \
+             WHERE generation_id = ?1",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut count = 0usize;
+    for row in rows {
+        let (record_kind, record_id, reason) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored dirty record kind", &record_kind)?;
+        validate_stored_semantic_text_field("stored dirty record id", &record_id)?;
+        validate_stored_semantic_text_field("stored dirty record reason", &reason)?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 fn ir_graph_violation_count(
@@ -2928,6 +3157,32 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         minimum_foreign_key_rows: 6,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
+    RequiredTableSchema {
+        name: "derived_record_dependencies",
+        columns: &[
+            "generation_id",
+            "record_kind",
+            "record_id",
+            "path",
+            "content_hash",
+        ],
+        primary_key_columns: &["generation_id", "record_kind", "record_id", "path"],
+        minimum_foreign_key_rows: 2,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
+    RequiredTableSchema {
+        name: "dirty_records",
+        columns: &[
+            "generation_id",
+            "record_kind",
+            "record_id",
+            "reason",
+            "marked_at_generation_id",
+        ],
+        primary_key_columns: &["generation_id", "record_kind", "record_id"],
+        minimum_foreign_key_rows: 2,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
 ];
 
 const INITIAL_SCHEMA: &str = r#"
@@ -3053,6 +3308,34 @@ CREATE TABLE IF NOT EXISTS evidence (
     FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE,
     FOREIGN KEY (generation_id, code_unit_id) REFERENCES code_units(generation_id, code_unit_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS derived_record_dependencies (
+    generation_id TEXT NOT NULL,
+    record_kind TEXT NOT NULL CHECK (record_kind <> ''),
+    record_id TEXT NOT NULL CHECK (record_id <> ''),
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (generation_id, record_kind, record_id, path),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_derived_record_dependencies_path
+ON derived_record_dependencies(generation_id, path, content_hash);
+
+CREATE TABLE IF NOT EXISTS dirty_records (
+    generation_id TEXT NOT NULL,
+    record_kind TEXT NOT NULL CHECK (record_kind <> ''),
+    record_id TEXT NOT NULL CHECK (record_id <> ''),
+    reason TEXT NOT NULL CHECK (reason <> ''),
+    marked_at_generation_id TEXT NOT NULL,
+    PRIMARY KEY (generation_id, record_kind, record_id),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (marked_at_generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_dirty_records_generation
+ON dirty_records(generation_id, record_kind, record_id);
 "#;
 
 #[cfg(test)]
@@ -3367,6 +3650,155 @@ mod tests {
     }
 
     #[test]
+    fn derived_dependencies_are_recorded_for_semantic_and_family_evidence() {
+        let workspace = TempWorkspace::new("sqlite-derived-dependencies");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let connection = store
+            .open_generation(&generation.generation_id)
+            .expect("open generation");
+        let mut statement = connection
+            .prepare(
+                "SELECT record_kind, record_id, path, content_hash \
+                 FROM derived_record_dependencies \
+                 WHERE generation_id = ?1 \
+                 ORDER BY record_kind, record_id, path",
+            )
+            .expect("prepare dependencies query");
+        let rows = statement
+            .query_map(params![generation.generation_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .expect("query dependencies")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect dependencies");
+
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "family".to_string(),
+                    family().family_id,
+                    "src/a.ts".to_string(),
+                    file("src/a.ts").content_hash.as_str().to_string(),
+                ),
+                (
+                    "family".to_string(),
+                    family().family_id,
+                    "src/b.ts".to_string(),
+                    file("src/b.ts").content_hash.as_str().to_string(),
+                ),
+                (
+                    "family_evidence".to_string(),
+                    family_evidence("src/a.ts").evidence_id,
+                    "src/a.ts".to_string(),
+                    file("src/a.ts").content_hash.as_str().to_string(),
+                ),
+                (
+                    "family_evidence".to_string(),
+                    family_evidence("src/b.ts").evidence_id,
+                    "src/b.ts".to_string(),
+                    file("src/b.ts").content_hash.as_str().to_string(),
+                ),
+                (
+                    "semantic_evidence".to_string(),
+                    semantic_fact("src/a.ts").evidence_id,
+                    "src/a.ts".to_string(),
+                    file("src/a.ts").content_hash.as_str().to_string(),
+                ),
+                (
+                    "semantic_fact".to_string(),
+                    semantic_fact("src/a.ts").fact_id,
+                    "src/a.ts".to_string(),
+                    file("src/a.ts").content_hash.as_str().to_string(),
+                ),
+            ]
+        );
+        let inspection = store.inspect().expect("inspect storage");
+        assert_eq!(inspection.dependency_record_count, Some(6));
+        assert_eq!(inspection.dirty_record_count, Some(0));
+    }
+
+    #[test]
+    fn dirty_records_block_active_family_reads() {
+        let (_workspace, store, generation) = store_with_active_family("sqlite-dirty-family-read");
+        let connection = store
+            .open_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute(
+                "INSERT INTO dirty_records \
+                 (generation_id, record_kind, record_id, reason, marked_at_generation_id) \
+                 VALUES (?1, 'family', ?2, 'stale_dependency', ?1)",
+                params![generation.generation_id, family().family_id],
+            )
+            .expect("insert dirty family");
+
+        let inspection = store.inspect().expect("inspect storage");
+        assert_eq!(inspection.dirty_record_count, Some(1));
+        let error = store
+            .list_active_families()
+            .expect_err("dirty active family must be refused");
+        assert!(format!("{error:?}").contains("dirty records"));
+    }
+
+    #[test]
+    fn dependency_hash_mismatch_blocks_active_family_reads() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-stale-family-dependency");
+        let connection = store
+            .open_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute(
+                "UPDATE derived_record_dependencies \
+                 SET content_hash = ?1 \
+                 WHERE generation_id = ?2 AND record_kind = 'family'",
+                params![
+                    "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    generation.generation_id,
+                ],
+            )
+            .expect("tamper family dependency");
+
+        let error = store
+            .list_active_families()
+            .expect_err("stale dependency must be refused");
+        assert!(format!("{error:?}").contains("derived record dependencies"));
+    }
+
+    #[test]
     fn family_records_require_building_generation() {
         let (_workspace, store, generation) = store_with_active_family("sqlite-family-immutable");
 
@@ -3656,6 +4088,8 @@ mod tests {
 
         assert_eq!(inspection.active_generation, Some("gen-000001".to_string()));
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
+        assert_eq!(inspection.dependency_record_count, Some(0));
+        assert_eq!(inspection.dirty_record_count, Some(0));
         assert_eq!(inspection.journal_mode.as_deref(), Some("wal"));
         assert_eq!(inspection.foreign_keys_enabled, Some(true));
         assert_eq!(inspection.busy_timeout_ms, Some(5_000));
@@ -5065,7 +5499,7 @@ mod tests {
             .execute_batch(
                 r#"
                 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
-                INSERT INTO schema_migrations (version, name, applied_at) VALUES (5, 'weak', 'now');
+                INSERT INTO schema_migrations (version, name, applied_at) VALUES (6, 'weak', 'now');
                 CREATE TABLE index_generations (generation_id TEXT PRIMARY KEY, status TEXT, created_at TEXT, activated_at TEXT, repogrammar_version TEXT, repository_revision TEXT, worktree_hash TEXT);
                 INSERT INTO index_generations (generation_id, status, created_at, repogrammar_version) VALUES ('gen-000001', 'building', 'now', '0.1.0');
                 CREATE TABLE indexed_files (generation_id TEXT, path TEXT, content_hash TEXT, size_bytes INTEGER, language TEXT);
