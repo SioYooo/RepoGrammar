@@ -87,7 +87,7 @@ jobs:
           cd release-assets
           sha256sum install.sh > install.sh.sha256
           sha256sum install.ps1 > install.ps1.sha256
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           prerelease: true
           files: release-assets/*
