@@ -46,6 +46,7 @@ pub enum Language {
     Python,
     PythonConfig,
     TsJsConfig,
+    Java,
     Rust,
     RustConfig,
     Unknown(String),
@@ -59,6 +60,7 @@ impl Language {
             Self::Python => "python",
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
+            Self::Java => "java",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
             Self::Unknown(value) => value.as_str(),
@@ -96,6 +98,10 @@ pub enum CodeUnitKind {
     PydanticModel,
     SqlAlchemyModel,
     SqlAlchemyRepositoryMethod,
+    SpringMvcRoute,
+    SpringComponent,
+    SpringBootApplication,
+    SpringDataRepository,
     RustModule,
     RustInlineModule,
     RustExternalModule,
@@ -145,6 +151,10 @@ impl CodeUnitKind {
             Self::PydanticModel => "pydantic_model",
             Self::SqlAlchemyModel => "sqlalchemy_model",
             Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
+            Self::SpringMvcRoute => "spring_mvc_route",
+            Self::SpringComponent => "spring_component",
+            Self::SpringBootApplication => "spring_boot_application",
+            Self::SpringDataRepository => "spring_data_repository",
             Self::RustModule => "rust_module",
             Self::RustInlineModule => "rust_inline_module",
             Self::RustExternalModule => "rust_external_module",
@@ -215,6 +225,17 @@ mod tests {
         assert_eq!(Language::Python.as_str(), "python");
         assert_eq!(Language::PythonConfig.as_str(), "python-config");
         assert_eq!(Language::TsJsConfig.as_str(), "tsjs-config");
+        assert_eq!(Language::Java.as_str(), "java");
+        assert_eq!(CodeUnitKind::SpringMvcRoute.as_str(), "spring_mvc_route");
+        assert_eq!(CodeUnitKind::SpringComponent.as_str(), "spring_component");
+        assert_eq!(
+            CodeUnitKind::SpringBootApplication.as_str(),
+            "spring_boot_application"
+        );
+        assert_eq!(
+            CodeUnitKind::SpringDataRepository.as_str(),
+            "spring_data_repository"
+        );
         assert_eq!(Language::Rust.as_str(), "rust");
         assert_eq!(Language::RustConfig.as_str(), "rust-config");
         assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");

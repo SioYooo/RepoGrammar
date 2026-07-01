@@ -1795,6 +1795,15 @@ mod tests {
             .join("v0_2")
     }
 
+    fn java_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("java")
+            .join("release")
+            .join("v0_2")
+    }
+
     fn copy_release_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&release_fixture_root().join(name), destination);
     }
@@ -1805,6 +1814,10 @@ mod tests {
 
     fn copy_rust_release_v0_2_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&rust_release_fixture_v0_2_root().join(name), destination);
+    }
+
+    fn copy_java_release_v0_2_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&java_release_fixture_v0_2_root().join(name), destination);
     }
 
     fn copy_python_release_fixture(name: &str, destination: &Path) {
@@ -1866,6 +1879,10 @@ mod tests {
             !output.contains(rust_release_fixture_v0_2_root().to_string_lossy().as_ref()),
             "{command} leaked absolute Rust v0.2 fixture path: {output}"
         );
+        assert!(
+            !output.contains(java_release_fixture_v0_2_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute Java v0.2 fixture path: {output}"
+        );
         for snippet in [
             "app.get(",
             "app.route(",
@@ -1918,6 +1935,9 @@ mod tests {
             "fn validate_family",
             "#[cfg(",
             "macro_rules!",
+            "@GetMapping",
+            "@RestController",
+            "ResponseEntity",
         ] {
             assert!(
                 !output.contains(snippet),
@@ -2468,6 +2488,7 @@ mod tests {
             DiscoveredLanguage::Python => Language::Python,
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
             DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+            DiscoveredLanguage::Java => Language::Java,
             DiscoveredLanguage::Rust => Language::Rust,
             DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
@@ -3540,6 +3561,71 @@ mod tests {
             .collect()
     }
 
+    fn index_java_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_java_release_v0_2_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert_eq!(index_json["semantic_worker"], "deferred");
+        assert_eq!(index_json["generation_id"], "gen-000001");
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "Java fixture should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    fn java_derived_support_facts(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<(String, String, String)> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(facts.facts.iter().all(|fact| {
+            !(fact.certainty == "DATAFLOW_DERIVED"
+                && fact.origin_engine == "repogrammar-frameworks")
+        }));
+        facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "repogrammar-java-derived"
+                    && fact.origin_method == "bounded_tree_sitter_java_anchor_v1"
+            })
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                (
+                    fact.path.clone(),
+                    fact.target.clone().unwrap_or_default(),
+                    fact.certainty.clone(),
+                )
+            })
+            .collect()
+    }
+
     fn rust_semantic_facts(
         runtime: &ProductCliRuntime,
         workspace: &TempWorkspace,
@@ -3572,6 +3658,49 @@ mod tests {
                     && family["support"].as_u64().unwrap_or_default() >= min_support),
             "missing Rust family role {role_token} with support >= {min_support}: {value}"
         );
+    }
+
+    #[test]
+    fn java_spring_mvc_exact_routes_form_family_without_worker() {
+        let (workspace, runtime) = index_java_release_v0_2_fixture(
+            "spring_mvc_exact_routes",
+            "java-release-spring-mvc-exact-routes",
+        );
+
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        let route_derived = derived
+            .iter()
+            .filter(|(path, target, _)| {
+                path == "src/main/java/com/example/catalog/CatalogController.java"
+                    && target == "spring.web.bind.annotation.GetMapping"
+            })
+            .count();
+        assert_eq!(route_derived, 3, "derived Java support facts: {derived:?}");
+        assert!(
+            derived.iter().any(|(path, target, _)| {
+                path == "src/main/java/com/example/catalog/CatalogController.java"
+                    && target == "spring.web.bind.annotation.RestController"
+            }),
+            "missing exact RestController support fact: {derived:?}"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        let family_id = family_array[0]["family_id"].as_str().expect("family id");
+        assert!(family_id.starts_with("family:java:spring_mvc_route:framework_spring_mvc_route"));
+        assert_eq!(family_array[0]["support"], 3);
+        let detail = run_with_runtime(
+            cli_args("family", workspace.path(), &[family_id, "--json"]),
+            &runtime,
+        );
+        let detail_json = parse_machine_output("family", &detail, &workspace);
+        assert_eq!(detail_json["status"], "ok");
+        assert_eq!(detail_json["output"]["source_snippets_included"], false);
     }
 
     #[test]

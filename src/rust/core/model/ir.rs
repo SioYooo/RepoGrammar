@@ -91,6 +91,10 @@ impl IrNodeKind {
             CodeUnitKind::PydanticModel => Self::PydanticModel,
             CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
             CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
+            CodeUnitKind::SpringMvcRoute => Self::Method,
+            CodeUnitKind::SpringComponent
+            | CodeUnitKind::SpringBootApplication
+            | CodeUnitKind::SpringDataRepository => Self::Class,
             CodeUnitKind::RustModule
             | CodeUnitKind::RustInlineModule
             | CodeUnitKind::RustExternalModule => Self::Module,

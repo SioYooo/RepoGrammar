@@ -24,7 +24,7 @@ Repository files
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Rust
+`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Java/Rust
 files, read source through a hash-checked repo-relative boundary, store
 repo-relative file metadata and structural code units in a building generation
 inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
@@ -138,7 +138,29 @@ emits React-shaped semantic support. TypeScript worker facts are stored as
 bounded semantic context only unless a later ADR defines a role-specific support
 promotion path. This is a token-saving foundation, not full TS/JS semantic
 analysis, and TS/JS remains a transitional substrate rather than the official
-v0.1 target. The future provider-backed path is tracked in
+v0.1 target. A parallel Java/Spring preview path exists for source-visible
+Spring structural anchors. Discovery includes `.java` files. The Tree-sitter
+Java adapter emits Java module/class/interface/method units, Spring MVC route
+units, Spring component units, Spring Boot application units, Spring Data
+repository units, structural anchors, and typed `UNKNOWN`s. Exact support is
+limited to Spring annotations or repository types that are fully qualified in
+source or imported from the expected Spring package: Spring MVC mapping
+annotations, `@Controller`/`@RestController`, stereotype annotations,
+`@SpringBootApplication`, `JpaRepository`, and `@RepositoryDefinition`. Simple
+lookalike annotations without exact imports, custom composed annotations,
+nonliteral route paths, route mappings outside exact controller classes,
+missing project/classpath context, dependency injection, component scan, AOP
+proxy behavior, repository factories, Maven/Gradle metadata, javac, and
+annotation processors remain typed `UNKNOWN` or non-supporting context. The
+application layer promotes accepted Java anchors to `DATAFLOW_DERIVED` support
+facts with engine `repogrammar-java-derived` and method
+`bounded_tree_sitter_java_anchor_v1`, carrying `provider_resolved=false`,
+`derived_from=tree_sitter_java_structural_anchors`, the role-compatible support
+family, and `framework_role=<role>`. Java/Spring families require at least
+three complete-link-compatible support facts and no claim-relevant blocking
+Java `UNKNOWN`; raw parser `STRUCTURAL` facts and `FRAMEWORK_HEURISTIC` role
+facts are insufficient by themselves.
+The future provider-backed path is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md` and must use owned TS/JS
 provider facts before widening these claims.
 The syntax-only parser emits a lightweight RepoGrammar-owned IR consisting of one
@@ -181,7 +203,7 @@ than the configured size limit are skipped, with 1 MB as the default inclusive
 limit.
 
 The current discovery substrate supports `.ts`, `.tsx`, `.js`, `.jsx`, `.py`,
-Python `pyproject.toml`, and bounded TS/JS project-config files such as
+`.java`, Python `pyproject.toml`, and bounded TS/JS project-config files such as
 `package.json`, `tsconfig.json`, `jsconfig.json`, `jest.config.*`, and
 `vitest.config.*`.
 Module-specific extensions such as `.mjs`, `.cjs`, `.mts`, and `.cts` remain

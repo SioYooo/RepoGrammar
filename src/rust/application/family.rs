@@ -1,6 +1,7 @@
 //! Application-layer EC-MVFI-lite family claim construction.
 
-use crate::adapters::frameworks::tsjs;
+use crate::adapters::frameworks::{java, tsjs};
+use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
@@ -22,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
 const PYTHON_MIN_FAMILY_SUPPORT: usize = 3;
 const TSJS_MIN_FAMILY_SUPPORT: usize = 3;
+const JAVA_MIN_FAMILY_SUPPORT: usize = 3;
 const PYTHON_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-python-derived";
 const PYTHON_DERIVED_SUPPORT_METHOD: &str = "bounded_ast_anchor_v1";
 const PYTHON_FIXTURE_PROVIDER_ENGINE: &str = "python-fixture-provider";
@@ -29,6 +31,8 @@ const PYTHON_FIXTURE_PROVIDER_METHOD: &str = "release_fixture_semantic_support";
 /// Engine/method that mint conservative TS/JS exact-anchor support facts.
 pub(crate) const TSJS_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-tsjs-derived";
 pub(crate) const TSJS_DERIVED_SUPPORT_METHOD: &str = "bounded_exact_anchor_v1";
+pub(crate) const JAVA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-java-derived";
+pub(crate) const JAVA_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_java_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
 pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
 
@@ -366,6 +370,11 @@ fn family_claim_from_supported_evidence(
         &supported_evidence,
         features_by_unit,
     ));
+    variation_slots.extend(java_context_variation_slots(
+        key,
+        &supported_evidence,
+        features_by_unit,
+    ));
     variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
     FamilyClaim {
         family_id,
@@ -602,6 +611,62 @@ fn tsjs_variation_feature_prefixes(
     }
 }
 
+fn java_context_variation_slots(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationSlot> {
+    if key.language != "java" {
+        return Vec::new();
+    }
+    java_variation_feature_prefixes(key.framework_role.as_str())
+        .iter()
+        .filter_map(|(slot_name, prefixes)| {
+            let profiles = evidence
+                .iter()
+                .map(|item| prefixed_feature_profile(item, features_by_unit, prefixes))
+                .collect::<BTreeSet<_>>();
+            let has_context = profiles.iter().any(|profile| !profile.is_empty());
+            (has_context && profiles.len() > 1).then(|| VariationSlot {
+                slot_id: format!("slot:{slot_name}"),
+                description: format!(
+                    "variation:{slot_name}:context metadata differs across supported members"
+                ),
+            })
+        })
+        .collect()
+}
+
+fn java_variation_feature_prefixes(
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match framework_role {
+        "framework:spring.mvc_route" => &[
+            ("java_spring_route_method", &["http_method:"]),
+            (
+                "java_spring_route_path_shape",
+                &["route_path_shape:", "class_route_path_shape:"],
+            ),
+            (
+                "java_spring_method_shape",
+                &["return_shape:", "parameter_shape:"],
+            ),
+        ],
+        "framework:spring.component" => &[
+            ("java_spring_stereotype", &["spring_annotation:"]),
+            ("java_spring_class_shape", &["class_shape:"]),
+        ],
+        "framework:spring_boot.application" => {
+            &[("java_spring_boot_class_shape", &["class_shape:"])]
+        }
+        "framework:spring_data.repository" => &[
+            ("java_spring_data_repository_kind", &["support_family:"]),
+            ("java_spring_data_class_shape", &["class_shape:"]),
+        ],
+        _ => &[],
+    }
+}
+
 pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
     let variation_evidence_indexes = framework_anchor_variation_evidence_indexes(claim);
     let members = claim
@@ -786,6 +851,10 @@ fn family_features_by_unit(
             .or_insert_with(BTreeSet::new);
         if is_tsjs_language_name(&unit.language) {
             add_tsjs_family_features(entry, fact, role_by_unit, support_targets_by_unit);
+            continue;
+        }
+        if unit.language == "java" {
+            add_java_family_features(entry, fact, role_by_unit, support_targets_by_unit);
             continue;
         }
         if unit.language == "rust" {
@@ -1019,6 +1088,72 @@ fn add_tsjs_family_features(
     }
 }
 
+fn add_java_family_features(
+    entry: &mut BTreeSet<String>,
+    fact: &SemanticFact,
+    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) {
+    let code_unit_id = fact.evidence.code_unit_id.as_str();
+    let framework_role = role_by_unit
+        .get(code_unit_id)
+        .and_then(single_framework_role)
+        .unwrap_or("");
+
+    add_variation_features_from_assumptions(
+        entry,
+        &fact.assumptions,
+        &[
+            ("java_anchor_kind=", "anchor_kind:"),
+            ("spring_annotation=", "spring_annotation:"),
+            ("http_method=", "http_method:"),
+            ("route_path_shape=", "route_path_shape:"),
+            ("class_route_path_shape=", "class_route_path_shape:"),
+            ("java_visibility_shape=", "visibility_shape:"),
+            ("java_return_shape=", "return_shape:"),
+            ("java_parameter_shape=", "parameter_shape:"),
+            ("java_class_shape=", "class_shape:"),
+        ],
+        stable_token,
+    );
+    if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
+        let is_support_target = support_targets_by_unit
+            .get(code_unit_id)
+            .is_some_and(|targets| targets.contains(target));
+        if is_support_target {
+            entry.insert(format!("framework_api_anchor:{}", stable_token(target)));
+            entry.insert(format!(
+                "support_family:{}",
+                stable_token(&support_target_family(target, framework_role))
+            ));
+        }
+    }
+    if fact.kind == SemanticFactKind::Unknown || fact.certainty == FactCertainty::Unknown {
+        if let Some(reason) = fact
+            .target
+            .as_ref()
+            .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())
+        {
+            let affected_claim = fact
+                .assumptions
+                .iter()
+                .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+                .unwrap_or("java_family_membership");
+            entry.insert(format!(
+                "unknown_reason:{}",
+                stable_token(reason.as_protocol_str())
+            ));
+            if java_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+            {
+                entry.insert(format!(
+                    "unknown_blocker:{}",
+                    stable_token(reason.as_protocol_str())
+                ));
+            }
+        }
+    }
+}
+
 fn add_rust_family_features(
     entry: &mut BTreeSet<String>,
     fact: &SemanticFact,
@@ -1109,6 +1244,8 @@ fn family_blocking_unknowns_by_unit(
             python_family_blocking_unknown(fact, framework_role)
         } else if is_tsjs_language_name(&unit.language) {
             tsjs_family_blocking_unknown(fact, framework_role)
+        } else if unit.language == "java" {
+            java_family_blocking_unknown(fact, framework_role)
         } else if unit.language == "rust" {
             rust_family_blocking_unknown(fact, framework_role)
         } else {
@@ -1206,6 +1343,8 @@ fn family_non_blocking_unknowns_by_unit(
             python_family_non_blocking_unknown(fact, framework_role)
         } else if is_tsjs_language_name(&unit.language) {
             tsjs_family_non_blocking_unknown(fact, framework_role)
+        } else if unit.language == "java" {
+            java_family_non_blocking_unknown(fact, framework_role)
         } else if unit.language == "rust" {
             rust_family_non_blocking_unknown(fact, framework_role)
         } else {
@@ -1474,6 +1613,124 @@ fn tsjs_unknown_is_non_blocking_family_subclaim(
     )
 }
 
+fn java_family_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    if fact.origin.engine != JAVA_ANCHOR_ENGINE || fact.origin.method != JAVA_ANCHOR_METHOD {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("java_family_membership");
+
+    if !java_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role) {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::Blocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some(
+            "resolve the blocking Java/Spring UNKNOWN before claiming a family".to_string(),
+        ),
+    })
+}
+
+fn java_family_non_blocking_unknown(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<ClaimUnknown> {
+    if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
+        return None;
+    }
+    if fact.origin.engine != JAVA_ANCHOR_ENGINE || fact.origin.method != JAVA_ANCHOR_METHOD {
+        return None;
+    }
+    let reason = fact
+        .target
+        .as_ref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target.as_str()).ok())?;
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("java_family_membership");
+
+    if java_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
+        || !java_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
+    {
+        return None;
+    }
+
+    Some(ClaimUnknown {
+        class: UnknownClass::NonBlocking,
+        reason,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some("resolve this Java/Spring subclaim before relying on it".to_string()),
+    })
+}
+
+fn java_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport
+        | UnknownReasonCode::MissingProjectConfig
+        | UnknownReasonCode::MissingDependency
+        | UnknownReasonCode::FrameworkMagic
+        | UnknownReasonCode::ConflictingFacts
+        | UnknownReasonCode::StaleEvidence => {
+            java_unknown_affected_claim_blocks_family(affected_claim, framework_role)
+        }
+        UnknownReasonCode::RuntimeDependencyInjection
+        | UnknownReasonCode::DynamicImport
+        | UnknownReasonCode::MonkeyPatch
+        | UnknownReasonCode::PytestFixtureInjection
+        | UnknownReasonCode::MacroOrPreprocessor
+        | UnknownReasonCode::BuildVariantAmbiguity
+        | UnknownReasonCode::InsufficientSupport => false,
+    }
+}
+
+fn java_unknown_affected_claim_blocks_family(affected_claim: &str, framework_role: &str) -> bool {
+    match affected_claim {
+        "java_family_membership"
+        | "java_spring_annotation_binding"
+        | "java_spring_controller_identity"
+        | "java_spring_framework_identity"
+        | "java_spring_repository_identity" => true,
+        claim if claim.starts_with("family:") => true,
+        _ => java_framework_role_is_known(framework_role) && affected_claim.starts_with("java_"),
+    }
+}
+
+fn java_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> bool {
+    matches!(
+        reason,
+        UnknownReasonCode::RuntimeDependencyInjection | UnknownReasonCode::FrameworkMagic
+    ) && matches!(
+        affected_claim,
+        "java_spring_component_scan"
+            | "java_spring_route_path"
+            | "java_spring_dependency_injection"
+            | "java_spring_proxy_semantics"
+    ) && java_framework_role_is_known(framework_role)
+}
+
 fn rust_family_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> Option<ClaimUnknown> {
     if fact.kind != SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
         return None;
@@ -1627,6 +1884,9 @@ fn evidence_pair_is_compatible(
     if is_tsjs_language_name(&key.language) {
         return tsjs_evidence_pair_is_compatible(left, right, features_by_unit);
     }
+    if key.language == "java" {
+        return java_evidence_pair_is_compatible(left, right, features_by_unit);
+    }
     if key.language == "rust" {
         return rust_evidence_pair_is_compatible(left, right, features_by_unit);
     }
@@ -1710,6 +1970,39 @@ fn tsjs_evidence_pair_is_compatible(
             equal_feature_profiles(left, right, features_by_unit, &["operation:"])
         }
         "framework_react_component" | "framework_react_hook" => false,
+        _ => true,
+    }
+}
+
+fn java_evidence_pair_is_compatible(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    if !prefixed_features(left, features_by_unit, "unknown_blocker:").is_empty()
+        || !prefixed_features(right, features_by_unit, "unknown_blocker:").is_empty()
+    {
+        return false;
+    }
+
+    let roles = prefixed_features(left, features_by_unit, "framework_role:");
+    let role = roles.iter().next().map(String::as_str).unwrap_or("");
+    match role {
+        "framework_spring_mvc_route" => equal_feature_profiles(
+            left,
+            right,
+            features_by_unit,
+            &["anchor_kind:", "spring_annotation:"],
+        ),
+        "framework_spring_component" => equal_feature_profiles(
+            left,
+            right,
+            features_by_unit,
+            &["spring_annotation:", "class_shape:"],
+        ),
+        "framework_spring_boot_application" | "framework_spring_data_repository" => {
+            equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
+        }
         _ => true,
     }
 }
@@ -1800,6 +2093,9 @@ fn family_cluster_signature(
     }
     if key.language == "rust" {
         return rust_cluster_signature(cluster, features_by_unit);
+    }
+    if key.language == "java" {
+        return java_cluster_signature(cluster, features_by_unit);
     }
     "family_cluster".to_string()
 }
@@ -1903,6 +2199,35 @@ fn rust_cluster_signature(
     )
 }
 
+fn java_cluster_signature(
+    cluster: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let signature_features = cluster
+        .iter()
+        .flat_map(|evidence| {
+            [
+                "support_family:",
+                "anchor_kind:",
+                "spring_annotation:",
+                "http_method:",
+                "route_path_shape:",
+                "class_shape:",
+                "path_context:",
+            ]
+            .into_iter()
+            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
+        })
+        .collect::<BTreeSet<_>>();
+    if signature_features.is_empty() {
+        return "java_family_cluster".to_string();
+    }
+    format!(
+        "cluster:{}",
+        signature_features.into_iter().collect::<Vec<_>>().join("+")
+    )
+}
+
 fn support_target_family(target: &str, framework_role: &str) -> String {
     match framework_role {
         "framework:express.route_handler" => "express.route_handler".to_string(),
@@ -1941,6 +2266,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
             }
             _ => "sqlalchemy.query_call".to_string(),
         },
+        framework_role if java_framework_role_is_known(framework_role) => {
+            java::support_family(target, framework_role)
+        }
         framework_role if rust_role_is_known(framework_role) => {
             rust_support_family(target, framework_role)
         }
@@ -2047,6 +2375,9 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if tsjs_framework_role_is_known(framework_role) {
         return tsjs_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if java_framework_role_is_known(framework_role) {
+        return java_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     if rust_role_is_known(framework_role) {
         return rust_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
@@ -2089,6 +2420,30 @@ fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) 
     )
 }
 
+fn java_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = java_support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && java_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn java_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    let target = fact.target.as_ref().map(|target| target.as_str());
+    let mut required = vec!["derived_from=tree_sitter_java_structural_anchors".to_string()];
+    if let Some(target) = target {
+        required.push(format!(
+            "derived_from={}",
+            java::support_family(target, framework_role)
+        ));
+    }
+    derived_support_has_safe_origin(
+        fact,
+        JAVA_DERIVED_SUPPORT_ENGINE,
+        JAVA_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &required,
+    )
+}
+
 /// Exact target whitelist per TS/JS framework role. Mirrors the Python whitelist:
 /// support must point at an exact recognized target, never at fact text that merely
 /// contains a framework name.
@@ -2101,6 +2456,17 @@ pub(crate) fn tsjs_support_target_is_role_compatible(
 
 pub(crate) fn tsjs_framework_role_is_known(framework_role: &str) -> bool {
     tsjs::framework_role_is_known(framework_role)
+}
+
+pub(crate) fn java_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    java::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn java_framework_role_is_known(framework_role: &str) -> bool {
+    java::framework_role_is_known(framework_role)
 }
 
 fn python_support_fact_is_role_compatible(
@@ -2256,6 +2622,10 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "pydantic_model"
             | "sqlalchemy_model"
             | "sqlalchemy_repository_method"
+            | "spring_mvc_route"
+            | "spring_component"
+            | "spring_boot_application"
+            | "spring_data_repository"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -2272,6 +2642,8 @@ pub(crate) fn min_family_support(language: &str) -> usize {
         PYTHON_MIN_FAMILY_SUPPORT
     } else if is_tsjs_language_name(language) {
         TSJS_MIN_FAMILY_SUPPORT
+    } else if language == "java" {
+        JAVA_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
         3
     } else {
@@ -2353,6 +2725,10 @@ mod tests {
 
     fn python_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
         unit_with_language(path, "python", kind, index)
+    }
+
+    fn java_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        unit_with_language(path, "java", kind, index)
     }
 
     fn unit_with_language(
@@ -2754,6 +3130,181 @@ mod tests {
             .expect("valid evidence"),
             assumptions,
         }
+    }
+
+    fn java_derived_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+    ) -> SemanticFact {
+        java_derived_fact_with_assumptions(unit, target, framework_role, Vec::new())
+    }
+
+    fn java_derived_fact_with_assumptions(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+        extra_assumptions: Vec<&str>,
+    ) -> SemanticFact {
+        let mut assumptions = vec![
+            "provider_resolved=false".to_string(),
+            "derived_from=tree_sitter_java_structural_anchors".to_string(),
+            format!(
+                "derived_from={}",
+                java::support_family(target, framework_role)
+            ),
+            format!("framework_role={framework_role}"),
+            format!("java_anchor_kind={}", unit.kind),
+        ];
+        assumptions.extend(
+            extra_assumptions
+                .into_iter()
+                .map(std::string::ToString::to_string),
+        );
+        SemanticFact {
+            kind: SemanticFactKind::ResolvedCall,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: JAVA_DERIVED_SUPPORT_ENGINE.to_string(),
+                engine_version: "0.1.0".to_string(),
+                method: JAVA_DERIVED_SUPPORT_METHOD.to_string(),
+            },
+            certainty: FactCertainty::DataflowDerived,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded Java Spring structural role support",
+            )
+            .expect("valid evidence"),
+            assumptions,
+        }
+    }
+
+    fn java_parser_structural_anchor(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        framework_role: &str,
+    ) -> SemanticFact {
+        let mut fact = java_derived_fact(unit, target, framework_role);
+        fact.origin.engine = JAVA_ANCHOR_ENGINE.to_string();
+        fact.origin.method = JAVA_ANCHOR_METHOD.to_string();
+        fact.certainty = FactCertainty::Structural;
+        fact
+    }
+
+    #[test]
+    fn java_family_requires_three_compatible_exact_anchor_support_facts() {
+        let first = java_unit("src/main/java/AController.java", "spring_mvc_route", 0);
+        let second = java_unit("src/main/java/BController.java", "spring_mvc_route", 1);
+        let third = java_unit("src/main/java/CController.java", "spring_mvc_route", 2);
+        let role = "framework:spring.mvc_route";
+
+        let low_support = build_family_claims(
+            &[first.clone(), second.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role),
+                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
+            ],
+        );
+        assert_insufficient_support(&low_support);
+
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role),
+                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
+                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+            ],
+        );
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "java");
+        assert_eq!(report.claims[0].support, 3);
+        assert_eq!(report.claims[0].framework_role, role);
+    }
+
+    #[test]
+    fn java_structural_framework_anchors_cannot_directly_support_membership() {
+        let first = java_unit("src/main/java/AController.java", "spring_mvc_route", 0);
+        let second = java_unit("src/main/java/BController.java", "spring_mvc_route", 1);
+        let third = java_unit("src/main/java/CController.java", "spring_mvc_route", 2);
+        let role = "framework:spring.mvc_route";
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                java_parser_structural_anchor(
+                    &first,
+                    "spring.web.bind.annotation.GetMapping",
+                    role,
+                ),
+                java_parser_structural_anchor(
+                    &second,
+                    "spring.web.bind.annotation.PostMapping",
+                    role,
+                ),
+                java_parser_structural_anchor(
+                    &third,
+                    "spring.web.bind.annotation.DeleteMapping",
+                    role,
+                ),
+            ],
+        );
+        assert_insufficient_support(&report);
+    }
+
+    #[test]
+    fn java_support_requires_safe_origin_and_exact_target() {
+        let first = java_unit("src/main/java/AController.java", "spring_mvc_route", 0);
+        let second = java_unit("src/main/java/BController.java", "spring_mvc_route", 1);
+        let third = java_unit("src/main/java/CController.java", "spring_mvc_route", 2);
+        let role = "framework:spring.mvc_route";
+
+        let mut wrong_engine =
+            java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role);
+        wrong_engine.origin.engine = "java-lookalike".to_string();
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                wrong_engine,
+                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
+                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+            ],
+        );
+        assert_insufficient_support(&report);
+
+        let substring = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, role),
+                role_fact(&second, role),
+                role_fact(&third, role),
+                java_derived_fact(
+                    &first,
+                    "com.example.spring.web.bind.annotation.GetMapping",
+                    role,
+                ),
+                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
+                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+            ],
+        );
+        assert_insufficient_support(&substring);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::ports::parser::{
 };
 use std::collections::BTreeSet;
 
+pub mod java;
 pub mod python;
 pub mod rust;
 pub mod syntax;
@@ -16,6 +17,7 @@ pub mod tsjs;
 pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
+    java: java::JavaSyntaxParser,
     rust: rust::RustSyntaxParser,
 }
 
@@ -28,6 +30,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse(document)
             }
+            crate::core::model::Language::Java => self.java.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -49,6 +52,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context(document, context)
             }
+            crate::core::model::Language::Java => self.java.parse_with_context(document, context),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -136,7 +140,14 @@ fn is_module_like(kind: &CodeUnitKind) -> bool {
 fn is_class_like(kind: &str) -> bool {
     matches!(
         kind,
-        "class" | "pydantic_model" | "sqlalchemy_model" | "rust_impl_block" | "rust_trait"
+        "class"
+            | "pydantic_model"
+            | "sqlalchemy_model"
+            | "spring_component"
+            | "spring_boot_application"
+            | "spring_data_repository"
+            | "rust_impl_block"
+            | "rust_trait"
     )
 }
 
@@ -145,6 +156,7 @@ fn is_method_like(kind: &str) -> bool {
         kind,
         "method"
             | "sqlalchemy_repository_method"
+            | "spring_mvc_route"
             | "rust_method"
             | "rust_trait_method"
             | "rust_associated_function"

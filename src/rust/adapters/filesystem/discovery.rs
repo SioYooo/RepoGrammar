@@ -2,6 +2,7 @@
 
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
+use crate::adapters::languages::java::JavaLanguageAdapter;
 use crate::adapters::languages::python::PythonLanguageAdapter;
 use crate::adapters::languages::rust::RustLanguageAdapter;
 use crate::core::model::ContentHash;
@@ -415,6 +416,9 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
         extension if PythonLanguageAdapter::supports_extension(extension) => {
             Some(DiscoveredLanguage::Python)
         }
+        extension if JavaLanguageAdapter::supports_extension(extension) => {
+            Some(DiscoveredLanguage::Java)
+        }
         extension if RustLanguageAdapter::supports_extension(extension) => {
             Some(DiscoveredLanguage::Rust)
         }
@@ -601,6 +605,64 @@ mod tests {
         );
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "target" && skipped.reason == SkippedReason::DefaultExcludedDirectory
+        }));
+    }
+
+    #[test]
+    fn discovers_java_sources_and_skips_java_build_outputs() {
+        let workspace = TempWorkspace::new("discovery-java");
+        fs::create_dir_all(workspace.path().join("src/main/java/com/example"))
+            .expect("create java source dir");
+        fs::create_dir_all(workspace.path().join("build/classes")).expect("create build dir");
+        fs::create_dir_all(workspace.path().join("out/classes")).expect("create out dir");
+        fs::write(
+            workspace
+                .path()
+                .join("src/main/java/com/example/DemoController.java"),
+            "class DemoController {}\n",
+        )
+        .expect("write java");
+        fs::write(
+            workspace.path().join("build/classes/Generated.java"),
+            "class Generated {}\n",
+        )
+        .expect("write build java");
+        fs::write(
+            workspace.path().join("out/classes/Generated.java"),
+            "class Generated {}\n",
+        )
+        .expect("write out java");
+        fs::write(workspace.path().join("Demo.class"), b"bytecode").expect("write class");
+        fs::write(workspace.path().join("build.gradle"), "plugins {}\n").expect("write gradle");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover files");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![(
+                "src/main/java/com/example/DemoController.java",
+                DiscoveredLanguage::Java
+            )]
+        );
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "build" && skipped.reason == SkippedReason::DefaultExcludedDirectory
+        }));
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "out" && skipped.reason == SkippedReason::DefaultExcludedDirectory
+        }));
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "Demo.class" && skipped.reason == SkippedReason::UnsupportedExtension
+        }));
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "build.gradle" && skipped.reason == SkippedReason::UnsupportedExtension
         }));
     }
 

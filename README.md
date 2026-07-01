@@ -93,6 +93,9 @@ analysis.
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
+| Java Spring MVC | v0.2 structural preview | Exact imported/FQN Spring MVC mapping annotations inside exact controllers; route constants and runtime dispatch remain `UNKNOWN` subclaims. |
+| Java Spring/Spring Boot | v0.2 structural preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain `UNKNOWN`. |
+| Java Spring Data | v0.2 structural preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, and classpath resolution remain `UNKNOWN`. |
 | Source text output | Explicit opt-in only | Default CLI/MCP output is metadata-only; `--include-source-spans` / `include_source_spans=true` returns bounded hash-checked line-numbered spans. |
 | Token savings | Not claimed by default | Token-saving claims require paired baseline/treatment measurements. `estimated_potential_token_savings` is a local ESTIMATED potential-read-displacement diagnostic, not measured savings. |
 | Project-local live install | Deferred | Public preview live writes are machine-level agent wiring only; per-repository `.repogrammar/` lifecycle uses explicit `init`/`resync`/`autosync` commands. |

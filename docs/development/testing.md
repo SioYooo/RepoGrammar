@@ -164,6 +164,14 @@ allowed.
   `parser_adapters`, `installer_actions`, `product_tests`, `low_support_family`,
   `macro_cfg_unknowns`, `trait_dispatch_unknowns`, `module_resolution`, and
   `cargo_build_blocked_family`.
+- Java/Spring preview tests must cover `.java` discovery, Tree-sitter Java
+  parser extraction, exact imported/FQN Spring MVC/stereotype/Spring Boot/Spring
+  Data anchors, `UnresolvedImport` for Spring-lookalike simple annotations
+  without exact imports, no route-family support outside exact controllers,
+  nonliteral route-path UNKNOWN subclaims, `repogrammar-java-derived`
+  safe-origin promotion, support>=3 family gates, and rejection of structural
+  parser anchors, substring targets, and wrong-origin facts as direct family
+  support.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,

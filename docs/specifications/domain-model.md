@@ -21,6 +21,10 @@ classes, SQLAlchemy model-shaped classes, and SQLAlchemy repository
 method-shaped functions. Root `pyproject.toml` may be represented as a
 `python-config` language file with a `project_config` code unit so the config
 artifact can share the same generation, hash, and evidence validation boundary.
+The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
+Java classes/interfaces/methods plus Spring MVC route methods, Spring
+components, Spring Boot applications, and Spring Data repositories when exact
+source-visible Spring annotations or repository types are present.
 These records are structural candidates only. They are
 not semantic facts, resolved symbols, framework-equivalence claims, or
 pattern-family membership evidence. A separate syntax-origin `SemanticFact` may
@@ -73,6 +77,17 @@ remain context only. Only application-layer `repogrammar-tsjs-derived`
 `derived_from=tsjs_<framework>_structural_anchors` assumptions can support
 conservative TS/JS families, and those families require repeated compatible
 support rather than a single syntax match.
+Current default Java indexing can store syntax-origin `FRAMEWORK_ROLE` facts
+for Spring MVC routes, Spring components, Spring Boot applications, and Spring
+Data repositories. The Java parser can also persist `STRUCTURAL` exact-anchor
+facts for fully qualified or imported Spring annotations and repository types,
+and typed `UNKNOWN` facts for unresolved imports, nonliteral route paths,
+controller/repository identity uncertainty, and runtime framework behavior.
+Only application-layer `repogrammar-java-derived` `DATAFLOW_DERIVED` facts with
+exact whitelisted targets and `derived_from=tree_sitter_java_structural_anchors`
+can support Java/Spring families. This does not prove Maven/Gradle, javac,
+annotation-processor, classpath, component-scan, dependency-injection, proxy, or
+repository-factory semantics.
 Current default Python indexing can store syntax-origin `FRAMEWORK_ROLE` facts
 for FastAPI route-shaped units, pytest tests/fixtures, Pydantic models,
 SQLAlchemy models, and SQLAlchemy repository methods. These facts also use
