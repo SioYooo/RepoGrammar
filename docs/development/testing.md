@@ -85,6 +85,7 @@ allowed.
   automatic `VACUUM`,
   active dirty-record refusal, active dependency/hash mismatch refusal, atomic
   rollback of failed fact writes,
+  active reads ignoring building-generation rows until activation,
   building-generation write gates for indexed files, code units, IR nodes/edges,
   and semantic facts, validation/activation transition guards that do not
   downgrade active generations, read-only active `files`/`units` listing order
