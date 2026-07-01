@@ -2613,6 +2613,14 @@ mod tests {
             panic!("query read tests must not write indexed files")
         }
 
+        fn remove_indexed_file(
+            &self,
+            _generation: &GenerationHandle,
+            _path: &str,
+        ) -> Result<(), IndexStoreError> {
+            panic!("query read tests must not remove indexed files")
+        }
+
         fn record_code_unit(
             &self,
             _generation: &GenerationHandle,

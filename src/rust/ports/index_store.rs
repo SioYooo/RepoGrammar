@@ -147,6 +147,12 @@ pub trait IndexStore {
         file: &IndexedFileRecord,
     ) -> Result<(), IndexStoreError>;
 
+    fn remove_indexed_file(
+        &self,
+        generation: &GenerationHandle,
+        path: &str,
+    ) -> Result<(), IndexStoreError>;
+
     fn record_code_unit(
         &self,
         generation: &GenerationHandle,

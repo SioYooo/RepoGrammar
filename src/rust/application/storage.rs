@@ -33,6 +33,17 @@ pub fn record_indexed_file(
         .map_err(index_store_error)
 }
 
+pub fn remove_indexed_file(
+    store: &impl IndexStore,
+    generation: &GenerationHandle,
+    path: &str,
+) -> Result<(), RepoGrammarError> {
+    validate_repo_relative_path(path)?;
+    store
+        .remove_indexed_file(generation, path)
+        .map_err(index_store_error)
+}
+
 pub fn record_code_unit(
     store: &impl IndexStore,
     generation: &GenerationHandle,
@@ -526,6 +537,14 @@ mod tests {
             Ok(())
         }
 
+        fn remove_indexed_file(
+            &self,
+            _generation: &GenerationHandle,
+            _path: &str,
+        ) -> Result<(), IndexStoreError> {
+            Ok(())
+        }
+
         fn record_code_unit(
             &self,
             _generation: &GenerationHandle,
@@ -777,6 +796,7 @@ mod tests {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
         record_indexed_file(&store, &generation, &file("src/a.ts")).expect("record file");
+        remove_indexed_file(&store, &generation, "src/removed.ts").expect("remove file");
         record_code_unit(
             &store,
             &generation,
@@ -828,6 +848,10 @@ mod tests {
         let error = record_indexed_file(&store, &generation, &missing_language)
             .expect_err("empty language must fail");
         assert!(error.to_string().contains("language"));
+
+        let error = remove_indexed_file(&store, &generation, "../escape.ts")
+            .expect_err("unsafe removal path must fail");
+        assert!(error.to_string().contains("path"));
     }
 
     #[test]

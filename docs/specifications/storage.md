@@ -190,9 +190,13 @@ removed through foreign-key cascades, and any derived record that depended on
 that path is marked dirty before the cascade. The dirty marker is conservative;
 it is not cleared by merely inserting the replacement file row, so activation
 still requires a future recompute/clear step instead of silently reusing stale
-support. Generation validation transitions only `building` to `validated`, may
-recheck an already `validated` generation without changing it, and must not
-downgrade or reactivate an `active` generation.
+support. Removing an indexed path from a building generation is also
+transactional and idempotent for absent paths; when the path exists, the adapter
+marks dependent derived records dirty before deleting the indexed-file row and
+letting path-scoped rows cascade. Generation validation transitions only
+`building` to `validated`, may recheck an already `validated` generation
+without changing it, and must not downgrade or reactivate an `active`
+generation.
 Bootstrap manifest validation parses `manifest.json` as JSON rather than
 matching literal text. Field order and formatting are not meaningful, but
 `schema_version`, non-empty `repogrammar_version`, `state`, `storage.status`,
@@ -386,7 +390,10 @@ unchanged file metadata is treated as an idempotent no-op, while changed file
 metadata marks dependent derived records dirty before replacing the file row and
 letting path-scoped rows cascade. Dirty markers intentionally block activation
 until a later bounded recomputation path can remove or rebuild the affected
-derived records.
+derived records. Path removal follows the same fail-closed rule: absent paths
+are a no-op, existing paths are deleted through the indexed-file row, and any
+derived records that depended on the removed path are marked dirty before the
+cascade.
 The current storage schema version is `6`. Existing pre-release schema `1`,
 `2`, `3`, `4`, and `5` generation databases are treated as stale and must be
 rebuilt rather than silently upgraded in place.

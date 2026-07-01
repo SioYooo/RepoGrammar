@@ -6404,6 +6404,14 @@ extraPaths = ["src/lib", "C:/secret"]
                 ))
             }
 
+            fn remove_indexed_file(
+                &self,
+                _generation: &GenerationHandle,
+                _path: &str,
+            ) -> Result<(), IndexStoreError> {
+                panic!("file removal must not run after file record failure")
+            }
+
             fn record_code_unit(
                 &self,
                 _generation: &GenerationHandle,
@@ -6511,6 +6519,17 @@ extraPaths = ["src/lib", "C:/secret"]
                 &self,
                 generation: &GenerationHandle,
                 _file: &IndexedFileRecord,
+            ) -> Result<(), IndexStoreError> {
+                self.recorded_generations
+                    .borrow_mut()
+                    .push(generation.generation_id.clone());
+                Ok(())
+            }
+
+            fn remove_indexed_file(
+                &self,
+                generation: &GenerationHandle,
+                _path: &str,
             ) -> Result<(), IndexStoreError> {
                 self.recorded_generations
                     .borrow_mut()
