@@ -76,7 +76,9 @@ allowed.
   code-unit path/hash/range validation, IR node/edge storage with
   same-generation code-unit/node validation, malformed semantic evidence and IR
   graph rejection before activation, derived-record dependency persistence for
-  semantic and family evidence, active dirty-record refusal, active
+  semantic and family evidence, idempotent unchanged indexed-file rewrites,
+  changed-path replacement that cascades stale path-scoped rows and marks
+  derived dependents dirty, active dirty-record refusal, active
   dependency/hash mismatch refusal, atomic rollback of failed fact writes,
   building-generation write gates for indexed files, code units, IR nodes/edges,
   and semantic facts, validation/activation transition guards that do not

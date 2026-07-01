@@ -16,7 +16,9 @@
   storage schema now records derived-record dependencies and dirty-record
   markers, reports their active counts through status/doctor, and refuses active
   family or semantic reads when dirty rows or dependency/hash mismatches are
-  present.
+  present. Re-recording an unchanged indexed file is now idempotent, while
+  replacing a changed path removes stale path-scoped records and marks derived
+  dependents dirty in the same SQLite transaction.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

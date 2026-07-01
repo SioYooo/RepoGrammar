@@ -399,9 +399,35 @@ impl IndexStore for SqliteIndexStore {
         file: &IndexedFileRecord,
     ) -> Result<(), IndexStoreError> {
         validate_repo_relative_path(&file.path)?;
-        let connection = self.open_existing_generation(&generation.generation_id)?;
+        let size_bytes = i64::try_from(file.size_bytes)
+            .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?;
+        let mut connection = self.open_existing_generation(&generation.generation_id)?;
         require_building_generation(&connection, &generation.generation_id, "indexed files")?;
-        connection
+        let transaction = connection.transaction().map_err(sql_unavailable)?;
+        let existing_file =
+            indexed_file_metadata(&transaction, &generation.generation_id, &file.path)?;
+        if existing_file.as_ref().is_some_and(|existing| {
+            existing.content_hash == file.content_hash.as_str()
+                && existing.size_bytes == size_bytes
+                && existing.language == file.language
+        }) {
+            transaction.commit().map_err(sql_unavailable)?;
+            return Ok(());
+        }
+        if existing_file.is_some() {
+            mark_dependents_dirty_for_replaced_path(
+                &transaction,
+                &generation.generation_id,
+                &file.path,
+            )?;
+            transaction
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![generation.generation_id, file.path],
+                )
+                .map_err(sql_unavailable)?;
+        }
+        transaction
             .execute(
                 "INSERT INTO indexed_files \
                  (generation_id, path, content_hash, size_bytes, language) \
@@ -410,12 +436,12 @@ impl IndexStore for SqliteIndexStore {
                     generation.generation_id,
                     file.path,
                     file.content_hash.as_str(),
-                    i64::try_from(file.size_bytes)
-                        .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?,
+                    size_bytes,
                     file.language,
                 ],
             )
             .map_err(sql_unavailable)?;
+        transaction.commit().map_err(sql_unavailable)?;
         Ok(())
     }
 
@@ -1281,6 +1307,53 @@ fn record_family_evidence_sqlite(
         evidence.content_hash.as_str(),
     )?;
     transaction.commit().map_err(sql_unavailable)?;
+    Ok(())
+}
+
+struct IndexedFileMetadata {
+    content_hash: String,
+    size_bytes: i64,
+    language: String,
+}
+
+fn indexed_file_metadata(
+    connection: &Connection,
+    generation_id: &str,
+    path: &str,
+) -> Result<Option<IndexedFileMetadata>, IndexStoreError> {
+    connection
+        .query_row(
+            "SELECT content_hash, size_bytes, language \
+             FROM indexed_files \
+             WHERE generation_id = ?1 AND path = ?2",
+            params![generation_id, path],
+            |row| {
+                Ok(IndexedFileMetadata {
+                    content_hash: row.get(0)?,
+                    size_bytes: row.get(1)?,
+                    language: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql_unavailable)
+}
+
+fn mark_dependents_dirty_for_replaced_path(
+    connection: &Connection,
+    generation_id: &str,
+    path: &str,
+) -> Result<(), IndexStoreError> {
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO dirty_records \
+             (generation_id, record_kind, record_id, reason, marked_at_generation_id) \
+             SELECT generation_id, record_kind, record_id, 'path_replaced', ?1 \
+             FROM derived_record_dependencies \
+             WHERE generation_id = ?1 AND path = ?2",
+            params![generation_id, path],
+        )
+        .map_err(sql_unavailable)?;
     Ok(())
 }
 
@@ -3748,6 +3821,200 @@ mod tests {
         let inspection = store.inspect().expect("inspect storage");
         assert_eq!(inspection.dependency_record_count, Some(6));
         assert_eq!(inspection.dirty_record_count, Some(0));
+    }
+
+    #[test]
+    fn unchanged_indexed_file_rewrite_preserves_path_records() {
+        let workspace = TempWorkspace::new("sqlite-unchanged-path-rewrite");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("src/a.ts"))
+            .expect("record code unit");
+        store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("unchanged file rewrite is idempotent");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let code_unit_count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM code_units WHERE generation_id = ?1",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("code unit count");
+        let dependency_count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM derived_record_dependencies WHERE generation_id = ?1",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("dependency count");
+        let dirty_count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM dirty_records WHERE generation_id = ?1",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("dirty count");
+
+        assert_eq!(code_unit_count, 1);
+        assert_eq!(dependency_count, 2);
+        assert_eq!(dirty_count, 0);
+    }
+
+    #[test]
+    fn replaced_indexed_file_removes_path_records_and_marks_dependents_dirty() {
+        let workspace = TempWorkspace::new("sqlite-replaced-path-dirty");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_semantic_fact(&generation, &semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        let mut changed_file = file("src/a.ts");
+        changed_file.content_hash = ContentHash::new(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("valid hash");
+        changed_file.size_bytes = 8;
+
+        store
+            .record_indexed_file(&generation, &changed_file)
+            .expect("replace indexed file");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        let stored_hash: String = connection
+            .query_row(
+                "SELECT content_hash FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("stored changed hash");
+        assert_eq!(stored_hash, changed_file.content_hash.as_str());
+        let removed_path_units: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path code units");
+        let retained_path_units: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND path = 'src/b.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("retained path code units");
+        let removed_path_evidence: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM evidence \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path evidence");
+        let retained_path_evidence: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM evidence \
+                 WHERE generation_id = ?1 AND path = 'src/b.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("retained path evidence");
+        let removed_path_dependencies: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM derived_record_dependencies \
+                 WHERE generation_id = ?1 AND path = 'src/a.ts'",
+                params![generation.generation_id],
+                |row| row.get(0),
+            )
+            .expect("removed path dependencies");
+        let dirty_rows = connection
+            .prepare(
+                "SELECT record_kind, record_id, reason \
+                 FROM dirty_records \
+                 WHERE generation_id = ?1 \
+                 ORDER BY record_kind, record_id",
+            )
+            .expect("prepare dirty query")
+            .query_map(params![generation.generation_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("query dirty records")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect dirty rows");
+
+        assert_eq!(removed_path_units, 0);
+        assert_eq!(retained_path_units, 1);
+        assert_eq!(removed_path_evidence, 0);
+        assert_eq!(retained_path_evidence, 1);
+        assert_eq!(removed_path_dependencies, 0);
+        assert_eq!(
+            dirty_rows,
+            vec![
+                (
+                    "family".to_string(),
+                    family().family_id,
+                    "path_replaced".to_string(),
+                ),
+                (
+                    "family_evidence".to_string(),
+                    family_evidence("src/a.ts").evidence_id,
+                    "path_replaced".to_string(),
+                ),
+                (
+                    "semantic_evidence".to_string(),
+                    semantic_fact("src/a.ts").evidence_id,
+                    "path_replaced".to_string(),
+                ),
+                (
+                    "semantic_fact".to_string(),
+                    semantic_fact("src/a.ts").fact_id,
+                    "path_replaced".to_string(),
+                ),
+            ]
+        );
+        let error = store
+            .validate_generation(&generation)
+            .expect_err("dirty replacement must block activation");
+        assert!(format!("{error:?}").contains("dirty records"));
     }
 
     #[test]
