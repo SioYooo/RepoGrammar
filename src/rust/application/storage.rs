@@ -9,9 +9,12 @@ use crate::ports::family_store::{
     IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
+    GenerationHandle, GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore,
+    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
 };
+
+pub const DEFAULT_RETAINED_INACTIVE_GENERATIONS: usize = 2;
 
 pub fn prepare_index_generation(
     store: &impl IndexStore,
@@ -152,6 +155,17 @@ pub fn inspect_index_storage(
     store: &impl IndexStore,
 ) -> Result<StorageInspection, RepoGrammarError> {
     store.inspect().map_err(index_store_error)
+}
+
+pub fn prune_index_generations(
+    store: &impl GenerationRetentionStore,
+    repository_root: &str,
+    state_dir_override: Option<&str>,
+    request: GenerationPruneRequest,
+) -> Result<GenerationPruneReport, RepoGrammarError> {
+    let _index_lock =
+        crate::application::repository::acquire_index_lock(repository_root, state_dir_override)?;
+    store.prune_generations(request).map_err(index_store_error)
 }
 
 fn validate_indexed_file(file: &IndexedFileRecord) -> Result<(), RepoGrammarError> {

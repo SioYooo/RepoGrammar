@@ -113,6 +113,22 @@ pub struct StorageInspection {
     pub integrity_check: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenerationPruneRequest {
+    pub keep_inactive: usize,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationPruneReport {
+    pub active_generation: String,
+    pub keep_inactive: usize,
+    pub retained_inactive_generations: Vec<String>,
+    pub candidate_generations: Vec<String>,
+    pub deleted_generations: Vec<String>,
+    pub dry_run: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexStoreError {
     Unavailable(String),
@@ -169,4 +185,11 @@ pub trait IndexStore {
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;
 
     fn inspect(&self) -> Result<StorageInspection, IndexStoreError>;
+}
+
+pub trait GenerationRetentionStore {
+    fn prune_generations(
+        &self,
+        request: GenerationPruneRequest,
+    ) -> Result<GenerationPruneReport, IndexStoreError>;
 }

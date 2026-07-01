@@ -409,6 +409,19 @@ after validation. All family and evidence records must bind to a
 `generation_id`. MCP serving should open the active database read-only where
 possible. Indexing is the only writer.
 
+Generation retention may remove inactive generation directories after an
+active generation is readable and storage health checks pass. The default
+retention policy is active plus the newest 2 inactive generations; CLI callers
+may override the inactive count with `--keep <n>`. Retention must never remove
+the generation currently named by `.repogrammar/current-generation`, must
+remove each eligible generation directory as a directory tree so SQLite
+WAL/SHM sidecar files are cleaned up with the database, and must recheck the
+active pointer before destructive deletion. If the active pointer is missing,
+corrupt, points at a non-active generation, or changes during pruning, retention
+must fail without deleting. Retention must refuse symlinked generation
+directories and generation entries that are not directories. A dry run must
+report the same candidates without mutating storage.
+
 ## Logs
 
 RepoGrammar uses repo-local diagnostic logs:

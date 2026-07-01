@@ -12,7 +12,8 @@ use crate::ports::family_store::{
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-    ActiveSemanticFacts, GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
+    ActiveSemanticFacts, GenerationHandle, GenerationPruneReport, GenerationPruneRequest,
+    GenerationRetentionStore, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
     IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
     StorageInspection, STORAGE_SCHEMA_VERSION,
 };
@@ -28,6 +29,12 @@ const CURRENT_GENERATION_FILE: &str = "current-generation";
 enum MissingDatabase {
     Allowed,
     Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GenerationDirectoryEntry {
+    generation_id: String,
+    number: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +199,57 @@ impl SqliteIndexStore {
             ),
             Err(_) => Err(unavailable("failed to inspect generation database")),
         }
+    }
+
+    fn list_generation_directories(
+        &self,
+    ) -> Result<Vec<GenerationDirectoryEntry>, IndexStoreError> {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(self.generations_dir())
+            .map_err(|_| unavailable("failed to read generations directory"))?
+        {
+            let entry = entry.map_err(|_| unavailable("failed to read generation entry"))?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(number) = parse_generation_number(name) else {
+                continue;
+            };
+            validate_generation_id(name)?;
+            let metadata = fs::symlink_metadata(entry.path())
+                .map_err(|_| unavailable("failed to inspect generation directory"))?;
+            if metadata.file_type().is_symlink() {
+                return Err(IndexStoreError::InvalidState(
+                    "generation directory must not be a symlink".to_string(),
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(IndexStoreError::InvalidState(
+                    "generation directory exists and is not a directory".to_string(),
+                ));
+            }
+            entries.push(GenerationDirectoryEntry {
+                generation_id: name.to_string(),
+                number,
+            });
+        }
+        entries.sort_by_key(|entry| entry.number);
+        Ok(entries)
+    }
+
+    fn ensure_active_generation_unchanged(
+        &self,
+        expected_generation_id: &str,
+    ) -> Result<(), IndexStoreError> {
+        let (current_generation_id, connection) = self.open_active_generation_read_only()?;
+        drop(connection);
+        if current_generation_id != expected_generation_id {
+            return Err(IndexStoreError::InvalidState(
+                "active generation changed during prune; retry repogrammar prune".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -693,6 +751,65 @@ impl IndexStore for SqliteIndexStore {
             ));
         }
         inspect_connection(&connection, Some(&generation_id))
+    }
+}
+
+impl GenerationRetentionStore for SqliteIndexStore {
+    fn prune_generations(
+        &self,
+        request: GenerationPruneRequest,
+    ) -> Result<GenerationPruneReport, IndexStoreError> {
+        let (active_generation, active_connection) = self.open_active_generation_read_only()?;
+        drop(active_connection);
+
+        let entries = self.list_generation_directories()?;
+        let mut inactive = entries
+            .into_iter()
+            .filter(|entry| entry.generation_id != active_generation)
+            .collect::<Vec<_>>();
+        inactive.sort_by_key(|entry| std::cmp::Reverse(entry.number));
+
+        let retained = inactive
+            .iter()
+            .take(request.keep_inactive)
+            .map(|entry| entry.generation_id.clone())
+            .collect::<Vec<_>>();
+        let mut candidates = inactive
+            .into_iter()
+            .skip(request.keep_inactive)
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|entry| entry.number);
+
+        let candidate_generations = candidates
+            .iter()
+            .map(|entry| entry.generation_id.clone())
+            .collect::<Vec<_>>();
+        let mut deleted_generations = Vec::new();
+
+        if !request.dry_run {
+            for candidate in candidates {
+                self.ensure_active_generation_unchanged(&active_generation)?;
+                if candidate.generation_id == active_generation {
+                    return Err(IndexStoreError::InvalidState(
+                        "refusing to prune active generation".to_string(),
+                    ));
+                }
+                let generation_dir = self.generation_dir(&candidate.generation_id);
+                ensure_existing_real_dir(&generation_dir, "generation directory")?;
+                fs::remove_dir_all(&generation_dir)
+                    .map_err(|_| unavailable("failed to remove generation directory"))?;
+                deleted_generations.push(candidate.generation_id);
+            }
+        }
+
+        Ok(GenerationPruneReport {
+            active_generation,
+            keep_inactive: request.keep_inactive,
+            retained_inactive_generations: retained,
+            candidate_generations,
+            deleted_generations,
+            dry_run: request.dry_run,
+        })
     }
 }
 
@@ -2871,6 +2988,163 @@ mod tests {
             .activate_generation(&generation)
             .expect("activate generation");
         (workspace, store, generation)
+    }
+
+    fn activate_empty_generation(store: &SqliteIndexStore) -> GenerationHandle {
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        generation
+    }
+
+    #[test]
+    fn prune_generations_preserves_active_and_removes_old_inactive() {
+        let workspace = TempWorkspace::new("sqlite-prune-generations");
+        let store = store(&workspace);
+        let first = activate_empty_generation(&store);
+        let second = activate_empty_generation(&store);
+        let third = activate_empty_generation(&store);
+        let fourth = activate_empty_generation(&store);
+        fs::write(
+            store
+                .generation_dir(&first.generation_id)
+                .join("repogrammar.sqlite-wal"),
+            "wal",
+        )
+        .expect("write wal sidecar");
+        fs::write(
+            store
+                .generation_dir(&first.generation_id)
+                .join("repogrammar.sqlite-shm"),
+            "shm",
+        )
+        .expect("write shm sidecar");
+
+        let report = store
+            .prune_generations(GenerationPruneRequest {
+                keep_inactive: 1,
+                dry_run: false,
+            })
+            .expect("prune generations");
+
+        assert_eq!(report.active_generation, fourth.generation_id);
+        assert_eq!(
+            report.retained_inactive_generations,
+            vec![third.generation_id.clone()]
+        );
+        assert_eq!(
+            report.candidate_generations,
+            vec![first.generation_id.clone(), second.generation_id.clone()]
+        );
+        assert_eq!(report.deleted_generations, report.candidate_generations);
+        assert!(!store.generation_dir(&first.generation_id).exists());
+        assert!(!store.generation_dir(&second.generation_id).exists());
+        assert!(store.generation_dir(&third.generation_id).is_dir());
+        assert!(store.generation_dir(&fourth.generation_id).is_dir());
+
+        let active = store
+            .list_active_indexed_files()
+            .expect("active generation remains readable");
+        assert_eq!(active.generation_id, fourth.generation_id);
+    }
+
+    #[test]
+    fn prune_generations_dry_run_does_not_remove_candidates() {
+        let workspace = TempWorkspace::new("sqlite-prune-dry-run");
+        let store = store(&workspace);
+        let first = activate_empty_generation(&store);
+        let second = activate_empty_generation(&store);
+        let third = activate_empty_generation(&store);
+
+        let report = store
+            .prune_generations(GenerationPruneRequest {
+                keep_inactive: 0,
+                dry_run: true,
+            })
+            .expect("dry-run prune generations");
+
+        assert_eq!(report.active_generation, third.generation_id);
+        assert!(report.retained_inactive_generations.is_empty());
+        assert_eq!(
+            report.candidate_generations,
+            vec![first.generation_id.clone(), second.generation_id.clone()]
+        );
+        assert!(report.deleted_generations.is_empty());
+        assert!(store.generation_dir(&first.generation_id).is_dir());
+        assert!(store.generation_dir(&second.generation_id).is_dir());
+        assert!(store.generation_dir(&third.generation_id).is_dir());
+    }
+
+    #[test]
+    fn prune_generations_refuses_generation_directory_symlink() {
+        let workspace = TempWorkspace::new("sqlite-prune-generation-symlink");
+        let store = store(&workspace);
+        let first = activate_empty_generation(&store);
+        let second = activate_empty_generation(&store);
+        fs::remove_dir_all(store.generation_dir(&first.generation_id))
+            .expect("remove first generation");
+        let outside = workspace.path().join("outside-generation");
+        fs::create_dir_all(&outside).expect("create outside generation");
+        if !create_test_symlink_dir(&outside, &store.generation_dir(&first.generation_id)) {
+            return;
+        }
+
+        let error = store
+            .prune_generations(GenerationPruneRequest {
+                keep_inactive: 0,
+                dry_run: false,
+            })
+            .expect_err("symlink generation directory must fail");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(store.generation_dir(&second.generation_id).is_dir());
+    }
+
+    #[test]
+    fn prune_generations_refuses_generation_file() {
+        let workspace = TempWorkspace::new("sqlite-prune-generation-file");
+        let store = store(&workspace);
+        let first = activate_empty_generation(&store);
+        let second = activate_empty_generation(&store);
+        fs::remove_dir_all(store.generation_dir(&first.generation_id))
+            .expect("remove first generation");
+        fs::write(
+            store.generation_dir(&first.generation_id),
+            "not a directory",
+        )
+        .expect("write generation file");
+
+        let error = store
+            .prune_generations(GenerationPruneRequest {
+                keep_inactive: 0,
+                dry_run: false,
+            })
+            .expect_err("generation file must fail");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(store.generation_dir(&second.generation_id).is_dir());
+    }
+
+    #[test]
+    fn prune_generations_refuses_corrupt_current_generation_pointer() {
+        let workspace = TempWorkspace::new("sqlite-prune-corrupt-pointer");
+        let store = store(&workspace);
+        let first = activate_empty_generation(&store);
+        let second = activate_empty_generation(&store);
+        fs::write(store.current_generation_path(), "not-a-generation\n")
+            .expect("corrupt current generation pointer");
+
+        let error = store
+            .prune_generations(GenerationPruneRequest {
+                keep_inactive: 0,
+                dry_run: false,
+            })
+            .expect_err("corrupt pointer must fail");
+
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert!(store.generation_dir(&first.generation_id).is_dir());
+        assert!(store.generation_dir(&second.generation_id).is_dir());
     }
 
     #[test]

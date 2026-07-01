@@ -75,8 +75,11 @@ allowed.
   and tamper rejection, read-only active IR and semantic-fact listing with
   validation and tamper rejection, internal active claim-input snapshot reads
   from one validated generation, snapshot tamper rejection across files, units,
-  IR, and semantic facts, and rejection of symlinked or malformed
-  active-generation pointers.
+  IR, and semantic facts, prune retention that preserves active generations,
+  deletes only old inactive generation directories including SQLite WAL/SHM
+  sidecars, keeps dry-runs mutation-free, refuses symlinked or non-directory
+  generation entries, refuses missing or corrupt active-generation pointers, and
+  rejects symlinked or malformed active-generation pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
