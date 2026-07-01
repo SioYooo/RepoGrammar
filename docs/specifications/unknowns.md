@@ -142,6 +142,12 @@ Some unknowns block only specific claims:
   package scope is implemented. Unrelated optional call-shape details may
   remain non-blocking metadata. Rust UNKNOWNs must not be guessed away by
   naming convention or path similarity.
+- Fuzzy path or path-suffix query targets that match evidence in more than one
+  stored family must become a blocking `InsufficientSupport` `UNKNOWN` for
+  `query target ambiguity`. The recovery guidance should name the candidate
+  family ids and ask the caller to narrow the target to one exact family id or
+  member id rather than silently treating one matching family as the whole-file
+  answer.
 
 When a family is emitted with a non-blocking unknown, the affected claim should
 name the concrete family and claim whenever possible, such as

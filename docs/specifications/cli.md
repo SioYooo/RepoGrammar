@@ -622,7 +622,12 @@ operand as their target. `family <target>` is an exact family-id lookup.
 and `check` may use fuzzy matching over supported query-safe path suffixes,
 exact member roles, and exact ids, but must not treat short substrings such as a
 framework name, classification label, or directory fragment as a successful
-family match. Query targets must be non-empty, at most 8192 bytes, and free of
+family match. When a fuzzy path or path suffix matches evidence in multiple
+families, the command must return typed `UNKNOWN` instead of selecting the first
+stored family. That unknown uses `InsufficientSupport`, affected claim
+`query target ambiguity`, and recovery guidance that tells the caller to narrow
+the target to an exact family id or member id while naming the candidate family
+ids. Query targets must be non-empty, at most 8192 bytes, and free of
 control characters. Matched family output defaults to `--mode compact`: family
 id, classification, support, members, variation slots, typed unknowns, selected
 output metadata, a `read_plan`, and no evidence records or source snippets.
