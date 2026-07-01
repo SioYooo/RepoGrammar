@@ -80,6 +80,8 @@ allowed.
   changed-path replacement that cascades stale path-scoped rows and marks
   derived dependents dirty, removed-path deletion that is idempotent for absent
   paths and marks existing derived dependents dirty before cascading stale rows,
+  post-commit `PRAGMA optimize` plus passive WAL checkpoint maintenance without
+  automatic `VACUUM`,
   active dirty-record refusal, active dependency/hash mismatch refusal, atomic
   rollback of failed fact writes,
   building-generation write gates for indexed files, code units, IR nodes/edges,

@@ -361,6 +361,15 @@ PRAGMA busy_timeout=5000;
 PRAGMA temp_store=MEMORY;
 ```
 
+After successful generation activation and after mutating mutable-database
+retention, the SQLite adapter runs bounded post-commit maintenance with
+`PRAGMA optimize` and `PRAGMA wal_checkpoint(PASSIVE)`. This happens outside
+the write transaction after the committed state is durable, so readers never see
+partial writes and a passive checkpoint reports reader contention instead of
+blocking them. Normal `index`, `sync`, `resync`, and `prune` must not run
+automatic blocking `VACUUM`; any future full compaction surface must be explicit
+and confirmation-gated.
+
 The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,
 family members, variation slots, evidence links, derived-record dependency
@@ -450,6 +459,9 @@ policy is active plus the newest 2 inactive generations; CLI callers may
 override the inactive count with `--keep <n>`. Retention must never remove the
 active generation row, must rely on foreign-key cascades for generation-scoped
 records, and must recheck active generation state before destructive deletion.
+Successful mutable-database deletion runs the same bounded post-commit
+`PRAGMA optimize` and passive WAL checkpoint as index activation, but it must
+not run automatic `VACUUM`.
 If no active generation is readable, the active row is corrupt, or the active
 generation changes during pruning, retention must fail without deleting. When
 only the legacy directory layout exists, retention may remove inactive
