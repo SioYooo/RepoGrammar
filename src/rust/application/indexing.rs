@@ -26,8 +26,9 @@ use crate::ports::file_discovery::{
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
-    GenerationHandle, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    ActiveClaimInputSnapshot, GenerationHandle, IndexStorageLayout, IndexStore, IndexStoreError,
+    IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord,
+    IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
@@ -73,7 +74,38 @@ pub struct IndexingOutcome {
     pub skipped_paths: usize,
     pub active_generation: Option<String>,
     pub semantic_worker: SemanticWorkerRunStatus,
+    pub sync_report: Option<IndexingSyncReport>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexingSyncMode {
+    Incremental,
+    FullRebuildFallback,
+}
+
+impl IndexingSyncMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Incremental => "incremental",
+            Self::FullRebuildFallback => "full_rebuild_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexingSyncReport {
+    pub base_generation: Option<String>,
+    pub sync_mode: IndexingSyncMode,
+    pub fallback_reason: Option<String>,
+    pub added_files: usize,
+    pub modified_files: usize,
+    pub removed_files: usize,
+    pub unchanged_files: usize,
+    pub copied_forward_files: usize,
+    pub reparsed_files: usize,
+    pub families_recomputed: usize,
+    pub dirty_records_cleared: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +173,7 @@ pub fn index_repository_with_discovery(
         skipped_paths: report.skipped.len(),
         active_generation: None,
         semantic_worker: SemanticWorkerRunStatus::Deferred,
+        sync_report: None,
         warnings: report.warnings,
     })
 }
@@ -178,6 +211,7 @@ pub fn index_repository_with_discovery_and_store(
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
         semantic_worker: SemanticWorkerRunStatus::Deferred,
+        sync_report: None,
         warnings: report.warnings,
     })
 }
@@ -216,6 +250,31 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            rust_provider: None,
+            semantic_worker: None,
+            family_store: None,
+        },
+        store,
+        &mut progress,
+    )
+}
+
+pub fn sync_repository_with_discovery_parser_frameworks_and_store(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_roles: &dyn FrameworkRoleDetector,
+    store: &impl IndexStore,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let mut progress = |_event: ProgressEvent| {};
+    sync_repository_with_optional_semantic_worker(
         request,
         discovery,
         source_store,
@@ -435,6 +494,62 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_pr
     )
 }
 
+pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let (framework_roles, rust_provider) = framework_and_rust_provider;
+    sync_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            rust_provider: Some(rust_provider),
+            semantic_worker: None,
+            family_store: Some(store),
+        },
+        store,
+        progress,
+    )
+}
+
+pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_worker_and_rust_provider: (
+        &dyn FrameworkRoleDetector,
+        &dyn SemanticWorker,
+        &dyn RustSemanticProvider,
+    ),
+    store: &(impl IndexStore + FamilyStore),
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
+    sync_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_roles),
+            rust_provider: Some(rust_provider),
+            semantic_worker: Some(semantic_worker),
+            family_store: Some(store),
+        },
+        store,
+        progress,
+    )
+}
+
 fn index_repository_with_optional_semantic_worker(
     request: IndexingRequest,
     discovery: &impl FileDiscovery,
@@ -461,6 +576,32 @@ fn index_repository_with_optional_semantic_worker(
         WorkUnits::Unknown,
     );
     let report = discover_repository_files(request.clone(), discovery)?;
+    let mut runtime = IndexingRuntime {
+        source_store,
+        parser,
+        options,
+        store,
+        progress,
+    };
+    index_repository_full_after_discovery(request, report, &mut runtime, None)
+}
+
+fn index_repository_full_after_discovery<SourceStoreImpl, SourceParserImpl, IndexStoreImpl>(
+    request: IndexingRequest,
+    report: FileDiscoveryReport,
+    runtime: &mut IndexingRuntime<'_, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>,
+    mut sync_report: Option<IndexingSyncReport>,
+) -> Result<IndexingOutcome, RepoGrammarError>
+where
+    SourceStoreImpl: SourceStore,
+    SourceParserImpl: SourceParser,
+    IndexStoreImpl: IndexStore,
+{
+    let source_store = runtime.source_store;
+    let parser = runtime.parser;
+    let options = &runtime.options;
+    let store = runtime.store;
+    let progress = &mut *runtime.progress;
     emit_progress(
         progress,
         ProgressStage::FileScanning,
@@ -699,12 +840,15 @@ fn index_repository_with_optional_semantic_worker(
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
-        record_family_claims(
+        let family_count = record_family_claims(
             family_store,
             &generation,
             &indexed_code_units,
             &family_facts,
         )?;
+        if let Some(sync_report) = sync_report.as_mut() {
+            sync_report.families_recomputed = family_count;
+        }
         emit_progress(
             progress,
             ProgressStage::FamilyConstruction,
@@ -737,8 +881,599 @@ fn index_repository_with_optional_semantic_worker(
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
         semantic_worker,
+        sync_report,
         warnings,
     })
+}
+
+fn sync_repository_with_optional_semantic_worker(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    options: IndexingPipelineOptions<'_>,
+    store: &impl IndexStore,
+    progress: &mut dyn FnMut(ProgressEvent),
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "acquiring index lock",
+        WorkUnits::Unknown,
+    );
+    let _index_lock = crate::application::repository::acquire_index_lock(
+        &request.repository_root,
+        request.state_dir_override.as_deref(),
+    )?;
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "discovering repository files",
+        WorkUnits::Unknown,
+    );
+    let report = discover_repository_files(request.clone(), discovery)?;
+    let semantic_worker_configured = options.semantic_worker.is_some();
+    let mut runtime = IndexingRuntime {
+        source_store,
+        parser,
+        options,
+        store,
+        progress,
+    };
+    let preflight = incremental_sync_preflight(runtime.store, semantic_worker_configured)?;
+    let Some(base_generation) = preflight.base_generation.clone() else {
+        let sync_report = sync_fallback_report(None, &report, None, "missing_active_generation");
+        return index_repository_full_after_discovery(
+            request,
+            report,
+            &mut runtime,
+            Some(sync_report),
+        );
+    };
+    if let Some(reason) = preflight.fallback_reason {
+        let delta = if reason == "semantic_worker_requires_full_rebuild" {
+            let snapshot = runtime
+                .store
+                .load_active_claim_input_snapshot()
+                .map_err(index_store_error)?;
+            Some(compute_sync_delta(&snapshot, &report))
+        } else {
+            None
+        };
+        let sync_report =
+            sync_fallback_report(Some(base_generation), &report, delta.as_ref(), &reason);
+        return index_repository_full_after_discovery(
+            request,
+            report,
+            &mut runtime,
+            Some(sync_report),
+        );
+    }
+
+    let snapshot = runtime
+        .store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    let delta = compute_sync_delta(&snapshot, &report);
+    if sync_delta_touches_project_context(&delta) {
+        let sync_report = sync_fallback_report(
+            Some(snapshot.generation_id.clone()),
+            &report,
+            Some(&delta),
+            "project_context_changed",
+        );
+        return index_repository_full_after_discovery(
+            request,
+            report,
+            &mut runtime,
+            Some(sync_report),
+        );
+    }
+
+    index_repository_incremental_after_discovery(request, report, snapshot, delta, &mut runtime)
+}
+
+struct IncrementalSyncPreflight {
+    base_generation: Option<String>,
+    fallback_reason: Option<String>,
+}
+
+fn incremental_sync_preflight(
+    store: &impl IndexStore,
+    semantic_worker_configured: bool,
+) -> Result<IncrementalSyncPreflight, RepoGrammarError> {
+    let inspection = store.inspect().map_err(index_store_error)?;
+    let mut fallback_reason = None;
+    if !matches!(
+        inspection.layout,
+        IndexStorageLayout::Mutable | IndexStorageLayout::MutableWithLegacy
+    ) {
+        fallback_reason = Some("legacy_or_empty_storage_layout".to_string());
+    } else if inspection.schema_version != Some(STORAGE_SCHEMA_VERSION) {
+        fallback_reason = Some("unsupported_storage_schema".to_string());
+    } else if inspection.active_generation.is_none() {
+        fallback_reason = Some("missing_active_generation".to_string());
+    } else if inspection.dirty_record_count.unwrap_or(0) != 0 {
+        fallback_reason = Some("active_dirty_records".to_string());
+    } else if semantic_worker_configured {
+        fallback_reason = Some("semantic_worker_requires_full_rebuild".to_string());
+    }
+    Ok(IncrementalSyncPreflight {
+        base_generation: inspection.active_generation,
+        fallback_reason,
+    })
+}
+
+struct SyncDelta {
+    added_files: Vec<DiscoveredFile>,
+    modified_files: Vec<DiscoveredFile>,
+    removed_files: Vec<IndexedFileRecord>,
+    unchanged_files: Vec<IndexedFileRecord>,
+}
+
+impl SyncDelta {
+    fn changed_files(&self) -> Vec<DiscoveredFile> {
+        let mut files = Vec::with_capacity(self.added_files.len() + self.modified_files.len());
+        files.extend(self.added_files.iter().cloned());
+        files.extend(self.modified_files.iter().cloned());
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        files
+    }
+}
+
+fn compute_sync_delta(
+    snapshot: &ActiveClaimInputSnapshot,
+    report: &FileDiscoveryReport,
+) -> SyncDelta {
+    let active_by_path = snapshot
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let current_by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut added_files = Vec::new();
+    let mut modified_files = Vec::new();
+    let mut unchanged_files = Vec::new();
+    let mut removed_files = Vec::new();
+
+    for file in &report.files {
+        let Some(active) = active_by_path.get(file.path.as_str()) else {
+            added_files.push(file.clone());
+            continue;
+        };
+        if active.content_hash == file.content_hash
+            && active.size_bytes == file.size_bytes
+            && active.language == file.language.as_str()
+        {
+            unchanged_files.push((*active).clone());
+        } else {
+            modified_files.push(file.clone());
+        }
+    }
+    for active in &snapshot.files {
+        if !current_by_path.contains_key(active.path.as_str()) {
+            removed_files.push(active.clone());
+        }
+    }
+
+    SyncDelta {
+        added_files,
+        modified_files,
+        removed_files,
+        unchanged_files,
+    }
+}
+
+fn sync_fallback_report(
+    base_generation: Option<String>,
+    report: &FileDiscoveryReport,
+    delta: Option<&SyncDelta>,
+    reason: &str,
+) -> IndexingSyncReport {
+    let (added_files, modified_files, removed_files, unchanged_files) = match delta {
+        Some(delta) => (
+            delta.added_files.len(),
+            delta.modified_files.len(),
+            delta.removed_files.len(),
+            delta.unchanged_files.len(),
+        ),
+        None => (report.files.len(), 0, 0, 0),
+    };
+    IndexingSyncReport {
+        base_generation,
+        sync_mode: IndexingSyncMode::FullRebuildFallback,
+        fallback_reason: Some(reason.to_string()),
+        added_files,
+        modified_files,
+        removed_files,
+        unchanged_files,
+        copied_forward_files: 0,
+        reparsed_files: report.files.len(),
+        families_recomputed: 0,
+        dirty_records_cleared: 0,
+    }
+}
+
+fn index_repository_incremental_after_discovery<SourceStoreImpl, SourceParserImpl, IndexStoreImpl>(
+    request: IndexingRequest,
+    report: FileDiscoveryReport,
+    snapshot: ActiveClaimInputSnapshot,
+    delta: SyncDelta,
+    runtime: &mut IndexingRuntime<'_, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>,
+) -> Result<IndexingOutcome, RepoGrammarError>
+where
+    SourceStoreImpl: SourceStore,
+    SourceParserImpl: SourceParser,
+    IndexStoreImpl: IndexStore,
+{
+    let source_store = runtime.source_store;
+    let parser = runtime.parser;
+    let options = &runtime.options;
+    let store = runtime.store;
+    let progress = &mut *runtime.progress;
+    emit_progress(
+        progress,
+        ProgressStage::FileScanning,
+        "discovered files",
+        known_work_units(report.files.len(), report.files.len()),
+    );
+    let generation = crate::application::storage::prepare_index_generation(store)?;
+    let changed_files = delta.changed_files();
+    let unchanged_paths = delta
+        .unchanged_files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut stored_files = 0usize;
+    for file in &delta.unchanged_files {
+        crate::application::storage::record_indexed_file(store, &generation, file)?;
+        stored_files += 1;
+        emit_progress(
+            progress,
+            ProgressStage::FileScanning,
+            "stored file metadata",
+            known_work_units(stored_files, report.files.len()),
+        );
+    }
+    for file in &changed_files {
+        crate::application::storage::record_indexed_file(
+            store,
+            &generation,
+            &IndexedFileRecord {
+                path: file.path.clone(),
+                content_hash: file.content_hash.clone(),
+                size_bytes: file.size_bytes,
+                language: file.language.as_str().to_string(),
+            },
+        )?;
+        stored_files += 1;
+        emit_progress(
+            progress,
+            ProgressStage::FileScanning,
+            "stored file metadata",
+            known_work_units(stored_files, report.files.len()),
+        );
+    }
+
+    let mut indexed_code_units = Vec::new();
+    let mut copied_unit_ids = BTreeSet::new();
+    for unit in &snapshot.units {
+        if !unchanged_paths.contains(&unit.path) {
+            continue;
+        }
+        crate::application::storage::record_code_unit(store, &generation, unit)?;
+        copied_unit_ids.insert(unit.id.clone());
+        indexed_code_units.push(unit.clone());
+    }
+
+    let mut copied_node_ids = BTreeSet::new();
+    for node in &snapshot.ir_nodes {
+        if !copied_unit_ids.contains(&node.code_unit_id) {
+            continue;
+        }
+        crate::application::storage::record_ir_node(store, &generation, node)?;
+        copied_node_ids.insert(node.id.clone());
+    }
+    for edge in &snapshot.ir_edges {
+        if copied_node_ids.contains(&edge.from_node_id)
+            && copied_node_ids.contains(&edge.to_node_id)
+        {
+            crate::application::storage::record_ir_edge(store, &generation, edge)?;
+        }
+    }
+
+    let mut copied_semantic_records = Vec::new();
+    let mut copied_parser_facts = Vec::new();
+    let mut copied_framework_role_facts = Vec::new();
+    for record in &snapshot.semantic_facts {
+        if !unchanged_paths.contains(&record.path) || is_local_derived_support_record(record) {
+            continue;
+        }
+        crate::application::storage::record_semantic_fact(store, &generation, record)?;
+        let fact = semantic_fact_from_index_record(record)?;
+        if fact.kind == SemanticFactKind::FrameworkRole
+            && fact.certainty == FactCertainty::FrameworkHeuristic
+        {
+            copied_framework_role_facts.push(fact);
+        } else {
+            copied_parser_facts.push(fact);
+        }
+        copied_semantic_records.push(record.clone());
+    }
+
+    let mut warnings = report.warnings.clone();
+    emit_progress(
+        progress,
+        ProgressStage::ProjectDiscovery,
+        "building parser project context",
+        WorkUnits::Unknown,
+    );
+    let parser_context = parser_project_context(&request, &report, source_store, parser)?;
+    let mut parser_semantic_facts = Vec::new();
+    let mut framework_role_facts = Vec::new();
+    for (index, file) in changed_files.iter().enumerate() {
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        let parse_report = match parser.parse_with_context(
+            SourceDocument {
+                path: &source.path,
+                language: language_from_discovered(file.language),
+                content_hash: source.content_hash.clone(),
+                repository_revision: RepositoryRevision::new("UNKNOWN")
+                    .expect("UNKNOWN is a non-empty repository revision marker"),
+                text: &source.text,
+            },
+            &parser_context,
+        ) {
+            Ok(report) => report,
+            Err(ParseError::UnsupportedLanguage) => {
+                warnings.push(format!(
+                    "parser skipped unsupported language: {}",
+                    file.path
+                ));
+                emit_progress(
+                    progress,
+                    ProgressStage::SyntaxParsing,
+                    "parsed source files",
+                    known_work_units(index + 1, changed_files.len()),
+                );
+                continue;
+            }
+            Err(ParseError::Internal(_)) => {
+                return Err(RepoGrammarError::InvalidInput(format!(
+                    "parser failed for {}: internal parser error",
+                    file.path
+                )));
+            }
+        };
+        let parse_outcome = record_parse_report(
+            store,
+            &generation,
+            file,
+            &source.text,
+            parse_report,
+            options.framework_roles,
+            &mut warnings,
+        )?;
+        indexed_code_units.extend(parse_outcome.code_units);
+        parser_semantic_facts.extend(parse_outcome.semantic_facts);
+        framework_role_facts.extend(parse_outcome.framework_role_facts);
+        emit_progress(
+            progress,
+            ProgressStage::SyntaxParsing,
+            "parsed source files",
+            known_work_units(index + 1, changed_files.len()),
+        );
+    }
+    emit_progress(
+        progress,
+        ProgressStage::CodeUnitExtractionNormalization,
+        "stored code units",
+        known_work_units(indexed_code_units.len(), indexed_code_units.len()),
+    );
+
+    let mut next_fact_offset = next_semantic_fact_offset(&copied_semantic_records);
+    sort_semantic_facts(&mut parser_semantic_facts);
+    let parser_fact_count =
+        record_semantic_facts(store, &generation, next_fact_offset, &parser_semantic_facts)?;
+    next_fact_offset += parser_fact_count;
+    sort_semantic_facts(&mut framework_role_facts);
+    let framework_fact_count =
+        record_semantic_facts(store, &generation, next_fact_offset, &framework_role_facts)?;
+    next_fact_offset += framework_fact_count;
+
+    let mut all_parser_facts = copied_parser_facts;
+    all_parser_facts.extend(parser_semantic_facts.iter().cloned());
+    let mut all_framework_role_facts = copied_framework_role_facts;
+    all_framework_role_facts.extend(framework_role_facts.iter().cloned());
+
+    let mut derived_python_support_facts = derive_python_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_python_support_facts);
+    let derived_python_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        next_fact_offset,
+        &derived_python_support_facts,
+    )?;
+    next_fact_offset += derived_python_support_fact_count;
+    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_tsjs_support_facts);
+    let derived_tsjs_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        next_fact_offset,
+        &derived_tsjs_support_facts,
+    )?;
+    next_fact_offset += derived_tsjs_support_fact_count;
+    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_rust_support_facts);
+    let derived_rust_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        next_fact_offset,
+        &derived_rust_support_facts,
+    )?;
+    let local_support_fact_count = copied_semantic_records.len()
+        + parser_fact_count
+        + framework_fact_count
+        + derived_python_support_fact_count
+        + derived_tsjs_support_fact_count
+        + derived_rust_support_fact_count;
+    emit_progress(
+        progress,
+        ProgressStage::SemanticResolution,
+        "recorded local support facts",
+        known_work_units(local_support_fact_count, local_support_fact_count),
+    );
+    emit_progress(
+        progress,
+        ProgressStage::SemanticResolution,
+        "semantic worker deferred",
+        WorkUnits::Unknown,
+    );
+
+    let mut sync_report = IndexingSyncReport {
+        base_generation: Some(snapshot.generation_id),
+        sync_mode: IndexingSyncMode::Incremental,
+        fallback_reason: None,
+        added_files: delta.added_files.len(),
+        modified_files: delta.modified_files.len(),
+        removed_files: delta.removed_files.len(),
+        unchanged_files: delta.unchanged_files.len(),
+        copied_forward_files: delta.unchanged_files.len(),
+        reparsed_files: changed_files.len(),
+        families_recomputed: 0,
+        dirty_records_cleared: 0,
+    };
+
+    if let Some(family_store) = options.family_store {
+        emit_progress(
+            progress,
+            ProgressStage::CandidateDiscovery,
+            "checking family candidates",
+            WorkUnits::Unknown,
+        );
+        let mut family_facts = Vec::with_capacity(
+            all_parser_facts.len()
+                + all_framework_role_facts.len()
+                + derived_python_support_facts.len()
+                + derived_tsjs_support_facts.len()
+                + derived_rust_support_facts.len(),
+        );
+        family_facts.extend(all_parser_facts);
+        family_facts.extend(all_framework_role_facts);
+        family_facts.extend(derived_python_support_facts);
+        family_facts.extend(derived_tsjs_support_facts);
+        family_facts.extend(derived_rust_support_facts);
+        sync_report.families_recomputed = record_family_claims(
+            family_store,
+            &generation,
+            &indexed_code_units,
+            &family_facts,
+        )?;
+        emit_progress(
+            progress,
+            ProgressStage::FamilyConstruction,
+            "stored eligible family claims",
+            WorkUnits::Unknown,
+        );
+    }
+
+    emit_progress(
+        progress,
+        ProgressStage::PersistenceValidation,
+        "validating generation",
+        WorkUnits::Unknown,
+    );
+    crate::application::storage::validate_index_generation(store, &generation)?;
+    crate::application::storage::activate_index_generation(store, &generation)?;
+    emit_progress(
+        progress,
+        ProgressStage::PersistenceValidation,
+        "activated generation",
+        WorkUnits::Unknown,
+    );
+
+    Ok(IndexingOutcome {
+        indexed_units: indexed_code_units.len(),
+        semantic_facts: local_support_fact_count,
+        discovered_files: report.files.len(),
+        skipped_paths: report.skipped.len(),
+        active_generation: Some(generation.generation_id),
+        semantic_worker: SemanticWorkerRunStatus::Deferred,
+        sync_report: Some(sync_report),
+        warnings,
+    })
+}
+
+fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
+    matches!(
+        record.origin_engine.as_str(),
+        "repogrammar-python-derived" | TSJS_DERIVED_SUPPORT_ENGINE | RUST_DERIVED_SUPPORT_ENGINE
+    )
+}
+
+fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
+    records
+        .iter()
+        .filter_map(|record| {
+            record
+                .fact_id
+                .strip_prefix("semantic-fact:")
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+        })
+        .max()
+        .map_or(records.len(), |index| index.saturating_add(1))
+}
+
+fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
+    delta
+        .added_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .chain(delta.modified_files.iter().map(|file| file.path.as_str()))
+        .chain(delta.removed_files.iter().map(|file| file.path.as_str()))
+        .any(sync_path_requires_full_project_context)
+}
+
+fn sync_path_requires_full_project_context(path: &str) -> bool {
+    matches!(
+        path,
+        "package.json"
+            | "tsconfig.json"
+            | "jsconfig.json"
+            | "jest.config.json"
+            | "vitest.config.json"
+            | "pyproject.toml"
+            | "Cargo.toml"
+            | "Cargo.lock"
+    ) || path == "conftest.py"
+        || path.ends_with("/conftest.py")
+        || path.ends_with("/Cargo.toml")
+        || path.ends_with("/Cargo.lock")
 }
 
 fn emit_progress(
@@ -766,6 +1501,19 @@ struct IndexingPipelineOptions<'a> {
     rust_provider: Option<&'a dyn RustSemanticProvider>,
     semantic_worker: Option<&'a dyn SemanticWorker>,
     family_store: Option<&'a dyn FamilyStore>,
+}
+
+struct IndexingRuntime<'a, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>
+where
+    SourceStoreImpl: SourceStore,
+    SourceParserImpl: SourceParser,
+    IndexStoreImpl: IndexStore,
+{
+    source_store: &'a SourceStoreImpl,
+    parser: &'a SourceParserImpl,
+    options: IndexingPipelineOptions<'a>,
+    store: &'a IndexStoreImpl,
+    progress: &'a mut dyn FnMut(ProgressEvent),
 }
 
 struct ParseStorageOutcome {
@@ -2585,6 +3333,34 @@ mod tests {
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
+    }
+
+    #[test]
+    fn sync_project_context_gate_covers_root_and_nested_config_paths() {
+        for path in [
+            "package.json",
+            "tsconfig.json",
+            "jsconfig.json",
+            "jest.config.json",
+            "vitest.config.json",
+            "pyproject.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+            "conftest.py",
+            "tests/conftest.py",
+            "crates/demo/Cargo.toml",
+            "crates/demo/Cargo.lock",
+        ] {
+            assert!(sync_path_requires_full_project_context(path), "{path}");
+        }
+        for path in [
+            "src/app.ts",
+            "src/conftest_helper.py",
+            "Cargo.locked",
+            "docs/Cargo.toml.md",
+        ] {
+            assert!(!sync_path_requires_full_project_context(path), "{path}");
+        }
     }
 
     fn parser_unit(

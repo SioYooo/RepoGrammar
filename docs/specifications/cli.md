@@ -238,14 +238,14 @@ During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
 
-`repogrammar index`, `repogrammar sync`, and `repogrammar resync` currently
-require an initialized repository-local state directory. The implemented
-bootstrap path runs TS/JS, bounded TS/JS project-config, and Python `.py`
-discovery, reads source through a repo-relative hash-checked boundary, stores
-repo-relative file metadata and syntax-only code-unit records plus any
-syntax-origin framework-role fact records in a new building generation inside
-`.repogrammar/repogrammar.sqlite`, validates the generation, and atomically
-marks that generation active while downgrading any previously active row to
+`repogrammar index`, `repogrammar sync`, and `repogrammar resync` require an
+initialized repository-local state directory. `index` and `resync` run a full
+rebuild: they perform TS/JS, bounded TS/JS project-config, Python `.py`, and
+Rust self-dogfood discovery, read source through a repo-relative hash-checked
+boundary, store repo-relative file metadata and syntax/code-unit records plus
+owned semantic facts in a new building generation inside
+`.repogrammar/repogrammar.sqlite`, validate the generation, and atomically mark
+that generation active while downgrading any previously active row to
 validated. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
@@ -259,11 +259,24 @@ Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
 exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
 without running a semantic worker. These are bounded RepoGrammar support facts,
 not compiler/provider-backed facts.
-`resync` is an alias for `sync`: it is available for any initialized
-repository, rebuilds a new active generation through the same static-analysis
-path, and uses the invoked command name in CLI output. Public fallback and MCP
-guidance should prefer `resync` for missing, stale, or intentionally refreshed
-analysis because it names the user intent to rebuild static-analysis facts.
+`sync` attempts a path-level incremental rebuild when the active generation is
+readable, mutable, schema-compatible, and dirty-free, no explicit semantic
+worker is configured, and the delta does not touch project-context files such
+as `package.json`, `tsconfig.json`, `jsconfig.json`, `pyproject.toml`,
+`conftest.py`, `Cargo.toml`, or `Cargo.lock`. Incremental `sync` discovers the
+current manifest, copies unchanged active file/code-unit/IR/semantic records
+into a new building generation without reparsing those paths, reparses added
+and modified paths, omits removed paths, recomputes local derived support and
+families over the new generation, validates dirty/dependency state, and then
+activates the new generation. If a safe precondition is not met, `sync` must
+fall back to the full rebuild path and report `sync_mode:
+full_rebuild_fallback` with a `fallback_reason`.
+`resync` is the explicit full-rebuild command: it is available for any
+initialized repository, rebuilds a new active generation through the full
+static-analysis path, and uses the invoked command name in CLI output. Public
+fallback and MCP guidance should prefer `resync` for missing, stale, or
+intentionally refreshed analysis because it names the user intent to rebuild
+static-analysis facts.
 Rust self-dogfood indexing may likewise add Tree-sitter-origin structural
 anchors, Cargo manifest inventory, Rust typed `UNKNOWN`s, and bounded internal
 `DATAFLOW_DERIVED` support facts for RepoGrammar-owned implementation roles.
@@ -279,13 +292,16 @@ percentages or ETAs.
 Progress events must not include source snippets, source paths, content hashes,
 symbols, raw targets, or repository-identifying absolute paths.
 The product runtime also runs the default safe Rust Cargo metadata project-model
-substage during `index`, `sync`, and `resync` when same-generation `Cargo.toml`
-code units exist. It may add provider-backed `PROJECT_CONFIG` facts and typed
-provider `UNKNOWN`s, but package/crate/target/feature/dependency metadata cannot
-prove symbol/type/call semantics or family membership.
+substage during full `index`, full `resync`, and full-rebuild `sync` fallback
+when same-generation `Cargo.toml` code units exist. Incremental `sync` reuses
+unchanged provider facts only when their evidence path/hash remains unchanged;
+`Cargo.toml` or `Cargo.lock` changes force full-rebuild fallback. Provider
+metadata may add provider-backed `PROJECT_CONFIG` facts and typed provider
+`UNKNOWN`s, but package/crate/target/feature/dependency metadata cannot prove
+symbol/type/call semantics or family membership.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` is set to an explicit worker executable,
-`index`, `sync`, and `resync` may run that worker after syntax-only code units
-are stored for the building generation.
+`index`, full `resync`, and full-rebuild `sync` fallback may run that worker
+after syntax-only code units are stored for the building generation.
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply an optional JSON array of
 non-blank string arguments. This is an argv contract, not shell parsing; worker
 arguments without `REPOGRAMMAR_TYPESCRIPT_WORKER` are invalid. Worker facts must
@@ -301,7 +317,8 @@ a new generation. Before discovery, source reads, generation preparation,
 validation, and activation, all three commands acquire
 `.repogrammar/locks/index.lock` and hold it through validation and activation.
 `REPOGRAMMAR_STRICT_GITIGNORE=true` makes unavailable Git ignore checks a hard
-index/sync/resync error; otherwise discovery keeps the warning fallback and continues.
+index/sync/resync error; otherwise discovery keeps the warning fallback and
+continues.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -326,16 +343,21 @@ supported-file metadata fingerprint, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
 lightweight detector must skip RepoGrammar state directories, default excluded
 directories, unsupported extensions, oversized files, symlinks, and paths
-outside the repository; the following full `sync` remains the authoritative
+outside the repository; the following `sync` remains the authoritative
 content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
-step. It must not scan repositories that have not explicitly run `init`, and it
-must not be started by `install`, `serve`, MCP queries, or agent wiring. `run`
-is the foreground worker entrypoint used by `start`; it writes diagnostics to
+step, whether it completes incrementally or reports a full-rebuild fallback. It
+must not scan repositories that have not explicitly run `init`, and it must not
+be started by `install`, `serve`, MCP queries, or agent wiring. `run` is the
+foreground worker entrypoint used by `start`; it writes diagnostics to
 `.repogrammar/logs/daemon.log` when started in the background. After every sync
-the daemon always records a one-line summary to that log — files seen, code
-units indexed, elapsed milliseconds, and the activated generation
-(`autosync: synced N file(s), U unit(s) in Xms (generation G)`), or a failure
-line with the elapsed time — independent of `--quiet`, which only suppresses the
+the daemon always records a one-line summary to that log. Incremental-aware
+summaries include sync mode, added/modified/removed counts, unchanged and
+copied-forward counts, reparsed files, units indexed, elapsed milliseconds, and
+the activated generation (`autosync: incremental sync +A ~M -R unchanged U
+copied C reparsed P file(s), N unit(s) in Xms (generation G)`). Older or
+non-sync outcomes may use the legacy summary (`autosync: synced N file(s), U
+unit(s) in Xms (generation G)`). Failures record a line with elapsed time.
+These daemon log writes are independent of `--quiet`, which only suppresses the
 interactive "watching"/"change detected" chatter. `stop` terminates
 the recorded daemon process and removes `.repogrammar/locks/daemon.lock`.
 `disable` requires the daemon to be stopped first and removes
@@ -771,13 +793,19 @@ presence, mutable sidecar byte counts, and active dirty/dependency counts.
 human and JSON-safe repo-local lifecycle information without claiming
 parser/mining support; `logs` returns a bounded redacted tail for selected
 repo-local component logs.
-`index` and `sync` currently create syntax-only mutable SQLite generations from the
-TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
-the Python `.py` discovery/CPython AST structural extractor. Their JSON output
-includes `generation_id`, `active_generation`, `discovered_files`,
-`stored_files`, the actual `indexed_units` count, the actual `semantic_facts`
-count, `indexing: syntax_only_code_units`, `parser: syntax_only`,
-`semantic_worker`, and `mining: deferred`. The structural extractors can also
+`index` and `resync` create full syntax-only mutable SQLite generations from
+the TS/JS file discovery substrate, bounded TS/JS project-config inventory,
+Python `.py` discovery/CPython AST structural extraction, and Rust
+self-dogfood syntax extraction. `sync` creates the same generation shape, but
+uses path-level incremental copy-forward when safe and full-rebuild fallback
+otherwise. Their JSON output includes `generation_id`, `active_generation`,
+`discovered_files`, `stored_files`, the actual `indexed_units` count, the
+actual `semantic_facts` count, `indexing: syntax_only_code_units`, `parser:
+syntax_only`, `semantic_worker`, and `mining: deferred`. `sync --json` also
+includes `sync_mode`, `fallback_reason`, `base_generation`, `added_files`,
+`modified_files`, `removed_files`, `unchanged_files`, `copied_forward_files`,
+`reparsed_files`, `families_recomputed`, and `dirty_records_cleared`. The
+structural extractors can also
 produce syntax-origin
 framework-role fact records for recognized Express, React, Jest/Vitest, Next.js,
 Fastify, Prisma, Drizzle, FastAPI, pytest, Pydantic, and SQLAlchemy code-unit

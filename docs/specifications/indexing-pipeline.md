@@ -24,11 +24,15 @@ Repository files
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python files,
-read source through a hash-checked repo-relative boundary, store repo-relative file
-metadata and structural code units in a building generation inside the mutable
-`.repogrammar/repogrammar.sqlite` database, validate that generation, and mark
-the corresponding `index_generations` row active. The
+`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Rust
+files, read source through a hash-checked repo-relative boundary, store
+repo-relative file metadata and structural code units in a building generation
+inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
+generation, and mark the corresponding `index_generations` row active. `index`
+and `resync` do this as full rebuilds; `sync` attempts path-level incremental
+copy-forward from the readable active generation and falls back to the full
+rebuild path when project context, worker, schema, layout, or dirty-state
+preconditions are unsafe. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
 semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
@@ -48,11 +52,13 @@ ambiguity can block repository-wide Rust self-dogfood family support, but
 nested fixture/package manifests must not globally block unrelated root Rust
 families.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
-`index`, `sync`, and `resync` can also ask that worker for facts about the
-discovered repo-relative TS/JS file set. Optional worker arguments come from
-`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of strings, not a shell
-command line. Accepted facts are recorded only when they match the same building
-generation's indexed file, code-unit id, content hash, and byte range.
+`index`, `resync`, and full-rebuild `sync` fallback can also ask that worker for
+facts about the discovered repo-relative TS/JS file set. Optional worker
+arguments come from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of
+strings, not a shell command line. Accepted facts are recorded only when they
+match the same building generation's indexed file, code-unit id, content hash,
+and byte range. Incremental `sync` falls back to a full rebuild when an explicit
+worker is configured.
 
 Outside the internal Rust self-dogfood extractor, this slice does not use
 Tree-sitter, call a TypeScript compiler, perform full multi-view alignment, or
@@ -564,11 +570,13 @@ claims. Optional repository-local auto-sync can be enabled with
 started by MCP serving or agent installation, and does not scan repositories
 that have not explicitly initialized RepoGrammar state.
 
-The current auto-sync worker is conservative and reuses the existing full
-`sync` path after detecting a changed lightweight supported-file metadata
-fingerprint and debouncing file changes. The detector avoids reading source
-contents during idle polling; the subsequent full `sync` remains authoritative
-for content hashes, Git-ignore enforcement, parser/provider facts, freshness,
-and active-generation activation. Incremental changed-unit reparsing,
-affected-family stale marking, and lazy query-time recomputation remain future
-work.
+The current auto-sync worker is conservative and reuses the normal `sync` path
+after detecting a changed lightweight supported-file metadata fingerprint and
+debouncing file changes. The detector avoids reading source contents during
+idle polling; the subsequent `sync` remains authoritative for content hashes,
+Git-ignore enforcement, parser/provider facts, incremental-versus-fallback
+decisions, freshness, and active-generation activation. Incremental `sync`
+copy-forwards unchanged active records into a new building generation, reparses
+added or modified paths, omits removed paths, and recomputes local derived
+support and families before validation. Lazy query-time recomputation remains
+future work.

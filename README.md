@@ -242,10 +242,12 @@ interactive terminal. Use
 
 `repogrammar autosync start` is optional but recommended for dogfooding. It
 enables repository-local auto-sync and starts a background worker that tracks a
-lightweight supported-file metadata fingerprint, debounces saves, and reuses
-the existing `sync` path so newly added or modified files enter the next active
-generation without a manual `resync`. It does not run from `install`, does not
-initialize other repositories, and can be inspected or managed with:
+lightweight supported-file metadata fingerprint, debounces saves, and runs
+`sync` so added, modified, removed, and unchanged paths are reconciled into the
+next active generation. `sync` uses path-level incremental copy-forward when
+safe and reports a full-rebuild fallback when project context or worker
+preconditions require it. It does not run from `install`, does not initialize
+other repositories, and can be inspected or managed with:
 
 ```text
 repogrammar autosync status

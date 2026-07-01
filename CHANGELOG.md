@@ -30,6 +30,14 @@
   and doctor now also report storage layout (`empty`, `mutable`, `legacy`, or
   `mutable_with_legacy`), mutable-database presence, legacy layout presence, and
   WAL/SHM sidecar byte counts when a mutable database exists.
+- `repogrammar sync` now performs path-level incremental updates when the active
+  mutable generation is readable, schema-compatible, and dirty-free. It
+  copy-forwards unchanged file/code-unit/IR/non-derived semantic records into a
+  new generation, reparses added or modified paths, drops removed paths,
+  recomputes local derived support and families, and reports delta counters in
+  `sync --json`. Project-context changes, configured semantic workers, unsafe
+  storage layouts, or dirty active records now report `sync_mode:
+  full_rebuild_fallback`; `index` and `resync` remain full rebuilds.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,
@@ -79,10 +87,10 @@
   entries, source text, paths, hashes, prompts, query text, or evidence text.
 - `repogrammar autosync` now provides optional repository-local automatic sync
   management. `autosync start` enables and starts a background worker that
-  polls the existing discovery fingerprint, debounces file saves, and reuses the
-  existing full `sync` path; `status`, `stop`, `disable`, and foreground `run`
-  manage the worker. The feature is explicit per repository and is not started
-  by MCP serving, agent installation, or queries.
+  polls the existing discovery fingerprint, debounces file saves, and runs the
+  normal delta-aware `sync` path; `status`, `stop`, `disable`, and foreground
+  `run` manage the worker. The feature is explicit per repository and is not
+  started by MCP serving, agent installation, or queries.
 - Public-preview readiness documentation now includes an explicit support matrix
   for Python v0.1, conservative JS/TS v0.2 exact-anchor support, unsupported
   React/broad TS/JS semantics, source-span opt-in, token-saving claim limits, and

@@ -126,21 +126,29 @@ or rewriting them.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 including `.repogrammar/telemetry/`, `.repogrammar/.gitignore`,
-`manifest.json`, and `receipts/init.json`. The current `index` and `sync`
-implementation creates or migrates `.repogrammar/repogrammar.sqlite`, inserts a
-new building `index_generations` row, stores TS/JS and Python `.py` discovery
-metadata plus syntax-only code-unit records, CodeUnit-derived IR nodes, and
-conservative IR containment edges under that generation id, validates the
+`manifest.json`, and `receipts/init.json`. The current full rebuild path
+(`index`, `resync`, and `sync` fallback) creates or migrates
+`.repogrammar/repogrammar.sqlite`, inserts a new building
+`index_generations` row, stores TS/JS, Python `.py`, and Rust self-dogfood
+discovery metadata plus syntax/code-unit records, CodeUnit-derived IR nodes,
+and conservative IR containment edges under that generation id, validates the
 generation, and marks it active while downgrading any previously active row to
-validated. Safe source-span rendering is a query/read-plan concern and is
-available only through explicit CLI/MCP opt-in. Telemetry upload queues and
-sent receipts are created only by explicit `repogrammar telemetry export/upload`
-paths. The current storage adapter has generation-scoped family tables and a
-FamilyStore port inside the mutable database. The product `index` and `sync`
-path now invokes a conservative EC-MVFI-lite builder before activation,
-but that builder writes family rows only when compatible framework-role
-candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
-support. Current default TS/JS and Python indexing may populate
+validated. Incremental `sync` also creates a new building generation in the
+same mutable database, but it computes a path delta from the readable active
+generation, copy-forwards unchanged indexed files, code units, IR nodes/edges,
+and non-derived semantic fact/evidence rows whose path/hash/language/size still
+match, reparses added and modified paths, omits removed paths, recomputes local
+derived support and family rows, validates that no dirty or stale dependency
+rows remain, and then atomically activates the new generation. Safe source-span
+rendering is a query/read-plan concern and is available only through explicit
+CLI/MCP opt-in. Telemetry upload queues and sent receipts are created only by
+explicit `repogrammar telemetry export/upload` paths. The current storage
+adapter has generation-scoped family tables and a FamilyStore port inside the
+mutable database. The product full rebuild and incremental sync paths invoke a
+conservative EC-MVFI-lite builder before activation, but that builder writes
+family rows only when compatible framework-role candidates also have strong
+same-generation `SEMANTIC` or `DATAFLOW_DERIVED` support. Current default TS/JS
+and Python indexing may populate
 semantic-fact/evidence rows with syntax-origin `FRAMEWORK_ROLE` records for
 recognized framework-shaped code units; those rows use `FRAMEWORK_HEURISTIC`
 certainty and same-generation code-unit evidence, and do not create family rows
@@ -176,15 +184,17 @@ CLI/MCP.
 The storage port and SQLite adapter can persist semantic facts together with
 repo-relative evidence rows for a building generation, but only when the fact is
 already validated against an indexed code unit, matching content hash, and byte
-range in that same generation. Default `index` and `sync` still do not run a
-semantic worker, but they may store syntax-origin framework-role facts produced
-from syntax-only code-unit kinds. When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an
-explicit worker executable and optional
+range in that same generation. Default full rebuilds and safe incremental
+`sync` still do not run a semantic worker, but they may store syntax-origin
+framework-role facts produced from syntax-only code-unit kinds. When
+`REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable and optional
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` argv vector, they may record
-worker-produced facts through this same-generation gate. Worker unavailable,
-unsupported-version, timeout, crash, or protocol-violation results fall back to
-syntax-only indexing with sanitized warnings; evidence that conflicts with the
-building generation's indexed path/hash/range aborts the new generation.
+worker-produced facts through this same-generation gate on the full rebuild
+path. Incremental `sync` must fall back to full rebuild when an explicit worker
+is configured. Worker unavailable, unsupported-version, timeout, crash, or
+protocol-violation results fall back to syntax-only indexing with sanitized
+warnings; evidence that conflicts with the building generation's indexed
+path/hash/range aborts the new generation.
 All generation-scoped writes for indexed files, code units, IR nodes/edges, and
 semantic facts require `status = 'building'`; validated, active, or failed
 generations are immutable even if a caller still holds an old generation handle.
@@ -230,12 +240,14 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, `.jsx`, and `.py` files. It returns repo-relative metadata and skip
-reasons, and `index`/`sync` store the discovered file manifest in the mutable
-SQLite database under the building generation id. The current index path also
-stores syntax-only `code_units` containing repo-relative path, language, kind,
-start/end byte range, and content hash. Source snippets, absolute paths,
-families, and pattern-family evidence are not stored by default syntax-only
-`index`/`sync` runs.
+reasons, and `index`, `resync`, and `sync` store the current discovered file
+manifest in the mutable SQLite database under the next building generation id.
+The full rebuild path stores syntax-only `code_units` containing repo-relative
+path, language, kind, start/end byte range, and content hash for all discovered
+files. Incremental `sync` copy-forwards those records for unchanged active
+paths and reparses added or modified paths. Source snippets and absolute paths
+are not stored by default syntax-only `index`/`sync`/`resync` runs; family rows
+are stored only by the family builder after same-generation support checks.
 Syntax-origin framework-role facts may be stored in semantic-fact/evidence rows
 for the same generation, but they remain internal framework-heuristic facts and
 must not create family rows, family-bound evidence, or query success by
@@ -390,11 +402,13 @@ source files, user files, or legacy generation directories.
 The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,
 family members, variation slots, evidence links, derived-record dependency
-rows, and dirty-record markers. The current `index` and `sync` command path
-populates indexed files, syntax-only code units,
-CodeUnit-derived IR nodes, conservative IR containment edges, optional
-semantic-worker facts, and exact-anchor Python `DATAFLOW_DERIVED` support facts
-derived in the application layer. The storage ports also expose semantic-fact
+rows, and dirty-record markers. The full rebuild command path populates indexed
+files, syntax-only code units, CodeUnit-derived IR nodes, conservative IR
+containment edges, optional semantic-worker facts, and exact-anchor
+`DATAFLOW_DERIVED` support facts derived in the application layer. Incremental
+`sync` copy-forwards unchanged base records into a new building generation,
+reparses changed paths, omits removed paths, and recomputes derived support and
+family records before validation. The storage ports also expose semantic-fact
 and family evidence writers for frontend and claim-builder integration. These
 writers accept only building generations and require evidence to match an
 indexed code unit's repository-relative path, content hash, and byte range in
@@ -603,13 +617,12 @@ running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`.
 Daemon lock acquisition writes complete lock metadata to a temporary file and
 publishes it atomically when supported, falls back to create-new semantics when
 needed, and removes stale daemon locks only when the on-disk bytes still match
-the inspected stale record. The current worker detects
-changed lightweight supported-file metadata fingerprints and calls the existing
-full `sync` path after a debounce interval. The detector is only a low-cost
-change trigger; the full sync remains responsible for content hashes,
-Git-ignore enforcement, parsing, semantic facts, and atomic generation
-activation. Incremental changed-unit reparsing, affected-family stale marking,
-and lazy query-time recomputation remain future work.
+the inspected stale record. The current worker detects changed lightweight
+supported-file metadata fingerprints and calls the normal `sync` path after a
+debounce interval. The detector is only a low-cost change trigger; `sync`
+remains responsible for content hashes, Git-ignore enforcement, parsing,
+semantic facts, full-rebuild fallback decisions, and atomic generation
+activation.
 
 ## Migration Strategy
 
