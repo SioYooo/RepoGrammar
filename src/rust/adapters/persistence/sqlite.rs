@@ -5009,6 +5009,38 @@ mod tests {
     }
 
     #[test]
+    fn active_reads_ignore_building_generation_until_activation() {
+        let workspace = TempWorkspace::new("sqlite-active-read-building-hidden");
+        let store = store(&workspace);
+        let first = store.prepare_next_generation().expect("prepare first");
+        store
+            .record_indexed_file(&first, &file("src/old.ts"))
+            .expect("record old file");
+        store.activate_generation(&first).expect("activate first");
+
+        let second = store.prepare_next_generation().expect("prepare second");
+        store
+            .record_indexed_file(&second, &file("src/new.ts"))
+            .expect("record new file");
+
+        let before_activation = store
+            .list_active_indexed_files()
+            .expect("list active before activation");
+        assert_eq!(before_activation.generation_id, first.generation_id);
+        assert_eq!(before_activation.files[0].path, "src/old.ts");
+
+        store
+            .activate_generation(&second)
+            .expect("activate second generation");
+
+        let after_activation = store
+            .list_active_indexed_files()
+            .expect("list active after activation");
+        assert_eq!(after_activation.generation_id, second.generation_id);
+        assert_eq!(after_activation.files[0].path, "src/new.ts");
+    }
+
+    #[test]
     fn list_active_code_units_returns_sorted_active_units_without_leaks() {
         let workspace = TempWorkspace::new("sqlite-list-units");
         let store = store(&workspace);
