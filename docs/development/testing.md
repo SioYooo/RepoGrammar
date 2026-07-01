@@ -68,8 +68,10 @@ allowed.
   in root and parent-worktree subdirectory projects.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
-  foreign-key enforcement, activation pointer validation, preservation of the
-  previous active generation after failed validation, repository-relative
+  foreign-key enforcement, mutable top-level database creation, active
+  `index_generations` row selection, legacy active-pointer fallback only when no
+  mutable database exists, preservation of the previous active generation after
+  failed validation, repository-relative
   indexed-file paths, semantic-fact/evidence storage with same-generation
   code-unit path/hash/range validation, IR node/edge storage with
   same-generation code-unit/node validation, malformed semantic evidence and IR
@@ -81,10 +83,11 @@ allowed.
   validation and tamper rejection, internal active claim-input snapshot reads
   from one validated generation, snapshot tamper rejection across files, units,
   IR, and semantic facts, prune retention that preserves active generations,
-  deletes only old inactive generation directories including SQLite WAL/SHM
-  sidecars, keeps dry-runs mutation-free, refuses symlinked or non-directory
-  generation entries, refuses missing or corrupt active-generation pointers, and
-  rejects symlinked or malformed active-generation pointers.
+  deletes only old inactive generation rows from the mutable database while
+  keeping dry-runs mutation-free, and still covers the legacy directory fallback
+  refusal cases for symlinked or non-directory generation entries, missing or
+  corrupt active-generation pointers, and symlinked or malformed
+  active-generation pointers.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
@@ -122,7 +125,9 @@ allowed.
   canonical target compatibility and same-code-unit path/hash/range evidence,
   no-family active generations returning typed
   `InsufficientSupport`, exact family/member lookup versus fuzzy
-  find/explain/check lookup, short-substring false-match rejection, stale
+  find/explain/check lookup, deterministic local `PARTIAL_CONTEXT` for a
+  uniquely resolved indexed target without family evidence, ambiguity abstention
+  before partial context, short-substring false-match rejection, stale
   family-evidence refusal with `StaleEvidence`, compact/evidence/deep output
   mode behavior, target and token-budget validation, greedy evidence coverage
   metadata, default read plans with repo-relative paths, content hashes, byte

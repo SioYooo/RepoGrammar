@@ -217,8 +217,25 @@ pub struct FamilyUnknownReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedQueryTarget {
+    pub original_target: String,
+    pub path: String,
+    pub code_unit_id: Option<String>,
+    pub match_kind: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyPartialContextReport {
+    pub active_generation: String,
+    pub resolved_target: ResolvedQueryTarget,
+    pub read_plan: ReadPlan,
+    pub unknowns: Vec<FamilyQueryUnknown>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FamilyLookupReport {
     Found(FamilyDetailReport),
+    PartialContext(FamilyPartialContextReport),
     Unknown(FamilyUnknownReport),
 }
 
@@ -711,6 +728,16 @@ pub fn lookup_family(
     }))
 }
 
+pub fn lookup_family_with_local_context(
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let report = lookup_family(family_store, target, mode)?;
+    add_local_context_fallback(index_store, report, target, mode)
+}
+
 pub fn lookup_family_with_freshness(
     request: FamilyEvidenceFreshnessRequest,
     store: &impl FamilyStore,
@@ -766,6 +793,18 @@ pub fn lookup_family_with_freshness(
     }))
 }
 
+pub fn lookup_family_with_freshness_and_local_context(
+    request: FamilyEvidenceFreshnessRequest,
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    source_store: &impl SourceStore,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let report = lookup_family_with_freshness(request, family_store, source_store, target, mode)?;
+    add_local_context_fallback(index_store, report, target, mode)
+}
+
 pub fn select_family_evidence(
     family: &FamilyDetailReport,
     options: FamilyOutputOptions,
@@ -810,6 +849,329 @@ pub fn build_read_plan(
         selection_strategy: "deterministic_read_plan_v1",
         items: selected,
         line_range_omissions: Vec::new(),
+    }
+}
+
+fn add_local_context_fallback(
+    index_store: &impl IndexStore,
+    report: FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    if mode != FamilyLookupMode::FuzzyQuery {
+        return Ok(report);
+    }
+    let FamilyLookupReport::Unknown(unknown_report) = report else {
+        return Ok(report);
+    };
+    if !is_query_target_insufficient_support(&unknown_report) {
+        return Ok(FamilyLookupReport::Unknown(unknown_report));
+    }
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(FamilyLookupReport::Unknown(unknown_report));
+    };
+    let snapshot = index_store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    if snapshot.generation_id != unknown_report.active_generation {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: unknown_report.active_generation,
+            unknowns: vec![FamilyQueryUnknown {
+                class: UnknownClass::Blocking,
+                reason: UnknownReasonCode::StaleEvidence,
+                affected_claim: "query target resolution".to_string(),
+                recovery: Some("rerun repogrammar resync before using local context".to_string()),
+            }],
+        }));
+    }
+    match resolve_local_context(target, &snapshot.files, &snapshot.units)? {
+        LocalContextResolution::Resolved(report) => Ok(FamilyLookupReport::PartialContext(
+            FamilyPartialContextReport {
+                active_generation: snapshot.generation_id,
+                resolved_target: report.resolved_target,
+                read_plan: report.read_plan,
+                unknowns: vec![FamilyQueryUnknown {
+                    class: UnknownClass::Blocking,
+                    reason: UnknownReasonCode::InsufficientSupport,
+                    affected_claim: "pattern family evidence for resolved target".to_string(),
+                    recovery: Some(
+                        "treat this as source-reading context only; rerun repogrammar resync after compatible family evidence exists"
+                            .to_string(),
+                    ),
+                }],
+            },
+        )),
+        LocalContextResolution::Ambiguous(unknown) => Ok(FamilyLookupReport::Unknown(
+            FamilyUnknownReport {
+                active_generation: snapshot.generation_id,
+                unknowns: vec![unknown],
+            },
+        )),
+        LocalContextResolution::Unresolved => Ok(FamilyLookupReport::Unknown(unknown_report)),
+    }
+}
+
+fn is_query_target_insufficient_support(report: &FamilyUnknownReport) -> bool {
+    matches!(
+        report.unknowns.as_slice(),
+        [FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim,
+            ..
+        }] if affected_claim == "query target"
+    )
+}
+
+struct LocalContextReport {
+    resolved_target: ResolvedQueryTarget,
+    read_plan: ReadPlan,
+}
+
+enum LocalContextResolution {
+    Resolved(LocalContextReport),
+    Ambiguous(FamilyQueryUnknown),
+    Unresolved,
+}
+
+fn resolve_local_context(
+    target: &str,
+    files: &[IndexedFileRecord],
+    units: &[IndexedCodeUnitRecord],
+) -> Result<LocalContextResolution, RepoGrammarError> {
+    let mut path_candidates = files
+        .iter()
+        .filter(|file| target_mentions_path(target, &file.path))
+        .collect::<Vec<_>>();
+    path_candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    path_candidates.dedup_by(|left, right| left.path == right.path);
+
+    if path_candidates.is_empty() {
+        path_candidates = files
+            .iter()
+            .filter(|file| {
+                units.iter().any(|unit| {
+                    unit.path == file.path && (target == unit.id || target.contains(&unit.id))
+                })
+            })
+            .collect::<Vec<_>>();
+        path_candidates.sort_by(|left, right| left.path.cmp(&right.path));
+        path_candidates.dedup_by(|left, right| left.path == right.path);
+    }
+
+    if path_candidates.is_empty() {
+        return Ok(LocalContextResolution::Unresolved);
+    }
+    if path_candidates.len() > 1 {
+        return Ok(LocalContextResolution::Ambiguous(
+            local_context_ambiguity_unknown(
+                "query target path ambiguity",
+                path_candidates
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+        ));
+    }
+
+    let file = path_candidates[0];
+    let mut units_for_path = units
+        .iter()
+        .filter(|unit| unit.path == file.path)
+        .collect::<Vec<_>>();
+    units_for_path.sort_by(|left, right| {
+        (
+            left.start_byte,
+            left.end_byte,
+            left.id.as_str(),
+            left.kind.as_str(),
+        )
+            .cmp(&(
+                right.start_byte,
+                right.end_byte,
+                right.id.as_str(),
+                right.kind.as_str(),
+            ))
+    });
+
+    let matching_units = units_for_path
+        .iter()
+        .copied()
+        .filter(|unit| target_mentions_unit(target, unit))
+        .collect::<Vec<_>>();
+    if matching_units.len() > 1 {
+        return Ok(LocalContextResolution::Ambiguous(
+            local_context_ambiguity_unknown(
+                "query target code unit ambiguity",
+                matching_units
+                    .iter()
+                    .map(|unit| unit.id.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+        ));
+    }
+
+    let unit = if matching_units.len() == 1 {
+        Some(matching_units[0])
+    } else if units_for_path.len() == 1 {
+        Some(units_for_path[0])
+    } else {
+        None
+    };
+
+    let (read_plan, resolved_target) = match unit {
+        Some(unit) => (
+            local_context_read_plan_for_unit(unit),
+            ResolvedQueryTarget {
+                original_target: target.to_string(),
+                path: unit.path.clone(),
+                code_unit_id: Some(unit.id.clone()),
+                match_kind: if target == unit.id || target.contains(&unit.id) {
+                    "code_unit_id"
+                } else if path_exactly_matches_target(target, &unit.path) {
+                    "path_exact"
+                } else {
+                    "path_embedded"
+                },
+            },
+        ),
+        None => (
+            local_context_read_plan_for_file(file)?,
+            ResolvedQueryTarget {
+                original_target: target.to_string(),
+                path: file.path.clone(),
+                code_unit_id: None,
+                match_kind: if path_exactly_matches_target(target, &file.path) {
+                    "path_exact"
+                } else {
+                    "path_embedded"
+                },
+            },
+        ),
+    };
+
+    Ok(LocalContextResolution::Resolved(LocalContextReport {
+        resolved_target,
+        read_plan,
+    }))
+}
+
+fn target_mentions_unit(target: &str, unit: &IndexedCodeUnitRecord) -> bool {
+    if target == unit.id || target.contains(&unit.id) {
+        return true;
+    }
+    target_identifier_tokens(target)
+        .into_iter()
+        .any(|token| token.len() >= 4 && unit.id.contains(token))
+}
+
+fn target_identifier_tokens(target: &str) -> Vec<&str> {
+    target
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '_' || character == ':')
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn local_context_read_plan_for_unit(unit: &IndexedCodeUnitRecord) -> ReadPlan {
+    let why =
+        "read this resolved target body before editing; no pattern-family evidence is available";
+    let item = ReadPlanItem {
+        purpose: ReadPlanPurpose::TargetBodyRequiredForEdit,
+        path: unit.path.clone(),
+        content_hash: unit.content_hash.clone(),
+        start_byte: unit.start_byte,
+        end_byte: unit.end_byte,
+        start_line: None,
+        end_line: None,
+        estimated_tokens: estimated_local_read_plan_tokens(
+            &unit.path,
+            unit.content_hash.as_str(),
+            unit.start_byte,
+            unit.end_byte,
+            why,
+        ),
+        why: why.to_string(),
+        source_required_before_edit: true,
+        source_snippets_included: false,
+    };
+    local_context_read_plan(item)
+}
+
+fn local_context_read_plan_for_file(
+    file: &IndexedFileRecord,
+) -> Result<ReadPlan, RepoGrammarError> {
+    let end_byte = usize::try_from(file.size_bytes).map_err(|_| {
+        RepoGrammarError::InvalidInput(
+            "indexed file size exceeds supported read-plan range".to_string(),
+        )
+    })?;
+    let why =
+        "read this resolved target file before editing; no pattern-family evidence is available";
+    let item = ReadPlanItem {
+        purpose: ReadPlanPurpose::TargetBodyRequiredForEdit,
+        path: file.path.clone(),
+        content_hash: file.content_hash.clone(),
+        start_byte: 0,
+        end_byte,
+        start_line: None,
+        end_line: None,
+        estimated_tokens: estimated_local_read_plan_tokens(
+            &file.path,
+            file.content_hash.as_str(),
+            0,
+            end_byte,
+            why,
+        ),
+        why: why.to_string(),
+        source_required_before_edit: true,
+        source_snippets_included: false,
+    };
+    Ok(local_context_read_plan(item))
+}
+
+fn local_context_read_plan(item: ReadPlanItem) -> ReadPlan {
+    ReadPlan {
+        estimated_tokens: item.estimated_tokens,
+        source_snippets_included: false,
+        requires_source_before_edit: true,
+        selection_strategy: "deterministic_local_context_v1",
+        budget_satisfied: true,
+        items: vec![item],
+        line_range_omissions: Vec::new(),
+    }
+}
+
+fn estimated_local_read_plan_tokens(
+    path: &str,
+    content_hash: &str,
+    start_byte: usize,
+    end_byte: usize,
+    why: &str,
+) -> usize {
+    let bytes = ReadPlanPurpose::TargetBodyRequiredForEdit.as_str().len()
+        + path.len()
+        + content_hash.len()
+        + start_byte.to_string().len()
+        + end_byte.to_string().len()
+        + why.len()
+        + 48;
+    bytes.div_ceil(4).max(1)
+}
+
+fn local_context_ambiguity_unknown(
+    affected_claim: &'static str,
+    candidates: Vec<&str>,
+) -> FamilyQueryUnknown {
+    FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::InsufficientSupport,
+        affected_claim: affected_claim.to_string(),
+        recovery: Some(format!(
+            "narrow the target to one exact repo-relative path or code unit id; candidate targets: {}",
+            candidates.join(", ")
+        )),
     }
 }
 
@@ -1740,7 +2102,43 @@ fn family_target_match(
 }
 
 fn path_matches_target(path: &str, target: &str) -> bool {
+    path_exactly_matches_target(target, path) || target_mentions_path(target, path)
+}
+
+fn path_exactly_matches_target(target: &str, path: &str) -> bool {
     path == target || (target.contains('/') && path.ends_with(&format!("/{target}")))
+}
+
+fn target_mentions_path(target: &str, path: &str) -> bool {
+    if path_exactly_matches_target(target, path) {
+        return true;
+    }
+    if !path.contains('/') || !target.contains(path) {
+        return false;
+    }
+    let Some(start) = target.find(path) else {
+        return false;
+    };
+    let end = start + path.len();
+    target_boundary_before(target, start) && target_boundary_after(target, end)
+}
+
+fn target_boundary_before(target: &str, start: usize) -> bool {
+    target[..start]
+        .chars()
+        .next_back()
+        .is_none_or(|character| !is_path_character(character))
+}
+
+fn target_boundary_after(target: &str, end: usize) -> bool {
+    target[end..]
+        .chars()
+        .next()
+        .is_none_or(|character| !is_path_character(character))
+}
+
+fn is_path_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '/' | '.' | '_' | '-')
 }
 
 fn ambiguous_target_unknown(matches: &[FamilyTargetMatch]) -> Option<FamilyQueryUnknown> {
@@ -3324,6 +3722,102 @@ mod tests {
                 UnknownReasonCode::InsufficientSupport
             );
         }
+    }
+
+    #[test]
+    fn family_lookup_matches_embedded_exact_path_without_short_substrings() {
+        let store = FakeFamilyStore::with_family();
+
+        let lookup = lookup_family(
+            &store,
+            Some("src/routes/a.ts process_boundary_diagnostics"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup family");
+
+        let FamilyLookupReport::Found(report) = lookup else {
+            panic!("embedded repo-relative path must find the family");
+        };
+        assert_eq!(report.family_id, "family:typescript:express_route:express");
+    }
+
+    #[test]
+    fn missing_family_target_returns_partial_local_context_for_resolved_path() {
+        let index_store = FakeStore::new(Vec::new())
+            .with_files(vec![indexed_file("src/routes/a.ts")])
+            .with_units(vec![IndexedCodeUnitRecord {
+                id: "unit:src/routes/a.ts#process_boundary_diagnostics:0-10".to_string(),
+                ..indexed_unit("src/routes/a.ts")
+            }]);
+        let family_store = FakeFamilyStore::empty();
+
+        let lookup = lookup_family_with_local_context(
+            &index_store,
+            &family_store,
+            Some("src/routes/a.ts process_boundary_diagnostics timeout"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup local context");
+
+        let FamilyLookupReport::PartialContext(report) = lookup else {
+            panic!("resolved local target must return partial context");
+        };
+        assert_eq!(report.resolved_target.path, "src/routes/a.ts");
+        assert_eq!(
+            report.resolved_target.code_unit_id.as_deref(),
+            Some("unit:src/routes/a.ts#process_boundary_diagnostics:0-10")
+        );
+        assert_eq!(report.resolved_target.match_kind, "path_embedded");
+        assert_eq!(
+            report.read_plan.selection_strategy,
+            "deterministic_local_context_v1"
+        );
+        assert_eq!(report.read_plan.items.len(), 1);
+        assert_eq!(
+            report.read_plan.items[0].purpose,
+            ReadPlanPurpose::TargetBodyRequiredForEdit
+        );
+        assert_eq!(report.read_plan.items[0].path, "src/routes/a.ts");
+        assert!(!report.read_plan.source_snippets_included);
+        assert!(report.read_plan.requires_source_before_edit);
+        assert_eq!(
+            report.unknowns[0].affected_claim,
+            "pattern family evidence for resolved target"
+        );
+    }
+
+    #[test]
+    fn partial_local_context_abstains_on_ambiguous_paths() {
+        let index_store = FakeStore::new(Vec::new())
+            .with_files(vec![
+                indexed_file("src/routes/a.ts"),
+                indexed_file("tests/src/routes/a.ts"),
+            ])
+            .with_units(vec![
+                indexed_unit("src/routes/a.ts"),
+                indexed_unit("tests/src/routes/a.ts"),
+            ]);
+        let family_store = FakeFamilyStore::empty();
+
+        let lookup = lookup_family_with_local_context(
+            &index_store,
+            &family_store,
+            Some("routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup local context");
+
+        let FamilyLookupReport::Unknown(report) = lookup else {
+            panic!("ambiguous suffix target must remain UNKNOWN");
+        };
+        assert_eq!(
+            report.unknowns[0].affected_claim,
+            "query target path ambiguity"
+        );
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
     }
 
     #[test]

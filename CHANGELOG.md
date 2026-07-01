@@ -4,6 +4,13 @@
 
 ### Changed
 
+- Storage now uses the top-level mutable `.repogrammar/repogrammar.sqlite`
+  database as the normal index store, with active generation state held in
+  `index_generations` rows and legacy `current-generation`/`generations/`
+  support retained only as fallback. Query commands now return
+  `PARTIAL_CONTEXT` for a uniquely resolved indexed target that lacks family
+  evidence, preserving typed `InsufficientSupport` instead of inflating it into
+  a family claim.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

@@ -39,8 +39,7 @@ Global user state must not contain:
 
 ## Project State Directory
 
-The repository-local state directory should use this layout once storage is
-implemented:
+The repository-local state directory uses this normal mutable-index layout:
 
 ```text
 .repogrammar/
@@ -49,12 +48,6 @@ implemented:
 |-- repogrammar.sqlite
 |-- repogrammar.sqlite-wal
 |-- repogrammar.sqlite-shm
-|-- current-generation
-|-- generations/
-|   |-- gen-000001/
-|   |   |-- repogrammar.sqlite
-|   |   `-- manifest.json
-|   `-- gen-000002/
 |-- cache/
 |   |-- tree-sitter/
 |   |-- semantic-workers/
@@ -78,8 +71,16 @@ implemented:
     `-- last-successful-index.json
 ```
 
-`manifest.json` records the active index metadata. `repogrammar.sqlite` is the
-active database. `generations/` supports atomic rebuild and rollback. `cache/`
+`manifest.json` records lifecycle metadata. `repogrammar.sqlite` is the mutable
+repository index database. It stores `index_generations` rows, indexed files,
+code units, IR, semantic facts, family rows, and evidence for all retained
+generations; the active generation is the single row with `status = 'active'`.
+Normal `index`, `sync`, `resync`, `status`, `doctor`, `files`, `units`, family
+queries, and `prune` operate on this top-level database and do not write a
+`.repogrammar/current-generation` pointer or create `.repogrammar/generations/`
+directories. Older repositories may still contain `current-generation` and
+per-generation SQLite databases under `generations/`; those paths are legacy
+read/prune fallback only when the mutable top-level database is absent. `cache/`
 contains derived parser, semantic-worker, fingerprint, and token-count caches.
 `logs/`, `locks/`, `telemetry/`, `tmp/`, and `receipts/` are repo-local
 diagnostic and lifecycle state.
@@ -118,18 +119,18 @@ or rewriting them.
 
 The bootstrap `init` implementation creates the lifecycle directories,
 including `.repogrammar/telemetry/`, `.repogrammar/.gitignore`,
-`manifest.json`, and `receipts/init.json`. The current
-`index` and `sync` implementation creates SQLite generations from TS/JS and
-Python `.py` discovery metadata plus syntax-only code-unit records,
-CodeUnit-derived IR nodes, and conservative IR containment edges, then activates
-`.repogrammar/current-generation` after validation. It does not yet create a
-top-level `.repogrammar/repogrammar.sqlite` or freshness manifests. Safe
-source-span rendering is a query/read-plan concern and is available only through
-explicit CLI/MCP opt-in. Telemetry upload queues and sent receipts are created
-only by explicit `repogrammar telemetry export/upload` paths. The current
-storage adapter has
-generation-scoped family tables and a FamilyStore port. The product `index` and
-`sync` path now invokes a conservative EC-MVFI-lite builder before activation,
+`manifest.json`, and `receipts/init.json`. The current `index` and `sync`
+implementation creates or migrates `.repogrammar/repogrammar.sqlite`, inserts a
+new building `index_generations` row, stores TS/JS and Python `.py` discovery
+metadata plus syntax-only code-unit records, CodeUnit-derived IR nodes, and
+conservative IR containment edges under that generation id, validates the
+generation, and marks it active while downgrading any previously active row to
+validated. Safe source-span rendering is a query/read-plan concern and is
+available only through explicit CLI/MCP opt-in. Telemetry upload queues and
+sent receipts are created only by explicit `repogrammar telemetry export/upload`
+paths. The current storage adapter has generation-scoped family tables and a
+FamilyStore port inside the mutable database. The product `index` and `sync`
+path now invokes a conservative EC-MVFI-lite builder before activation,
 but that builder writes family rows only when compatible framework-role
 candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
 support. Current default TS/JS and Python indexing may populate
@@ -146,15 +147,14 @@ facts and cannot prove membership. Root `pyproject.toml` may be indexed as a
 `python-config` file and
 `project_config` code unit; only sanitized `PROJECT_CONFIG`/`STRUCTURAL`
 metadata or typed project-config `UNKNOWN` records may be stored, and they are
-blocked from family-claim input. The CLI can
-read the active generation for `files`, `units`, and FamilyStore-backed
-pattern-family commands. FamilyStore-backed reads can render metadata-only
-evidence and read plans, but they still do not render source snippets or
-absolute paths. Raw structural IR and semantic-fact read paths remain internal.
-Active-generation reads
-open one generation read-only, require a regular `current-generation` pointer,
-validate the generation schema and health, and recheck stored repo-relative
-paths, strict content hashes, languages, unit ids, byte ranges, IR node/edge
+blocked from family-claim input. The CLI can read the active generation for
+`files`, `units`, and FamilyStore-backed pattern-family commands.
+FamilyStore-backed reads can render metadata-only evidence and read plans, but
+they still do not render source snippets or absolute paths. Raw structural IR
+and semantic-fact read paths remain internal. Active-generation reads open the
+mutable database read-only, select the single active `index_generations` row,
+validate the schema and storage health, and recheck stored repo-relative paths,
+strict content hashes, languages, unit ids, byte ranges, IR node/edge
 references, semantic fact kind/certainty tokens, assumptions JSON, and
 same-generation evidence before returning records.
 The query application layer can run an internal file-hash freshness and
@@ -208,9 +208,9 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, `.jsx`, and `.py` files. It returns repo-relative metadata and skip
-reasons, and `index`/`sync` store the discovered file manifest in a
-generation-scoped SQLite database. The current index path also stores
-syntax-only `code_units` containing repo-relative path, language, kind,
+reasons, and `index`/`sync` store the discovered file manifest in the mutable
+SQLite database under the building generation id. The current index path also
+stores syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash. Source snippets, absolute paths,
 families, and pattern-family evidence are not stored by default syntax-only
 `index`/`sync` runs.
@@ -323,11 +323,13 @@ recovery guidance where applicable.
 ## SQLite Responsibilities
 
 RepoGrammar uses repository-local SQLite databases. SQLite and SQL migration
-logic belong only in persistence adapters. The current substrate creates one
-database per generation under `.repogrammar/generations/<generation>/` and
-records the active generation in `.repogrammar/current-generation`. The
-top-level `.repogrammar/repogrammar.sqlite` active database path remains the
-target read path for later family-evidence query integration. Current CLI
+logic belong only in persistence adapters. The current substrate uses the
+top-level `.repogrammar/repogrammar.sqlite` database as the normal mutable index
+store. Each rebuild inserts a new `index_generations` row, generation-scoped
+tables carry that `generation_id`, and active reads select the single active
+generation row. Legacy per-generation databases under
+`.repogrammar/generations/<generation>/` and `.repogrammar/current-generation`
+are read/prune fallback only when the mutable database is absent. Current CLI
 `files` and `units` reads use the validated active generation and expose only
 repo-relative metadata and code-unit rows. The internal claim-input snapshot uses
 the same active generation and validation rules, but remains unavailable through
@@ -409,18 +411,19 @@ after validation. All family and evidence records must bind to a
 `generation_id`. MCP serving should open the active database read-only where
 possible. Indexing is the only writer.
 
-Generation retention may remove inactive generation directories after an
-active generation is readable and storage health checks pass. The default
-retention policy is active plus the newest 2 inactive generations; CLI callers
-may override the inactive count with `--keep <n>`. Retention must never remove
-the generation currently named by `.repogrammar/current-generation`, must
-remove each eligible generation directory as a directory tree so SQLite
-WAL/SHM sidecar files are cleaned up with the database, and must recheck the
-active pointer before destructive deletion. If the active pointer is missing,
-corrupt, points at a non-active generation, or changes during pruning, retention
-must fail without deleting. Retention must refuse symlinked generation
-directories and generation entries that are not directories. A dry run must
-report the same candidates without mutating storage.
+Generation retention may remove inactive generation rows after an active
+generation is readable and storage health checks pass. The default retention
+policy is active plus the newest 2 inactive generations; CLI callers may
+override the inactive count with `--keep <n>`. Retention must never remove the
+active generation row, must rely on foreign-key cascades for generation-scoped
+records, and must recheck active generation state before destructive deletion.
+If no active generation is readable, the active row is corrupt, or the active
+generation changes during pruning, retention must fail without deleting. When
+only the legacy directory layout exists, retention may remove inactive
+generation directories after the same health checks; that fallback must refuse
+missing or corrupt active-generation pointers, symlinked generation directories,
+and generation entries that are not directories. A dry run must report the same
+candidates without mutating storage.
 
 ## Logs
 

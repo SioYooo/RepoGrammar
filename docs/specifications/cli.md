@@ -165,16 +165,20 @@ command that may remove `.repogrammar/`; `repogrammar uninstall` must not remove
 project indexes. `uninit` must make logs deletion explicit.
 
 `repogrammar prune` removes old inactive index generations from
-`.repogrammar/generations/` while preserving the active generation referenced by
-`.repogrammar/current-generation`. The default retention policy is active plus
-the newest 2 inactive generations. `--keep <n>` overrides the inactive
-generation count and may be `0`. Destructive prune runs require `--yes`;
-`--dry-run` reports candidates without deleting. Human and JSON output must
-report the active generation, retained inactive generation IDs, candidate
-generation IDs, deleted generation IDs, `dry_run`, and `keep_inactive` without
-exposing absolute paths. Prune must refuse unhealthy storage, missing or corrupt
-active-generation pointers, symlinked generation directories, generation entries
-that are not directories, and concurrent active-generation changes.
+`.repogrammar/repogrammar.sqlite` by deleting inactive `index_generations` rows
+and their cascading generation-scoped records while preserving the single active
+generation row. The default retention policy is active plus the newest 2
+inactive generations. `--keep <n>` overrides the inactive generation count and
+may be `0`. Destructive prune runs require `--yes`; `--dry-run` reports
+candidates without deleting. Human and JSON output must report the active
+generation, retained inactive generation IDs, candidate generation IDs, deleted
+generation IDs, `dry_run`, and `keep_inactive` without exposing absolute paths.
+Prune must refuse unhealthy storage and concurrent active-generation changes.
+When only a legacy `.repogrammar/current-generation` pointer and
+`.repogrammar/generations/` directory exist, prune may use the legacy directory
+fallback; that fallback must refuse missing or corrupt active-generation
+pointers, symlinked generation directories, and generation entries that are not
+directories.
 
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
@@ -211,9 +215,10 @@ require an initialized repository-local state directory. The implemented
 bootstrap path runs TS/JS, bounded TS/JS project-config, and Python `.py`
 discovery, reads source through a repo-relative hash-checked boundary, stores
 repo-relative file metadata and syntax-only code-unit records plus any
-syntax-origin framework-role fact records in a new generation-scoped SQLite
-database, validates the generation, and atomically activates
-`.repogrammar/current-generation`. Human and JSON output must report
+syntax-origin framework-role fact records in a new building generation inside
+`.repogrammar/repogrammar.sqlite`, validates the generation, and atomically
+marks that generation active while downgrading any previously active row to
+validated. Human and JSON output must report
 `indexing: syntax_only_code_units`, the actual `indexed_units` count,
 the actual `semantic_facts` count, `parser: syntax_only`, `semantic_worker`,
 and `mining: deferred`. By default, `semantic_worker` is `deferred`.
@@ -641,7 +646,17 @@ stored family. That unknown uses `InsufficientSupport`, affected claim
 `query target ambiguity`, and recovery guidance that tells the caller to narrow
 the target to an exact family id or member id while naming the candidate family
 ids. Query targets must be non-empty, at most 8192 bytes, and free of
-control characters. Matched family output defaults to `--mode compact`: family
+control characters. When `find`, `explain`, or `check` can deterministically
+resolve a fuzzy target to exactly one indexed repo-relative path or code unit in
+the active generation but no family evidence supports a claim for that target,
+the command returns `status: PARTIAL_CONTEXT` instead of pretending a family was
+found. `PARTIAL_CONTEXT` is metadata-only local context: it includes the
+resolved target, a single target read-plan item, output metadata, and a typed
+`InsufficientSupport` unknown for `pattern family evidence for resolved target`.
+It is not family evidence, not conformance evidence, and not safe to treat as a
+supported pattern claim. Exact `family` and `member` lookups continue to return
+typed `UNKNOWN` when their exact ids are missing. Matched family output defaults
+to `--mode compact`: family
 id, classification, support, members, variation slots, typed unknowns, selected
 output metadata, a `read_plan`, and no evidence records or source snippets.
 `--mode evidence` adds budgeted repo-relative evidence metadata:
@@ -704,13 +719,15 @@ The bootstrap recognizes the command surface and required options. `init`
 creates safe repo-local lifecycle state, `.repogrammar/.gitignore`, required
 lifecycle subdirectories, a bootstrap manifest, `receipts/init.json`, and Git
 ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
-directory. `prune --yes` removes only old inactive generation directories after
-storage health and active-generation checks; `prune --dry-run` reports the same
-candidates without writes. `status`, `doctor`, `unlock`, and `logs` expose
+directory. `prune --yes` removes only old inactive generation rows from the
+mutable database after storage health and active-generation checks; when only
+legacy generation directories exist, it falls back to pruning those directories.
+`prune --dry-run` reports the same candidates without writes. `status`,
+`doctor`, `unlock`, and `logs` expose
 human and JSON-safe repo-local lifecycle information without claiming
 parser/mining support; `logs` returns a bounded redacted tail for selected
 repo-local component logs.
-`index` and `sync` currently create syntax-only SQLite generations from the
+`index` and `sync` currently create syntax-only mutable SQLite generations from the
 TS/JS file discovery substrate, bounded TS/JS project-config inventory, plus
 the Python `.py` discovery/CPython AST structural extractor. Their JSON output
 includes `generation_id`, `active_generation`, `discovered_files`,

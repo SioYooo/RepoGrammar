@@ -27,10 +27,10 @@ use repogrammar::application::install::{
 use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::query::{
     enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
-    list_indexed_files, lookup_family_with_freshness, render_source_spans, repo_shape_diagnostics,
-    FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan, RepoShapeDiagnosticsReport,
-    SourceSpanRenderReport, SourceSpanRenderRequest,
+    list_indexed_files, lookup_family_with_freshness_and_local_context, render_source_spans,
+    repo_shape_diagnostics, FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode,
+    FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan,
+    RepoShapeDiagnosticsReport, SourceSpanRenderReport, SourceSpanRenderRequest,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -894,11 +894,12 @@ impl CliRuntime for ProductCliRuntime {
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
-        lookup_family_with_freshness(
+        lookup_family_with_freshness_and_local_context(
             FamilyEvidenceFreshnessRequest {
                 repository_root: request.path.clone(),
                 max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
+            &store,
             &store,
             &FilesystemSourceStore,
             target,
@@ -1424,6 +1425,7 @@ mod tests {
     use repogrammar::ports::parser::{SourceDocument, SourceParser};
     #[cfg(unix)]
     use repogrammar::ports::source_store::{SourceReadRequest, SourceStore};
+    use rusqlite::{params, Connection};
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::fs;
@@ -1472,6 +1474,29 @@ mod tests {
         ];
         args.extend(extra.iter().map(|value| value.to_string()));
         args
+    }
+
+    fn stored_generation_count(project: &Path) -> u32 {
+        let connection = Connection::open(project.join(".repogrammar/repogrammar.sqlite"))
+            .expect("open repository database");
+        connection
+            .query_row("SELECT count(*) FROM index_generations", [], |row| {
+                row.get(0)
+            })
+            .expect("count generations")
+    }
+
+    fn stored_generation_exists(project: &Path, generation_id: &str) -> bool {
+        let connection = Connection::open(project.join(".repogrammar/repogrammar.sqlite"))
+            .expect("open repository database");
+        let count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM index_generations WHERE generation_id = ?1",
+                params![generation_id],
+                |row| row.get(0),
+            )
+            .expect("check generation");
+        count == 1
     }
 
     #[test]
@@ -1790,6 +1815,16 @@ mod tests {
 
     fn assert_unknown_query_json(command: &str, value: &Value) {
         assert_eq!(value["command"], command);
+        if matches!(command, "find" | "explain" | "check") && value["status"] == "PARTIAL_CONTEXT" {
+            assert_eq!(value["implemented"], true);
+            assert_eq!(value["read_plan"]["source_snippets_included"], false);
+            assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
+            assert_eq!(
+                value["unknowns"][0]["affected_claim"],
+                "pattern family evidence for resolved target"
+            );
+            return;
+        }
         assert_eq!(value["status"], "UNKNOWN");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
@@ -1802,19 +1837,31 @@ mod tests {
                 "{command} UNKNOWN leaked families: {value}"
             );
         }
-        for field in [
-            "family",
-            "member",
-            "members",
-            "variation_slots",
-            "evidence",
-            "output",
-            "check",
-            "read_plan",
-        ] {
+        let forbidden_fields: &[&str] = if value["status"] == "PARTIAL_CONTEXT" {
+            &[
+                "family",
+                "member",
+                "members",
+                "variation_slots",
+                "evidence",
+                "check",
+            ]
+        } else {
+            &[
+                "family",
+                "member",
+                "members",
+                "variation_slots",
+                "evidence",
+                "output",
+                "check",
+                "read_plan",
+            ]
+        };
+        for field in forbidden_fields {
             assert!(
                 value.get(field).is_none(),
-                "{command} UNKNOWN leaked claim field {field}: {value}"
+                "{command} no-claim response leaked claim field {field}: {value}"
             );
         }
     }
@@ -5295,14 +5342,7 @@ mod tests {
                 run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
             assert_eq!(index.status, 0, "{index:?}");
         }
-        let generations_dir = workspace.path().join(".repogrammar/generations");
-        assert_eq!(
-            fs::read_dir(&generations_dir)
-                .expect("read generations")
-                .filter(|entry| entry.as_ref().is_ok_and(|entry| entry.path().is_dir()))
-                .count(),
-            4
-        );
+        assert_eq!(stored_generation_count(workspace.path()), 4);
 
         let dry_run = run_with_runtime(
             cli_args(
@@ -5321,13 +5361,7 @@ mod tests {
         assert!(!dry_run
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
-        assert_eq!(
-            fs::read_dir(&generations_dir)
-                .expect("read generations")
-                .filter(|entry| entry.as_ref().is_ok_and(|entry| entry.path().is_dir()))
-                .count(),
-            4
-        );
+        assert_eq!(stored_generation_count(workspace.path()), 4);
 
         let prune = run_with_runtime(
             cli_args(
@@ -5343,17 +5377,11 @@ mod tests {
         assert_eq!(value["active_generation"], "gen-000004");
         assert_eq!(value["retained_inactive_generations"][0], "gen-000003");
         assert_eq!(value["deleted_generations"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            fs::read_dir(&generations_dir)
-                .expect("read generations")
-                .filter(|entry| entry.as_ref().is_ok_and(|entry| entry.path().is_dir()))
-                .count(),
-            2
-        );
-        assert!(!generations_dir.join("gen-000001").exists());
-        assert!(!generations_dir.join("gen-000002").exists());
-        assert!(generations_dir.join("gen-000003").is_dir());
-        assert!(generations_dir.join("gen-000004").is_dir());
+        assert_eq!(stored_generation_count(workspace.path()), 2);
+        assert!(!stored_generation_exists(workspace.path(), "gen-000001"));
+        assert!(!stored_generation_exists(workspace.path(), "gen-000002"));
+        assert!(stored_generation_exists(workspace.path(), "gen-000003"));
+        assert!(stored_generation_exists(workspace.path(), "gen-000004"));
 
         let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
         assert_eq!(status.status, 0);

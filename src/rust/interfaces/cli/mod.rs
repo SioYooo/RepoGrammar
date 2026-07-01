@@ -14,10 +14,10 @@ use crate::application::query::{
     read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
     validate_query_target, validate_query_token_budget, DiagnosticSignal, FamilyDetailReport,
     FamilyEvidenceMode, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, SelectedFamilyEvidence,
-    SourceSpanRenderReport, TokenSavingReadiness,
+    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryUnknown, FamilyUnknownReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
+    ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TokenSavingReadiness,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -1153,10 +1153,11 @@ fn prepare_family_output(
     options: FamilyOutputOptions,
     include_source_spans: bool,
 ) -> Result<Option<PreparedFamilyOutput>, RepoGrammarError> {
-    let FamilyLookupReport::Found(family) = report else {
-        return Ok(None);
+    let base_read_plan = match report {
+        FamilyLookupReport::Found(family) => build_read_plan(family, target, mode, options),
+        FamilyLookupReport::PartialContext(report) => report.read_plan.clone(),
+        FamilyLookupReport::Unknown(_) => return Ok(None),
     };
-    let base_read_plan = build_read_plan(family, target, mode, options);
     let mut read_plan = runtime.enrich_read_plan_line_ranges(request.clone(), &base_read_plan)?;
     let source_spans = if include_source_spans {
         let rendered =
@@ -1491,8 +1492,51 @@ fn family_lookup_human(
             }
             output
         }
+        FamilyLookupReport::PartialContext(report) => {
+            family_partial_context_human(command, report, options, prepared_output)
+        }
         FamilyLookupReport::Unknown(report) => family_unknown_human(command, report),
     }
+}
+
+fn family_partial_context_human(
+    command: &str,
+    report: &FamilyPartialContextReport,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> String {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&report.read_plan);
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let snippets = if read_plan.source_snippets_included {
+        "included"
+    } else {
+        "not_included"
+    };
+    let mut output = format!(
+        "{command}: PARTIAL_CONTEXT\nactive_generation: {}\nresolved_target: {}\tpath: {}\tcode_unit_id: {}\tmatch_kind: {}\nestimated_read_plan_tokens: {}\nsource_snippets: {}\nread_plan_requires_source_before_edit: {}\n",
+        report.active_generation,
+        report.resolved_target.original_target,
+        report.resolved_target.path,
+        report
+            .resolved_target
+            .code_unit_id
+            .as_deref()
+            .unwrap_or("none"),
+        report.resolved_target.match_kind,
+        read_plan.estimated_tokens,
+        snippets,
+        read_plan.requires_source_before_edit
+    );
+    push_read_plan_human(&mut output, read_plan, options.evidence_mode);
+    if let Some(source_spans) = source_spans {
+        push_source_spans_human(&mut output, source_spans);
+    }
+    for unknown in &report.unknowns {
+        push_unknown_human(&mut output, unknown);
+    }
+    output
 }
 
 fn family_unknown_human(command: &str, report: &FamilyUnknownReport) -> String {
@@ -1532,6 +1576,9 @@ fn family_lookup_json(
         FamilyLookupReport::Found(family) => {
             family_detail_json(command, family, target, mode, options, prepared_output)
         }
+        FamilyLookupReport::PartialContext(report) => {
+            family_partial_context_json(command, report, options, prepared_output)
+        }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
             "status": "UNKNOWN",
@@ -1540,6 +1587,36 @@ fn family_lookup_json(
             "unknowns": unknowns_json(&report.unknowns),
         })),
     }
+}
+
+fn family_partial_context_json(
+    command: &str,
+    report: &FamilyPartialContextReport,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> String {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&report.read_plan);
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    json_line(json!({
+        "command": command,
+        "status": "PARTIAL_CONTEXT",
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "resolved_target": resolved_target_json(&report.resolved_target),
+        "output": {
+            "mode": options.evidence_mode.as_str(),
+            "token_budget": options.token_budget,
+            "estimated_read_plan_tokens": read_plan.estimated_tokens,
+            "selection_strategy": read_plan.selection_strategy,
+            "budget_satisfied": read_plan.budget_satisfied,
+            "source_snippets_included": read_plan.source_snippets_included,
+        },
+        "read_plan": read_plan_json(read_plan),
+        "source_spans": source_spans_json(source_spans),
+        "unknowns": unknowns_json(&report.unknowns),
+    }))
 }
 
 fn family_detail_json(
@@ -1656,6 +1733,15 @@ fn family_output_components(
         read_plan,
         estimated_potential_token_savings,
     }
+}
+
+fn resolved_target_json(target: &ResolvedQueryTarget) -> serde_json::Value {
+    json!({
+        "original_target": target.original_target,
+        "path": target.path,
+        "code_unit_id": target.code_unit_id,
+        "match_kind": target.match_kind,
+    })
 }
 
 fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyEvidenceMode) {
@@ -5921,7 +6007,8 @@ mod tests {
         index_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
     use crate::application::query::{
-        list_code_units, list_families, list_indexed_files, lookup_family, FamilySummary,
+        list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
+        FamilySummary,
     };
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
@@ -5929,7 +6016,7 @@ mod tests {
     };
     use crate::ports::index_store::STORAGE_SCHEMA_VERSION;
     use crate::test_support::TempWorkspace;
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
     use serde_json::{json, Value};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
@@ -6753,7 +6840,7 @@ mod tests {
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
-            lookup_family(&store, target, mode)
+            lookup_family_with_local_context(&store, &store, target, mode)
         }
     }
 
@@ -6761,14 +6848,12 @@ mod tests {
         let database = workspace
             .path()
             .join(DEFAULT_STATE_DIR)
-            .join("generations")
-            .join(generation_id)
             .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection = Connection::open(database).expect("open repository database");
         let paths = connection
-            .prepare("SELECT path FROM indexed_files ORDER BY path")
+            .prepare("SELECT path FROM indexed_files WHERE generation_id = ?1 ORDER BY path")
             .expect("prepare indexed paths")
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map(params![generation_id], |row| row.get::<_, String>(0))
             .expect("query indexed paths")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect indexed paths");
@@ -7683,6 +7768,45 @@ mod tests {
     }
 
     #[test]
+    fn family_query_json_returns_partial_context_for_indexed_target_without_family() {
+        let workspace = TempWorkspace::new("cli-query-partial-context");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let output = run_with_context_and_runtime(
+            ["find", "a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value =
+            serde_json::from_str(output.stdout.trim()).expect("partial context JSON");
+        assert_eq!(value["command"], "find");
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolved_target"]["path"], "a.ts");
+        assert_eq!(value["read_plan"]["source_snippets_included"], false);
+        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
+        assert_eq!(value["read_plan"]["items"][0]["path"], "a.ts");
+        assert_eq!(
+            value["unknowns"][0]["affected_claim"],
+            "pattern family evidence for resolved target"
+        );
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!output.stdout.contains("export const"));
+    }
+
+    #[test]
     fn family_query_compact_mode_omits_evidence_without_source_leakage() {
         let workspace = TempWorkspace::new("cli-family-query-json");
         let env = |_: &str| None;
@@ -8295,8 +8419,8 @@ mod tests {
     }
 
     #[test]
-    fn files_and_units_fallback_to_doctor_for_broken_active_pointer() {
-        let workspace = TempWorkspace::new("cli-files-units-broken-pointer");
+    fn files_and_units_ignore_legacy_pointer_when_mutable_index_exists() {
+        let workspace = TempWorkspace::new("cli-files-units-legacy-pointer");
         let env = |_: &str| None;
         let runtime = TestRuntime;
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
@@ -8317,15 +8441,11 @@ mod tests {
         for command in ["files", "units"] {
             let output =
                 run_with_context_and_runtime([command, "--json"], workspace.path(), &env, &runtime);
-            assert_eq!(output.status, 2);
-            assert!(output.stdout.is_empty());
-            let fallback: Value =
-                serde_json::from_str(output.stderr.trim()).expect("query fallback must be JSON");
-            assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
-            assert_eq!(fallback["reason"], "repository status is unavailable");
-            assert_eq!(fallback["guidance"], "run repogrammar doctor");
-            assert_eq!(fallback["command"], command);
-            assert_eq!(fallback["implemented"], true);
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            let value: Value =
+                serde_json::from_str(output.stdout.trim()).expect("inventory output must be JSON");
+            assert_eq!(value["active_generation"], "gen-000001");
         }
     }
 
@@ -8734,8 +8854,13 @@ mod tests {
         assert!(workspace
             .path()
             .join(DEFAULT_STATE_DIR)
-            .join("current-generation")
+            .join("repogrammar.sqlite")
             .is_file());
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .exists());
         assert!(!workspace
             .path()
             .join(DEFAULT_STATE_DIR)
@@ -8813,17 +8938,16 @@ mod tests {
         assert_eq!(value["discovered_files"], 2);
         assert_eq!(value["stored_files"], 2);
         assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 2);
-        assert_eq!(
-            fs::read_to_string(
-                workspace
-                    .path()
-                    .join(DEFAULT_STATE_DIR)
-                    .join("current-generation")
-            )
-            .expect("read current generation")
-            .trim(),
-            "gen-000002"
-        );
+        assert!(workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("repogrammar.sqlite")
+            .is_file());
+        assert!(!workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("current-generation")
+            .exists());
         assert!(!workspace
             .path()
             .join(DEFAULT_STATE_DIR)
@@ -8931,8 +9055,8 @@ mod tests {
         let env = |_: &str| None;
         let runtime = TestRuntime;
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
-        let generations = workspace.path().join(DEFAULT_STATE_DIR).join("generations");
-        fs::remove_dir_all(&generations).expect("remove generations");
+        let cache = workspace.path().join(DEFAULT_STATE_DIR).join("cache");
+        fs::remove_dir_all(&cache).expect("remove cache");
 
         let output =
             run_with_context_and_runtime(["index", "--json"], workspace.path(), &env, &runtime);
@@ -8945,7 +9069,7 @@ mod tests {
             .as_str()
             .expect("reason")
             .contains("missing required subdirectories"));
-        assert!(!generations.exists());
+        assert!(!cache.exists());
         assert!(!workspace
             .path()
             .join(DEFAULT_STATE_DIR)
@@ -9026,8 +9150,8 @@ mod tests {
         let env = |_: &str| None;
         let runtime = TestRuntime;
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
-        let generations = workspace.path().join(DEFAULT_STATE_DIR).join("generations");
-        fs::remove_dir_all(&generations).expect("remove generations");
+        let cache = workspace.path().join(DEFAULT_STATE_DIR).join("cache");
+        fs::remove_dir_all(&cache).expect("remove cache");
 
         let status =
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
@@ -9042,7 +9166,7 @@ mod tests {
         assert!(value["storage_error"]
             .as_str()
             .expect("storage error")
-            .contains("generations"));
+            .contains("cache"));
 
         let doctor =
             run_with_context_and_runtime(["doctor", "--json"], workspace.path(), &env, &runtime);
@@ -9063,7 +9187,7 @@ mod tests {
             .expect("findings")
             .iter()
             .any(|finding| finding["code"] == "STORAGE_INVALID"));
-        assert!(!generations.exists());
+        assert!(!cache.exists());
     }
 
     #[test]
@@ -9219,16 +9343,11 @@ mod tests {
     }
 
     #[test]
-    fn doctor_reports_broken_active_generation_pointer_without_panic() {
+    fn doctor_reports_legacy_broken_active_generation_pointer_without_panic() {
         let workspace = TempWorkspace::new("cli-storage-broken-pointer");
         let env = |_: &str| None;
         let runtime = TestRuntime;
-        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
-        assert_eq!(
-            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
-            0
-        );
         fs::write(
             workspace
                 .path()

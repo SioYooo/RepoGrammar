@@ -26,8 +26,9 @@ placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
 `index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python files,
 read source through a hash-checked repo-relative boundary, store repo-relative file
-metadata and structural code units in a generation-scoped SQLite database,
-validate that generation, and activate `.repogrammar/current-generation`. The
+metadata and structural code units in a building generation inside the mutable
+`.repogrammar/repogrammar.sqlite` database, validate that generation, and mark
+the corresponding `index_generations` row active. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
 semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation

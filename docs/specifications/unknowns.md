@@ -181,7 +181,15 @@ Human and JSON CLI output must distinguish:
 - missing-index fallback;
 - stale-index refusal;
 - not-yet-implemented query execution;
+- deterministic local `PARTIAL_CONTEXT` that resolves a target but has no
+  family evidence;
 - typed `UNKNOWN` from a real analysis result.
+
+`PARTIAL_CONTEXT` is not a weakened success state. It may provide a
+metadata-only read plan for a fresh indexed path or code unit, but it must carry
+typed `InsufficientSupport` for the missing pattern-family claim and must not
+include family evidence, member evidence, conformance status, or source text
+unless the normal explicit source-span opt-in succeeds.
 
 When public family output is blocked by `StaleEvidence`,
 `InsufficientSupport`, or another claim-relevant `UNKNOWN`, CLI and MCP output

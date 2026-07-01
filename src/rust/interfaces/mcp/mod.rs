@@ -4,9 +4,9 @@ use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, query_preflight,
     read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
     validate_query_target, validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyQueryUnknown,
-    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
+    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport,
+    FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
     MAX_QUERY_TOKEN_BUDGET,
 };
 #[cfg(test)]
@@ -301,6 +301,51 @@ pub fn handle_context_call(
                 Ok(family_detail_value(
                     arguments.operation,
                     &family,
+                    &read_plan,
+                    arguments.output_options,
+                    source_spans.as_ref(),
+                ))
+            }
+            Ok(FamilyLookupReport::PartialContext(report)) => {
+                let mut read_plan = match runtime
+                    .enrich_read_plan_line_ranges(request.clone(), &report.read_plan)
+                {
+                    Ok(read_plan) => read_plan,
+                    Err(_) => {
+                        return Ok(fallback_value(
+                            arguments.operation,
+                            repository_status_unavailable_fallback(
+                                QueryPreflightOperation::PatternFamilyQuery,
+                            ),
+                        ));
+                    }
+                };
+                let source_spans = if arguments.include_source_spans {
+                    match runtime.render_source_spans(
+                        request.clone(),
+                        &read_plan,
+                        true,
+                        arguments.output_options.token_budget,
+                    ) {
+                        Ok(source_spans) => {
+                            read_plan = read_plan_with_rendered_spans(&read_plan, &source_spans);
+                            Some(source_spans)
+                        }
+                        Err(_) => {
+                            return Ok(fallback_value(
+                                arguments.operation,
+                                repository_status_unavailable_fallback(
+                                    QueryPreflightOperation::PatternFamilyQuery,
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(family_partial_context_value(
+                    arguments.operation,
+                    &report,
                     &read_plan,
                     arguments.output_options,
                     source_spans.as_ref(),
@@ -700,6 +745,43 @@ fn family_detail_value(
     })
 }
 
+fn family_partial_context_value(
+    operation: McpOperation,
+    report: &FamilyPartialContextReport,
+    read_plan: &ReadPlan,
+    options: FamilyOutputOptions,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Value {
+    json!({
+        "operation": operation.as_str(),
+        "command": operation.cli_command(),
+        "status": "PARTIAL_CONTEXT",
+        "implemented": true,
+        "active_generation": report.active_generation,
+        "resolved_target": resolved_target_value(&report.resolved_target),
+        "output": {
+            "mode": options.evidence_mode.as_str(),
+            "token_budget": options.token_budget,
+            "estimated_read_plan_tokens": read_plan.estimated_tokens,
+            "selection_strategy": read_plan.selection_strategy,
+            "budget_satisfied": read_plan.budget_satisfied,
+            "source_snippets_included": read_plan.source_snippets_included,
+        },
+        "read_plan": read_plan_value(read_plan),
+        "source_spans": source_spans_value(source_spans),
+        "unknowns": unknowns_value(&report.unknowns),
+    })
+}
+
+fn resolved_target_value(target: &ResolvedQueryTarget) -> Value {
+    json!({
+        "original_target": target.original_target,
+        "path": target.path,
+        "code_unit_id": target.code_unit_id,
+        "match_kind": target.match_kind,
+    })
+}
+
 fn read_plan_value(read_plan: &ReadPlan) -> Value {
     json!({
         "estimated_tokens": read_plan.estimated_tokens,
@@ -958,6 +1040,35 @@ mod tests {
         assert_eq!(response["implemented"], true);
         assert_eq!(response["unknowns"][0]["reason"], "InsufficientSupport");
         assert_eq!(runtime.lookup_calls(), 1);
+    }
+
+    #[test]
+    fn active_generation_with_resolved_target_without_family_returns_partial_context() {
+        let runtime = FakeMcpRuntime::ready_partial_context();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "find_analogues", "target": "src/routes/a.ts missing_family"}),
+        )
+        .expect("partial context response");
+        let text = response.to_string();
+
+        assert_eq!(response["status"], "PARTIAL_CONTEXT");
+        assert_eq!(response["implemented"], true);
+        assert_eq!(response["resolved_target"]["path"], "src/routes/a.ts");
+        assert_eq!(
+            response["read_plan"]["items"][0]["purpose"],
+            "target_body_required_for_edit"
+        );
+        assert_eq!(response["read_plan"]["source_snippets_included"], false);
+        assert_eq!(response["source_spans"]["requested"], false);
+        assert_eq!(
+            response["unknowns"][0]["affected_claim"],
+            "pattern family evidence for resolved target"
+        );
+        assert!(!text.contains("/tmp/repogrammar"));
+        assert!(!text.contains("export const"));
     }
 
     #[test]
@@ -1436,6 +1547,15 @@ mod tests {
             )
         }
 
+        fn ready_partial_context() -> Self {
+            Self::new(
+                RepositoryStatus::Initialized {
+                    active_generation: "gen-000001".to_string(),
+                },
+                partial_context_report(),
+            )
+        }
+
         fn ready_found_with_source_spans() -> Self {
             let mut runtime = Self::ready_found();
             runtime.source_spans = Some(source_span_report());
@@ -1537,6 +1657,53 @@ mod tests {
                 affected_claim: "query target".to_string(),
                 recovery: Some(
                     "run repogrammar resync after adding compatible implementations".to_string(),
+                ),
+            }],
+        })
+    }
+
+    fn partial_context_report() -> FamilyLookupReport {
+        let hash = ContentHash::new(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("valid hash");
+        let why = "read this resolved target body before editing; no pattern-family evidence is available";
+        FamilyLookupReport::PartialContext(FamilyPartialContextReport {
+            active_generation: "gen-000001".to_string(),
+            resolved_target: ResolvedQueryTarget {
+                original_target: "src/routes/a.ts missing_family".to_string(),
+                path: "src/routes/a.ts".to_string(),
+                code_unit_id: Some("unit:src/routes/a.ts#express_route:get:0-20:1".to_string()),
+                match_kind: "path_embedded",
+            },
+            read_plan: ReadPlan {
+                items: vec![ReadPlanItem {
+                    purpose: ReadPlanPurpose::TargetBodyRequiredForEdit,
+                    path: "src/routes/a.ts".to_string(),
+                    content_hash: hash,
+                    start_byte: 0,
+                    end_byte: 20,
+                    start_line: None,
+                    end_line: None,
+                    estimated_tokens: 42,
+                    why: why.to_string(),
+                    source_required_before_edit: true,
+                    source_snippets_included: false,
+                }],
+                estimated_tokens: 42,
+                source_snippets_included: false,
+                requires_source_before_edit: true,
+                selection_strategy: "deterministic_local_context_v1",
+                budget_satisfied: true,
+                line_range_omissions: Vec::new(),
+            },
+            unknowns: vec![FamilyQueryUnknown {
+                class: UnknownClass::Blocking,
+                reason: UnknownReasonCode::InsufficientSupport,
+                affected_claim: "pattern family evidence for resolved target".to_string(),
+                recovery: Some(
+                    "treat this as source-reading context only; rerun repogrammar resync after compatible family evidence exists"
+                        .to_string(),
                 ),
             }],
         })
