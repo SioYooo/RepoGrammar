@@ -22,6 +22,11 @@ allowed.
 - Helper code used only by tests must be gated with `#[cfg(test)]` or an
   equivalent test-only cfg so `cargo clippy --all-targets` does not compile it
   as dead production code.
+- Dependency updates that require Rust API adaptation must run compile,
+  clippy, and full test gates against the updated lockfile. Parser, hash, or
+  workflow-action major-version updates must preserve the existing fixture and
+  source-free-output test coverage rather than relying on the dependency bump
+  alone.
 - Symlink safety tests must assert rejection on hosts that can create symlinks.
   On Windows sessions that lack the symlink creation privilege, tests may exit
   early only after confirming the failure is the platform privilege or
