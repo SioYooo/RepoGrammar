@@ -20,6 +20,9 @@
   replacing a changed path removes stale path-scoped records and marks derived
   dependents dirty in the same SQLite transaction. Removed indexed paths now
   use the same fail-closed path-scoped cascade and dirty-marker behavior.
+  Successful mutable index activation and mutating mutable prune operations now
+  apply bounded SQLite maintenance with `PRAGMA optimize` and a passive WAL
+  checkpoint without running automatic `VACUUM`.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

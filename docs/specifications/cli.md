@@ -179,6 +179,10 @@ When only a legacy `.repogrammar/current-generation` pointer and
 fallback; that fallback must refuse missing or corrupt active-generation
 pointers, symlinked generation directories, and generation entries that are not
 directories.
+After a destructive mutable-database prune commits, the storage adapter runs
+bounded SQLite maintenance with `PRAGMA optimize` and a passive WAL checkpoint.
+This maintenance must not run blocking `VACUUM` and must not remove active
+mutable records.
 
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
@@ -734,7 +738,11 @@ ignore hygiene. `uninit --yes` removes only the resolved RepoGrammar state
 directory. `prune --yes` removes only old inactive generation rows from the
 mutable database after storage health and active-generation checks; when only
 legacy generation directories exist, it falls back to pruning those directories.
-`prune --dry-run` reports the same candidates without writes. `status`,
+`prune --dry-run` reports the same candidates without writes. Successful
+mutable index activation and destructive mutable prune run bounded SQLite
+maintenance through `PRAGMA optimize` and passive WAL checkpointing; there is
+no automatic `VACUUM` or separate public `compact` command in this slice.
+`status`,
 `doctor`, `unlock`, and `logs` expose
 human and JSON-safe repo-local lifecycle information without claiming
 parser/mining support; `logs` returns a bounded redacted tail for selected

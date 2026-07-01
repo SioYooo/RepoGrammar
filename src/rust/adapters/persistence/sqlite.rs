@@ -470,6 +470,7 @@ impl IndexStore for SqliteIndexStore {
                 .map_err(sql_unavailable)?;
         }
         transaction.commit().map_err(sql_unavailable)?;
+        let _ = run_post_commit_maintenance(&connection)?;
         Ok(())
     }
 
@@ -1033,6 +1034,7 @@ impl SqliteIndexStore {
                 deleted_generations.push(candidate.generation_id);
             }
             transaction.commit().map_err(sql_unavailable)?;
+            let _ = run_post_commit_maintenance(&connection)?;
         }
 
         Ok(GenerationPruneReport {
@@ -2200,6 +2202,32 @@ fn apply_read_pragmas(connection: &Connection) -> rusqlite::Result<()> {
          PRAGMA busy_timeout=5000;
          PRAGMA temp_store=MEMORY;",
     )
+}
+
+fn run_post_commit_maintenance(
+    connection: &Connection,
+) -> Result<(u64, u64, u64), IndexStoreError> {
+    connection
+        .execute_batch("PRAGMA optimize;")
+        .map_err(sql_unavailable)?;
+    let (busy, log_frames, checkpointed_frames) = connection
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    Ok((
+        nonnegative_pragma_count(busy, "WAL checkpoint busy count")?,
+        nonnegative_pragma_count(log_frames, "WAL checkpoint log frame count")?,
+        nonnegative_pragma_count(checkpointed_frames, "WAL checkpointed frame count")?,
+    ))
+}
+
+fn nonnegative_pragma_count(value: i64, label: &'static str) -> Result<u64, IndexStoreError> {
+    u64::try_from(value).map_err(|_| IndexStoreError::InvalidState(format!("{label} is invalid")))
 }
 
 fn open_connection(
@@ -4575,6 +4603,34 @@ mod tests {
         assert_eq!(inspection.busy_timeout_ms, Some(5_000));
         assert_eq!(inspection.temp_store.as_deref(), Some("memory"));
         assert_eq!(inspection.integrity_check.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn post_commit_maintenance_runs_optimize_and_passive_wal_checkpoint() {
+        let workspace = TempWorkspace::new("sqlite-post-commit-maintenance");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open active generation");
+        let (busy, log_frames, checkpointed_frames) =
+            run_post_commit_maintenance(&connection).expect("post-commit maintenance");
+
+        assert_eq!(
+            active_generation_id(&connection).expect("active generation"),
+            Some(generation.generation_id)
+        );
+        assert!(
+            busy > 0 || checkpointed_frames <= log_frames,
+            "passive WAL checkpoint reported impossible frame counts: busy={busy}, log={log_frames}, checkpointed={checkpointed_frames}"
+        );
     }
 
     #[test]
