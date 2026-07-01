@@ -142,6 +142,25 @@ root manifest sections are typed build-variant `UNKNOWN`s that block affected
 Rust self-dogfood families until resolved. Nested fixture/package manifests
 must not globally block unrelated root Rust family support.
 
+Java support in the v0.2 preview is a conservative Spring/Spring Boot
+structural slice. RepoGrammar can discover `.java` files, parse Java classes,
+interfaces, methods, and Spring-shaped units with Tree-sitter Java, and derive
+bounded support for exact source-visible Spring annotations only when the
+annotation is fully qualified or imported from the expected Spring package.
+The supported Spring targets are Spring MVC `@RequestMapping` /
+`@GetMapping` / `@PostMapping` / `@PutMapping` / `@PatchMapping` /
+`@DeleteMapping`, Spring stereotypes including `@Controller`,
+`@RestController`, `@Service`, `@Repository`, and `@Component`,
+`@SpringBootApplication`, and Spring Data repository interfaces that exactly
+extend/import `JpaRepository` or use exact `@RepositoryDefinition`. The parser
+does not execute Maven, Gradle, javac, annotation processors, Spring component
+scans, dependency injection, AOP proxies, repository factories, or classpath
+resolution. Lookalike simple annotations without exact imports, custom composed
+annotations, route constants, DI/proxy semantics, missing project context, and
+classpath-sensitive behavior remain typed `UNKNOWN` or non-supporting context.
+Java/Spring families require at least three complete-link-compatible derived
+support facts and no claim-relevant blocking `UNKNOWN`.
+
 ## Public-preview support matrix
 
 | Area | Status | Public claim |
@@ -160,6 +179,9 @@ must not globally block unrelated root Rust family support.
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
 | Rust provider-backed project model | Preview | Default indexing can refresh Cargo metadata `PROJECT_CONFIG` facts for discovered manifests without build-script/proc-macro execution; rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
+| Java Spring MVC | Structural v0.2 preview | Exact imported/FQN Spring MVC route annotations inside exact controllers; route constants and runtime dispatch remain typed `UNKNOWN` subclaims. |
+| Java Spring/Spring Boot components | Structural v0.2 preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain runtime `UNKNOWN`s. |
+| Java Spring Data | Structural v0.2 preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, module selection, and classpath resolution remain `UNKNOWN`. |
 | TS/JS provider-backed semantics | Planned preview | Provider ports exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
@@ -204,8 +226,8 @@ candidates also have strong same-generation `SEMANTIC` or `DATAFLOW_DERIVED`
 non-framework evidence. That support must be role-compatible: an arbitrary
 semantic fact for an unrelated package, API, or framework cannot prove an
 FastAPI, pytest, SQLAlchemy, Pydantic, Express, Jest/Vitest, Next.js, Fastify,
-Prisma, or Drizzle family. React components/hooks are currently recognized only
-as syntax/framework-role shapes and stay `UNKNOWN`.
+Prisma, Drizzle, or Java/Spring family. React components/hooks are currently
+recognized only as syntax/framework-role shapes and stay `UNKNOWN`.
 Otherwise family queries must return typed `UNKNOWN` rather than upgrading
 syntax/framework heuristics into claims.
 Family query output is selected rather than dumped wholesale. The default

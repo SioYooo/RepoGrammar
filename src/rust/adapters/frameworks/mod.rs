@@ -8,6 +8,7 @@ use crate::core::policy::rust_self_dogfood::rust_self_dogfood_role_for_unit;
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 
 pub mod express;
+pub mod java;
 pub mod jest;
 pub mod nestjs;
 pub mod react;
@@ -40,6 +41,14 @@ struct FrameworkRole<'a> {
 
 fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
     if let Some(role) = tsjs::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = java::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,
@@ -176,6 +185,13 @@ mod tests {
                     CodeUnitKind::SqlAlchemyRepositoryMethod,
                     "sqlalchemy-repository",
                 ),
+                java_unit(CodeUnitKind::SpringMvcRoute, "spring-route"),
+                java_unit(CodeUnitKind::SpringComponent, "spring-component"),
+                java_unit(
+                    CodeUnitKind::SpringBootApplication,
+                    "spring-boot-application",
+                ),
+                java_unit(CodeUnitKind::SpringDataRepository, "spring-data-repository"),
                 rust_unit(
                     CodeUnitKind::RustFunction,
                     "src/rust/application/indexing.rs",
@@ -189,7 +205,7 @@ mod tests {
             ])
             .expect("detect roles");
 
-        assert_eq!(facts.len(), 24);
+        assert_eq!(facts.len(), 28);
         let forbidden_fragments = [
             "/tmp/secret",
             "UNIQUE_SOURCE_SENTINEL_DO_NOT_STORE",
@@ -250,6 +266,10 @@ mod tests {
                 "framework:pydantic.model",
                 "framework:sqlalchemy.model",
                 "framework:sqlalchemy.repository_method",
+                "framework:spring.mvc_route",
+                "framework:spring.component",
+                "framework:spring_boot.application",
+                "framework:spring_data.repository",
                 "framework:repogrammar.rust_indexing_phase",
                 "framework:repogrammar.rust_product_test"
             ]
@@ -272,6 +292,25 @@ mod tests {
             .expect("detect roles");
 
         assert!(facts.is_empty());
+    }
+
+    fn java_unit(kind: CodeUnitKind, id_suffix: &str) -> CodeUnit {
+        CodeUnit {
+            id: CodeUnitId::new(format!("unit:src/main/java/App.java#{id_suffix}"))
+                .expect("valid id"),
+            language: Language::Java,
+            kind,
+            range: SourceRange::new(0, 10).expect("valid range"),
+            provenance: Provenance::new(
+                "src/main/java/App.java",
+                ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            )
+            .expect("valid provenance"),
+        }
     }
 
     fn rust_unit(kind: CodeUnitKind, path: &str, name: &str) -> CodeUnit {

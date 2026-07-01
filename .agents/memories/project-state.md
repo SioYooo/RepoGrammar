@@ -66,6 +66,13 @@
   target-dependency inventory. Root `Cargo.toml` build-variant UNKNOWN can block
   repository-wide Rust self-dogfood family emission, but nested fixture/package
   manifests must not globally block unrelated root Rust family support.
+  A conservative v0.2 Java/Spring preview slice now discovers `.java` files,
+  parses Java with Tree-sitter Java, recognizes exact imported/FQN Spring MVC,
+  stereotype, Spring Boot, and Spring Data anchors, derives
+  `repogrammar-java-derived` support only under exact target and safe-origin
+  gates, and keeps simple lookalikes, route constants, DI/proxy/component-scan,
+  Maven/Gradle/javac/annotation-processor, classpath, and generated repository
+  behavior as typed `UNKNOWN` or non-supporting context.
   `repogrammar init --yes --resync --autosync` is now the explicit one-command
   repository bootstrap: plain `init --yes` remains confirmation-only and does
   not index, while the combined form initializes repo-local state, runs the
@@ -200,7 +207,7 @@
   Python gitignore behavior in root and parent-worktree layouts, and explicit
   strict gitignore failure when Git ignore checks are unavailable. CLI/MCP
   query inputs share target and token-budget bounds.
-- Last updated: 2026-06-29
+- Last updated: 2026-07-02
 - Scope: Current implemented capability snapshot.
 - Evidence: Rust code, README, roadmap, CLI/storage/indexing specs, and
   `repo-guard` checks.

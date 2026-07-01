@@ -44,9 +44,12 @@ not manually parse `.git` files when native Git can provide the same fact.
 
 ## Tree-sitter boundary
 
-Tree-sitter is the intended universal syntax technology, but parser AST nodes stay in
-`src/rust/adapters/parsing/` and language-specific adapter modules. Adapters convert
-parser output into `core::model` types before returning through `ports::parser`.
+Tree-sitter is the intended universal syntax technology, but parser AST nodes
+stay in `src/rust/adapters/parsing/` and language-specific adapter modules.
+Adapters convert parser output into `core::model` types before returning
+through `ports::parser`. The current Rust production dependencies include
+`tree-sitter-rust` for internal Rust self-dogfood extraction and
+`tree-sitter-java` for conservative Java/Spring structural extraction.
 
 Tree-sitter is not a complete semantic analyzer. It can generate syntax
 features, changed ranges, code-unit candidates, decorator/call shapes, and

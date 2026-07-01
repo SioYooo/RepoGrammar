@@ -54,6 +54,13 @@
 
 ### Added
 
+- Conservative Java/Spring structural-preview support. RepoGrammar now discovers
+  `.java` files, uses Tree-sitter Java for structural Java/Spring code units,
+  emits exact imported/FQN Spring MVC/stereotype/Spring Boot/Spring Data
+  anchors, derives bounded `repogrammar-java-derived` support under exact target
+  and safe-origin gates, and preserves typed `UNKNOWN`s for lookalike
+  annotations, nonliteral route paths, DI/proxy/component-scan/runtime/classpath
+  behavior, Maven/Gradle/javac/annotation-processor semantics, and low support.
 - Conservative TS/JS structural-preview adapters for Next.js, Fastify, Prisma,
   and Drizzle. The new adapter registry adds role-compatible exact-anchor
   promotion with framework-specific `derived_from=tsjs_<framework>_structural_anchors`

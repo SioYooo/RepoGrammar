@@ -184,6 +184,13 @@ same-generation `Cargo.toml` code units exist; it does not execute build
 scripts or proc macros and does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
 semantic-provider roadmap is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md`.
+The v0.2 preview also includes a conservative Java/Spring structural slice:
+`.java` discovery, Tree-sitter Java code-unit extraction, exact imported/FQN
+Spring MVC/stereotype/Spring Boot/Spring Data anchors, application-layer
+`repogrammar-java-derived` support promotion, support>=3 family gates, and
+typed `UNKNOWN` boundaries for lookalike annotations, nonliteral route paths,
+DI/proxy/component-scan/runtime/classpath behavior. It does not execute Maven,
+Gradle, javac, annotation processors, or Spring runtime code.
 Continue one boundary at a time:
 Python repo-local module/import graph, safe project configuration, provider
 adapter execution, bounded framework-role propagation, or richer
@@ -218,6 +225,9 @@ evidence contracts remain validated together.
 
 - Official target: Python.
 - Framework focus: FastAPI, pytest, SQLAlchemy, and Pydantic.
+- v0.2 structural previews: TS/JS exact anchors, Rust self-dogfood, and
+  Java/Spring exact imported/FQN anchors remain bounded, non-official-v0.1
+  support.
 - Goal: validate pattern-family representation with high evidence density in
   Python backend and test repositories.
 

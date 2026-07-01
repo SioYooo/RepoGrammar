@@ -1,12 +1,14 @@
 //! Indexing use-case boundary.
 
-use crate::adapters::frameworks::tsjs;
+use crate::adapters::frameworks::{java, tsjs};
+use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
-    build_family_claims, family_eligible_kind, family_storage_records, min_family_support,
-    python_family_unknown_blocks_claim, python_support_target_is_role_compatible,
-    tsjs_support_target_is_role_compatible, RUST_DERIVED_SUPPORT_ENGINE,
+    build_family_claims, family_eligible_kind, family_storage_records,
+    java_support_target_is_role_compatible, min_family_support, python_family_unknown_blocks_claim,
+    python_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
+    JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE,
     RUST_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
@@ -737,6 +739,21 @@ where
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
         &derived_tsjs_support_facts,
     )?;
+    let mut derived_java_support_facts = derive_java_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_java_support_facts);
+    let derived_java_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count,
+        &derived_java_support_facts,
+    )?;
     let mut derived_rust_support_facts = derive_rust_framework_support_facts(
         &indexed_code_units,
         &parser_semantic_facts,
@@ -749,13 +766,15 @@ where
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count,
+            + derived_tsjs_support_fact_count
+            + derived_java_support_fact_count,
         &derived_rust_support_facts,
     )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
         + derived_tsjs_support_fact_count
+        + derived_java_support_fact_count
         + derived_rust_support_fact_count;
     emit_progress(
         progress,
@@ -829,6 +848,7 @@ where
                 + framework_role_facts.len()
                 + derived_python_support_facts.len()
                 + derived_tsjs_support_facts.len()
+                + derived_java_support_facts.len()
                 + derived_rust_support_facts.len()
                 + rust_provider_facts.len()
                 + worker_facts.len(),
@@ -837,6 +857,7 @@ where
         family_facts.extend(framework_role_facts.iter().cloned());
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(derived_tsjs_support_facts);
+        family_facts.extend(derived_java_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
@@ -1324,6 +1345,19 @@ where
         &derived_tsjs_support_facts,
     )?;
     next_fact_offset += derived_tsjs_support_fact_count;
+    let mut derived_java_support_facts = derive_java_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_java_support_facts);
+    let derived_java_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        next_fact_offset,
+        &derived_java_support_facts,
+    )?;
+    next_fact_offset += derived_java_support_fact_count;
     let mut derived_rust_support_facts = derive_rust_framework_support_facts(
         &indexed_code_units,
         &all_parser_facts,
@@ -1341,6 +1375,7 @@ where
         + framework_fact_count
         + derived_python_support_fact_count
         + derived_tsjs_support_fact_count
+        + derived_java_support_fact_count
         + derived_rust_support_fact_count;
     emit_progress(
         progress,
@@ -1381,12 +1416,14 @@ where
                 + all_framework_role_facts.len()
                 + derived_python_support_facts.len()
                 + derived_tsjs_support_facts.len()
+                + derived_java_support_facts.len()
                 + derived_rust_support_facts.len(),
         );
         family_facts.extend(all_parser_facts);
         family_facts.extend(all_framework_role_facts);
         family_facts.extend(derived_python_support_facts);
         family_facts.extend(derived_tsjs_support_facts);
+        family_facts.extend(derived_java_support_facts);
         family_facts.extend(derived_rust_support_facts);
         sync_report.families_recomputed = record_family_claims(
             family_store,
@@ -1432,7 +1469,10 @@ where
 fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
     matches!(
         record.origin_engine.as_str(),
-        "repogrammar-python-derived" | TSJS_DERIVED_SUPPORT_ENGINE | RUST_DERIVED_SUPPORT_ENGINE
+        "repogrammar-python-derived"
+            | TSJS_DERIVED_SUPPORT_ENGINE
+            | JAVA_DERIVED_SUPPORT_ENGINE
+            | RUST_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -2753,6 +2793,186 @@ fn derived_tsjs_framework_support_fact(
     )
 }
 
+fn derive_java_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units = java_framework_support_blocked_units(code_units, parser_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_java_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "java" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if java_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_java_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+            fact,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn java_framework_support_blocked_units(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+) -> BTreeSet<String> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocked = BTreeSet::new();
+    for fact in parser_facts {
+        if !java_framework_support_blocking_unknown(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language == "java" && parser_fact_evidence_is_within_unit(fact, unit) {
+            blocked.insert(code_unit_id.to_string());
+        }
+    }
+    blocked
+}
+
+fn java_framework_support_blocking_unknown(fact: &SemanticFact) -> bool {
+    if fact.kind != SemanticFactKind::Unknown
+        || fact.certainty != FactCertainty::Unknown
+        || fact.origin.engine != JAVA_ANCHOR_ENGINE
+        || fact.origin.method != JAVA_ANCHOR_METHOD
+    {
+        return false;
+    }
+    let Some(reason) = fact.target.as_ref().map(SymbolId::as_str) else {
+        return false;
+    };
+    let affected_claim = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("affected_claim="))
+        .unwrap_or("java_family_membership");
+    match reason {
+        "UnresolvedImport"
+        | "MissingProjectConfig"
+        | "MissingDependency"
+        | "FrameworkMagic"
+        | "ConflictingFacts"
+        | "StaleEvidence" => {
+            matches!(
+                affected_claim,
+                "java_family_membership"
+                    | "java_spring_annotation_binding"
+                    | "java_spring_controller_identity"
+                    | "java_spring_framework_identity"
+                    | "java_spring_repository_identity"
+            ) || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+fn is_java_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall
+            | SemanticFactKind::ResolvedImport
+            | SemanticFactKind::Symbol
+            | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == JAVA_ANCHOR_ENGINE
+        && fact.origin.method == JAVA_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_java_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=tree_sitter_java_structural_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        format!(
+            "derived_from={}",
+            java::support_family(target, framework_role)
+        ),
+    ];
+    assumptions.extend(
+        source_fact
+            .assumptions
+            .iter()
+            .filter(|assumption| {
+                assumption.starts_with("java_anchor_kind=")
+                    || assumption.starts_with("spring_annotation=")
+                    || assumption.starts_with("http_method=")
+                    || assumption.starts_with("route_path_shape=")
+                    || assumption.starts_with("class_route_path_shape=")
+                    || assumption.starts_with("java_visibility_shape=")
+                    || assumption.starts_with("java_return_shape=")
+                    || assumption.starts_with("java_parameter_shape=")
+                    || assumption.starts_with("java_class_shape=")
+            })
+            .cloned(),
+    );
+    assumptions.sort();
+    assumptions.dedup();
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: JAVA_DERIVED_SUPPORT_ENGINE,
+            method: JAVA_DERIVED_SUPPORT_METHOD,
+            note: "bounded Java Spring structural role support",
+            assumptions,
+        },
+    )
+}
+
 fn derive_rust_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
     parser_facts: &[SemanticFact],
@@ -3261,6 +3481,7 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::Python => Language::Python,
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
         DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
+        DiscoveredLanguage::Java => Language::Java,
         DiscoveredLanguage::Rust => Language::Rust,
         DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
@@ -3826,6 +4047,20 @@ mod tests {
         }
     }
 
+    fn indexed_java_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:{path}#{kind}:{index}:0-20:{index}"),
+            path: path.to_string(),
+            language: "java".to_string(),
+            kind: kind.to_string(),
+            start_byte: 0,
+            end_byte: 20,
+            content_hash: strict_hash(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+        }
+    }
+
     fn tsjs_structural_anchor_fact(unit: &IndexedCodeUnitRecord, target: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::ResolvedCall,
@@ -3850,6 +4085,67 @@ mod tests {
             )
             .expect("valid evidence"),
             assumptions: vec![format!("tsjs_anchor_kind={}", unit.kind)],
+        }
+    }
+
+    fn java_structural_anchor_fact(unit: &IndexedCodeUnitRecord, target: &str) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::ResolvedCall,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(target).expect("valid target")),
+            origin: FactOrigin {
+                engine: JAVA_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: JAVA_ANCHOR_METHOD.to_string(),
+            },
+            certainty: FactCertainty::Structural,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "bounded Java Spring structural role anchor",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                format!("java_anchor_kind={}", unit.kind),
+                "spring_annotation=GetMapping".to_string(),
+            ],
+        }
+    }
+
+    fn java_unknown_fact(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: unit.id.clone(),
+            target: Some(SymbolId::new(reason.as_protocol_str()).expect("valid reason")),
+            origin: FactOrigin {
+                engine: JAVA_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: JAVA_ANCHOR_METHOD.to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "Java parser typed UNKNOWN",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("affected_claim={affected_claim}")],
         }
     }
 
@@ -3892,6 +4188,64 @@ mod tests {
             "framework:express.route_handler"
         );
         assert_eq!(report.claims[0].support, 3);
+    }
+
+    #[test]
+    fn exact_java_spring_anchors_derive_family_support_without_unresolved_imports() {
+        let first = indexed_java_unit("src/main/java/AController.java", "spring_mvc_route", 0);
+        let second = indexed_java_unit("src/main/java/BController.java", "spring_mvc_route", 1);
+        let third = indexed_java_unit("src/main/java/CController.java", "spring_mvc_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            java_structural_anchor_fact(&first, "spring.web.bind.annotation.GetMapping"),
+            java_structural_anchor_fact(&second, "spring.web.bind.annotation.PostMapping"),
+            java_structural_anchor_fact(&third, "spring.web.bind.annotation.DeleteMapping"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:spring.mvc_route"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_java_framework_support_facts(&units, &parser_facts, &role_facts)
+            .expect("derive exact java spring support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == JAVA_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == JAVA_DERIVED_SUPPORT_METHOD
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "derived_from=tree_sitter_java_structural_anchors"
+                })
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].language, "java");
+        assert_eq!(
+            report.claims[0].framework_role,
+            "framework:spring.mvc_route"
+        );
+        assert_eq!(report.claims[0].support, 3);
+
+        let blocked = derive_java_framework_support_facts(
+            std::slice::from_ref(&first),
+            &[
+                java_structural_anchor_fact(&first, "spring.web.bind.annotation.GetMapping"),
+                java_unknown_fact(
+                    &first,
+                    UnknownReasonCode::UnresolvedImport,
+                    "java_spring_annotation_binding",
+                ),
+            ],
+            &[framework_role_fact_for_unit(
+                &first,
+                "framework:spring.mvc_route",
+            )],
+        )
+        .expect("derive with blocking unknown");
+        assert!(blocked.is_empty());
     }
 
     #[test]

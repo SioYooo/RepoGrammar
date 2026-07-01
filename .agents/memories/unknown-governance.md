@@ -1,7 +1,7 @@
 # UNKNOWN Governance
 
 - Status: Active
-- Last updated: 2026-06-26
+- Last updated: 2026-07-02
 - Scope: Durable reminders for uncertainty handling.
 - Evidence: `docs/specifications/unknowns.md`
 - Related canonical docs: `docs/specifications/domain-model.md`, `docs/specifications/semantic-workers.md`
@@ -31,6 +31,11 @@
   self-dogfood families, but nested fixture/package manifests must not globally
   block unrelated root Rust family claims; keep those unknowns scoped to the
   affected package/crate/claim until provider-backed package scope exists.
+- Java/Spring preview UNKNOWNs are claim-scoped: unresolved Spring annotation
+  imports/FQNs and unsupported controller/repository identity can block Java
+  family support, while nonliteral route paths, component scan, DI/proxy,
+  classpath, Maven/Gradle, javac, annotation-processor, and generated
+  repository behavior remain explicit subclaims or non-supporting context.
 - A fresh supported semantic fact kind is only eligible input for future claim
   builders. It is not a pattern-family classification or conformance result.
 - Tests for new analyzers should include uncertain, conflicting, stale,

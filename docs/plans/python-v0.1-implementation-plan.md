@@ -24,8 +24,10 @@ worker protocol scaffolding, SQLite generation storage, FamilyStore-backed
 query reads, and conservative EC-MVFI-lite gates.
 
 That substrate is useful and should not be thrown away, but the next v0.1
-implementation work should pivot toward Python. Existing TS/JS behavior must be
-described as transitional until a later release re-promotes it.
+implementation work should pivot toward Python. Existing TS/JS behavior and
+the later Java/Spring structural preview must be described as bounded
+transitional or v0.2-preview support until a later release re-promotes them into
+an official language target.
 
 ADR-0012 refines the Python route as a claim-driven selective cascade. Do not
 run all analyzers over the whole repository. Start with cheap CPython syntax,
