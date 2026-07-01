@@ -1838,14 +1838,7 @@ mod tests {
             );
         }
         let forbidden_fields: &[&str] = if value["status"] == "PARTIAL_CONTEXT" {
-            &[
-                "family",
-                "member",
-                "members",
-                "variation_slots",
-                "evidence",
-                "check",
-            ]
+            &["family", "member", "members", "variation_slots", "evidence"]
         } else {
             &[
                 "family",
@@ -1862,6 +1855,12 @@ mod tests {
             assert!(
                 value.get(field).is_none(),
                 "{command} no-claim response leaked claim field {field}: {value}"
+            );
+        }
+        if value["status"] == "PARTIAL_CONTEXT" && command != "check" {
+            assert!(
+                value.get("check").is_none(),
+                "{command} partial context should not include advisory check metadata: {value}"
             );
         }
     }
@@ -3191,7 +3190,9 @@ mod tests {
                 check_json["check"]["reason"],
                 "runtime equivalence remains unproven"
             );
-            assert_eq!(check_json["check"]["fail_on"], "none");
+            assert!(check_json["check"].get("fail_on").is_none());
+            assert!(check_json["check"].get("pass").is_none());
+            assert!(check_json["check"].get("conforms").is_none());
             assert_python_exact_anchor_family_detail("check", &check_json, *case);
 
             let family_auto_evidence = run_with_runtime(
@@ -5892,10 +5893,9 @@ project_includes = ["src"]
             );
             assert_eq!(output.status, 0);
             assert!(output.stderr.is_empty());
-            let unknown: Value = serde_json::from_str(output.stdout.trim()).expect("UNKNOWN JSON");
-            assert_eq!(unknown["status"], "UNKNOWN");
-            assert_eq!(unknown["command"], command);
-            assert_eq!(unknown["unknowns"][0]["reason"], "InsufficientSupport");
+            let unknown: Value = serde_json::from_str(output.stdout.trim()).expect("query JSON");
+            assert_unknown_query_json(command, &unknown);
+            assert_no_claim_payload(command, &unknown);
         }
 
         let sync = run_with_runtime(cli_args("sync", workspace.path(), &["--json"]), &runtime);
@@ -6447,7 +6447,10 @@ class User(Base):
             .expect("tool payload");
         let payload: Value = serde_json::from_str(payload_text).expect("tool payload JSON");
 
-        assert_eq!(payload["status"], "UNKNOWN");
+        assert!(
+            payload["status"] == "UNKNOWN" || payload["status"] == "PARTIAL_CONTEXT",
+            "MCP path query should return UNKNOWN or source-free partial context: {payload}"
+        );
         assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
         assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!payload_text.contains("export function"));

@@ -189,7 +189,10 @@ Human and JSON CLI output must distinguish:
 metadata-only read plan for a fresh indexed path or code unit, but it must carry
 typed `InsufficientSupport` for the missing pattern-family claim and must not
 include family evidence, member evidence, conformance status, or source text
-unless the normal explicit source-span opt-in succeeds.
+unless the normal explicit source-span opt-in succeeds. When the operation is
+`check_conformance`, the partial result may include only advisory conformance
+metadata with `UNKNOWN` status and must not include proof-like `pass`,
+`conforms`, or `fail_on` fields.
 
 When public family output is blocked by `StaleEvidence`,
 `InsufficientSupport`, or another claim-relevant `UNKNOWN`, CLI and MCP output

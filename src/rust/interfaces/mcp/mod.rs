@@ -674,11 +674,7 @@ fn family_detail_value(
         source_spans,
     );
     let check = if operation == McpOperation::CheckConformance {
-        Some(json!({
-            "advisory_status": "UNKNOWN",
-            "reason": "runtime equivalence remains unproven",
-            "fail_on": "none",
-        }))
+        Some(check_advisory_value())
     } else {
         None
     };
@@ -752,7 +748,7 @@ fn family_partial_context_value(
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
-    json!({
+    let mut value = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "status": "PARTIAL_CONTEXT",
@@ -770,15 +766,36 @@ fn family_partial_context_value(
         "read_plan": read_plan_value(read_plan),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
-    })
+    });
+    if operation == McpOperation::CheckConformance {
+        value["check"] = check_advisory_value();
+    }
+    value
 }
 
 fn resolved_target_value(target: &ResolvedQueryTarget) -> Value {
     json!({
         "original_target": target.original_target,
+        "kind": target.kind,
         "path": target.path,
+        "line": target.line,
+        "byte_range": target.byte_range.map(|(start, end)| json!({"start": start, "end": end})),
+        "family_id": target.family_id,
         "code_unit_id": target.code_unit_id,
+        "symbol_hints": target.symbol_hints,
+        "residue_terms": target.residue_terms,
+        "candidate_paths": target.candidate_paths,
+        "candidate_family_ids": target.candidate_family_ids,
+        "candidate_code_unit_ids": target.candidate_code_unit_ids,
+        "confidence": target.confidence,
         "match_kind": target.match_kind,
+    })
+}
+
+fn check_advisory_value() -> Value {
+    json!({
+        "advisory_status": "UNKNOWN",
+        "reason": "runtime equivalence remains unproven",
     })
 }
 
@@ -1056,7 +1073,17 @@ mod tests {
 
         assert_eq!(response["status"], "PARTIAL_CONTEXT");
         assert_eq!(response["implemented"], true);
+        assert_eq!(response["resolved_target"]["kind"], "code_unit");
         assert_eq!(response["resolved_target"]["path"], "src/routes/a.ts");
+        assert_eq!(
+            response["resolved_target"]["candidate_paths"][0],
+            "src/routes/a.ts"
+        );
+        assert_eq!(
+            response["resolved_target"]["candidate_code_unit_ids"][0],
+            "unit:src/routes/a.ts#express_route:get:0-20:1"
+        );
+        assert_eq!(response["resolved_target"]["confidence"], "high");
         assert_eq!(
             response["read_plan"]["items"][0]["purpose"],
             "target_body_required_for_edit"
@@ -1069,6 +1096,28 @@ mod tests {
         );
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn check_conformance_partial_context_remains_advisory_without_proof_fields() {
+        let runtime = FakeMcpRuntime::ready_partial_context();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "check_conformance", "target": "src/routes/a.ts missing_family"}),
+        )
+        .expect("partial check response");
+
+        assert_eq!(response["status"], "PARTIAL_CONTEXT");
+        assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
+        assert_eq!(
+            response["check"]["reason"],
+            "runtime equivalence remains unproven"
+        );
+        assert!(response["check"].get("fail_on").is_none());
+        assert!(response["check"].get("pass").is_none());
+        assert!(response["check"].get("conforms").is_none());
     }
 
     #[test]
@@ -1085,6 +1134,9 @@ mod tests {
 
         assert_eq!(response["status"], "CONTEXT_ONLY");
         assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
+        assert!(response["check"].get("fail_on").is_none());
+        assert!(response["check"].get("pass").is_none());
+        assert!(response["check"].get("conforms").is_none());
         assert_eq!(response["output"]["mode"], "compact");
         assert_eq!(response["output"]["estimated_evidence_tokens"], 0);
         assert!(
@@ -1668,12 +1720,24 @@ mod tests {
         )
         .expect("valid hash");
         let why = "read this resolved target body before editing; no pattern-family evidence is available";
-        FamilyLookupReport::PartialContext(FamilyPartialContextReport {
+        FamilyLookupReport::PartialContext(Box::new(FamilyPartialContextReport {
             active_generation: "gen-000001".to_string(),
             resolved_target: ResolvedQueryTarget {
                 original_target: "src/routes/a.ts missing_family".to_string(),
+                kind: "code_unit",
                 path: "src/routes/a.ts".to_string(),
+                line: None,
+                byte_range: None,
+                family_id: None,
                 code_unit_id: Some("unit:src/routes/a.ts#express_route:get:0-20:1".to_string()),
+                symbol_hints: Vec::new(),
+                residue_terms: vec!["missing_family".to_string()],
+                candidate_paths: vec!["src/routes/a.ts".to_string()],
+                candidate_family_ids: Vec::new(),
+                candidate_code_unit_ids: vec![
+                    "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
+                ],
+                confidence: "high",
                 match_kind: "path_embedded",
             },
             read_plan: ReadPlan {
@@ -1706,7 +1770,7 @@ mod tests {
                         .to_string(),
                 ),
             }],
-        })
+        }))
     }
 
     fn family_detail() -> FamilyDetailReport {

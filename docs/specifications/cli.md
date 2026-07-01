@@ -646,12 +646,20 @@ stored family. That unknown uses `InsufficientSupport`, affected claim
 `query target ambiguity`, and recovery guidance that tells the caller to narrow
 the target to an exact family id or member id while naming the candidate family
 ids. Query targets must be non-empty, at most 8192 bytes, and free of
-control characters. When `find`, `explain`, or `check` can deterministically
-resolve a fuzzy target to exactly one indexed repo-relative path or code unit in
-the active generation but no family evidence supports a claim for that target,
-the command returns `status: PARTIAL_CONTEXT` instead of pretending a family was
-found. `PARTIAL_CONTEXT` is metadata-only local context: it includes the
-resolved target, a single target read-plan item, output metadata, and a typed
+control characters. The deterministic target resolver recognizes exact
+repo-relative indexed paths, exact member/code-unit ids, embedded indexed paths
+inside longer text, unique indexed path suffixes, `path:line`, and
+`path:start-end` byte-range forms. It records the raw target, resolved kind,
+repo-relative path, optional line, optional byte range, optional family/member
+ids, symbol hints, residue terms, candidate paths/ids, confidence, and match
+kind. It must prefer exact indexed paths over suffixes and must return ambiguity
+instead of choosing the first storage-order match.
+When `find`, `explain`, or `check` can deterministically resolve a fuzzy target
+to exactly one indexed repo-relative path or code unit in the active generation
+but no family evidence supports a claim for that target, the command returns
+`status: PARTIAL_CONTEXT` instead of pretending a family was found.
+`PARTIAL_CONTEXT` is metadata-only local context: it includes the resolved
+target, a single target read-plan item, output metadata, and a typed
 `InsufficientSupport` unknown for `pattern family evidence for resolved target`.
 It is not family evidence, not conformance evidence, and not safe to treat as a
 supported pattern claim. Exact `family` and `member` lookups continue to return
@@ -698,12 +706,13 @@ still report missing coverage until later builders explicitly link evidence to
 variation slots or exceptions.
 `--mode deep` is accepted as an explicit detail request, but it remains
 metadata-first and does not imply source output without `--include-source-spans`.
-None of these modes may include absolute paths. `check` is
-advisory in this slice: it may return matched family context as
-`CONTEXT_ONLY`, but the check-specific conformance status remains `UNKNOWN`
-with reason `runtime equivalence remains unproven`. Matched family detail
-unknowns scope the runtime-equivalence gap to the concrete family id, for
-example `<family_id>:runtime_equivalence`.
+None of these modes may include absolute paths. `check` is advisory in this
+slice: it may return matched family context as `CONTEXT_ONLY` or resolved local
+context as `PARTIAL_CONTEXT`, but the check-specific conformance status remains
+`UNKNOWN` with reason `runtime equivalence remains unproven`. The advisory
+`check` object must not contain proof-like fields such as `pass`, `conforms`, or
+`fail_on`. Matched family detail unknowns scope the runtime-equivalence gap to
+the concrete family id, for example `<family_id>:runtime_equivalence`.
 
 Before public pattern-family output is returned, stored family evidence must be
 fresh against the current repository source hashes. If an evidence source is

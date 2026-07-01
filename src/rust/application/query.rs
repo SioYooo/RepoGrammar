@@ -219,8 +219,18 @@ pub struct FamilyUnknownReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedQueryTarget {
     pub original_target: String,
+    pub kind: &'static str,
     pub path: String,
+    pub line: Option<usize>,
+    pub byte_range: Option<(usize, usize)>,
+    pub family_id: Option<String>,
     pub code_unit_id: Option<String>,
+    pub symbol_hints: Vec<String>,
+    pub residue_terms: Vec<String>,
+    pub candidate_paths: Vec<String>,
+    pub candidate_family_ids: Vec<String>,
+    pub candidate_code_unit_ids: Vec<String>,
+    pub confidence: &'static str,
     pub match_kind: &'static str,
 }
 
@@ -235,7 +245,7 @@ pub struct FamilyPartialContextReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FamilyLookupReport {
     Found(FamilyDetailReport),
-    PartialContext(FamilyPartialContextReport),
+    PartialContext(Box<FamilyPartialContextReport>),
     Unknown(FamilyUnknownReport),
 }
 
@@ -886,7 +896,7 @@ fn add_local_context_fallback(
     }
     match resolve_local_context(target, &snapshot.files, &snapshot.units)? {
         LocalContextResolution::Resolved(report) => Ok(FamilyLookupReport::PartialContext(
-            FamilyPartialContextReport {
+            Box::new(FamilyPartialContextReport {
                 active_generation: snapshot.generation_id,
                 resolved_target: report.resolved_target,
                 read_plan: report.read_plan,
@@ -899,7 +909,7 @@ fn add_local_context_fallback(
                             .to_string(),
                     ),
                 }],
-            },
+            }),
         )),
         LocalContextResolution::Ambiguous(unknown) => Ok(FamilyLookupReport::Unknown(
             FamilyUnknownReport {
@@ -928,8 +938,28 @@ struct LocalContextReport {
     read_plan: ReadPlan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetLocator {
+    line: Option<usize>,
+    byte_range: Option<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetPathMatch {
+    match_kind: &'static str,
+    line: Option<usize>,
+    byte_range: Option<(usize, usize)>,
+    rank: usize,
+}
+
+#[derive(Debug)]
+struct LocalPathCandidate<'a> {
+    file: &'a IndexedFileRecord,
+    path_match: TargetPathMatch,
+}
+
 enum LocalContextResolution {
-    Resolved(LocalContextReport),
+    Resolved(Box<LocalContextReport>),
     Ambiguous(FamilyQueryUnknown),
     Unresolved,
 }
@@ -941,22 +971,47 @@ fn resolve_local_context(
 ) -> Result<LocalContextResolution, RepoGrammarError> {
     let mut path_candidates = files
         .iter()
-        .filter(|file| target_mentions_path(target, &file.path))
+        .filter_map(|file| {
+            target_path_match(target, &file.path)
+                .map(|path_match| LocalPathCandidate { file, path_match })
+        })
         .collect::<Vec<_>>();
-    path_candidates.sort_by(|left, right| left.path.cmp(&right.path));
-    path_candidates.dedup_by(|left, right| left.path == right.path);
+    path_candidates.sort_by(|left, right| {
+        (
+            left.file.path.as_str(),
+            left.path_match.rank,
+            left.path_match.match_kind,
+        )
+            .cmp(&(
+                right.file.path.as_str(),
+                right.path_match.rank,
+                right.path_match.match_kind,
+            ))
+    });
+    path_candidates.dedup_by(|left, right| left.file.path == right.file.path);
 
     if path_candidates.is_empty() {
         path_candidates = files
             .iter()
-            .filter(|file| {
-                units.iter().any(|unit| {
-                    unit.path == file.path && (target == unit.id || target.contains(&unit.id))
-                })
+            .filter_map(|file| {
+                units
+                    .iter()
+                    .any(|unit| {
+                        unit.path == file.path && target_contains_code_unit_id(target, &unit.id)
+                    })
+                    .then_some(LocalPathCandidate {
+                        file,
+                        path_match: TargetPathMatch {
+                            match_kind: "code_unit_id",
+                            line: None,
+                            byte_range: None,
+                            rank: 0,
+                        },
+                    })
             })
             .collect::<Vec<_>>();
-        path_candidates.sort_by(|left, right| left.path.cmp(&right.path));
-        path_candidates.dedup_by(|left, right| left.path == right.path);
+        path_candidates.sort_by(|left, right| left.file.path.cmp(&right.file.path));
+        path_candidates.dedup_by(|left, right| left.file.path == right.file.path);
     }
 
     if path_candidates.is_empty() {
@@ -968,13 +1023,14 @@ fn resolve_local_context(
                 "query target path ambiguity",
                 path_candidates
                     .iter()
-                    .map(|file| file.path.as_str())
+                    .map(|candidate| candidate.file.path.as_str())
                     .collect::<Vec<_>>(),
             ),
         ));
     }
 
-    let file = path_candidates[0];
+    let path_candidate = &path_candidates[0];
+    let file = path_candidate.file;
     let mut units_for_path = units
         .iter()
         .filter(|unit| unit.path == file.path)
@@ -994,11 +1050,29 @@ fn resolve_local_context(
             ))
     });
 
-    let matching_units = units_for_path
+    let target_terms = target_identifier_tokens(target)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let unit_hint_terms = target_terms
+        .iter()
+        .filter(|term| !file.path.contains(term.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut matching_units = units_for_path
         .iter()
         .copied()
-        .filter(|unit| target_mentions_unit(target, unit))
+        .filter(|unit| target_mentions_unit(target, unit, &unit_hint_terms))
         .collect::<Vec<_>>();
+    if matching_units.is_empty() {
+        if let Some((start, end)) = path_candidate.path_match.byte_range {
+            matching_units = units_for_path
+                .iter()
+                .copied()
+                .filter(|unit| ranges_overlap(start, end, unit.start_byte, unit.end_byte))
+                .collect::<Vec<_>>();
+        }
+    }
     if matching_units.len() > 1 {
         return Ok(LocalContextResolution::Ambiguous(
             local_context_ambiguity_unknown(
@@ -1018,20 +1092,35 @@ fn resolve_local_context(
     } else {
         None
     };
+    let symbol_hints = unit
+        .map(|unit| symbol_hints_for_unit(&unit_hint_terms, unit))
+        .unwrap_or_default();
+    let residue_terms = residue_terms(&target_terms, &symbol_hints, &file.path);
+    let candidate_code_unit_ids = unit.map(|unit| vec![unit.id.clone()]).unwrap_or_default();
+    let candidate_paths = vec![file.path.clone()];
+    let confidence = local_context_confidence(path_candidate.path_match.match_kind, unit.is_some());
 
     let (read_plan, resolved_target) = match unit {
         Some(unit) => (
             local_context_read_plan_for_unit(unit),
             ResolvedQueryTarget {
                 original_target: target.to_string(),
+                kind: "code_unit",
                 path: unit.path.clone(),
+                line: path_candidate.path_match.line,
+                byte_range: path_candidate.path_match.byte_range,
+                family_id: None,
                 code_unit_id: Some(unit.id.clone()),
-                match_kind: if target == unit.id || target.contains(&unit.id) {
+                symbol_hints,
+                residue_terms,
+                candidate_paths,
+                candidate_family_ids: Vec::new(),
+                candidate_code_unit_ids,
+                confidence,
+                match_kind: if target_contains_code_unit_id(target, &unit.id) {
                     "code_unit_id"
-                } else if path_exactly_matches_target(target, &unit.path) {
-                    "path_exact"
                 } else {
-                    "path_embedded"
+                    path_candidate.path_match.match_kind
                 },
             },
         ),
@@ -1039,38 +1128,239 @@ fn resolve_local_context(
             local_context_read_plan_for_file(file)?,
             ResolvedQueryTarget {
                 original_target: target.to_string(),
+                kind: "path",
                 path: file.path.clone(),
+                line: path_candidate.path_match.line,
+                byte_range: path_candidate.path_match.byte_range,
+                family_id: None,
                 code_unit_id: None,
-                match_kind: if path_exactly_matches_target(target, &file.path) {
-                    "path_exact"
-                } else {
-                    "path_embedded"
-                },
+                symbol_hints,
+                residue_terms,
+                candidate_paths,
+                candidate_family_ids: Vec::new(),
+                candidate_code_unit_ids,
+                confidence,
+                match_kind: path_candidate.path_match.match_kind,
             },
         ),
     };
 
-    Ok(LocalContextResolution::Resolved(LocalContextReport {
-        resolved_target,
-        read_plan,
-    }))
+    Ok(LocalContextResolution::Resolved(Box::new(
+        LocalContextReport {
+            resolved_target,
+            read_plan,
+        },
+    )))
 }
 
-fn target_mentions_unit(target: &str, unit: &IndexedCodeUnitRecord) -> bool {
-    if target == unit.id || target.contains(&unit.id) {
+fn target_contains_code_unit_id(target: &str, code_unit_id: &str) -> bool {
+    if target == code_unit_id {
         return true;
     }
-    target_identifier_tokens(target)
-        .into_iter()
+    target.contains(code_unit_id)
+}
+
+fn target_mentions_unit(
+    target: &str,
+    unit: &IndexedCodeUnitRecord,
+    target_terms: &[String],
+) -> bool {
+    if target_contains_code_unit_id(target, &unit.id) {
+        return true;
+    }
+    target_terms
+        .iter()
         .any(|token| token.len() >= 4 && unit.id.contains(token))
+}
+
+fn symbol_hints_for_unit(target_terms: &[String], unit: &IndexedCodeUnitRecord) -> Vec<String> {
+    target_terms
+        .iter()
+        .filter(|term| term.len() >= 4 && unit.id.contains(term.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn residue_terms(target_terms: &[String], symbol_hints: &[String], path: &str) -> Vec<String> {
+    let symbol_hints = symbol_hints.iter().collect::<BTreeSet<_>>();
+    target_terms
+        .iter()
+        .filter(|term| !symbol_hints.contains(term))
+        .filter(|term| !path.contains(term.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn ranges_overlap(start: usize, end: usize, unit_start: usize, unit_end: usize) -> bool {
+    start < unit_end && end > unit_start
+}
+
+fn local_context_confidence(match_kind: &'static str, has_unit: bool) -> &'static str {
+    match (match_kind, has_unit) {
+        ("code_unit_id", _) | ("path_exact", true) => "exact",
+        ("path_exact", false) | ("path_embedded", true) => "high",
+        ("path_embedded", false) | ("path_suffix", true) => "medium",
+        _ => "low",
+    }
+}
+
+fn target_path_match(target: &str, path: &str) -> Option<TargetPathMatch> {
+    find_embedded_path_match(target, path).or_else(|| find_query_path_token_match(target, path))
+}
+
+fn find_embedded_path_match(target: &str, path: &str) -> Option<TargetPathMatch> {
+    if !path.contains('/') && !path.contains('.') && target.trim() != path {
+        return None;
+    }
+    let mut search_start = 0;
+    while let Some(relative_start) = target[search_start..].find(path) {
+        let start = search_start + relative_start;
+        let end = start + path.len();
+        search_start = start + 1;
+        if !target_boundary_before(target, start) {
+            continue;
+        }
+        let (locator, locator_end) = parse_locator_after_path(target, end);
+        if !target_boundary_after_locator(target, locator_end) {
+            continue;
+        }
+        let exact_token =
+            target[..start].trim().is_empty() && target[locator_end..].trim().is_empty();
+        return Some(TargetPathMatch {
+            match_kind: if exact_token {
+                "path_exact"
+            } else {
+                "path_embedded"
+            },
+            line: locator.and_then(|locator| locator.line),
+            byte_range: locator.and_then(|locator| locator.byte_range),
+            rank: if exact_token { 0 } else { 1 },
+        });
+    }
+    None
+}
+
+fn find_query_path_token_match(target: &str, indexed_path: &str) -> Option<TargetPathMatch> {
+    target_path_tokens(target).into_iter().find_map(|token| {
+        let (path_text, locator) = split_query_path_locator(token);
+        if !is_safe_query_path_text(path_text) {
+            return None;
+        }
+        if indexed_path == path_text {
+            return Some(TargetPathMatch {
+                match_kind: "path_exact",
+                line: locator.and_then(|locator| locator.line),
+                byte_range: locator.and_then(|locator| locator.byte_range),
+                rank: 0,
+            });
+        }
+        if path_text.contains('/') && indexed_path.ends_with(&format!("/{path_text}")) {
+            return Some(TargetPathMatch {
+                match_kind: "path_suffix",
+                line: locator.and_then(|locator| locator.line),
+                byte_range: locator.and_then(|locator| locator.byte_range),
+                rank: 2,
+            });
+        }
+        None
+    })
+}
+
+fn target_path_tokens(target: &str) -> Vec<&str> {
+    target
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+                )
+        })
+        .map(|token| token.trim_matches(|character: char| matches!(character, '.' | ':' | '=')))
+        .filter(|token| token.contains('/') || token.contains('.'))
+        .collect()
+}
+
+fn split_query_path_locator(token: &str) -> (&str, Option<TargetLocator>) {
+    let Some((path, suffix)) = token.rsplit_once(':') else {
+        return (token, None);
+    };
+    if let Some(locator) = parse_locator_text(suffix) {
+        (path, Some(locator))
+    } else {
+        (token, None)
+    }
+}
+
+fn parse_locator_after_path(target: &str, path_end: usize) -> (Option<TargetLocator>, usize) {
+    let rest = &target[path_end..];
+    let Some(rest) = rest.strip_prefix(':') else {
+        return (None, path_end);
+    };
+    let locator_len = rest
+        .chars()
+        .take_while(|character| character.is_ascii_digit() || *character == '-')
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if locator_len == 0 {
+        return (None, path_end);
+    }
+    let locator_text = &rest[..locator_len];
+    match parse_locator_text(locator_text) {
+        Some(locator) => (Some(locator), path_end + 1 + locator_len),
+        None => (None, path_end),
+    }
+}
+
+fn parse_locator_text(text: &str) -> Option<TargetLocator> {
+    if let Some((start, end)) = text.split_once('-') {
+        let start = start.parse::<usize>().ok()?;
+        let end = end.parse::<usize>().ok()?;
+        if start >= end {
+            return None;
+        }
+        return Some(TargetLocator {
+            line: None,
+            byte_range: Some((start, end)),
+        });
+    }
+    let line = text.parse::<usize>().ok()?;
+    if line == 0 {
+        return None;
+    }
+    Some(TargetLocator {
+        line: Some(line),
+        byte_range: None,
+    })
+}
+
+fn target_boundary_after_locator(target: &str, end: usize) -> bool {
+    target[end..]
+        .chars()
+        .next()
+        .is_none_or(|character| !is_path_character(character) && character != ':')
+}
+
+fn is_safe_query_path_text(path: &str) -> bool {
+    !path.is_empty()
+        && (path.contains('/') || path.contains('.'))
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains("://")
+        && !path.chars().any(char::is_control)
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn target_identifier_tokens(target: &str) -> Vec<&str> {
     target
-        .split(|character: char| {
-            !(character.is_ascii_alphanumeric() || character == '_' || character == ':')
-        })
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|token| !token.is_empty())
+        .filter(|token| !token.chars().all(|character| character.is_ascii_digit()))
         .collect()
 }
 
@@ -2102,38 +2392,13 @@ fn family_target_match(
 }
 
 fn path_matches_target(path: &str, target: &str) -> bool {
-    path_exactly_matches_target(target, path) || target_mentions_path(target, path)
-}
-
-fn path_exactly_matches_target(target: &str, path: &str) -> bool {
-    path == target || (target.contains('/') && path.ends_with(&format!("/{target}")))
-}
-
-fn target_mentions_path(target: &str, path: &str) -> bool {
-    if path_exactly_matches_target(target, path) {
-        return true;
-    }
-    if !path.contains('/') || !target.contains(path) {
-        return false;
-    }
-    let Some(start) = target.find(path) else {
-        return false;
-    };
-    let end = start + path.len();
-    target_boundary_before(target, start) && target_boundary_after(target, end)
+    target_path_match(target, path).is_some()
 }
 
 fn target_boundary_before(target: &str, start: usize) -> bool {
     target[..start]
         .chars()
         .next_back()
-        .is_none_or(|character| !is_path_character(character))
-}
-
-fn target_boundary_after(target: &str, end: usize) -> bool {
-    target[end..]
-        .chars()
-        .next()
         .is_none_or(|character| !is_path_character(character))
 }
 
@@ -3767,6 +4032,23 @@ mod tests {
             report.resolved_target.code_unit_id.as_deref(),
             Some("unit:src/routes/a.ts#process_boundary_diagnostics:0-10")
         );
+        assert_eq!(report.resolved_target.kind, "code_unit");
+        assert_eq!(report.resolved_target.line, None);
+        assert_eq!(report.resolved_target.byte_range, None);
+        assert_eq!(
+            report.resolved_target.symbol_hints,
+            vec!["process_boundary_diagnostics"]
+        );
+        assert_eq!(report.resolved_target.residue_terms, vec!["timeout"]);
+        assert_eq!(
+            report.resolved_target.candidate_paths,
+            vec!["src/routes/a.ts"]
+        );
+        assert_eq!(
+            report.resolved_target.candidate_code_unit_ids,
+            vec!["unit:src/routes/a.ts#process_boundary_diagnostics:0-10"]
+        );
+        assert_eq!(report.resolved_target.confidence, "high");
         assert_eq!(report.resolved_target.match_kind, "path_embedded");
         assert_eq!(
             report.read_plan.selection_strategy,
@@ -3784,6 +4066,105 @@ mod tests {
             report.unknowns[0].affected_claim,
             "pattern family evidence for resolved target"
         );
+    }
+
+    #[test]
+    fn partial_local_context_resolves_root_path_plus_symbol_terms() {
+        let index_store = FakeStore::new(Vec::new())
+            .with_files(vec![indexed_file("a.ts")])
+            .with_units(vec![IndexedCodeUnitRecord {
+                id: "unit:a.ts#helper_symbol:0-10".to_string(),
+                ..indexed_unit("a.ts")
+            }]);
+        let family_store = FakeFamilyStore::empty();
+
+        let lookup = lookup_family_with_local_context(
+            &index_store,
+            &family_store,
+            Some("a.ts helper_symbol timeout"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup local context");
+
+        let FamilyLookupReport::PartialContext(report) = lookup else {
+            panic!("root file path plus symbol must return partial context");
+        };
+        assert_eq!(report.resolved_target.path, "a.ts");
+        assert_eq!(
+            report.resolved_target.code_unit_id.as_deref(),
+            Some("unit:a.ts#helper_symbol:0-10")
+        );
+        assert_eq!(report.resolved_target.symbol_hints, vec!["helper_symbol"]);
+        assert_eq!(report.resolved_target.residue_terms, vec!["timeout"]);
+        assert_eq!(report.resolved_target.match_kind, "path_embedded");
+    }
+
+    #[test]
+    fn partial_local_context_preserves_path_line_and_byte_range_targets() {
+        let file = IndexedFileRecord {
+            size_bytes: 120,
+            ..indexed_file("src/routes/a.ts")
+        };
+        let first_unit = IndexedCodeUnitRecord {
+            id: "unit:src/routes/a.ts#first:0-20".to_string(),
+            start_byte: 0,
+            end_byte: 20,
+            ..indexed_unit("src/routes/a.ts")
+        };
+        let second_unit = IndexedCodeUnitRecord {
+            id: "unit:src/routes/a.ts#second:40-80".to_string(),
+            start_byte: 40,
+            end_byte: 80,
+            ..indexed_unit("src/routes/a.ts")
+        };
+        let family_store = FakeFamilyStore::empty();
+        let range_lookup = lookup_family_with_local_context(
+            &FakeStore::new(Vec::new())
+                .with_files(vec![file.clone()])
+                .with_units(vec![first_unit.clone(), second_unit.clone()]),
+            &family_store,
+            Some("src/routes/a.ts:45-60"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup byte range");
+
+        let FamilyLookupReport::PartialContext(range_report) = range_lookup else {
+            panic!("byte-range target must resolve local context");
+        };
+        assert_eq!(range_report.resolved_target.byte_range, Some((45, 60)));
+        assert_eq!(range_report.resolved_target.line, None);
+        assert_eq!(
+            range_report.resolved_target.code_unit_id.as_deref(),
+            Some("unit:src/routes/a.ts#second:40-80")
+        );
+        assert_eq!(range_report.resolved_target.match_kind, "path_exact");
+        assert_eq!(range_report.resolved_target.confidence, "exact");
+
+        let line_lookup = lookup_family_with_local_context(
+            &FakeStore::new(Vec::new())
+                .with_files(vec![file])
+                .with_units(vec![IndexedCodeUnitRecord {
+                    id: "unit:src/routes/a.ts#process_boundary_diagnostics:0-20".to_string(),
+                    start_byte: 0,
+                    end_byte: 20,
+                    ..indexed_unit("src/routes/a.ts")
+                }]),
+            &family_store,
+            Some("src/routes/a.ts:7 process_boundary_diagnostics timeout"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup line target");
+
+        let FamilyLookupReport::PartialContext(line_report) = line_lookup else {
+            panic!("line target must resolve local context");
+        };
+        assert_eq!(line_report.resolved_target.line, Some(7));
+        assert_eq!(line_report.resolved_target.byte_range, None);
+        assert_eq!(
+            line_report.resolved_target.symbol_hints,
+            vec!["process_boundary_diagnostics"]
+        );
+        assert_eq!(line_report.resolved_target.residue_terms, vec!["timeout"]);
     }
 
     #[test]
