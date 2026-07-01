@@ -131,6 +131,27 @@ pub struct GenerationPruneReport {
     pub dry_run: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexCompactRequest {
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStorageSizeReport {
+    pub database_bytes: u64,
+    pub wal_bytes: u64,
+    pub shm_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexCompactReport {
+    pub active_generation: String,
+    pub dry_run: bool,
+    pub before: IndexStorageSizeReport,
+    pub after: IndexStorageSizeReport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexStoreError {
     Unavailable(String),
@@ -200,4 +221,11 @@ pub trait GenerationRetentionStore {
         &self,
         request: GenerationPruneRequest,
     ) -> Result<GenerationPruneReport, IndexStoreError>;
+}
+
+pub trait IndexMaintenanceStore {
+    fn compact_storage(
+        &self,
+        request: IndexCompactRequest,
+    ) -> Result<IndexCompactReport, IndexStoreError>;
 }

@@ -13,9 +13,10 @@ use crate::ports::family_store::{
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
     ActiveSemanticFacts, GenerationHandle, GenerationPruneReport, GenerationPruneRequest,
-    GenerationRetentionStore, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
-    IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
-    StorageInspection, STORAGE_SCHEMA_VERSION,
+    GenerationRetentionStore, IndexCompactReport, IndexCompactRequest, IndexMaintenanceStore,
+    IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageInspection,
+    STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -213,6 +214,69 @@ impl SqliteIndexStore {
         let connection = open_read_only_connection(path)?;
         apply_read_pragmas(&connection).map_err(sql_unavailable)?;
         Ok(Some(connection))
+    }
+
+    fn open_mutable_database_read_only(&self) -> Result<Connection, IndexStoreError> {
+        let path = self.database_path_for(MissingDatabase::Rejected)?;
+        let connection = open_read_only_connection(path)?;
+        apply_read_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(connection)
+    }
+
+    fn compact_mutable_database(
+        &self,
+        request: IndexCompactRequest,
+    ) -> Result<IndexCompactReport, IndexStoreError> {
+        if request.dry_run {
+            let connection = self.open_mutable_database_read_only()?;
+            let active_generation = active_generation_id(&connection)?.ok_or_else(|| {
+                IndexStoreError::InvalidState("active generation is missing".to_string())
+            })?;
+            validate_generation_for_read(&connection, &active_generation)?;
+            let before = self.storage_size_report()?;
+            return Ok(IndexCompactReport {
+                active_generation,
+                dry_run: true,
+                before: before.clone(),
+                after: before,
+            });
+        }
+
+        let connection = self.open_mutable_database(MissingDatabase::Rejected)?;
+        let active_generation = active_generation_id(&connection)?.ok_or_else(|| {
+            IndexStoreError::InvalidState("active generation is missing".to_string())
+        })?;
+        validate_generation_for_read(&connection, &active_generation)?;
+        let before = self.storage_size_report()?;
+        let _ = run_compaction_maintenance(&connection)?;
+        let after = self.storage_size_report()?;
+        Ok(IndexCompactReport {
+            active_generation,
+            dry_run: false,
+            before,
+            after,
+        })
+    }
+
+    fn storage_size_report(&self) -> Result<IndexStorageSizeReport, IndexStoreError> {
+        let database_path = self.database_path_for(MissingDatabase::Rejected)?;
+        let database_bytes =
+            required_regular_file_size(&database_path, "repository index database")?;
+        let wal_bytes = optional_regular_file_size(
+            &self.state_dir.join(format!("{DATABASE_FILE}-wal")),
+            "repository index WAL sidecar",
+        )?;
+        let shm_bytes = optional_regular_file_size(
+            &self.state_dir.join(format!("{DATABASE_FILE}-shm")),
+            "repository index SHM sidecar",
+        )?;
+        let total_bytes = checked_size_total(database_bytes, wal_bytes, shm_bytes)?;
+        Ok(IndexStorageSizeReport {
+            database_bytes,
+            wal_bytes,
+            shm_bytes,
+            total_bytes,
+        })
     }
 
     fn database_path_for(
@@ -1103,6 +1167,16 @@ impl SqliteIndexStore {
             deleted_generations,
             dry_run: request.dry_run,
         })
+    }
+}
+
+impl IndexMaintenanceStore for SqliteIndexStore {
+    fn compact_storage(
+        &self,
+        request: IndexCompactRequest,
+    ) -> Result<IndexCompactReport, IndexStoreError> {
+        self.require_existing_layout()?;
+        self.compact_mutable_database(request)
     }
 }
 
@@ -2226,6 +2300,32 @@ fn run_post_commit_maintenance(
     ))
 }
 
+fn run_compaction_maintenance(connection: &Connection) -> Result<(u64, u64, u64), IndexStoreError> {
+    connection
+        .execute_batch("PRAGMA optimize; VACUUM;")
+        .map_err(sql_unavailable)?;
+    let (busy, log_frames, checkpointed_frames) = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let busy = nonnegative_pragma_count(busy, "WAL checkpoint busy count")?;
+    if busy != 0 {
+        return Err(IndexStoreError::InvalidState(
+            "SQLite WAL checkpoint was busy during compact; retry repogrammar compact".to_string(),
+        ));
+    }
+    Ok((
+        busy,
+        nonnegative_pragma_count(log_frames, "WAL checkpoint log frame count")?,
+        nonnegative_pragma_count(checkpointed_frames, "WAL checkpointed frame count")?,
+    ))
+}
+
 fn nonnegative_pragma_count(value: i64, label: &'static str) -> Result<u64, IndexStoreError> {
     u64::try_from(value).map_err(|_| IndexStoreError::InvalidState(format!("{label} is invalid")))
 }
@@ -2926,6 +3026,49 @@ fn ensure_existing_real_dir(path: &Path, label: &'static str) -> Result<(), Inde
         }
         Err(_) => Err(unavailable("failed to inspect storage directory")),
     }
+}
+
+fn required_regular_file_size(path: &Path, label: &'static str) -> Result<u64, IndexStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(IndexStoreError::InvalidState(
+            format!("{label} must not be a symlink"),
+        )),
+        Ok(metadata) if metadata.is_file() => Ok(metadata.len()),
+        Ok(_) => Err(IndexStoreError::InvalidState(format!(
+            "{label} exists and is not a file"
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(IndexStoreError::InvalidState(format!("{label} is missing")))
+        }
+        Err(_) => Err(unavailable("failed to inspect storage file")),
+    }
+}
+
+fn optional_regular_file_size(path: &Path, label: &'static str) -> Result<u64, IndexStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(IndexStoreError::InvalidState(
+            format!("{label} must not be a symlink"),
+        )),
+        Ok(metadata) if metadata.is_file() => Ok(metadata.len()),
+        Ok(_) => Err(IndexStoreError::InvalidState(format!(
+            "{label} exists and is not a file"
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(_) => Err(unavailable("failed to inspect storage sidecar")),
+    }
+}
+
+fn checked_size_total(
+    database_bytes: u64,
+    wal_bytes: u64,
+    shm_bytes: u64,
+) -> Result<u64, IndexStoreError> {
+    database_bytes
+        .checked_add(wal_bytes)
+        .and_then(|value| value.checked_add(shm_bytes))
+        .ok_or_else(|| {
+            IndexStoreError::InvalidState("repository index size is invalid".to_string())
+        })
 }
 
 fn validate_generation_id(generation_id: &str) -> Result<(), IndexStoreError> {
@@ -4603,6 +4746,93 @@ mod tests {
         assert_eq!(inspection.busy_timeout_ms, Some(5_000));
         assert_eq!(inspection.temp_store.as_deref(), Some("memory"));
         assert_eq!(inspection.integrity_check.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn compact_dry_run_reports_sizes_without_mutating_database() {
+        let workspace = TempWorkspace::new("sqlite-compact-dry-run");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let database_size = fs::metadata(store.mutable_database_path())
+            .expect("database metadata")
+            .len();
+
+        let report = store
+            .compact_storage(IndexCompactRequest { dry_run: true })
+            .expect("dry-run compact");
+
+        assert_eq!(report.active_generation, generation.generation_id);
+        assert!(report.dry_run);
+        assert_eq!(report.before, report.after);
+        assert!(report.before.database_bytes >= database_size);
+        assert_eq!(
+            fs::metadata(store.mutable_database_path())
+                .expect("database metadata after dry-run")
+                .len(),
+            database_size
+        );
+    }
+
+    #[test]
+    fn compact_yes_reports_size_effects_and_preserves_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-compact-yes");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .compact_storage(IndexCompactRequest { dry_run: false })
+            .expect("compact storage");
+
+        assert_eq!(report.active_generation, generation.generation_id);
+        assert!(!report.dry_run);
+        assert!(report.before.total_bytes >= report.before.database_bytes);
+        assert!(report.after.total_bytes >= report.after.database_bytes);
+        assert_eq!(report.after.wal_bytes, 0);
+        let inspection = store.inspect().expect("inspect after compact");
+        assert_eq!(inspection.active_generation, Some(report.active_generation));
+        assert_eq!(inspection.integrity_check.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn compact_refuses_dirty_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-compact-dirty");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("src/a.ts"))
+            .expect("record file");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute(
+                "INSERT INTO dirty_records \
+                 (generation_id, record_kind, record_id, reason, marked_at_generation_id) \
+                 VALUES (?1, 'index', 'compact-test', 'stale_dependency', ?1)",
+                params![generation.generation_id],
+            )
+            .expect("insert dirty record");
+
+        let error = store
+            .compact_storage(IndexCompactRequest { dry_run: false })
+            .expect_err("dirty generation must block compact");
+
+        assert!(format!("{error:?}").contains("dirty records"));
     }
 
     #[test]

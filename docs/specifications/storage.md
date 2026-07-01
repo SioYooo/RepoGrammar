@@ -367,8 +367,19 @@ retention, the SQLite adapter runs bounded post-commit maintenance with
 the write transaction after the committed state is durable, so readers never see
 partial writes and a passive checkpoint reports reader contention instead of
 blocking them. Normal `index`, `sync`, `resync`, and `prune` must not run
-automatic blocking `VACUUM`; any future full compaction surface must be explicit
-and confirmation-gated.
+automatic blocking `VACUUM`.
+
+Full database compaction is available only through `repogrammar compact`. The
+command uses the repository-local index lock before dry-run or mutating
+compaction. `compact --dry-run` opens the mutable database read-only, validates
+the active generation and storage sidecars, and reports database, WAL, SHM, and
+total byte counts without mutating the database. `compact --yes` repeats the
+active-generation validation, runs explicit SQLite `VACUUM` against
+`.repogrammar/repogrammar.sqlite`, requires a successful truncating WAL
+checkpoint, then reports before/after size metadata. Compact must refuse missing
+mutable storage, dirty active records, malformed sidecar paths, busy WAL
+checkpoint state, and unhealthy repository-local state. It must not remove
+source files, user files, or legacy generation directories.
 
 The initial schema stores schema metadata, generation rows, indexed files,
 syntax-only code-unit records, IR nodes and edges, semantic facts, families,

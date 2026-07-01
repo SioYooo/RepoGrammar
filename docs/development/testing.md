@@ -95,7 +95,10 @@ allowed.
   keeping dry-runs mutation-free, and still covers the legacy directory fallback
   refusal cases for symlinked or non-directory generation entries, missing or
   corrupt active-generation pointers, and symlinked or malformed
-  active-generation pointers.
+  active-generation pointers. Explicit compact coverage must include
+  `compact --dry-run --json` size reporting without writes, `compact --yes`
+  active-generation preservation and before/after size reporting, and refusal
+  of unsafe active database states such as dirty records.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,

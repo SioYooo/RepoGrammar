@@ -48,7 +48,10 @@ use crate::application::telemetry::{
 };
 use crate::core::model::EstimatedPotentialTokenSavings;
 use crate::error::RepoGrammarError;
-use crate::ports::index_store::{GenerationPruneReport, GenerationPruneRequest};
+use crate::ports::index_store::{
+    GenerationPruneReport, GenerationPruneRequest, IndexCompactReport, IndexCompactRequest,
+    IndexStorageSizeReport,
+};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::IsTerminal;
@@ -148,6 +151,14 @@ pub trait CliRuntime {
         _prune: GenerationPruneRequest,
     ) -> Result<GenerationPruneReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("prune"))
+    }
+
+    fn compact_storage(
+        &self,
+        _request: RepositoryStatusRequest,
+        _compact: IndexCompactRequest,
+    ) -> Result<IndexCompactReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("compact"))
     }
 
     fn indexed_files(
@@ -499,6 +510,8 @@ fn usage() -> String {
         "      Manage optional repo-local automatic sync. Use `autosync start`, not `--start`.",
         "  prune [--project <path>] [--keep <n>] [--dry-run] [--yes] [--json]",
         "      Remove old inactive index generations while preserving the active generation.",
+        "  compact [--project <path>] [--dry-run] [--yes] [--json]",
+        "      Compact the repo-owned mutable SQLite index database after explicit confirmation.",
         "  status [--project <path>] [--json]",
         "      Report repository state, active generation, schema, and storage health.",
         "  doctor [--project <path>] [--json]",
@@ -626,6 +639,19 @@ fn command_usage(command: &str) -> Option<String> {
             "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
             "  --keep <n>                         Number of newest inactive generations to keep. Defaults to 2 and may be 0.",
             "  --dry-run                          Report prune candidates without deleting generation records or legacy directories.",
+            "  --yes                              Required unless --dry-run is present.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
+        ])),
+        "compact" => Some(help_text(&[
+            "Usage: repogrammar compact [--project <path>|--path <path>] [--dry-run] [--yes] [--json] [--quiet|--verbose]",
+            "",
+            "Compacts the repo-owned mutable SQLite index database. It never removes source files, user files, or legacy generation directories.",
+            "Dry-run and mutating runs acquire the repository-local index lock. Mutating runs require --yes; use --dry-run to report database, WAL, and SHM sizes without writes.",
+            "",
+            "Options:",
+            "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
+            "  --dry-run                          Report before/after size metadata without compacting.",
             "  --yes                              Required unless --dry-run is present.",
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
@@ -867,6 +893,7 @@ fn is_project_lifecycle_command(command: &str) -> bool {
             | "resync"
             | "autosync"
             | "prune"
+            | "compact"
             | "status"
             | "doctor"
             | "unlock"
@@ -917,6 +944,12 @@ where
     if command == "prune" {
         return match parse_prune_options(rest) {
             Ok(options) => handle_prune(&options, current_dir, env_lookup, runtime),
+            Err(error) => CliOutput::failure(2, format!("{error}\n")),
+        };
+    }
+    if command == "compact" {
+        return match parse_compact_options(rest) {
+            Ok(options) => handle_compact(&options, current_dir, env_lookup, runtime),
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         };
     }
@@ -4388,6 +4421,30 @@ where
     }
 }
 
+fn handle_compact<F>(
+    options: &CompactOptions,
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    let compact_request = IndexCompactRequest {
+        dry_run: options.dry_run,
+    };
+
+    match runtime.compact_storage(request, compact_request) {
+        Ok(report) if options.json => CliOutput::success(compact_report_json(&report)),
+        Ok(report) => CliOutput::success(compact_report_human(&report)),
+        Err(error) => lifecycle_error("compact", options.json, error),
+    }
+}
+
 fn handle_index<F>(
     command: &str,
     options: &LifecycleOptions,
@@ -4707,6 +4764,16 @@ struct PruneOptions {
     verbose: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CompactOptions {
+    project_path: Option<String>,
+    dry_run: bool,
+    yes: bool,
+    json: bool,
+    quiet: bool,
+    verbose: bool,
+}
+
 impl Default for LifecycleOptions {
     fn default() -> Self {
         Self {
@@ -4934,6 +5001,49 @@ fn parse_prune_options(rest: &[String]) -> Result<PruneOptions, String> {
     }
     if !options.dry_run && !options.yes {
         return Err("prune requires --yes unless --dry-run is present".to_string());
+    }
+    Ok(options)
+}
+
+fn parse_compact_options(rest: &[String]) -> Result<CompactOptions, String> {
+    let mut options = CompactOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--project" | "--path" => {
+                let value = option_value(rest, index, rest[index].as_str(), "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--dry-run" => {
+                options.dry_run = true;
+                index += 1;
+            }
+            "--yes" => {
+                options.yes = true;
+                index += 1;
+            }
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" => {
+                options.quiet = true;
+                index += 1;
+            }
+            "--verbose" => {
+                options.verbose = true;
+                index += 1;
+            }
+            value if !value.starts_with('-') => {
+                set_project_path(&mut options.project_path, value)?;
+                index += 1;
+            }
+            other => return Err(format!("unknown compact option: {other}")),
+        }
+    }
+    if !options.dry_run && !options.yes {
+        return Err("compact requires --yes unless --dry-run is present".to_string());
     }
     Ok(options)
 }
@@ -5575,6 +5685,55 @@ fn prune_report_json(report: &GenerationPruneReport) -> String {
         "candidate_generations": report.candidate_generations,
         "deleted_generations": report.deleted_generations,
     }))
+}
+
+fn compact_report_human(report: &IndexCompactReport) -> String {
+    let status = if report.dry_run {
+        "dry_run"
+    } else {
+        "complete"
+    };
+    format!(
+        "compact: {status}\nactive_generation: {}\ndatabase_bytes_before: {}\nwal_bytes_before: {}\nshm_bytes_before: {}\ntotal_bytes_before: {}\ndatabase_bytes_after: {}\nwal_bytes_after: {}\nshm_bytes_after: {}\ntotal_bytes_after: {}\nreclaimed_bytes: {}\n",
+        report.active_generation,
+        report.before.database_bytes,
+        report.before.wal_bytes,
+        report.before.shm_bytes,
+        report.before.total_bytes,
+        report.after.database_bytes,
+        report.after.wal_bytes,
+        report.after.shm_bytes,
+        report.after.total_bytes,
+        compact_reclaimed_bytes(report)
+    )
+}
+
+fn compact_report_json(report: &IndexCompactReport) -> String {
+    json_line(json!({
+        "command": "compact",
+        "status": if report.dry_run { "dry_run" } else { "complete" },
+        "active_generation": report.active_generation,
+        "dry_run": report.dry_run,
+        "before": storage_size_report_json(&report.before),
+        "after": storage_size_report_json(&report.after),
+        "reclaimed_bytes": compact_reclaimed_bytes(report),
+    }))
+}
+
+fn storage_size_report_json(report: &IndexStorageSizeReport) -> Value {
+    json!({
+        "database_bytes": report.database_bytes,
+        "wal_bytes": report.wal_bytes,
+        "shm_bytes": report.shm_bytes,
+        "total_bytes": report.total_bytes,
+    })
+}
+
+fn compact_reclaimed_bytes(report: &IndexCompactReport) -> u64 {
+    report
+        .before
+        .total_bytes
+        .saturating_sub(report.after.total_bytes)
 }
 
 fn status_human(report: &RepositoryStatusReport) -> String {
@@ -6388,6 +6547,67 @@ mod tests {
                     vec!["gen-000001".to_string(), "gen-000002".to_string()]
                 },
                 dry_run: prune.dry_run,
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct CompactRuntime {
+        last_request: RefCell<Option<RepositoryStatusRequest>>,
+        last_compact: RefCell<Option<IndexCompactRequest>>,
+    }
+
+    impl CliRuntime for CompactRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            unreachable!("compact command should not index")
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("compact command should not request status through CLI test runtime")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("compact command should not request doctor through CLI test runtime")
+        }
+
+        fn compact_storage(
+            &self,
+            request: RepositoryStatusRequest,
+            compact: IndexCompactRequest,
+        ) -> Result<IndexCompactReport, RepoGrammarError> {
+            self.last_request.replace(Some(request));
+            self.last_compact.replace(Some(compact));
+            let before = IndexStorageSizeReport {
+                database_bytes: 128,
+                wal_bytes: 32,
+                shm_bytes: 16,
+                total_bytes: 176,
+            };
+            let after = if compact.dry_run {
+                before.clone()
+            } else {
+                IndexStorageSizeReport {
+                    database_bytes: 96,
+                    wal_bytes: 0,
+                    shm_bytes: 16,
+                    total_bytes: 112,
+                }
+            };
+            Ok(IndexCompactReport {
+                active_generation: "gen-000004".to_string(),
+                dry_run: compact.dry_run,
+                before,
+                after,
             })
         }
     }
@@ -7269,6 +7489,93 @@ mod tests {
             .stderr
             .contains("--keep requires a non-negative integer"));
         assert!(runtime.last_prune.borrow().is_none());
+    }
+
+    #[test]
+    fn compact_json_dry_run_reports_sizes_without_absolute_paths() {
+        let workspace = TempWorkspace::new("cli-compact-dry-run");
+        let env = |_: &str| None;
+        let runtime = CompactRuntime::default();
+        let output = run_with_context_and_runtime(
+            ["compact", "--dry-run", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert!(output.stderr.is_empty());
+        let request = runtime
+            .last_request
+            .borrow()
+            .clone()
+            .expect("status request");
+        assert!(request
+            .path
+            .starts_with(workspace.path().to_string_lossy().as_ref()));
+        let compact = runtime.last_compact.borrow().expect("compact request");
+        assert!(compact.dry_run);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("compact JSON");
+        assert_eq!(value["command"], "compact");
+        assert_eq!(value["status"], "dry_run");
+        assert_eq!(value["active_generation"], "gen-000004");
+        assert_eq!(value["before"]["total_bytes"], 176);
+        assert_eq!(value["after"]["total_bytes"], 176);
+        assert_eq!(value["reclaimed_bytes"], 0);
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn compact_requires_yes_without_dry_run() {
+        let workspace = TempWorkspace::new("cli-compact-requires-yes");
+        let env = |_: &str| None;
+        let runtime = CompactRuntime::default();
+
+        let output = run_with_context_and_runtime(["compact"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output
+            .stderr
+            .contains("compact requires --yes unless --dry-run is present"));
+        assert!(runtime.last_compact.borrow().is_none());
+    }
+
+    #[test]
+    fn compact_human_with_yes_reports_size_effects() {
+        let workspace = TempWorkspace::new("cli-compact-human");
+        let env = |_: &str| None;
+        let runtime = CompactRuntime::default();
+        let output =
+            run_with_context_and_runtime(["compact", "--yes"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        let compact = runtime.last_compact.borrow().expect("compact request");
+        assert!(!compact.dry_run);
+        assert!(output.stdout.contains("compact: complete\n"));
+        assert!(output.stdout.contains("active_generation: gen-000004\n"));
+        assert!(output.stdout.contains("total_bytes_before: 176\n"));
+        assert!(output.stdout.contains("total_bytes_after: 112\n"));
+        assert!(output.stdout.contains("reclaimed_bytes: 64\n"));
+    }
+
+    #[test]
+    fn compact_rejects_unknown_options() {
+        let workspace = TempWorkspace::new("cli-compact-unknown-option");
+        let env = |_: &str| None;
+        let runtime = CompactRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["compact", "--dry-run", "--mystery"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stderr.contains("unknown compact option: --mystery"));
+        assert!(runtime.last_compact.borrow().is_none());
     }
 
     #[test]
