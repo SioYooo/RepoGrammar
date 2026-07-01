@@ -17,6 +17,8 @@ use repogrammar::application::autosync::{
 use repogrammar::application::indexing::{
     index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
     index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress,
+    sync_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
+    sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress,
     IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::install::{
@@ -186,6 +188,21 @@ fn read_prompt_response(prompt: &str) -> Result<String, String> {
 /// successful sync. Records files seen, code units indexed, elapsed time, and the
 /// activated generation so the daemon log shows what each sync did.
 fn format_autosync_sync_log(outcome: &IndexingOutcome, elapsed_ms: u128) -> String {
+    if let Some(sync_report) = &outcome.sync_report {
+        return format!(
+            "autosync: {} sync +{} ~{} -{} unchanged {} copied {} reparsed {} file(s), {} unit(s) in {}ms (generation {})",
+            sync_report.sync_mode.as_str(),
+            sync_report.added_files,
+            sync_report.modified_files,
+            sync_report.removed_files,
+            sync_report.unchanged_files,
+            sync_report.copied_forward_files,
+            sync_report.reparsed_files,
+            outcome.indexed_units,
+            elapsed_ms,
+            outcome.active_generation.as_deref().unwrap_or("none")
+        );
+    }
     format!(
         "autosync: synced {} file(s), {} unit(s) in {}ms (generation {})",
         outcome.discovered_files,
@@ -756,12 +773,34 @@ impl CliRuntime for ProductCliRuntime {
             if let Some(executable) = request.semantic_worker_executable {
                 let worker = TypeScriptSemanticWorkerBoundary::new(executable)
                     .with_args(request.semantic_worker_args);
-                index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+                if command == "sync" {
+                    sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+                        indexing_request,
+                        &FilesystemFileDiscovery,
+                        &FilesystemSourceStore,
+                        &parser,
+                        (&framework_roles, &worker, &rust_provider),
+                        &store,
+                        &mut progress,
+                    )
+                } else {
+                    index_repository_with_discovery_parser_frameworks_semantic_worker_rust_provider_families_and_store_with_progress(
+                        indexing_request,
+                        &FilesystemFileDiscovery,
+                        &FilesystemSourceStore,
+                        &parser,
+                        (&framework_roles, &worker, &rust_provider),
+                        &store,
+                        &mut progress,
+                    )
+                }
+            } else if command == "sync" {
+                sync_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress(
                     indexing_request,
                     &FilesystemFileDiscovery,
                     &FilesystemSourceStore,
                     &parser,
-                    (&framework_roles, &worker, &rust_provider),
+                    (&framework_roles, &rust_provider),
                     &store,
                     &mut progress,
                 )
@@ -1574,6 +1613,7 @@ mod tests {
             skipped_paths: 1,
             active_generation: Some("gen-000007".to_string()),
             semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            sync_report: None,
             warnings: Vec::new(),
         };
         assert_eq!(
@@ -1591,11 +1631,42 @@ mod tests {
             skipped_paths: 0,
             active_generation: None,
             semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            sync_report: None,
             warnings: Vec::new(),
         };
         assert_eq!(
             format_autosync_sync_log(&outcome, 5),
             "autosync: synced 0 file(s), 0 unit(s) in 5ms (generation none)"
+        );
+    }
+
+    #[test]
+    fn autosync_sync_log_includes_incremental_delta_when_available() {
+        let outcome = IndexingOutcome {
+            indexed_units: 5,
+            semantic_facts: 2,
+            discovered_files: 3,
+            skipped_paths: 0,
+            active_generation: Some("gen-000008".to_string()),
+            semantic_worker: repogrammar::application::indexing::SemanticWorkerRunStatus::Deferred,
+            sync_report: Some(repogrammar::application::indexing::IndexingSyncReport {
+                base_generation: Some("gen-000007".to_string()),
+                sync_mode: repogrammar::application::indexing::IndexingSyncMode::Incremental,
+                fallback_reason: None,
+                added_files: 1,
+                modified_files: 1,
+                removed_files: 1,
+                unchanged_files: 1,
+                copied_forward_files: 1,
+                reparsed_files: 2,
+                families_recomputed: 0,
+                dirty_records_cleared: 0,
+            }),
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            format_autosync_sync_log(&outcome, 19),
+            "autosync: incremental sync +1 ~1 -1 unchanged 1 copied 1 reparsed 2 file(s), 5 unit(s) in 19ms (generation gen-000008)"
         );
     }
 

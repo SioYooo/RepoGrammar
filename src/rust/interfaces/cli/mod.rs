@@ -503,7 +503,7 @@ fn usage() -> String {
         "  index [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
         "      Build a fresh syntax/code-unit index and activate it atomically.",
         "  sync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
-        "      Rebuild the active index using the same safe indexing path.",
+        "      Incrementally update the active index when safe, with full-rebuild fallback.",
         "  resync [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
         "      Rebuild the active index and static-analysis facts for any initialized repository.",
         "  autosync <status|enable|start|stop|disable|run> [options]",
@@ -5603,6 +5603,22 @@ fn index_outcome_human(
         output.push_str(warning);
         output.push('\n');
     }
+    if let Some(sync_report) = &outcome.sync_report {
+        output.push_str(&format!(
+            "sync_mode: {}\nfallback_reason: {}\nbase_generation: {}\nadded_files: {}\nmodified_files: {}\nremoved_files: {}\nunchanged_files: {}\ncopied_forward_files: {}\nreparsed_files: {}\nfamilies_recomputed: {}\ndirty_records_cleared: {}\n",
+            sync_report.sync_mode.as_str(),
+            sync_report.fallback_reason.as_deref().unwrap_or("none"),
+            sync_report.base_generation.as_deref().unwrap_or("none"),
+            sync_report.added_files,
+            sync_report.modified_files,
+            sync_report.removed_files,
+            sync_report.unchanged_files,
+            sync_report.copied_forward_files,
+            sync_report.reparsed_files,
+            sync_report.families_recomputed,
+            sync_report.dirty_records_cleared,
+        ));
+    }
     output
 }
 
@@ -5619,7 +5635,7 @@ fn index_outcome_value(
     outcome: &IndexingOutcome,
     options: &LifecycleOptions,
 ) -> serde_json::Value {
-    json!({
+    let mut value = json!({
         "command": command,
         "status": "complete",
         "generation_id": outcome.active_generation,
@@ -5635,7 +5651,59 @@ fn index_outcome_value(
         "mining": "deferred",
         "progress": options.progress.as_str(),
         "warnings": outcome.warnings,
-    })
+    });
+    if let (Some(sync_report), Some(object)) = (&outcome.sync_report, value.as_object_mut()) {
+        object.insert(
+            "sync_mode".to_string(),
+            json!(sync_report.sync_mode.as_str()),
+        );
+        object.insert(
+            "fallback_reason".to_string(),
+            sync_report
+                .fallback_reason
+                .as_ref()
+                .map(|reason| json!(reason))
+                .unwrap_or(Value::Null),
+        );
+        object.insert(
+            "base_generation".to_string(),
+            sync_report
+                .base_generation
+                .as_ref()
+                .map(|generation| json!(generation))
+                .unwrap_or(Value::Null),
+        );
+        object.insert("added_files".to_string(), json!(sync_report.added_files));
+        object.insert(
+            "modified_files".to_string(),
+            json!(sync_report.modified_files),
+        );
+        object.insert(
+            "removed_files".to_string(),
+            json!(sync_report.removed_files),
+        );
+        object.insert(
+            "unchanged_files".to_string(),
+            json!(sync_report.unchanged_files),
+        );
+        object.insert(
+            "copied_forward_files".to_string(),
+            json!(sync_report.copied_forward_files),
+        );
+        object.insert(
+            "reparsed_files".to_string(),
+            json!(sync_report.reparsed_files),
+        );
+        object.insert(
+            "families_recomputed".to_string(),
+            json!(sync_report.families_recomputed),
+        );
+        object.insert(
+            "dirty_records_cleared".to_string(),
+            json!(sync_report.dirty_records_cleared),
+        );
+    }
+    value
 }
 
 fn prune_report_human(report: &GenerationPruneReport) -> String {
@@ -6270,7 +6338,8 @@ mod tests {
     use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::application::indexing::{
-        index_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
+        index_repository_with_discovery_parser_frameworks_and_store,
+        sync_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
     use crate::application::query::{
         list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
@@ -6420,6 +6489,7 @@ mod tests {
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Complete,
+                sync_report: None,
                 warnings: Vec::new(),
             })
         }
@@ -6457,6 +6527,7 @@ mod tests {
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                sync_report: None,
                 warnings: Vec::new(),
             })
         }
@@ -6492,6 +6563,7 @@ mod tests {
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                sync_report: None,
                 warnings: Vec::new(),
             })
         }
@@ -6529,6 +6601,7 @@ mod tests {
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                sync_report: None,
                 warnings: Vec::new(),
             })
         }
@@ -6939,6 +7012,7 @@ mod tests {
                 skipped_paths: 0,
                 active_generation: Some("gen-000001".to_string()),
                 semantic_worker: crate::application::indexing::SemanticWorkerRunStatus::Deferred,
+                sync_report: None,
                 warnings: Vec::new(),
             })
         }
@@ -7066,7 +7140,7 @@ mod tests {
     impl CliRuntime for TestRuntime {
         fn index_repository(
             &self,
-            _command: &str,
+            command: &str,
             request: CliIndexRequest,
         ) -> Result<IndexingOutcome, RepoGrammarError> {
             let status_request = RepositoryStatusRequest {
@@ -7101,13 +7175,24 @@ mod tests {
             }
 
             let framework_roles = SyntaxFrameworkRoleDetector;
+            let indexing_request = IndexingRequest {
+                repository_root: request.repository_root,
+                state_dir_override: request.state_dir_override,
+                max_file_bytes: request.max_file_bytes,
+                strict_gitignore: request.strict_gitignore,
+            };
+            if command == "sync" {
+                return sync_repository_with_discovery_parser_frameworks_and_store(
+                    indexing_request,
+                    &FilesystemFileDiscovery,
+                    &FilesystemSourceStore,
+                    &SyntaxCodeUnitParser,
+                    &framework_roles,
+                    &store,
+                );
+            }
             index_repository_with_discovery_parser_frameworks_and_store(
-                IndexingRequest {
-                    repository_root: request.repository_root,
-                    state_dir_override: request.state_dir_override,
-                    max_file_bytes: request.max_file_bytes,
-                    strict_gitignore: request.strict_gitignore,
-                },
+                indexing_request,
                 &FilesystemFileDiscovery,
                 &FilesystemSourceStore,
                 &SyntaxCodeUnitParser,
@@ -9367,16 +9452,28 @@ mod tests {
     }
 
     #[test]
-    fn sync_json_rebuilds_a_new_file_manifest_generation() {
+    fn sync_json_performs_incremental_add_modify_remove_copy_forward() {
         let workspace = TempWorkspace::new("cli-sync-real-runtime");
         let env = |_: &str| None;
         let runtime = TestRuntime;
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        fs::write(
+            workspace.path().join("removed.ts"),
+            "export const removed = true;\n",
+        )
+        .expect("write removed");
+        fs::write(
+            workspace.path().join("stable.ts"),
+            "export const stable = true;\n",
+        )
+        .expect("write stable");
         assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
         assert_eq!(
             run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
             0
         );
+        fs::write(workspace.path().join("a.ts"), "export const a = 2;\n").expect("modify a");
+        fs::remove_file(workspace.path().join("removed.ts")).expect("remove file");
         fs::write(
             workspace.path().join("b.tsx"),
             "export function B(){ return null; }\n",
@@ -9390,9 +9487,20 @@ mod tests {
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
         assert_eq!(value["command"], "sync");
         assert_eq!(value["generation_id"], "gen-000002");
-        assert_eq!(value["discovered_files"], 2);
-        assert_eq!(value["stored_files"], 2);
-        assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 2);
+        assert_eq!(value["sync_mode"], "incremental");
+        assert_eq!(value["fallback_reason"], Value::Null);
+        assert_eq!(value["base_generation"], "gen-000001");
+        assert_eq!(value["discovered_files"], 3);
+        assert_eq!(value["stored_files"], 3);
+        assert_eq!(value["added_files"], 1);
+        assert_eq!(value["modified_files"], 1);
+        assert_eq!(value["removed_files"], 1);
+        assert_eq!(value["unchanged_files"], 1);
+        assert_eq!(value["copied_forward_files"], 1);
+        assert_eq!(value["reparsed_files"], 2);
+        assert_eq!(value["dirty_records_cleared"], 0);
+        assert!(value["families_recomputed"].is_u64());
+        assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 3);
         assert!(workspace
             .path()
             .join(DEFAULT_STATE_DIR)
@@ -9408,10 +9516,13 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("locks/index.lock")
             .exists());
-        assert_eq!(indexed_paths(&workspace, "gen-000001"), vec!["a.ts"]);
+        assert_eq!(
+            indexed_paths(&workspace, "gen-000001"),
+            vec!["a.ts", "removed.ts", "stable.ts"]
+        );
         assert_eq!(
             indexed_paths(&workspace, "gen-000002"),
-            vec!["a.ts", "b.tsx"]
+            vec!["a.ts", "b.tsx", "stable.ts"]
         );
 
         let status =
@@ -9449,6 +9560,42 @@ mod tests {
         assert_eq!(
             indexed_paths(&workspace, "gen-000002"),
             vec!["a.ts", "b.ts"]
+        );
+    }
+
+    #[test]
+    fn sync_json_falls_back_to_full_rebuild_for_project_context_change() {
+        let workspace = TempWorkspace::new("cli-sync-context-fallback");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(run_with_context(["init"], workspace.path(), &env).status, 0);
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"typescript":"6.0.0"}}"#,
+        )
+        .expect("write package");
+
+        let output =
+            run_with_context_and_runtime(["sync", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
+        assert_eq!(value["command"], "sync");
+        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["sync_mode"], "full_rebuild_fallback");
+        assert_eq!(value["fallback_reason"], "project_context_changed");
+        assert_eq!(value["base_generation"], "gen-000001");
+        assert_eq!(value["added_files"], 1);
+        assert_eq!(value["reparsed_files"], 2);
+        assert_eq!(
+            indexed_paths(&workspace, "gen-000002"),
+            vec!["a.ts", "package.json"]
         );
     }
 
