@@ -14,6 +14,7 @@ Project lifecycle:
 - `resync`
 - `autosync`
 - `prune`
+- `compact`
 - `status`
 - `doctor`
 - `unlock`
@@ -183,6 +184,17 @@ After a destructive mutable-database prune commits, the storage adapter runs
 bounded SQLite maintenance with `PRAGMA optimize` and a passive WAL checkpoint.
 This maintenance must not run blocking `VACUUM` and must not remove active
 mutable records.
+
+`repogrammar compact` explicitly compacts the repo-owned mutable SQLite index
+database. `compact --dry-run --json` must acquire the repository-local index
+lock, validate the active generation and storage sidecars, perform no writes,
+and report database, WAL, SHM, total before/after bytes, `dry_run`, active
+generation, status, and reclaimed bytes without exposing absolute paths.
+Mutating `compact --yes` must require the same index lock and storage-health
+preflight as `prune`, refuse unsafe database states such as dirty active
+records, refuse missing mutable storage, and report the same before/after size
+metadata after running explicit SQLite `VACUUM` and a truncating WAL checkpoint.
+It must not delete source files, user files, or legacy generation directories.
 
 `repogrammar status` must support human and `--json` output. It must report
 whether the repository is initialized, manifest status, the active generation,
@@ -740,8 +752,10 @@ mutable database after storage health and active-generation checks; when only
 legacy generation directories exist, it falls back to pruning those directories.
 `prune --dry-run` reports the same candidates without writes. Successful
 mutable index activation and destructive mutable prune run bounded SQLite
-maintenance through `PRAGMA optimize` and passive WAL checkpointing; there is
-no automatic `VACUUM` or separate public `compact` command in this slice.
+maintenance through `PRAGMA optimize` and passive WAL checkpointing. There is
+no automatic `VACUUM`; full database compaction is available only through the
+explicit confirmation-gated `repogrammar compact --yes` command, with
+`compact --dry-run --json` for non-mutating size inspection.
 `status`,
 `doctor`, `unlock`, and `logs` expose
 human and JSON-safe repo-local lifecycle information without claiming

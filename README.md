@@ -218,6 +218,7 @@ repogrammar init --yes --resync --autosync
 repogrammar status
 repogrammar autosync status
 repogrammar prune --dry-run
+repogrammar compact --dry-run --json
 repogrammar logs --component daemon --tail 20
 repogrammar families
 repogrammar find --project . --token-budget 8000 <target>

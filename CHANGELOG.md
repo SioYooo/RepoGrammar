@@ -22,7 +22,11 @@
   use the same fail-closed path-scoped cascade and dirty-marker behavior.
   Successful mutable index activation and mutating mutable prune operations now
   apply bounded SQLite maintenance with `PRAGMA optimize` and a passive WAL
-  checkpoint without running automatic `VACUUM`.
+  checkpoint without running automatic `VACUUM`. Explicit
+  `repogrammar compact --dry-run --json` and `repogrammar compact --yes`
+  commands now report mutable SQLite database/WAL/SHM size metadata, require the
+  index lock, validate the active generation, and reserve full `VACUUM` for
+  confirmation-gated compaction with a truncating WAL checkpoint only.
 - Public-preview hardening now blocks React-shaped TypeScript semantic-worker
   facts from forming unsupported JS/TS family claims, applies safe
   `tsconfig.json` / `jsconfig.json` `baseUrl` prefixes to JSON path aliases,

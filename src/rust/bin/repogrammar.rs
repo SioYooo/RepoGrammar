@@ -37,7 +37,7 @@ use repogrammar::application::repository::{
     RepositoryDoctorReport, RepositoryDoctorRequest, RepositoryImplementationStatus,
     RepositoryStatus, RepositoryStatusReport, RepositoryStatusRequest,
 };
-use repogrammar::application::storage::prune_index_generations;
+use repogrammar::application::storage::{compact_index_storage, prune_index_generations};
 use repogrammar::application::telemetry::TelemetryUploadReceipt;
 use repogrammar::error::RepoGrammarError;
 #[cfg(test)]
@@ -52,7 +52,9 @@ use repogrammar::interfaces::mcp::{
     serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
-use repogrammar::ports::index_store::{GenerationPruneReport, GenerationPruneRequest};
+use repogrammar::ports::index_store::{
+    GenerationPruneReport, GenerationPruneRequest, IndexCompactReport, IndexCompactRequest,
+};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use std::ffi::{c_void, OsString};
@@ -853,6 +855,46 @@ impl CliRuntime for ProductCliRuntime {
             &request.path,
             request.state_dir_override.as_deref(),
             prune,
+        )
+    }
+
+    fn compact_storage(
+        &self,
+        request: RepositoryStatusRequest,
+        compact: IndexCompactRequest,
+    ) -> Result<IndexCompactReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        let status = repository_status_with_storage(request.clone(), &store)?;
+        match status.status {
+            RepositoryStatus::NotInitialized => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "repository is not initialized; run repogrammar init --yes".to_string(),
+                ));
+            }
+            RepositoryStatus::CorruptedManifest => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "repository manifest is corrupted; run repogrammar doctor".to_string(),
+                ));
+            }
+            RepositoryStatus::Initialized { .. } => {}
+        }
+        if !status.missing_subdirs.is_empty() {
+            return Err(RepoGrammarError::InvalidInput(
+                "repository-local state is missing required subdirectories; run repogrammar doctor"
+                    .to_string(),
+            ));
+        }
+        if status.storage == RepositoryImplementationStatus::Unhealthy {
+            return Err(RepoGrammarError::InvalidInput(
+                "repository-local storage is unhealthy; run repogrammar doctor".to_string(),
+            ));
+        }
+
+        compact_index_storage(
+            &store,
+            &request.path,
+            request.state_dir_override.as_deref(),
+            compact,
         )
     }
 
@@ -5389,6 +5431,86 @@ mod tests {
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000004");
         assert_eq!(value["storage"], "available");
+    }
+
+    #[test]
+    fn product_runtime_compacts_mutable_index_and_preserves_active_status() {
+        let workspace = TempWorkspace::new("product-runtime-compact");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0, "{index:?}");
+
+        let dry_run = run_with_runtime(
+            cli_args("compact", workspace.path(), &["--dry-run", "--json"]),
+            &runtime,
+        );
+        assert_eq!(dry_run.status, 0, "{dry_run:?}");
+        assert!(dry_run.stderr.is_empty());
+        let value: Value = serde_json::from_str(dry_run.stdout.trim()).expect("compact JSON");
+        assert_eq!(value["command"], "compact");
+        assert_eq!(value["status"], "dry_run");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert!(value["before"]["total_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["before"], value["after"]);
+        assert!(!dry_run
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let compact = run_with_runtime(
+            cli_args("compact", workspace.path(), &["--yes", "--json"]),
+            &runtime,
+        );
+        assert_eq!(compact.status, 0, "{compact:?}");
+        let value: Value = serde_json::from_str(compact.stdout.trim()).expect("compact JSON");
+        assert_eq!(value["status"], "complete");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert!(value["before"]["total_bytes"].as_u64().unwrap() > 0);
+        assert!(value["after"]["total_bytes"].as_u64().unwrap() > 0);
+        assert!(!compact
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(value["active_generation"], "gen-000001");
+        assert_eq!(value["storage"], "available");
+    }
+
+    #[test]
+    fn product_runtime_compact_refuses_live_index_lock() {
+        let workspace = TempWorkspace::new("product-runtime-compact-lock");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(cli_args("init", workspace.path(), &[]), &runtime);
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        assert_eq!(index.status, 0, "{index:?}");
+        let _guard = repogrammar::application::repository::acquire_index_lock(
+            workspace.path().to_string_lossy().as_ref(),
+            None,
+        )
+        .expect("hold index lock");
+
+        let output = run_with_runtime(
+            cli_args("compact", workspace.path(), &["--dry-run", "--json"]),
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        assert!(!output
+            .stderr
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("error JSON");
+        assert_eq!(value["command"], "compact");
+        assert!(value["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("index lock is held"));
     }
 
     #[test]
