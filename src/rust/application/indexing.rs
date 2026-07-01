@@ -2576,7 +2576,7 @@ mod tests {
     };
     use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceText};
     use crate::test_support::TempWorkspace;
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection, OptionalExtension};
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3357,27 +3357,30 @@ mod tests {
     }
 
     fn semantic_fact_count(state: &Path, generation_id: &str) -> u32 {
-        let database = state
-            .join("generations")
-            .join(generation_id)
-            .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
         connection
-            .query_row("SELECT count(*) FROM semantic_facts", [], |row| row.get(0))
+            .query_row(
+                "SELECT count(*) FROM semantic_facts WHERE generation_id = ?1",
+                params![generation_id],
+                |row| row.get(0),
+            )
             .expect("count semantic facts")
     }
 
     fn semantic_fact_ids(state: &Path, generation_id: &str) -> Vec<(String, String)> {
-        let database = state
-            .join("generations")
-            .join(generation_id)
-            .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
         let mut statement = connection
-            .prepare("SELECT fact_id, evidence_id FROM semantic_facts ORDER BY fact_id")
+            .prepare(
+                "SELECT fact_id, evidence_id \
+                 FROM semantic_facts \
+                 WHERE generation_id = ?1 \
+                 ORDER BY fact_id",
+            )
             .expect("prepare fact id query");
         statement
-            .query_map([], |row| {
+            .query_map(params![generation_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .expect("query semantic fact ids")
@@ -3386,9 +3389,25 @@ mod tests {
     }
 
     fn create_index_state(state: &Path) {
-        fs::create_dir_all(state.join("generations")).expect("create generations");
         fs::create_dir_all(state.join("tmp")).expect("create tmp");
         fs::create_dir_all(state.join("locks")).expect("create locks");
+    }
+
+    fn active_generation_id(state: &Path) -> Option<String> {
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
+        connection
+            .query_row(
+                "SELECT generation_id \
+                 FROM index_generations \
+                 WHERE status = 'active' \
+                 ORDER BY activated_at DESC, generation_id DESC \
+                 LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .expect("read active generation")
     }
 
     #[test]
@@ -3492,14 +3511,14 @@ mod tests {
         assert_eq!(inspection.active_generation.as_deref(), Some("gen-000001"));
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
 
-        let database = state
-            .join("generations")
-            .join("gen-000001")
-            .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
         let rows = connection
             .prepare(
-                "SELECT path, content_hash, size_bytes, language FROM indexed_files ORDER BY rowid",
+                "SELECT path, content_hash, size_bytes, language \
+                 FROM indexed_files \
+                 WHERE generation_id = 'gen-000001' \
+                 ORDER BY rowid",
             )
             .expect("prepare query")
             .query_map([], |row| {
@@ -3610,15 +3629,14 @@ mod tests {
         assert_eq!(outcome.discovered_files, 2);
         assert_eq!(outcome.indexed_units, 7);
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
-        let database = state
-            .join("generations")
-            .join("gen-000001")
-            .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
         let rows = connection
             .prepare(
                 "SELECT path, kind, start_byte, end_byte, content_hash \
-                 FROM code_units ORDER BY path, start_byte, end_byte, code_unit_id",
+                 FROM code_units \
+                 WHERE generation_id = 'gen-000001' \
+                 ORDER BY path, start_byte, end_byte, code_unit_id",
             )
             .expect("prepare query")
             .query_map([], |row| {
@@ -5387,23 +5405,29 @@ mod tests {
                 "framework:jest_vitest.test"
             ]
         );
-        let database = state
-            .join("generations")
-            .join("gen-000001")
-            .join("repogrammar.sqlite");
-        let connection = Connection::open(database).expect("open generation database");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
         let family_bound_evidence: u32 = connection
             .query_row(
-                "SELECT count(*) FROM evidence WHERE family_id IS NOT NULL",
+                "SELECT count(*) FROM evidence \
+                 WHERE generation_id = 'gen-000001' AND family_id IS NOT NULL",
                 [],
                 |row| row.get(0),
             )
             .expect("count family-bound evidence");
         let families: u32 = connection
-            .query_row("SELECT count(*) FROM families", [], |row| row.get(0))
+            .query_row(
+                "SELECT count(*) FROM families WHERE generation_id = 'gen-000001'",
+                [],
+                |row| row.get(0),
+            )
             .expect("count families");
         let family_members: u32 = connection
-            .query_row("SELECT count(*) FROM family_members", [], |row| row.get(0))
+            .query_row(
+                "SELECT count(*) FROM family_members WHERE generation_id = 'gen-000001'",
+                [],
+                |row| row.get(0),
+            )
             .expect("count family members");
         assert_eq!(family_bound_evidence, 0);
         assert_eq!(families, 0);
@@ -5779,12 +5803,7 @@ mod tests {
         .expect_err("stale semantic evidence must abort indexing");
 
         assert!(error.to_string().contains("semantic fact content hash"));
-        assert_eq!(
-            fs::read_to_string(state.join("current-generation"))
-                .expect("read active generation")
-                .trim(),
-            "gen-000001"
-        );
+        assert_eq!(active_generation_id(&state).as_deref(), Some("gen-000001"));
         assert_eq!(semantic_fact_count(&state, "gen-000002"), 0);
     }
 
@@ -6138,12 +6157,7 @@ extraPaths = ["src/lib", "C:/secret"]
         .expect_err("source failure must abort new generation");
 
         assert!(error.to_string().contains("source content changed"));
-        assert_eq!(
-            fs::read_to_string(state.join("current-generation"))
-                .expect("read active generation")
-                .trim(),
-            "gen-000001"
-        );
+        assert_eq!(active_generation_id(&state).as_deref(), Some("gen-000001"));
     }
 
     #[test]
@@ -6218,12 +6232,7 @@ extraPaths = ["src/lib", "C:/secret"]
                 error.to_string().contains("parser returned a code unit"),
                 "unexpected error: {error}"
             );
-            assert_eq!(
-                fs::read_to_string(state.join("current-generation"))
-                    .expect("read active generation")
-                    .trim(),
-                "gen-000001"
-            );
+            assert_eq!(active_generation_id(&state).as_deref(), Some("gen-000001"));
         }
     }
 
@@ -6317,12 +6326,7 @@ extraPaths = ["src/lib", "C:/secret"]
                 error.to_string().contains("parser"),
                 "unexpected error: {error}"
             );
-            assert_eq!(
-                fs::read_to_string(state.join("current-generation"))
-                    .expect("read active generation")
-                    .trim(),
-                "gen-000001"
-            );
+            assert_eq!(active_generation_id(&state).as_deref(), Some("gen-000001"));
         }
     }
 
@@ -6376,12 +6380,7 @@ extraPaths = ["src/lib", "C:/secret"]
         )
         .expect_err("duplicate code unit id must abort new generation");
 
-        assert_eq!(
-            fs::read_to_string(state.join("current-generation"))
-                .expect("read active generation")
-                .trim(),
-            "gen-000001"
-        );
+        assert_eq!(active_generation_id(&state).as_deref(), Some("gen-000001"));
     }
 
     #[test]

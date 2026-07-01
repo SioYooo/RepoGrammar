@@ -54,6 +54,10 @@ impl SqliteIndexStore {
         }
     }
 
+    fn database_path(&self) -> PathBuf {
+        self.state_dir.join(DATABASE_FILE)
+    }
+
     fn generations_dir(&self) -> PathBuf {
         self.state_dir.join("generations")
     }
@@ -71,29 +75,44 @@ impl SqliteIndexStore {
     }
 
     #[cfg(test)]
-    fn generation_database_path(&self, generation_id: &str) -> PathBuf {
-        self.generation_dir(generation_id).join(DATABASE_FILE)
+    fn mutable_database_path(&self) -> PathBuf {
+        self.database_path()
     }
 
     fn ensure_layout(&self) -> Result<(), IndexStoreError> {
         ensure_real_dir(&self.state_dir, "state directory")?;
-        ensure_real_dir(&self.generations_dir(), "generations directory")?;
         ensure_real_dir(&self.tmp_dir(), "tmp directory")?;
         Ok(())
     }
 
-    fn next_generation_id(&self) -> Result<String, IndexStoreError> {
+    fn next_generation_id(&self, connection: &Connection) -> Result<String, IndexStoreError> {
         let mut max_seen = 0u32;
-        for entry in fs::read_dir(self.generations_dir())
-            .map_err(|_| unavailable("failed to read generations directory"))?
-        {
-            let entry = entry.map_err(|_| unavailable("failed to read generation entry"))?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            if let Some(number) = parse_generation_number(name) {
+
+        let mut statement = connection
+            .prepare("SELECT generation_id FROM index_generations")
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_unavailable)?;
+        for row in rows {
+            let generation_id = row.map_err(sql_unavailable)?;
+            if let Some(number) = parse_generation_number(&generation_id) {
                 max_seen = max_seen.max(number);
+            }
+        }
+
+        if self.generations_dir().exists() {
+            for entry in fs::read_dir(self.generations_dir())
+                .map_err(|_| unavailable("failed to read generations directory"))?
+            {
+                let entry = entry.map_err(|_| unavailable("failed to read generation entry"))?;
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if let Some(number) = parse_generation_number(name) {
+                    max_seen = max_seen.max(number);
+                }
             }
         }
         if max_seen >= 999_999 {
@@ -104,32 +123,32 @@ impl SqliteIndexStore {
         Ok(format!("gen-{:06}", max_seen + 1))
     }
 
+    #[cfg(test)]
     fn open_generation(&self, generation_id: &str) -> Result<Connection, IndexStoreError> {
-        let path = self.generation_database_path_for(generation_id, MissingDatabase::Allowed)?;
-        let connection = open_connection(path, MissingDatabase::Allowed)?;
-        apply_pragmas(&connection).map_err(sql_unavailable)?;
-        Ok(connection)
+        validate_generation_id(generation_id)?;
+        self.open_mutable_database(MissingDatabase::Allowed)
     }
 
     fn open_existing_generation(&self, generation_id: &str) -> Result<Connection, IndexStoreError> {
-        let path = self.generation_database_path_for(generation_id, MissingDatabase::Rejected)?;
-        let connection = open_connection(path, MissingDatabase::Rejected)?;
-        apply_pragmas(&connection).map_err(sql_unavailable)?;
-        Ok(connection)
-    }
-
-    fn open_existing_generation_read_only(
-        &self,
-        generation_id: &str,
-    ) -> Result<Connection, IndexStoreError> {
-        let path = self.generation_database_path_for(generation_id, MissingDatabase::Rejected)?;
-        let connection = open_read_only_connection(path)?;
-        apply_read_pragmas(&connection).map_err(sql_unavailable)?;
-        Ok(connection)
+        validate_generation_id(generation_id)?;
+        self.open_mutable_database(MissingDatabase::Rejected)
     }
 
     fn open_active_generation_read_only(&self) -> Result<(String, Connection), IndexStoreError> {
         self.require_existing_layout()?;
+        if let Some(connection) = self.try_open_mutable_database_read_only()? {
+            let generation_id = active_generation_id(&connection)?.ok_or_else(|| {
+                IndexStoreError::InvalidState("active generation is missing".to_string())
+            })?;
+            validate_generation_for_read(&connection, &generation_id)?;
+            return Ok((generation_id, connection));
+        }
+        self.open_legacy_active_generation_read_only()
+    }
+
+    fn open_legacy_active_generation_read_only(
+        &self,
+    ) -> Result<(String, Connection), IndexStoreError> {
         let current = self.current_generation_path();
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
@@ -150,7 +169,7 @@ impl SqliteIndexStore {
             .trim()
             .to_string();
         validate_generation_id(&generation_id)?;
-        let connection = self.open_existing_generation_read_only(&generation_id)?;
+        let connection = self.open_legacy_existing_generation_read_only(&generation_id)?;
         if generation_status(&connection, &generation_id)?.as_deref() != Some("active") {
             return Err(IndexStoreError::InvalidState(
                 "current-generation does not point at an active generation".to_string(),
@@ -162,12 +181,90 @@ impl SqliteIndexStore {
 
     fn require_existing_layout(&self) -> Result<(), IndexStoreError> {
         ensure_existing_real_dir(&self.state_dir, "state directory")?;
-        ensure_existing_real_dir(&self.generations_dir(), "generations directory")?;
         ensure_existing_real_dir(&self.tmp_dir(), "tmp directory")?;
         Ok(())
     }
 
-    fn generation_database_path_for(
+    fn open_mutable_database(
+        &self,
+        missing_database: MissingDatabase,
+    ) -> Result<Connection, IndexStoreError> {
+        let path = self.database_path_for(missing_database)?;
+        let connection = open_connection(path, missing_database)?;
+        apply_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(connection)
+    }
+
+    fn try_open_mutable_database(&self) -> Result<Option<Connection>, IndexStoreError> {
+        let path = match self.database_path_for_optional()? {
+            Some(path) => path,
+            None => return Ok(None),
+        };
+        let connection = open_connection(path, MissingDatabase::Rejected)?;
+        apply_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(Some(connection))
+    }
+
+    fn try_open_mutable_database_read_only(&self) -> Result<Option<Connection>, IndexStoreError> {
+        let path = match self.database_path_for_optional()? {
+            Some(path) => path,
+            None => return Ok(None),
+        };
+        let connection = open_read_only_connection(path)?;
+        apply_read_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(Some(connection))
+    }
+
+    fn database_path_for(
+        &self,
+        missing_database: MissingDatabase,
+    ) -> Result<PathBuf, IndexStoreError> {
+        ensure_existing_real_dir(&self.state_dir, "state directory")?;
+        let path = self.database_path();
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(IndexStoreError::InvalidState(
+                    "repository index database must not be a symlink".to_string(),
+                ))
+            }
+            Ok(metadata) if metadata.is_file() => canonical_database_path(&self.state_dir),
+            Ok(_) => Err(IndexStoreError::InvalidState(
+                "repository index database exists and is not a file".to_string(),
+            )),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && missing_database == MissingDatabase::Allowed =>
+            {
+                canonical_database_path(&self.state_dir)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(
+                IndexStoreError::InvalidState("repository index database is missing".to_string()),
+            ),
+            Err(_) => Err(unavailable("failed to inspect repository index database")),
+        }
+    }
+
+    fn database_path_for_optional(&self) -> Result<Option<PathBuf>, IndexStoreError> {
+        ensure_existing_real_dir(&self.state_dir, "state directory")?;
+        let path = self.database_path();
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(IndexStoreError::InvalidState(
+                    "repository index database must not be a symlink".to_string(),
+                ))
+            }
+            Ok(metadata) if metadata.is_file() => {
+                canonical_database_path(&self.state_dir).map(Some)
+            }
+            Ok(_) => Err(IndexStoreError::InvalidState(
+                "repository index database exists and is not a file".to_string(),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(unavailable("failed to inspect repository index database")),
+        }
+    }
+
+    fn legacy_generation_database_path_for(
         &self,
         generation_id: &str,
         missing_database: MissingDatabase,
@@ -199,6 +296,17 @@ impl SqliteIndexStore {
             ),
             Err(_) => Err(unavailable("failed to inspect generation database")),
         }
+    }
+
+    fn open_legacy_existing_generation_read_only(
+        &self,
+        generation_id: &str,
+    ) -> Result<Connection, IndexStoreError> {
+        let path =
+            self.legacy_generation_database_path_for(generation_id, MissingDatabase::Rejected)?;
+        let connection = open_read_only_connection(path)?;
+        apply_read_pragmas(&connection).map_err(sql_unavailable)?;
+        Ok(connection)
     }
 
     fn list_generation_directories(
@@ -260,14 +368,19 @@ fn canonical_generation_database_path(generation_dir: &Path) -> Result<PathBuf, 
         .map_err(|_| unavailable("failed to canonicalize generation directory"))
 }
 
+fn canonical_database_path(state_dir: &Path) -> Result<PathBuf, IndexStoreError> {
+    state_dir
+        .canonicalize()
+        .map(|path| path.join(DATABASE_FILE))
+        .map_err(|_| unavailable("failed to canonicalize state directory"))
+}
+
 impl IndexStore for SqliteIndexStore {
     fn prepare_next_generation(&self) -> Result<GenerationHandle, IndexStoreError> {
         self.ensure_layout()?;
-        let generation_id = self.next_generation_id()?;
-        fs::create_dir(self.generation_dir(&generation_id))
-            .map_err(|_| unavailable("failed to create generation directory"))?;
-        let connection = self.open_generation(&generation_id)?;
+        let connection = self.open_mutable_database(MissingDatabase::Allowed)?;
         apply_migrations(&connection)?;
+        let generation_id = self.next_generation_id(&connection)?;
         connection
             .execute(
                 "INSERT INTO index_generations \
@@ -693,8 +806,17 @@ impl IndexStore for SqliteIndexStore {
 
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
         self.validate_generation(generation)?;
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        let updated = connection
+        let mut connection = self.open_existing_generation(&generation.generation_id)?;
+        let transaction = connection.transaction().map_err(sql_unavailable)?;
+        transaction
+            .execute(
+                "UPDATE index_generations \
+                 SET status = 'validated' \
+                 WHERE status = 'active' AND generation_id <> ?1",
+                params![generation.generation_id],
+            )
+            .map_err(sql_unavailable)?;
+        let updated = transaction
             .execute(
                 "UPDATE index_generations \
                  SET status = 'active', activated_at = datetime('now') \
@@ -707,16 +829,24 @@ impl IndexStore for SqliteIndexStore {
                 "generation must be validated before activation".to_string(),
             ));
         }
-        atomic_write_current_generation(
-            &self.current_generation_path(),
-            &self.tmp_dir(),
-            &generation.generation_id,
-        )?;
+        transaction.commit().map_err(sql_unavailable)?;
         Ok(())
     }
 
     fn inspect(&self) -> Result<StorageInspection, IndexStoreError> {
         self.ensure_layout()?;
+        if let Some(connection) = self.try_open_mutable_database()? {
+            let active_generation = active_generation_id(&connection)?;
+            if let Some(generation_id) = &active_generation {
+                if generation_status(&connection, generation_id)?.as_deref() != Some("active") {
+                    return Err(IndexStoreError::InvalidState(
+                        "active generation row is not marked active".to_string(),
+                    ));
+                }
+            }
+            return inspect_connection(&connection, active_generation.as_deref());
+        }
+
         let current = self.current_generation_path();
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
@@ -744,7 +874,7 @@ impl IndexStore for SqliteIndexStore {
             .trim()
             .to_string();
         validate_generation_id(&generation_id)?;
-        let connection = self.open_existing_generation(&generation_id)?;
+        let connection = self.open_legacy_existing_generation_read_only(&generation_id)?;
         if generation_status(&connection, &generation_id)?.as_deref() != Some("active") {
             return Err(IndexStoreError::InvalidState(
                 "current-generation does not point at an active generation".to_string(),
@@ -759,7 +889,86 @@ impl GenerationRetentionStore for SqliteIndexStore {
         &self,
         request: GenerationPruneRequest,
     ) -> Result<GenerationPruneReport, IndexStoreError> {
-        let (active_generation, active_connection) = self.open_active_generation_read_only()?;
+        if self.try_open_mutable_database()?.is_some() {
+            return self.prune_mutable_generations(request);
+        }
+        self.prune_legacy_generation_directories(request)
+    }
+}
+
+impl SqliteIndexStore {
+    fn prune_mutable_generations(
+        &self,
+        request: GenerationPruneRequest,
+    ) -> Result<GenerationPruneReport, IndexStoreError> {
+        let mut connection = self.open_mutable_database(MissingDatabase::Rejected)?;
+        let active_generation = active_generation_id(&connection)?.ok_or_else(|| {
+            IndexStoreError::InvalidState("active generation is missing".to_string())
+        })?;
+        let mut inactive = list_database_generation_entries(&connection)?
+            .into_iter()
+            .filter(|entry| entry.generation_id != active_generation)
+            .collect::<Vec<_>>();
+        inactive.sort_by_key(|entry| std::cmp::Reverse(entry.number));
+
+        let retained = inactive
+            .iter()
+            .take(request.keep_inactive)
+            .map(|entry| entry.generation_id.clone())
+            .collect::<Vec<_>>();
+        let mut candidates = inactive
+            .into_iter()
+            .skip(request.keep_inactive)
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|entry| entry.number);
+
+        let candidate_generations = candidates
+            .iter()
+            .map(|entry| entry.generation_id.clone())
+            .collect::<Vec<_>>();
+        let mut deleted_generations = Vec::new();
+
+        if !request.dry_run {
+            let transaction = connection.transaction().map_err(sql_unavailable)?;
+            if active_generation_id(&transaction)?.as_deref() != Some(active_generation.as_str()) {
+                return Err(IndexStoreError::InvalidState(
+                    "active generation changed during prune; retry repogrammar prune".to_string(),
+                ));
+            }
+            for candidate in candidates {
+                if candidate.generation_id == active_generation {
+                    return Err(IndexStoreError::InvalidState(
+                        "refusing to prune active generation".to_string(),
+                    ));
+                }
+                transaction
+                    .execute(
+                        "DELETE FROM index_generations \
+                         WHERE generation_id = ?1 AND status <> 'active'",
+                        params![candidate.generation_id],
+                    )
+                    .map_err(sql_unavailable)?;
+                deleted_generations.push(candidate.generation_id);
+            }
+            transaction.commit().map_err(sql_unavailable)?;
+        }
+
+        Ok(GenerationPruneReport {
+            active_generation,
+            keep_inactive: request.keep_inactive,
+            retained_inactive_generations: retained,
+            candidate_generations,
+            deleted_generations,
+            dry_run: request.dry_run,
+        })
+    }
+
+    fn prune_legacy_generation_directories(
+        &self,
+        request: GenerationPruneRequest,
+    ) -> Result<GenerationPruneReport, IndexStoreError> {
+        let (active_generation, active_connection) =
+            self.open_legacy_active_generation_read_only()?;
         drop(active_connection);
 
         let entries = self.list_generation_directories()?;
@@ -1912,11 +2121,13 @@ fn inspect_connection(
     let integrity_check = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(sql_unavailable)?;
-    let code_unit_count = if active_generation.is_some() {
+    let code_unit_count = if let Some(active_generation) = active_generation {
         let count = connection
-            .query_row("SELECT count(*) FROM code_units", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT count(*) FROM code_units WHERE generation_id = ?1",
+                params![active_generation],
+                |row| row.get::<_, i64>(0),
+            )
             .map_err(sql_unavailable)?;
         Some(u64::try_from(count).map_err(|_| {
             IndexStoreError::InvalidState("code unit count is outside valid range".to_string())
@@ -2265,6 +2476,50 @@ fn generation_status(
         .map_err(sql_unavailable)
 }
 
+fn active_generation_id(connection: &Connection) -> Result<Option<String>, IndexStoreError> {
+    let generation_id = connection
+        .query_row(
+            "SELECT generation_id \
+             FROM index_generations \
+             WHERE status = 'active' \
+             ORDER BY activated_at DESC, generation_id DESC \
+             LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    if let Some(generation_id) = &generation_id {
+        validate_generation_id(generation_id)?;
+    }
+    Ok(generation_id)
+}
+
+fn list_database_generation_entries(
+    connection: &Connection,
+) -> Result<Vec<GenerationDirectoryEntry>, IndexStoreError> {
+    let mut statement = connection
+        .prepare("SELECT generation_id FROM index_generations")
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sql_unavailable)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let generation_id = row.map_err(sql_unavailable)?;
+        validate_generation_id(&generation_id)?;
+        let Some(number) = parse_generation_number(&generation_id) else {
+            continue;
+        };
+        entries.push(GenerationDirectoryEntry {
+            generation_id,
+            number,
+        });
+    }
+    entries.sort_by_key(|entry| entry.number);
+    Ok(entries)
+}
+
 fn require_building_generation(
     connection: &Connection,
     generation_id: &str,
@@ -2279,31 +2534,6 @@ fn require_building_generation(
             "generation row is missing".to_string(),
         )),
     }
-}
-
-fn atomic_write_current_generation(
-    current_path: &Path,
-    tmp_dir: &Path,
-    generation_id: &str,
-) -> Result<(), IndexStoreError> {
-    validate_generation_id(generation_id)?;
-    ensure_real_dir(tmp_dir, "tmp directory")?;
-    if let Ok(metadata) = fs::symlink_metadata(current_path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(IndexStoreError::InvalidState(
-                "current-generation must be a regular file".to_string(),
-            ));
-        }
-    }
-
-    let tmp_path = tmp_dir.join(format!("{CURRENT_GENERATION_FILE}.tmp"));
-    fs::write(&tmp_path, format!("{generation_id}\n"))
-        .map_err(|_| unavailable("failed to write current-generation pointer"))?;
-    fs::rename(&tmp_path, current_path).map_err(|_| {
-        let _ = fs::remove_file(&tmp_path);
-        unavailable("failed to atomically activate current generation")
-    })?;
-    Ok(())
 }
 
 fn ensure_real_dir(path: &Path, label: &'static str) -> Result<(), IndexStoreError> {
@@ -2829,11 +3059,10 @@ CREATE TABLE IF NOT EXISTS evidence (
 mod tests {
     use super::*;
     use crate::core::model::ContentHash;
-    use crate::test_support::{create_test_symlink_dir, create_test_symlink_file, TempWorkspace};
+    use crate::test_support::{create_test_symlink_file, TempWorkspace};
 
     fn store(workspace: &TempWorkspace) -> SqliteIndexStore {
         let state = workspace.path().join(".repogrammar");
-        fs::create_dir_all(state.join("generations")).expect("create generations");
         fs::create_dir_all(state.join("tmp")).expect("create tmp");
         SqliteIndexStore::new(state)
     }
@@ -3006,20 +3235,6 @@ mod tests {
         let second = activate_empty_generation(&store);
         let third = activate_empty_generation(&store);
         let fourth = activate_empty_generation(&store);
-        fs::write(
-            store
-                .generation_dir(&first.generation_id)
-                .join("repogrammar.sqlite-wal"),
-            "wal",
-        )
-        .expect("write wal sidecar");
-        fs::write(
-            store
-                .generation_dir(&first.generation_id)
-                .join("repogrammar.sqlite-shm"),
-            "shm",
-        )
-        .expect("write shm sidecar");
 
         let report = store
             .prune_generations(GenerationPruneRequest {
@@ -3038,10 +3253,31 @@ mod tests {
             vec![first.generation_id.clone(), second.generation_id.clone()]
         );
         assert_eq!(report.deleted_generations, report.candidate_generations);
-        assert!(!store.generation_dir(&first.generation_id).exists());
-        assert!(!store.generation_dir(&second.generation_id).exists());
-        assert!(store.generation_dir(&third.generation_id).is_dir());
-        assert!(store.generation_dir(&fourth.generation_id).is_dir());
+        let connection = store
+            .open_existing_generation(&fourth.generation_id)
+            .expect("open mutable database");
+        assert_eq!(
+            generation_status(&connection, &first.generation_id).expect("first status"),
+            None
+        );
+        assert_eq!(
+            generation_status(&connection, &second.generation_id).expect("second status"),
+            None
+        );
+        assert_eq!(
+            generation_status(&connection, &third.generation_id)
+                .expect("third status")
+                .as_deref(),
+            Some("validated")
+        );
+        assert_eq!(
+            generation_status(&connection, &fourth.generation_id)
+                .expect("fourth status")
+                .as_deref(),
+            Some("active")
+        );
+        assert!(store.mutable_database_path().is_file());
+        assert!(!store.generations_dir().exists());
 
         let active = store
             .list_active_indexed_files()
@@ -3071,80 +3307,14 @@ mod tests {
             vec![first.generation_id.clone(), second.generation_id.clone()]
         );
         assert!(report.deleted_generations.is_empty());
-        assert!(store.generation_dir(&first.generation_id).is_dir());
-        assert!(store.generation_dir(&second.generation_id).is_dir());
-        assert!(store.generation_dir(&third.generation_id).is_dir());
-    }
-
-    #[test]
-    fn prune_generations_refuses_generation_directory_symlink() {
-        let workspace = TempWorkspace::new("sqlite-prune-generation-symlink");
-        let store = store(&workspace);
-        let first = activate_empty_generation(&store);
-        let second = activate_empty_generation(&store);
-        fs::remove_dir_all(store.generation_dir(&first.generation_id))
-            .expect("remove first generation");
-        let outside = workspace.path().join("outside-generation");
-        fs::create_dir_all(&outside).expect("create outside generation");
-        if !create_test_symlink_dir(&outside, &store.generation_dir(&first.generation_id)) {
-            return;
+        let connection = store
+            .open_existing_generation(&third.generation_id)
+            .expect("open mutable database");
+        for generation in [&first, &second, &third] {
+            assert!(generation_status(&connection, &generation.generation_id)
+                .expect("generation status")
+                .is_some());
         }
-
-        let error = store
-            .prune_generations(GenerationPruneRequest {
-                keep_inactive: 0,
-                dry_run: false,
-            })
-            .expect_err("symlink generation directory must fail");
-
-        assert!(matches!(error, IndexStoreError::InvalidState(_)));
-        assert!(store.generation_dir(&second.generation_id).is_dir());
-    }
-
-    #[test]
-    fn prune_generations_refuses_generation_file() {
-        let workspace = TempWorkspace::new("sqlite-prune-generation-file");
-        let store = store(&workspace);
-        let first = activate_empty_generation(&store);
-        let second = activate_empty_generation(&store);
-        fs::remove_dir_all(store.generation_dir(&first.generation_id))
-            .expect("remove first generation");
-        fs::write(
-            store.generation_dir(&first.generation_id),
-            "not a directory",
-        )
-        .expect("write generation file");
-
-        let error = store
-            .prune_generations(GenerationPruneRequest {
-                keep_inactive: 0,
-                dry_run: false,
-            })
-            .expect_err("generation file must fail");
-
-        assert!(matches!(error, IndexStoreError::InvalidState(_)));
-        assert!(store.generation_dir(&second.generation_id).is_dir());
-    }
-
-    #[test]
-    fn prune_generations_refuses_corrupt_current_generation_pointer() {
-        let workspace = TempWorkspace::new("sqlite-prune-corrupt-pointer");
-        let store = store(&workspace);
-        let first = activate_empty_generation(&store);
-        let second = activate_empty_generation(&store);
-        fs::write(store.current_generation_path(), "not-a-generation\n")
-            .expect("corrupt current generation pointer");
-
-        let error = store
-            .prune_generations(GenerationPruneRequest {
-                keep_inactive: 0,
-                dry_run: false,
-            })
-            .expect_err("corrupt pointer must fail");
-
-        assert!(matches!(error, IndexStoreError::InvalidState(_)));
-        assert!(store.generation_dir(&first.generation_id).is_dir());
-        assert!(store.generation_dir(&second.generation_id).is_dir());
     }
 
     #[test]
@@ -3445,14 +3615,32 @@ mod tests {
     fn generation_id_space_exhaustion_is_reported_without_creating_invalid_ids() {
         let workspace = TempWorkspace::new("sqlite-generation-exhausted");
         let store = store(&workspace);
-        fs::create_dir(store.generations_dir().join("gen-999999")).expect("create max generation");
+        let connection = store
+            .open_mutable_database(MissingDatabase::Allowed)
+            .expect("open mutable database");
+        apply_migrations(&connection).expect("apply migrations");
+        connection
+            .execute(
+                "INSERT INTO index_generations \
+                 (generation_id, status, created_at, repogrammar_version) \
+                 VALUES ('gen-999999', 'validated', datetime('now'), ?1)",
+                params![env!("CARGO_PKG_VERSION")],
+            )
+            .expect("insert max generation");
 
         let error = store
             .prepare_next_generation()
             .expect_err("exhausted generation ids must fail");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
-        assert!(!store.generations_dir().join("gen-1000000").exists());
+        let count: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM index_generations WHERE generation_id = 'gen-1000000'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("invalid generation count");
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -4730,11 +4918,37 @@ mod tests {
         store.activate_generation(&first).expect("activate first");
 
         let second = store.prepare_next_generation().expect("prepare second");
-        fs::write(
-            store.generation_database_path(&second.generation_id),
-            "not a sqlite database",
-        )
-        .expect("corrupt second db");
+        store
+            .record_indexed_file(&second, &file("src/a.ts"))
+            .expect("record second file");
+        store
+            .record_code_unit(&second, &code_unit("src/a.ts"))
+            .expect("record second code unit");
+        let connection = store
+            .open_existing_generation(&second.generation_id)
+            .expect("open second generation");
+        connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, 'evidence:bad', ?2, 'src/a.ts', ?3, 0, 11, 'bad evidence')",
+                params![
+                    second.generation_id,
+                    code_unit("src/a.ts").id,
+                    file("src/a.ts").content_hash.as_str()
+                ],
+            )
+            .expect("insert malformed evidence");
+        connection
+            .execute(
+                "INSERT INTO semantic_facts \
+                 (generation_id, fact_id, kind, subject, target, certainty, origin_engine, \
+                  origin_engine_version, origin_method, assumptions_json, evidence_id) \
+                 VALUES (?1, 'fact:bad', 'RESOLVED_IMPORT', 'src/a.ts#import', NULL, \
+                         'SEMANTIC', 'typescript', '6.0.0', 'compiler_api', '[]', 'evidence:bad')",
+                params![second.generation_id],
+            )
+            .expect("insert semantic fact for malformed evidence");
 
         assert!(store.validate_generation(&second).is_err());
         let inspection = store.inspect().expect("inspect after failed validation");
@@ -4805,20 +5019,18 @@ mod tests {
     }
 
     #[test]
-    fn inspect_rejects_pointer_to_non_active_generation() {
-        let workspace = TempWorkspace::new("sqlite-pointer-not-active");
+    fn inspect_reports_no_active_generation_when_mutable_database_has_no_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-no-active-generation");
         let store = store(&workspace);
         let generation = store.prepare_next_generation().expect("prepare generation");
         store
             .validate_generation(&generation)
             .expect("validate generation");
-        fs::write(store.current_generation_path(), "gen-000001\n").expect("write pointer");
 
-        let error = store
-            .inspect()
-            .expect_err("validated but inactive pointer must fail");
+        let inspection = store.inspect().expect("inspect storage");
 
-        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        assert_eq!(inspection.active_generation, None);
+        assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
     }
 
     #[test]
@@ -4845,12 +5057,10 @@ mod tests {
         let workspace = TempWorkspace::new("sqlite-weak-schema");
         let store = store(&workspace);
         let generation = store.prepare_next_generation().expect("prepare generation");
-        fs::remove_file(store.generation_database_path(&generation.generation_id))
-            .expect("remove generated database");
+        fs::remove_file(store.mutable_database_path()).expect("remove generated database");
 
         let connection =
-            Connection::open(store.generation_database_path(&generation.generation_id))
-                .expect("open weak database");
+            Connection::open(store.mutable_database_path()).expect("open weak database");
         connection
             .execute_batch(
                 r#"
@@ -4924,16 +5134,14 @@ mod tests {
     }
 
     #[test]
-    fn generation_directory_must_not_be_symlink() {
-        let workspace = TempWorkspace::new("sqlite-generation-dir-symlink");
+    fn repository_index_database_must_not_be_symlink() {
+        let workspace = TempWorkspace::new("sqlite-db-symlink");
         let state = workspace.path().join(".repogrammar");
-        let generations = state.join("generations");
-        fs::create_dir_all(&generations).expect("create generations");
         fs::create_dir_all(state.join("tmp")).expect("create tmp");
-        let outside = workspace.path().join("outside-generation");
-        fs::create_dir_all(&outside).expect("create outside generation");
+        let outside = workspace.path().join("outside.sqlite");
+        fs::write(&outside, "").expect("create outside database target");
 
-        if !create_test_symlink_dir(&outside, &generations.join("gen-000001")) {
+        if !create_test_symlink_file(&outside, &state.join(DATABASE_FILE)) {
             return;
         }
 
@@ -4943,37 +5151,33 @@ mod tests {
         };
         let error = store
             .validate_generation(&generation)
-            .expect_err("generation directory symlink must fail");
+            .expect_err("repository index database symlink must fail");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
-    fn generation_database_must_not_be_symlink() {
-        let workspace = TempWorkspace::new("sqlite-generation-db-symlink");
+    fn mutable_database_must_not_be_symlink_after_prepare() {
+        let workspace = TempWorkspace::new("sqlite-prepared-db-symlink");
         let store = store(&workspace);
         let generation = store.prepare_next_generation().expect("prepare generation");
         let outside = workspace.path().join("outside.sqlite");
         fs::write(&outside, "").expect("create outside database target");
-        fs::remove_file(store.generation_database_path(&generation.generation_id))
-            .expect("remove generated database");
+        fs::remove_file(store.mutable_database_path()).expect("remove mutable database");
 
-        if !create_test_symlink_file(
-            &outside,
-            &store.generation_database_path(&generation.generation_id),
-        ) {
+        if !create_test_symlink_file(&outside, &store.mutable_database_path()) {
             return;
         }
 
         let error = store
             .validate_generation(&generation)
-            .expect_err("generation database symlink must fail");
+            .expect_err("mutable database symlink must fail");
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 
     #[test]
-    fn activation_rejects_current_generation_symlink() {
+    fn activation_ignores_legacy_current_generation_symlink() {
         let workspace = TempWorkspace::new("sqlite-pointer-symlink");
         let store = store(&workspace);
         let generation = store.prepare_next_generation().expect("prepare generation");
@@ -4983,10 +5187,16 @@ mod tests {
             return;
         }
 
-        let error = store
+        store
             .activate_generation(&generation)
-            .expect_err("symlink pointer must fail");
-        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            .expect("legacy pointer symlink is not used by mutable activation");
+        assert_eq!(
+            store
+                .inspect()
+                .expect("inspect active mutable generation")
+                .active_generation,
+            Some(generation.generation_id)
+        );
     }
 
     #[test]

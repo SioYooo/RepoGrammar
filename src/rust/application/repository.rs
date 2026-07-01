@@ -14,15 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const DEFAULT_STATE_DIR: &str = ".repogrammar";
 
 const STATE_DIR_OVERRIDE_PREFIX: &str = ".repogrammar-";
-const REQUIRED_STATE_SUBDIRS: [&str; 7] = [
-    "generations",
-    "cache",
-    "logs",
-    "locks",
-    "telemetry",
-    "tmp",
-    "receipts",
-];
+const REQUIRED_STATE_SUBDIRS: [&str; 6] =
+    ["cache", "logs", "locks", "telemetry", "tmp", "receipts"];
 const STATE_GITIGNORE: &str = "# RepoGrammar local generated state.\n\
 # This directory contains repository-local indexes, logs, caches, locks,\n\
 # telemetry rollups, and temporary files. Do not commit it.\n\
@@ -2427,7 +2420,7 @@ mod tests {
         let workspace = TempWorkspace::new("repository-storage-missing-subdir");
         init_repository(init_request(workspace.path())).expect("init repository");
         let state = workspace.path().join(DEFAULT_STATE_DIR);
-        fs::remove_dir_all(state.join("generations")).expect("remove generations dir");
+        fs::remove_dir_all(state.join("cache")).expect("remove cache dir");
         let store = SqliteIndexStore::new(&state);
 
         let status = repository_status_with_storage(
@@ -2436,14 +2429,14 @@ mod tests {
         )
         .expect("status with storage");
 
-        assert_eq!(status.missing_subdirs, vec!["generations".to_string()]);
+        assert_eq!(status.missing_subdirs, vec!["cache".to_string()]);
         assert_eq!(status.storage, RepositoryImplementationStatus::Unhealthy);
         assert!(status
             .storage_error
             .as_deref()
             .expect("storage error")
-            .contains("generations"));
-        assert!(!state.join("generations").exists());
+            .contains("cache"));
+        assert!(!state.join("cache").exists());
     }
 
     #[test]

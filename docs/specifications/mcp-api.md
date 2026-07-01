@@ -127,6 +127,16 @@ with typed `UNKNOWN` instead of returning whichever family appears first in
 storage order. The unknown uses reason `InsufficientSupport`, affected claim
 `query target ambiguity`, and recovery guidance that names the candidate family
 ids and asks the caller to narrow the query to an exact family id or member id.
+When those same fuzzy operations can deterministically resolve the target to
+exactly one indexed repo-relative path or code unit in the active generation but
+no family evidence supports a claim for that target, MCP returns top-level
+`PARTIAL_CONTEXT`. This response contains `resolved_target`, metadata-only
+`output`, a target `read_plan`, optional `source_spans` only when
+`include_source_spans: true` succeeds, and a typed `InsufficientSupport`
+unknown for `pattern family evidence for resolved target`. It is local
+read-planning context, not family evidence or conformance evidence. Exact
+`show_family` lookups still require an exact family id and return typed
+`UNKNOWN` when that family id is missing.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
 unknowns, output metadata, and a `read_plan` without evidence records;
