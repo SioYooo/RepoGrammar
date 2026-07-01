@@ -365,6 +365,10 @@ are rejected before probing. `unlock --force --yes` removes only confirmed
 stale `index.lock`; active, unknown, invalid, daemon, and SQLite locks remain
 in place. Status and doctor JSON use explicit manifest/storage schema-version
 fields and do not expose ambiguous `schema_version` fields.
+Auto-sync daemon acquisition writes complete `.repogrammar/locks/daemon.lock`
+metadata through a temporary file plus atomic publish when supported, falls
+back to create-new semantics when needed, and removes stale daemon locks only
+when the inspected bytes still match.
 The storage port and SQLite adapter can persist already-validated semantic facts
 and repo-relative evidence for building generations when they match an indexed
 same-generation code unit's path, content hash, and byte range. By default

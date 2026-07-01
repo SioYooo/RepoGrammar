@@ -518,8 +518,11 @@ freshness warnings in `status`, and freshness checks before MCP claims. For
 first setup, users and agents may run `repogrammar init --yes --resync --autosync`.
 When enabled with `repogrammar autosync start`, RepoGrammar stores
 `.repogrammar/autosync.json`, uses `.repogrammar/locks/daemon.lock` for the
-running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`. The
-current worker detects
+running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`.
+Daemon lock acquisition writes complete lock metadata to a temporary file and
+publishes it atomically when supported, falls back to create-new semantics when
+needed, and removes stale daemon locks only when the on-disk bytes still match
+the inspected stale record. The current worker detects
 changed lightweight supported-file metadata fingerprints and calls the existing
 full `sync` path after a debounce interval. The detector is only a low-cost
 change trigger; the full sync remains responsible for content hashes,

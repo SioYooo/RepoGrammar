@@ -68,6 +68,10 @@ analysis rules.
   remove only the lock bytes they wrote. `unlock --force --yes` may remove
   confirmed stale `index.lock` only; active, unknown, invalid, daemon, and
   SQLite locks must not be deleted.
+- Auto-sync daemon acquisition must write complete `.repogrammar/locks/daemon.lock`
+  metadata through a temporary file plus atomic publish when supported, fall
+  back to create-new semantics when needed, and remove stale daemon locks only
+  when the inspected bytes still match.
 - Status and doctor JSON must keep manifest schema version and storage schema
   version separate. Do not reintroduce ambiguous `schema_version` fields in
   status output or `doctor.checks`.
