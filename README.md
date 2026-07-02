@@ -101,7 +101,7 @@ analysis.
 
 | Area | Public-preview status | Boundary |
 |---|---|---|
-| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence plus static repo-local import context; dynamic decorators, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
+| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence plus static repo-local import context; literal `include_router(..., prefix="...")` records context only, while dynamic decorators/prefixes, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
 | Python pytest | Supported | Bounded test/fixture family evidence plus static fixture graph context; ambiguous fixture injection, nonliteral lookups, and dynamic plugin behavior produce `UNKNOWN`. |
 | Python Pydantic | Supported | Bounded model/settings family evidence; dynamic model factories and unresolved bases produce `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |

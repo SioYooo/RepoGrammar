@@ -990,7 +990,9 @@ fn claim_specific_required_unknown_mechanism(
         return match affected_claim {
             "python_import_resolution" => Some("python_import_graph"),
             "pytest_fixture_binding" => Some("pytest_fixture_graph"),
-            "fastapi_dependency_target" => Some("fastapi_dependency_graph"),
+            "fastapi_dependency_target" | "fastapi_router_binding" | "fastapi_router_prefix" => {
+                Some("fastapi_dependency_graph")
+            }
             _ if framework_role.starts_with("framework:pytest")
                 && affected_claim.contains("fixture") =>
             {

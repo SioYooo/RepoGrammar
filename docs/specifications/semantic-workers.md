@@ -383,11 +383,13 @@ same-method reassignment invalidation, simple call targets, bounded
 same-function FastAPI service-call context anchors, FastAPI
 static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
-`HTTPException(status_code=...)` status-code effect slots, `pytest.test`
-test-function anchors, same-file pytest test and fixture dependency edges with
-literal `name=` aliases, known pytest built-in fixture context, literal pytest
-parametrize argument anchors, path-derived module names, and CPython `symtable`
-scope anchors, plus typed `UNKNOWN` facts for dynamic import, `__import__`,
+`HTTPException(status_code=...)` status-code effect slots, literal
+FastAPI/APIRouter `include_router(..., prefix="...")` router-prefix context
+anchors, `pytest.test` test-function anchors, same-file pytest test and fixture
+dependency edges with literal `name=` aliases, known pytest built-in fixture
+context, literal pytest parametrize argument anchors, path-derived module names,
+and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for dynamic
+import, `__import__`,
 `locals()[...]`, `eval`, `exec`, `compile`, unresolved import, framework magic,
 dynamic or unresolved decorators, dynamic Pydantic model factories, dynamic pytest fixture names,
 duplicate conftest fixture bindings, plugin-style fixture names without an

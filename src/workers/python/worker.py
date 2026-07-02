@@ -1648,6 +1648,144 @@ def collect_fastapi_response_model_facts(
         )
 
 
+def literal_string_value(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def normalize_route_prefix(value: str) -> str:
+    stripped = value.strip("/")
+    if not stripped:
+        return "/"
+    segments = []
+    for segment in stripped.split("/"):
+        if not segment:
+            continue
+        if segment.startswith("{") and segment.endswith("}"):
+            segments.append(":param")
+        elif any(character in segment for character in "*?"):
+            segments.append(":pattern")
+        elif segment.isdigit():
+            segments.append(":number")
+        else:
+            segments.append(segment.lower())
+    return "/" + "/".join(segments) if segments else "/"
+
+
+def fastapi_include_router_prefix_shape(call: ast.Call) -> tuple[str | None, bool]:
+    for keyword in call.keywords:
+        if keyword.arg == "prefix":
+            value = literal_string_value(keyword.value)
+            if value is None:
+                return None, True
+            return normalize_route_prefix(value), False
+    return "none", False
+
+
+def fastapi_include_router_binding_assumptions(
+    router_name: str | None,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    module_index: dict[str, list[str]] | None,
+) -> list[str] | None:
+    if not router_name:
+        return None
+    root_name = router_name.split(".", 1)[0]
+    canonical = canonical_name(router_name, aliases, assignments)
+    if assignments.get(root_name) == "fastapi.APIRouter" and router_name == root_name:
+        return ["router_binding=local", f"router_local_name={root_name}"]
+    if root_name in aliases:
+        module_name = canonical.rsplit(".", 1)[0]
+        if module_index is not None and (
+            module_name in module_index or repo_local_prefix_exists(module_name, module_index)
+        ):
+            return ["router_binding=repo_local_import", f"router_target={canonical}"]
+        return None
+    return None
+
+
+def collect_fastapi_include_router_facts(
+    tree: ast.Module,
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    module_unit_id: str,
+    aliases: dict[str, str],
+    assignments: dict[str, str],
+    module_index: dict[str, list[str]] | None,
+    facts: list[dict[str, Any]],
+) -> None:
+    for item in tree.body:
+        if not isinstance(item, ast.Expr) or not isinstance(item.value, ast.Call):
+            continue
+        call = item.value
+        start, end = node_range(starts, call)
+        name = dotted_name(call.func)
+        canonical = canonical_name(name, aliases, assignments) if name else None
+        if canonical not in {"fastapi.FastAPI.include_router", "fastapi.APIRouter.include_router"}:
+            continue
+        router_name = static_reference_name(call.args[0]) if call.args else None
+        binding_assumptions = fastapi_include_router_binding_assumptions(
+            router_name,
+            aliases,
+            assignments,
+            module_index,
+        )
+        if binding_assumptions is None:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=module_unit_id,
+                    reason_code="UnresolvedImport",
+                    affected_claim="fastapi_router_binding",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
+        prefix_shape, prefix_unknown = fastapi_include_router_prefix_shape(call)
+        if prefix_unknown:
+            add_fact(
+                facts,
+                unknown_fact(
+                    subject_unit_id=module_unit_id,
+                    reason_code="FrameworkMagic",
+                    affected_claim="fastapi_router_prefix",
+                    path=path,
+                    content_hash_value=content_hash_value,
+                    repository_revision=repository_revision,
+                    start=start,
+                    end=end,
+                ),
+            )
+            continue
+        fact_data = structural_fact(
+            kind="RESOLVED_CALL",
+            subject_unit_id=module_unit_id,
+            target=canonical,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind="fastapi_include_router",
+        )
+        fact_data["assumptions"].extend(
+            [
+                "fact_scope=context_only",
+                "prefix_unknown=false",
+                f"route_prefix_shape={prefix_shape}",
+                *binding_assumptions,
+            ]
+        )
+        add_fact(facts, fact_data)
+
+
 def annotated_type_and_metadata(
     annotation: ast.AST | None,
     aliases: dict[str, str],
@@ -3074,6 +3212,18 @@ def analyze_source(
         module_unit_id,
         aliases,
         assignments,
+        facts,
+    )
+    collect_fastapi_include_router_facts(
+        tree,
+        starts,
+        path,
+        content_hash_value,
+        repository_revision,
+        module_unit_id,
+        aliases,
+        assignments,
+        module_index,
         facts,
     )
     fixture_name_counts = pytest_fixture_name_counts_from_tree(tree, aliases, assignments)

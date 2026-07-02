@@ -73,11 +73,12 @@ families can also record narrow variation metadata when their
 already-compatible exact framework-anchor support targets differ within the same
 family; this does not imply provider-backed semantics or runtime equivalence.
 The current Python worker can also emit bounded same-function
-FastAPI route service-call anchors as structural handler/service context; those
-anchors are not membership support. It can also emit static FastAPI request
-body and request-parameter anchors for `Body`, `Path`, `Query`, `Header`, and
-`Cookie` marker shapes; those are route-shape context only and are not
-membership support. Dynamic decorator factories and `setattr(...)`
+FastAPI route service-call anchors as structural handler/service context and
+literal `include_router(..., prefix="...")` router-prefix anchors as module
+context; those anchors are not membership support. It can also emit static
+FastAPI request body and request-parameter anchors for `Body`, `Path`, `Query`,
+`Header`, and `Cookie` marker shapes; those are route-shape context only and
+are not membership support. Dynamic decorator factories and `setattr(...)`
 monkey-patching become typed `UNKNOWN`s rather than inferred framework identity
 or call-target evidence. It also persists root
 `pyproject.toml` only as structural project-config context or typed config
@@ -190,7 +191,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 
 | Area | Status | Public claim |
 |---|---|---|
-| Python FastAPI | Supported | Bounded framework-family evidence under sound-by-abstention gates. |
+| Python FastAPI | Supported | Bounded framework-family evidence under sound-by-abstention gates; literal `include_router(..., prefix="...")` is context only, and dynamic prefixes/router factories remain `UNKNOWN`. |
 | Python pytest | Supported | Bounded test/fixture family evidence with typed fixture ambiguity `UNKNOWN`. |
 | Python Pydantic | Supported | Bounded model/settings family evidence; dynamic factories remain `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |

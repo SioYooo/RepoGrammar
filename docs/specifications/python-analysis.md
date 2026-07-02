@@ -143,9 +143,16 @@ The current implementation covers a bounded static CPython `ast` slice only:
 - framework-specific structural anchors for FastAPI route decorators,
   static `response_model=...` schema slots, `Depends(...)`, and
   static `Depends(get_db)` dependency target slots;
+- module-level FastAPI/APIRouter `include_router(...)` context when the
+  receiver is an exact local FastAPI/APIRouter binding, the router argument is
+  a local `APIRouter()` binding or repo-local imported router symbol, and the
+  optional `prefix` is absent or a literal string. These anchors carry
+  `route_prefix_shape=...` as context only and do not prove route-family
+  membership;
 - typed
   `RuntimeDependencyInjection` `UNKNOWN` facts for dynamic dependency target
-  expressions such as `Depends(make_dependency())`;
+  expressions such as `Depends(make_dependency())`, and typed `UNKNOWN` facts
+  for dynamic include-router prefixes or unresolved/external router bindings;
 - FastAPI `HTTPException(...)`, literal `HTTPException(status_code=...)`
   status-code effect slots, static FastAPI request body and request-parameter
   marker slots for `Body`, `Path`,

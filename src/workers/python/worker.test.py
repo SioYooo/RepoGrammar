@@ -2570,6 +2570,123 @@ def create_user(current_user=Depends(dependency=get_user)):
     assert "Depends(" not in serialized
 
 with tempfile.TemporaryDirectory() as root:
+    Path(root, "app.py").write_text(
+        """
+from fastapi import APIRouter, FastAPI
+
+app = FastAPI()
+router = APIRouter()
+app.include_router(router, prefix="/api/v1")
+""",
+        encoding="utf-8",
+    )
+    messages = run_worker(valid_request(root))
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    include_fact = next(
+        fact
+        for fact in facts
+        if fact.get("fact_kind") == "RESOLVED_CALL"
+        and fact.get("target") == "fastapi.FastAPI.include_router"
+    )
+    assert "python_anchor_kind=fastapi_include_router" in include_fact.get("assumptions", [])
+    assert "fact_scope=context_only" in include_fact.get("assumptions", [])
+    assert "router_binding=local" in include_fact.get("assumptions", [])
+    assert "router_local_name=router" in include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/api/v1" in include_fact.get("assumptions", [])
+    assert "prefix_unknown=false" in include_fact.get("assumptions", [])
+    assert_no_fact_source_payloads(facts)
+
+    Path(root, "routes.py").write_text(
+        """
+from fastapi import APIRouter
+
+router = APIRouter()
+""",
+        encoding="utf-8",
+    )
+    Path(root, "app.py").write_text(
+        """
+from fastapi import FastAPI
+from routes import router
+
+app = FastAPI()
+app.include_router(router, prefix="/api")
+""",
+        encoding="utf-8",
+    )
+    request = valid_request(root)
+    request["changed_files"] = ["app.py", "routes.py"]
+    messages = run_worker(request)
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    imported_include_fact = next(
+        fact
+        for fact in facts
+        if fact.get("fact_kind") == "RESOLVED_CALL"
+        and fact.get("target") == "fastapi.FastAPI.include_router"
+    )
+    assert "router_binding=repo_local_import" in imported_include_fact.get("assumptions", [])
+    assert "router_target=routes.router" in imported_include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/api" in imported_include_fact.get("assumptions", [])
+    assert_no_fact_source_payloads(facts)
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "app.py").write_text(
+        """
+from fastapi import APIRouter, FastAPI
+
+app = FastAPI()
+router = APIRouter()
+prefix = "/api"
+app.include_router(router, prefix=prefix)
+""",
+        encoding="utf-8",
+    )
+    messages = run_worker(valid_request(root))
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    assert not any(
+        fact.get("fact_kind") == "RESOLVED_CALL"
+        and fact.get("target") == "fastapi.FastAPI.include_router"
+        for fact in facts
+    )
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "FrameworkMagic"
+        and "affected_claim=fastapi_router_prefix" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    assert_no_fact_source_payloads(facts)
+
+with tempfile.TemporaryDirectory() as root:
+    Path(root, "app.py").write_text(
+        """
+from fastapi import FastAPI
+from external_routes import router
+
+app = FastAPI()
+app.include_router(router, prefix="/api")
+""",
+        encoding="utf-8",
+    )
+    messages = run_worker(valid_request(root))
+    assert_end_of_stream(messages)
+    facts = [message for message in messages if message.get("message_type") == "fact"]
+    assert not any(
+        fact.get("fact_kind") == "RESOLVED_CALL"
+        and fact.get("target") == "fastapi.FastAPI.include_router"
+        for fact in facts
+    )
+    assert any(
+        fact.get("fact_kind") == "UNKNOWN"
+        and fact.get("target") == "UnresolvedImport"
+        and "affected_claim=fastapi_router_binding" in fact.get("assumptions", [])
+        for fact in facts
+    )
+    assert_no_fact_source_payloads(facts)
+
+with tempfile.TemporaryDirectory() as root:
     Path(root, "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")
     Path(root, "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
     first = valid_request(root)

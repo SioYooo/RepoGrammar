@@ -59,6 +59,10 @@
   `DATAFLOW_DERIVED` graph facts with `provider_resolved=false`; ambiguous,
   dynamic, plugin, unsafe star, external, or unresolved cases remain typed
   `UNKNOWN`.
+- FastAPI module-level `include_router(router, prefix="...")` calls now record
+  exact local or repo-local imported router-prefix context without treating it
+  as route-family support. Dynamic prefixes, unresolved/external routers, and
+  router factories remain typed `UNKNOWN`.
 - SQLAlchemy repository-method exact anchors now include typed
   `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
   calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy

@@ -438,12 +438,15 @@ FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
-`Cookie` request-shape anchors, path-derived module names, CPython `symtable`
-scope anchors, and typed dynamic/unresolved decorator, dynamic call, monkey-patch,
-dynamic/unresolved/ambiguous import, unsafe star import without literal
-`__all__`, dynamic Pydantic model factory, dynamic pytest fixture name,
-nonliteral `request.getfixturevalue`, duplicate conftest fixture, plugin fixture,
-and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
+`Cookie` request-shape anchors, literal FastAPI/APIRouter
+`include_router(..., prefix="...")` router-prefix context anchors,
+path-derived module names, CPython `symtable` scope anchors, and typed
+dynamic/unresolved decorator, dynamic call, monkey-patch,
+dynamic/unresolved/ambiguous import, dynamic include-router prefix or router
+binding, unsafe star import without literal `__all__`, dynamic Pydantic model
+factory, dynamic pytest fixture name, nonliteral `request.getfixturevalue`,
+duplicate conftest fixture, plugin fixture, and fixture-injection `UNKNOWN`
+cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
 through pytest's directory hierarchy as graph-derived fixture-edge facts. The
 Rust parser adapter validates and persists parse-document payloads as internal
@@ -637,11 +640,13 @@ exact-match the canonical route-method table:
 `api_route` and WebSocket decorators are not v0.1 support targets. Static
 `response_model=...`, static `Depends(get_db)` dependency-target, `Depends(...)`,
 and `HTTPException(...)` parser anchors, including literal status-code effect
-anchors, plus static FastAPI request body and request-parameter anchors, stay
-schema/context/effect metadata and do not prove membership support. Dynamic
-FastAPI dependency target expressions become
-`RuntimeDependencyInjection` `UNKNOWN` for `fastapi_dependency_target`; they do
-not erase route-shape evidence and do not become family support. Canonical
+anchors, plus static FastAPI request body, request-parameter, and literal
+`include_router` prefix anchors, stay schema/context/effect metadata and do not
+prove membership support. Dynamic FastAPI dependency target expressions become
+`RuntimeDependencyInjection` `UNKNOWN` for `fastapi_dependency_target`; dynamic
+include-router prefixes or unresolved/external router bindings likewise stay
+typed `UNKNOWN`. These do not erase route-shape evidence and do not become
+family support. Canonical
 `pytest.mark.parametrize` decorator anchors can support pytest test families,
 but `pytest.parametrize.<name>` argument anchors remain context metadata and do
 not prove support. Known pytest built-in fixture context targets such as
