@@ -185,9 +185,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls, plus bounded parameter-role propagation that canonicalizes typed
   `Session` and `AsyncSession` calls such as `session.execute(...)`,
-  `session.commit()`, `session.rollback()`, `session.scalar(...)`,
-  `session.scalars(...)`, and `session.add(...)` to exact SQLAlchemy session
-  targets. The same bounded pass also propagates `__init__` assignments such as
+  `session.get(...)`, `session.commit()`, `session.rollback()`,
+  `session.scalar(...)`, `session.scalars(...)`, and `session.add(...)` to
+  exact SQLAlchemy session targets. The same bounded pass also propagates
+  `__init__` assignments such as
   `self.session = session` and `self.db: AsyncSession = db` into later repository
   methods, while any same-method reassignment of that receiver blocks
   canonicalization. Relationship and `add` anchors are effect/context metadata
@@ -430,7 +431,7 @@ Compatibility examples:
 - SQLAlchemy repository method: calls on parameters annotated as
   `sqlalchemy.orm.Session` or `sqlalchemy.ext.asyncio.AsyncSession` resolve to
   exact supported sync or async session method targets, including `execute`,
-  `commit`, `rollback`, `scalar`, and `scalars`.
+  `get`, `commit`, `rollback`, `scalar`, and `scalars`.
 
 Unresolved canonical identity blocks only the claim that depends on that
 identity. A FastAPI route family may still exist when a specific dependency
@@ -523,8 +524,8 @@ SQLAlchemy roles:
 
 The first SQLAlchemy slice should prioritize SQLAlchemy 2.0 typed mappings:
 `DeclarativeBase`, `Mapped`, `mapped_column`, `relationship`, `Session` or
-`AsyncSession`, `select(...)`, `session.execute(...)`, `session.scalar(...)`,
-`session.scalars(...)`, `commit`, and
+`AsyncSession`, `select(...)`, `session.execute(...)`, `session.get(...)`,
+`session.scalar(...)`, `session.scalars(...)`, `commit`, and
 rollback/error handling where statically visible. Legacy dynamic
 `declarative_base()` support may be recognized with lower certainty, but the
 deprecated SQLAlchemy mypy plugin must not become a default provider.

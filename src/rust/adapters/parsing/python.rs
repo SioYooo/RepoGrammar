@@ -2874,6 +2874,9 @@ class UserRepository:
     def stream_users(self, session: Session):
         return session.scalars("select users")
 
+    def load_user(self, session: Session):
+        return session.get(User, 1)
+
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
 
@@ -2882,6 +2885,9 @@ class UserRepository:
 
     async def stream_accounts(self, db: AsyncSession):
         return await db.scalars("select accounts")
+
+    async def load_account(self, db: AsyncSession):
+        return await db.get(User, 1)
 
 class StoredSessionRepository:
     def __init__(self, session: Session, db: AsyncSession):
@@ -2971,6 +2977,14 @@ class StoredSessionRepository:
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("sqlalchemy.orm.Session.get")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str)
                     == Some("sqlalchemy.ext.asyncio.AsyncSession.execute")
         }));
@@ -2987,6 +3001,15 @@ class StoredSessionRepository:
             fact.kind == SemanticFactKind::ResolvedCall
                 && fact.target.as_ref().map(SymbolId::as_str)
                     == Some("sqlalchemy.ext.asyncio.AsyncSession.scalars")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_session_call")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.ext.asyncio.AsyncSession.get")
                 && fact
                     .assumptions
                     .iter()
@@ -3056,6 +3079,31 @@ class UserRepository:
         }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("return self.session.execute"));
+    }
+
+    #[test]
+    fn cpython_frontend_does_not_classify_plain_get_calls_as_sqlalchemy() {
+        let source = r#"
+class CacheRepository:
+    def read_cache(self, cache):
+        return cache.get("users")
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(!report
+            .units
+            .iter()
+            .any(|unit| unit.kind.as_str() == "sqlalchemy_repository_method"));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact
+                    .target
+                    .as_ref()
+                    .map(SymbolId::as_str)
+                    .is_some_and(|target| target.starts_with("sqlalchemy."))
+        }));
     }
 
     #[test]

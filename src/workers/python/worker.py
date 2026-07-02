@@ -47,6 +47,7 @@ SQLALCHEMY_SESSION_METHODS = {
     "add",
     "commit",
     "execute",
+    "get",
     "rollback",
     "scalar",
     "scalars",
@@ -561,7 +562,13 @@ def is_sqlalchemy_model(node: ast.ClassDef, aliases: dict[str, str] | None = Non
     return False
 
 
-def has_sqlalchemy_repository_call(node: ast.AST) -> bool:
+def has_sqlalchemy_repository_call(node: ast.AST, aliases: dict[str, str] | None = None) -> bool:
+    aliases = aliases or {}
+    parameter_roles = (
+        collect_parameter_roles(node, aliases)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        else {}
+    )
     for child in ast.walk(node):
         if not isinstance(child, ast.Call):
             continue
@@ -570,6 +577,10 @@ def has_sqlalchemy_repository_call(node: ast.AST) -> bool:
             continue
         if name in {"select", "sqlalchemy.select"}:
             return True
+        if name.endswith(".get"):
+            receiver = name.rsplit(".", 1)[0]
+            if receiver in parameter_roles:
+                return True
         if name.endswith((".execute", ".commit", ".rollback", ".scalar", ".scalars")):
             return True
     return False
@@ -587,7 +598,7 @@ def function_kind(
         return "pytest_fixture"
     if node.name.startswith("test_"):
         return "pytest_test"
-    if has_sqlalchemy_repository_call(node) and (
+    if has_sqlalchemy_repository_call(node, aliases) and (
         class_name is None or class_name.endswith(("Repository", "Repo", "Service"))
     ):
         return "sqlalchemy_repository_method"
