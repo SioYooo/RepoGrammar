@@ -1020,6 +1020,7 @@ impl<'a> SyntaxScanner<'a> {
     ) -> Result<(), ParseError> {
         let test_runner_names = super::tsjs::exact_test_runner_call_names(self.document.text);
         let fastify_receivers = fastify_receivers_for_scan(self.document.text);
+        let drizzle_table_factories = drizzle_table_factories_for_scan(self.document.text);
         for (line_start, line) in lines {
             let line_end = line_start + line.len();
             if let Some((kind, name, offset)) = next_default_export_unit(self.document.path, line) {
@@ -1066,7 +1067,9 @@ impl<'a> SyntaxScanner<'a> {
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::PrismaTransaction, "transaction", start, end)?;
             }
-            if let Some((name, offset)) = drizzle_schema_table_declaration(line) {
+            if let Some((name, offset)) =
+                drizzle_schema_table_declaration(line, &drizzle_table_factories)
+            {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
                 self.add_unit(CodeUnitKind::DrizzleSchemaTable, name, start, end)?;
@@ -1387,6 +1390,9 @@ fn fastify_receivers_for_scan(text: &str) -> BTreeSet<String> {
         {
             factories.insert("Fastify".to_string());
         }
+        for name in named_import_or_require_names(line, "fastify", &["fastify", "Fastify"]) {
+            factories.insert(name);
+        }
     }
     for line in top_level_lines(text) {
         let Some((name, rhs)) = declaration_assignment(line) else {
@@ -1400,6 +1406,29 @@ fn fastify_receivers_for_scan(text: &str) -> BTreeSet<String> {
         }
     }
     receivers
+}
+
+fn drizzle_table_factories_for_scan(text: &str) -> BTreeSet<String> {
+    let mut factories = ["pgTable", "mysqlTable", "sqliteTable"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    for line in top_level_lines(text) {
+        for module in [
+            "drizzle-orm/pg-core",
+            "drizzle-orm/mysql-core",
+            "drizzle-orm/sqlite-core",
+        ] {
+            for name in named_import_or_require_names(
+                line,
+                module,
+                &["pgTable", "mysqlTable", "sqliteTable"],
+            ) {
+                factories.insert(name);
+            }
+        }
+    }
+    factories
 }
 
 fn next_default_export_unit(path: &str, line: &str) -> Option<(CodeUnitKind, &'static str, usize)> {
@@ -1536,12 +1565,15 @@ fn prisma_transaction_call(line: &str) -> Option<usize> {
     receiver_offset_before_pattern(line, ".$transaction(")
 }
 
-fn drizzle_schema_table_declaration(line: &str) -> Option<(&str, usize)> {
+fn drizzle_schema_table_declaration<'a>(
+    line: &'a str,
+    table_factories: &BTreeSet<String>,
+) -> Option<(&'a str, usize)> {
     let (name, rhs, start) = declaration_assignment_with_offset(line)?;
-    if ["pgTable(", "mysqlTable(", "sqliteTable("]
-        .iter()
-        .any(|pattern| rhs.trim_start().starts_with(pattern))
-    {
+    let rhs = rhs.trim_start();
+    let (factory, factory_start) = parse_identifier_after(rhs, 0)?;
+    let after_factory = factory_start + factory.len();
+    if table_factories.contains(&factory) && rhs[after_factory..].trim_start().starts_with('(') {
         Some((name, start))
     } else {
         None
@@ -1710,6 +1742,78 @@ fn imported_default_or_require_name<'a>(line: &'a str, module: &str) -> Option<&
         return declaration_assignment(trimmed).map(|(name, _)| name);
     }
     None
+}
+
+fn named_import_or_require_names(line: &str, module: &str, exported_names: &[&str]) -> Vec<String> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("import ") {
+        if let Some(from_index) = rest.find(" from ") {
+            let clause = rest[..from_index].trim();
+            let quoted_module = first_quoted(&rest[from_index + " from ".len()..]);
+            if quoted_module.as_deref() == Some(module) {
+                return braced_binding_names(clause, false, exported_names);
+            }
+        }
+    }
+    let Some(module_name) = first_quoted_after(trimmed, "require(") else {
+        return Vec::new();
+    };
+    if module_name != module {
+        return Vec::new();
+    }
+    let Some(after_keyword) = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|keyword| trimmed.strip_prefix(keyword))
+    else {
+        return Vec::new();
+    };
+    let Some(equals) = after_keyword.find('=') else {
+        return Vec::new();
+    };
+    braced_binding_names(after_keyword[..equals].trim(), true, exported_names)
+}
+
+fn braced_binding_names(
+    clause: &str,
+    allow_colon_alias: bool,
+    exported_names: &[&str],
+) -> Vec<String> {
+    let Some(open) = clause.find('{') else {
+        return Vec::new();
+    };
+    let Some(close_relative) = clause[open..].find('}') else {
+        return Vec::new();
+    };
+    let inner = &clause[open + 1..open + close_relative];
+    let mut names = Vec::new();
+    for part in inner.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (original, local) = if allow_colon_alias {
+            match part.split_once(':') {
+                Some((original, local)) => (original.trim(), local.trim()),
+                None => (part, part),
+            }
+        } else {
+            match part.split_once(" as ") {
+                Some((original, local)) => (original.trim(), local.trim()),
+                None => (part, part),
+            }
+        };
+        let Some((original, _)) = parse_identifier_after(original, 0) else {
+            continue;
+        };
+        if !exported_names.contains(&original.as_str()) {
+            continue;
+        }
+        let local = local.split('=').next().unwrap_or(local).trim();
+        if let Some((local, _)) = parse_identifier_after(local, 0) {
+            names.push(local);
+        }
+    }
+    names
 }
 
 fn declaration_assignment(line: &str) -> Option<(&str, &str)> {

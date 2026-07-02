@@ -352,8 +352,9 @@ allowed.
   (`src/rust/application/indexing.rs`), and the product smoke
   (`src/rust/bin/repogrammar.rs`). They must cover Express positive routes,
   Next.js App/Pages file-convention positives including async const route
-  handlers, Fastify shorthand/full route positives, Prisma client/query/
-  transaction positives, Drizzle schema/query positives including
+  handlers, exact ES import/CommonJS require/CommonJS destructuring-alias
+  framework bindings, Fastify shorthand/full route positives, Prisma
+  client/query/transaction positives, Drizzle schema/query positives including
   `db.query.<table>.findMany/findFirst`, object-literal/dynamic-receiver/
   dynamic-method/reassigned/shadowed negatives, raw and unsupported bulk query
   negatives, typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver, runner,
