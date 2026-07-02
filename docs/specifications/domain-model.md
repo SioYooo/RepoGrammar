@@ -144,6 +144,12 @@ Pyright, RightTyper, Cargo/rust-analyzer/rustc/rustdoc JSON, TypeScript
 Compiler API/Language Service, CodeQL, or abstract-analysis adapters can
 translate into `SemanticFact` plus typed `UNKNOWN`. These port types are not
 provider facts by themselves and do not change the current family support gate.
+The Rust Tree-sitter parser can also attach bounded Cargo feature context to
+source-level `#[cfg]` / `#[cfg_attr]` `UNKNOWN` facts by reading the nearest
+discovered `Cargo.toml` from parser project context. Those assumptions may say
+which simple feature predicates were seen and whether the feature is declared,
+but they remain `UNKNOWN` metadata rather than cfg evaluation, symbol
+resolution, or family evidence.
 
 ## PatternFamily
 

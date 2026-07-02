@@ -4036,6 +4036,18 @@ mod tests {
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "affected_claim=rust_build_variant")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_cfg_feature=preview")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_cfg_feature_declared=preview:true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "rust_cfg_model=cargo_feature_cfg_model")
         }));
 
         let families = run_with_runtime(

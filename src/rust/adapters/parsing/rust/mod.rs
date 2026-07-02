@@ -337,7 +337,12 @@ impl<'a> RustTreeScanner<'a> {
                 "bounded Rust structural role anchor",
             )?);
         }
-        facts.extend(cfg_lattice::unit_unknowns(&self.document, unit, slice)?);
+        facts.extend(cfg_lattice::unit_unknowns(
+            &self.document,
+            unit,
+            slice,
+            self.context,
+        )?);
         Ok(facts)
     }
 
@@ -868,6 +873,76 @@ macro_rules! make_item {
             .collect::<BTreeSet<_>>();
         assert!(reasons.contains("BuildVariantAmbiguity"));
         assert!(reasons.contains("MacroOrPreprocessor"));
+    }
+
+    #[test]
+    fn cfg_unknowns_carry_bounded_cargo_feature_context() {
+        let text = r#"
+#[cfg(feature = "preview")]
+fn declared_feature_gate() {}
+
+#[cfg(feature = "missing")]
+fn undeclared_feature_gate() {}
+"#;
+        let context = ParserProjectContext {
+            rust_cargo_files: vec![crate::ports::parser::ParserProjectFileContext {
+                path: "Cargo.toml".to_string(),
+                text: r#"
+[package]
+name = "repogrammar"
+
+[features]
+preview = []
+"#
+                .to_string(),
+            }],
+            ..ParserProjectContext::default()
+        };
+        let report = RustSyntaxParser
+            .parse_with_context(
+                document("src/rust/application/family.rs", text, Language::Rust),
+                &context,
+            )
+            .expect("parse Rust");
+        let cfg_unknowns = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == SemanticFactKind::Unknown
+                    && fact
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            cfg_unknowns.len() >= 2,
+            "source-level cfgs should remain typed UNKNOWNs: {cfg_unknowns:?}"
+        );
+        assert!(cfg_unknowns.iter().any(|fact| {
+            fact.assumptions
+                .contains(&"rust_cfg_feature=preview".to_string())
+                && fact
+                    .assumptions
+                    .contains(&"rust_cfg_feature_declared=preview:true".to_string())
+        }));
+        assert!(cfg_unknowns.iter().any(|fact| {
+            fact.assumptions
+                .contains(&"rust_cfg_feature=missing".to_string())
+                && fact
+                    .assumptions
+                    .contains(&"rust_cfg_feature_declared=missing:false".to_string())
+        }));
+        assert!(cfg_unknowns.iter().all(|fact| {
+            fact.assumptions
+                .contains(&"rust_cfg_model=cargo_feature_cfg_model".to_string())
+                && fact
+                    .assumptions
+                    .contains(&"rust_cfg_manifest=Cargo.toml".to_string())
+                && fact
+                    .assumptions
+                    .contains(&"rust_cfg_predicate=feature".to_string())
+        }));
     }
 
     #[test]

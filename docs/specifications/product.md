@@ -145,7 +145,11 @@ indexer does not run Cargo, rustc, build scripts, procedural macros, or
 whole-program trait/call resolution. Cargo build scripts and target-specific
 root manifest sections are typed build-variant `UNKNOWN`s that block affected
 Rust self-dogfood families until resolved. Nested fixture/package manifests
-must not globally block unrelated root Rust family support.
+must not globally block unrelated root Rust family support. Source-level
+`#[cfg]` and `#[cfg_attr]` build-variant UNKNOWNs may carry bounded nearest
+`Cargo.toml` feature context, including simple feature predicates and whether
+the feature is declared, but that context does not evaluate cfgs or prove
+family support.
 
 Java support in the v0.2 preview is a conservative Spring/Spring Boot
 structural slice. RepoGrammar can discover `.java` files, parse Java classes,
@@ -183,7 +187,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
-| Rust provider-backed project model | Preview | Default indexing can refresh Cargo metadata `PROJECT_CONFIG` facts for discovered manifests without build-script/proc-macro execution; rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
+| Rust provider-backed project model | Preview | Default indexing can refresh Cargo metadata `PROJECT_CONFIG` facts for discovered manifests without build-script/proc-macro execution, and parser-origin cfg UNKNOWNs can carry bounded Cargo feature context; rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
 | Java Spring MVC | Structural v0.2 preview | Exact imported/FQN Spring MVC route annotations inside exact controllers; route constants and runtime dispatch remain typed `UNKNOWN` subclaims. |
 | Java Spring/Spring Boot components | Structural v0.2 preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain runtime `UNKNOWN`s. |
 | Java Spring Data | Structural v0.2 preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, module selection, and classpath resolution remain `UNKNOWN`. |

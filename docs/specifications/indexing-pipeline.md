@@ -84,6 +84,14 @@ evidence, and no claim-relevant Rust `UNKNOWN`. Structural anchors alone,
 generic Rust functions, unresolved module links, build-variant ambiguity,
 macro/proc-macro expansion, trait-object dispatch, and stale evidence must not
 be upgraded into confident family claims.
+The Rust parser project context includes discovered Rust module paths and
+bounded `Cargo.toml` file contents. External `mod` declarations can use that
+module inventory to produce structural module-resolution context or typed
+`UNKNOWN`s. Source-level `#[cfg]` / `#[cfg_attr]` build-variant UNKNOWNs can
+use the nearest Cargo manifest to record simple feature predicates and
+declared/undeclared feature state as assumptions. This is only
+`cargo_feature_cfg_model` triage: RepoGrammar still does not evaluate cfgs,
+select targets/features, or treat Cargo feature metadata as family support.
 A parallel, deliberately conservative TS/JS path exists for Express,
 Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
 parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific

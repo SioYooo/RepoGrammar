@@ -158,8 +158,9 @@ allowed.
   `UnresolvedImport` UNKNOWN boundaries, support>=3 for internal Rust families,
   low-support abstention, default source-free CLI/MCP output, explicit
   source-span opt-in, safe and unsafe module resolution, target-specific Cargo
-  dependency inventory, Cargo build-script non-execution with a sentinel file,
-  repository-level build-variant blocking, and fixtures under
+  dependency inventory, Cargo feature context on source-level cfg UNKNOWNs,
+  Cargo build-script non-execution with a sentinel file, repository-level
+  build-variant blocking, and fixtures under
   `src/fixtures/rust/release/v0_2/` including `internal_family_gates`,
   `parser_adapters`, `installer_actions`, `product_tests`, `low_support_family`,
   `macro_cfg_unknowns`, `trait_dispatch_unknowns`, `module_resolution`, and

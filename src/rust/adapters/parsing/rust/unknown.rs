@@ -20,6 +20,24 @@ pub(super) fn fact(
     end_byte: usize,
     spec: RustUnknownSpec,
 ) -> Result<SemanticFact, ParseError> {
+    fact_with_assumptions(document, unit, start_byte, end_byte, spec, Vec::new())
+}
+
+pub(super) fn fact_with_assumptions(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    start_byte: usize,
+    end_byte: usize,
+    spec: RustUnknownSpec,
+    extra_assumptions: Vec<String>,
+) -> Result<SemanticFact, ParseError> {
+    let mut assumptions = vec![
+        format!("affected_claim={}", spec.affected_claim),
+        format!("rust_unknown_kind={}", spec.kind),
+    ];
+    assumptions.extend(extra_assumptions);
+    assumptions.sort();
+    assumptions.dedup();
     Ok(SemanticFact {
         kind: SemanticFactKind::Unknown,
         subject: unit.id.as_str().to_string(),
@@ -42,10 +60,7 @@ pub(super) fn fact(
             spec.note,
         )
         .map_err(ParseError::Internal)?,
-        assumptions: vec![
-            format!("affected_claim={}", spec.affected_claim),
-            format!("rust_unknown_kind={}", spec.kind),
-        ],
+        assumptions,
     })
 }
 

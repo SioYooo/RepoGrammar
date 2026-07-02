@@ -132,7 +132,10 @@ Some unknowns block only specific claims:
   `#[cfg]` / `#[cfg_attr]`, target-specific Cargo sections, and Cargo build
   scripts to `BuildVariantAmbiguity`, macro/proc-macro syntax to
   `MacroOrPreprocessor`, trait-object dispatch to `FrameworkMagic`, and stale
-  Rust source evidence to `StaleEvidence`.
+  Rust source evidence to `StaleEvidence`. Source-level cfg UNKNOWNs may carry
+  bounded nearest-`Cargo.toml` feature-predicate assumptions, including whether
+  a simple feature predicate is declared, but they still do not evaluate the
+  selected cfg/profile/target.
 - Rust UNKNOWNs block only the affected claim. `rust_build_variant`,
   `rust_macro_expansion`, `rust_trait_dispatch`, `rust_module_resolution`, and
   `rust_family_membership` block the relevant internal RepoGrammar family
