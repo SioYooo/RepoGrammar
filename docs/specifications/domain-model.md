@@ -68,7 +68,9 @@ they do not resolve TypeScript symbols, framework runtime behavior, or family
 membership.
 The TS/JS syntax parser can also persist `STRUCTURAL` exact-anchor facts for
 bounded Express, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle shapes,
-typed `UNKNOWN` facts for dynamic, unsafe, or unresolved
+including exact ES import, CommonJS `require`, and CommonJS destructuring-alias
+bindings from supported framework packages. It also persists typed `UNKNOWN`
+facts for dynamic, unsafe, or unresolved
 receiver/runner/support-target/framework-magic boundaries, and structural
 project-config facts for bounded `package.json`, `tsconfig.json`,
 `jsconfig.json`, Jest config, and Vitest config inventory, including safe JSON

@@ -117,6 +117,10 @@ record unique repo-local literal relative/path-alias/rootDirs imports as
 unresolved aliases/imports/rootDirs targets, ambiguous re-exports, dynamic
 framework magic, raw query builders, and missing project context remain typed
 `UNKNOWN` rather than family support.
+Exact TS/JS framework bindings may use ES imports, CommonJS `require`, or
+CommonJS destructuring aliases from the exact supported framework package; this
+does not support custom wrappers, injected clients, plugin containers, or
+runtime extension mechanisms.
 Jest/Vitest script configs such as `jest.config.ts` or `vitest.config.js` are
 recorded as metadata/typed `UNKNOWN` only; they are not executed and do not by
 themselves provide ambient runner context. React components/hooks remain blocked
@@ -170,12 +174,12 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | Python pytest | Supported | Bounded test/fixture family evidence with typed fixture ambiguity `UNKNOWN`. |
 | Python Pydantic | Supported | Bounded model/settings family evidence; dynamic factories remain `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |
-| JS/TS Express | Conservative v0.2 preview | Exact import/require plus direct literal route calls; support>=3 and complete-link compatibility required. |
+| JS/TS Express | Conservative v0.2 preview | Exact import/require bindings, including CommonJS destructuring aliases, plus direct literal route calls; support>=3 and complete-link compatibility required. |
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
 | JS/TS Next.js | Structural v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; dynamic segments, route groups, and parallel routes are context assumptions on exact anchors, while middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
-| JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
-| JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
-| JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
+| JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver, including CommonJS destructuring aliases, plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings, including CommonJS destructuring aliases, plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories and local `drizzle(...)` db bindings, including CommonJS destructuring aliases, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |

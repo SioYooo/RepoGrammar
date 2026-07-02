@@ -155,9 +155,7 @@ pub(super) fn table_declaration_parts(slice: &str) -> Option<(&str, &str)> {
         .strip_prefix('=')?
         .trim_start();
     let (factory, after_factory) = leading_identifier(rhs)?;
-    if !DRIZZLE_TABLE_FACTORIES.contains(&factory)
-        || !rhs[after_factory..].trim_start().starts_with('(')
-    {
+    if !rhs[after_factory..].trim_start().starts_with('(') {
         return None;
     }
     Some((name, factory))

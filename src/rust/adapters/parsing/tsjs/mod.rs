@@ -531,6 +531,50 @@ app.put("/a", (req, res) => { res.end(); });
     }
 
     #[test]
+    fn commonjs_destructured_framework_aliases_anchor_exact_packages() {
+        let text = r#"const { Router: createRouter } = require("express");
+const { fastify: createFastify } = require("fastify");
+const { PrismaClient: DatabaseClient } = require("@prisma/client");
+const { drizzle: createDb } = require("drizzle-orm/node-postgres");
+const { pgTable: table } = require("drizzle-orm/pg-core");
+
+const router = createRouter();
+router.get("/users", (req, res) => { res.end(); });
+
+const app = createFastify();
+app.post("/events", async (request, reply) => reply.send({ ok: true }));
+
+const prisma = new DatabaseClient();
+prisma.user.findMany({ where: { active: true } });
+
+export const users = table("users", {});
+const db = createDb(pool);
+db.select().from(users);
+"#;
+
+        assert_eq!(
+            targets("src/cjs-aliases.js", text),
+            vec![
+                "drizzle.query.select".to_string(),
+                "drizzle.schema.table".to_string(),
+                "express.route.get".to_string(),
+                "fastify.route.post".to_string(),
+                "prisma.query.findMany".to_string(),
+            ]
+        );
+
+        let wrong_package = r#"const { Router: createRouter } = require("./router");
+const router = createRouter();
+router.get("/users", (req, res) => { res.end(); });
+"#;
+        assert!(targets("src/wrong-cjs-alias.js", wrong_package).is_empty());
+        assert_eq!(
+            unknown_kinds("src/wrong-cjs-alias.js", wrong_package),
+            vec!["unresolved_express_receiver".to_string()]
+        );
+    }
+
+    #[test]
     fn express_object_literal_lookalike_has_no_anchor() {
         let text = r#"const app = { get(path, handler) { return handler; } };
 app.get("/users", (req, res) => { res.json([]); });

@@ -498,7 +498,7 @@ fn parse_require_declaration(line: &str) -> Vec<(String, ImportBinding)> {
         None => return Vec::new(),
     };
     if lhs.starts_with('{') {
-        return parse_named_specifiers(lhs)
+        return parse_object_binding_specifiers(lhs)
             .into_iter()
             .map(|(local, original)| {
                 (
@@ -524,6 +524,14 @@ fn parse_require_declaration(line: &str) -> Vec<(String, ImportBinding)> {
 }
 
 fn parse_named_specifiers(clause: &str) -> Vec<(String, String)> {
+    parse_braced_specifiers(clause, false)
+}
+
+fn parse_object_binding_specifiers(clause: &str) -> Vec<(String, String)> {
+    parse_braced_specifiers(clause, true)
+}
+
+fn parse_braced_specifiers(clause: &str, allow_colon_alias: bool) -> Vec<(String, String)> {
     let open = match clause.find('{') {
         Some(index) => index,
         None => return Vec::new(),
@@ -539,10 +547,18 @@ fn parse_named_specifiers(clause: &str) -> Vec<(String, String)> {
         if part.is_empty() {
             continue;
         }
-        let (original, local) = match part.split_once(" as ") {
-            Some((original, local)) => (original.trim(), local.trim()),
-            None => (part, part),
+        let (original, local) = if allow_colon_alias {
+            match part.split_once(':') {
+                Some((original, local)) => (original.trim(), local.trim()),
+                None => (part, part),
+            }
+        } else {
+            match part.split_once(" as ") {
+                Some((original, local)) => (original.trim(), local.trim()),
+                None => (part, part),
+            }
         };
+        let local = local.split('=').next().unwrap_or(local).trim();
         let original = match leading_identifier(original) {
             Some((name, _)) => name.to_string(),
             None => continue,
@@ -587,7 +603,7 @@ fn declared_identifiers(line: &str) -> Vec<String> {
         if let Some(rest) = trimmed.strip_prefix(keyword) {
             let rest = rest.trim_start();
             if rest.starts_with('{') {
-                return parse_named_specifiers(rest)
+                return parse_object_binding_specifiers(rest)
                     .into_iter()
                     .map(|(local, _)| local)
                     .collect();

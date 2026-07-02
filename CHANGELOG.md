@@ -68,6 +68,10 @@
   repo-local relative import resolution. Unique rootDirs targets become
   `STRUCTURAL` `RESOLVED_IMPORT` context facts, while unresolved or conflicting
   rootDirs candidates remain typed `UNKNOWN`.
+- TS/JS exact-anchor binding now accepts CommonJS destructuring aliases from
+  exact supported framework packages, covering Express routers, Fastify
+  factories, Prisma clients, and Drizzle table/db factories without treating
+  custom wrappers or injected clients as support.
 
 ### Added
 

@@ -87,12 +87,14 @@ be upgraded into confident family claims.
 A parallel, deliberately conservative TS/JS path exists for Express,
 Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
 parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
-bindings and file conventions match the adapter registry: Express app/router
-calls, Jest/Vitest runners, Next App/Pages conventions with `next` package
-context, Fastify factory receivers plus shorthand routes or full `app.route`
-declarations with literal method, literal `url`/`path`, and an exact `handler`
-field, local
-`new PrismaClient()` clients, and Drizzle table/db/query bindings. Exact local
+bindings and file conventions match the adapter registry. Exact bindings may
+come from ES imports, CommonJS `require`, or CommonJS destructuring aliases from
+the exact supported package, but not from custom wrappers or injected clients:
+Express app/router calls, Jest/Vitest runners, Next App/Pages conventions with
+`next` package context, Fastify factory receivers plus shorthand routes or full
+`app.route` declarations with literal method, literal `url`/`path`, and an
+exact `handler` field, local `new PrismaClient()` clients, and Drizzle
+table/db/query bindings. Exact local
 Next dynamic segments, route
 groups, and parallel routes are retained as context assumptions on page/layout
 and route-handler anchors; middleware, server actions, re-exports, and
