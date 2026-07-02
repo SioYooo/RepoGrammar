@@ -64,8 +64,13 @@ family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
 Jest/Vitest config inventory is stored as structural context only. A bounded
 repo-local static import resolver can record relative/path-alias imports as
 structural context, while dynamic imports, conditional `require`, unresolved
-aliases, and star re-exports remain typed `UNKNOWN`. This is not full
-TypeScript/JavaScript semantic analysis.
+aliases, and star re-exports remain typed `UNKNOWN`. When explicitly configured
+through the semantic-worker environment variables, the checked-in TypeScript
+worker can accept bounded module/export/package operations and use the
+TypeScript compiler API for module resolution if a TypeScript module is
+available to that worker. Without that API it emits only structural fallback
+facts or typed `UNKNOWN`s. This is not full TypeScript/JavaScript semantic
+analysis.
 For Jest/Vitest, package dependencies and JSON config files can provide ambient
 runner context; script configs such as `jest.config.ts` or `vitest.config.js`
 are recorded only as metadata/typed `UNKNOWN` and are not executed.
@@ -95,7 +100,7 @@ analysis.
 | JS/TS Prisma | v0.2 structural preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | v0.2 structural preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
-| Full JS/TS semantic analysis | Not supported | No compiler-backed TypeScript resolution, full alias/re-export semantics, dynamic wrapper support, or project execution. |
+| Full JS/TS semantic analysis | Not supported | Only bounded optional TypeScript worker operations exist; no full Program/TypeChecker family support, dynamic wrapper support, package-script execution, or general JS/TS semantic claim. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation families only, from Tree-sitter structural anchors; no Cargo/rustc/proc-macro execution and no general Rust semantic claims. |
 | Java Spring MVC | v0.2 structural preview | Exact imported/FQN Spring MVC mapping annotations inside exact controllers; route constants and runtime dispatch remain `UNKNOWN` subclaims. |
 | Java Spring/Spring Boot | v0.2 structural preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain `UNKNOWN`. |

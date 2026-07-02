@@ -641,10 +641,15 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
         .map(|file| (file.path.as_str(), file.language.as_str()))
         .collect::<BTreeMap<_, _>>();
     let roles_by_unit = inventory_framework_roles_by_unit(&snapshot.semantic_facts);
+    let resolved_tsjs_operation_keys =
+        provider_resolved_tsjs_operation_keys(&snapshot.semantic_facts);
     let mut entries = snapshot
         .semantic_facts
         .iter()
         .filter(|fact| inventory_fact_is_unknown(fact))
+        .filter(|fact| {
+            !tsjs_unknown_resolved_by_provider_operation(fact, &resolved_tsjs_operation_keys)
+        })
         .map(|fact| {
             let reason = inventory_unknown_reason(fact);
             let language = unit_by_id
@@ -677,8 +682,13 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
                     .as_ref()
                     .is_some_and(|unknown| unknown.class == UnknownClass::Blocking)
                 || class == UnknownClass::Blocking;
-            let required_mechanism =
-                required_unknown_mechanism(language, reason, &affected_claim, &framework_role);
+            let required_mechanism = required_unknown_mechanism(
+                language,
+                reason,
+                &affected_claim,
+                &framework_role,
+                &fact.assumptions,
+            );
             let recovery_code = unknown_recovery_code(reason, &required_mechanism);
             UnknownInventoryEntry {
                 language: language.to_string(),
@@ -735,6 +745,73 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
         by_blocks_support: aggregate_blocks_support(&entries),
         by_recovery_code: aggregate_unknown_bucket(&entries, |entry| entry.recovery_code),
     }
+}
+
+type TsJsOperationEvidenceKey = (String, String, String, usize, usize, String);
+
+fn provider_resolved_tsjs_operation_keys(
+    facts: &[IndexedSemanticFactRecord],
+) -> BTreeSet<TsJsOperationEvidenceKey> {
+    facts
+        .iter()
+        .filter(|fact| {
+            matches!(fact.kind.as_str(), "RESOLVED_IMPORT" | "SYMBOL" | "TYPE")
+                && fact.certainty == FactCertainty::Semantic.as_protocol_str()
+                && fact.origin_engine == "typescript"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider=typescript")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=true")
+        })
+        .filter_map(|fact| {
+            let operation = assumption_value(&fact.assumptions, "query_operation")?;
+            Some(tsjs_operation_key_for_fact(fact, &operation))
+        })
+        .collect()
+}
+
+fn tsjs_unknown_resolved_by_provider_operation(
+    fact: &IndexedSemanticFactRecord,
+    resolved_keys: &BTreeSet<TsJsOperationEvidenceKey>,
+) -> bool {
+    if fact.kind != "UNKNOWN" || !fact.origin_method.contains("import_resolver") {
+        return false;
+    }
+    let Some(affected_claim) = assumption_value(&fact.assumptions, "affected_claim") else {
+        return false;
+    };
+    let Some(operation) = tsjs_operation_for_affected_claim(&affected_claim) else {
+        return false;
+    };
+    resolved_keys.contains(&tsjs_operation_key_for_fact(fact, operation))
+}
+
+fn tsjs_operation_for_affected_claim(affected_claim: &str) -> Option<&'static str> {
+    match affected_claim {
+        "tsjs_import_resolution" => Some("resolve_module_specifier"),
+        "tsjs_export_resolution" => Some("resolve_export"),
+        "tsjs_reexport_resolution" => Some("resolve_reexport"),
+        "tsjs_package_entry" => Some("resolve_package_entry"),
+        _ => None,
+    }
+}
+
+fn tsjs_operation_key_for_fact(
+    fact: &IndexedSemanticFactRecord,
+    operation: &str,
+) -> TsJsOperationEvidenceKey {
+    (
+        fact.path.clone(),
+        fact.content_hash.as_str().to_string(),
+        fact.code_unit_id.clone(),
+        fact.start_byte,
+        fact.end_byte,
+        operation.to_string(),
+    )
 }
 
 fn inventory_fact_is_unknown(fact: &IndexedSemanticFactRecord) -> bool {
@@ -830,10 +907,14 @@ fn required_unknown_mechanism(
     reason: UnknownReasonCode,
     affected_claim: &str,
     framework_role: &str,
+    assumptions: &[String],
 ) -> String {
-    if let Some(mechanism) =
-        claim_specific_required_unknown_mechanism(language, affected_claim, framework_role)
-    {
+    if let Some(mechanism) = claim_specific_required_unknown_mechanism(
+        language,
+        affected_claim,
+        framework_role,
+        assumptions,
+    ) {
         return mechanism.to_string();
     }
 
@@ -903,6 +984,7 @@ fn claim_specific_required_unknown_mechanism(
     language: &str,
     affected_claim: &str,
     framework_role: &str,
+    assumptions: &[String],
 ) -> Option<&'static str> {
     if language == "python" {
         return match affected_claim {
@@ -925,7 +1007,9 @@ fn claim_specific_required_unknown_mechanism(
 
     if is_tsjs_language(language) {
         return match affected_claim {
-            "tsjs_path_alias" | "tsjs_import_resolution" => Some("typescript_paths_resolver"),
+            "tsjs_import_resolution" => tsjs_import_resolution_mechanism(assumptions),
+            "tsjs_path_alias" => Some("typescript_paths_resolver"),
+            "tsjs_package_entry" => Some("typescript_package_entry_model"),
             "tsjs_reexport_resolution"
             | "next_default_export"
             | "next_pages_api_export"
@@ -967,6 +1051,24 @@ fn claim_specific_required_unknown_mechanism(
     }
 
     None
+}
+
+fn tsjs_import_resolution_mechanism(assumptions: &[String]) -> Option<&'static str> {
+    match assumption_value(assumptions, "tsjs_unknown_kind").as_deref() {
+        Some("unresolved_path_alias" | "path_alias_conflict") => Some("typescript_paths_resolver"),
+        Some("unresolved_root_dirs" | "root_dirs_conflict") => Some("typescript_rootdirs_model"),
+        Some("dynamic_require" | "conditional_require") => Some("typescript_commonjs_alias_model"),
+        Some("missing_dependency" | "missing_package_entry" | "unsafe_package_entry") => {
+            Some("typescript_package_entry_model")
+        }
+        Some("unresolved_export" | "unresolved_reexport" | "ambiguous_reexport") => {
+            Some("typescript_export_graph")
+        }
+        Some("unresolved_import" | "ambiguous_import" | "dynamic_import") | None => {
+            Some("typescript_module_resolver")
+        }
+        Some(_) => Some("typescript_module_resolver"),
+    }
 }
 
 fn unknown_recovery_code(reason: UnknownReasonCode, required_mechanism: &str) -> &'static str {
@@ -3981,6 +4083,101 @@ mod tests {
         assert!(!recovery_debug.contains("code_unit_id"));
         assert!(!recovery_debug.contains("fact_id"));
         assert!(!recovery_debug.contains("fn handler"));
+    }
+
+    #[test]
+    fn unknown_inventory_maps_tsjs_resolver_mechanism_buckets() {
+        let unit = indexed_language_unit("src/app.ts", "typescript", "handler", 0);
+        let facts = vec![
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::UnresolvedImport,
+                "tsjs_import_resolution",
+                vec!["tsjs_unknown_kind=unresolved_import".to_string()],
+            ),
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::UnresolvedImport,
+                "tsjs_import_resolution",
+                vec!["tsjs_unknown_kind=unresolved_path_alias".to_string()],
+            ),
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::UnresolvedImport,
+                "tsjs_import_resolution",
+                vec!["tsjs_unknown_kind=unresolved_root_dirs".to_string()],
+            ),
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::MissingDependency,
+                "tsjs_package_entry",
+                vec!["tsjs_unknown_kind=missing_package_entry".to_string()],
+            ),
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::DynamicImport,
+                "tsjs_import_resolution",
+                vec!["tsjs_unknown_kind=dynamic_require".to_string()],
+            ),
+            unknown_fact_for_unit_with_assumptions(
+                &unit,
+                UnknownReasonCode::ConflictingFacts,
+                "tsjs_reexport_resolution",
+                vec!["tsjs_unknown_kind=ambiguous_reexport".to_string()],
+            ),
+        ];
+        let store = FakeStore::new(facts).with_units(vec![unit]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+
+        for mechanism in [
+            "typescript_module_resolver",
+            "typescript_paths_resolver",
+            "typescript_rootdirs_model",
+            "typescript_package_entry_model",
+            "typescript_commonjs_alias_model",
+            "typescript_export_graph",
+        ] {
+            assert_eq!(
+                bucket_count(&report.by_required_mechanism, mechanism),
+                1,
+                "{mechanism} should be counted once"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_inventory_suppresses_tsjs_unknowns_resolved_by_provider_operation() {
+        let unit = indexed_language_unit("src/app.ts", "typescript", "handler", 0);
+        let mut unresolved = unknown_fact_for_unit_with_assumptions(
+            &unit,
+            UnknownReasonCode::UnresolvedImport,
+            "tsjs_import_resolution",
+            vec!["tsjs_unknown_kind=unresolved_import".to_string()],
+        );
+        unresolved.origin_engine = "repogrammar-tsjs-syntax".to_string();
+        unresolved.origin_method = "bounded_import_resolver_v1".to_string();
+        let mut resolved = semantic_fact();
+        resolved.kind = "RESOLVED_IMPORT".to_string();
+        resolved.certainty = "SEMANTIC".to_string();
+        resolved.origin_engine = "typescript".to_string();
+        resolved.origin_engine_version = "6.0.0".to_string();
+        resolved.origin_method = "compiler_api_module_resolver_v1".to_string();
+        resolved.assumptions = vec![
+            "provider=typescript".to_string(),
+            "provider_resolved=true".to_string(),
+            "query_operation=resolve_module_specifier".to_string(),
+        ];
+        resolved.code_unit_id = unit.id.clone();
+        resolved.path = unit.path.clone();
+        resolved.content_hash = unit.content_hash.clone();
+        resolved.start_byte = unit.start_byte;
+        resolved.end_byte = unit.end_byte;
+        let store = FakeStore::new(vec![unresolved, resolved]).with_units(vec![unit]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+
+        assert_eq!(report.total_unknowns, 0);
     }
 
     #[test]

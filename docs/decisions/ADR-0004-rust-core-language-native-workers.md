@@ -52,6 +52,6 @@ shell interpolation.
 ## Follow-up work
 
 Design and validate the TypeScript worker toolchain, package lockfile, richer
-version policy, freshness metadata, and claim gates before adding executable
-TypeScript compiler worker code or allowing stored worker facts to support
-pattern-family claims.
+version policy, freshness metadata, and claim gates before bundling a
+TypeScript compiler dependency, widening beyond bounded operation-scoped module
+resolution, or allowing stored worker facts to support pattern-family claims.

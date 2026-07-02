@@ -51,6 +51,14 @@ The test verifies:
 | TS/JS framework negatives | `src/fixtures/typescript/release/v0_2/framework_adapter_negative_cases` | Fastify receiver gaps, Prisma/Drizzle dynamic or raw cases, path/import conflicts, and exact-anchor abstention. |
 | Rust macro/cfg unknowns | `src/fixtures/rust/release/v0_2/macro_cfg_unknowns` | Cargo cfg/build-variant ambiguity, macro boundaries, and Rust self-dogfood false-certainty guards. |
 
+The current TS/JS negative baseline expects the remaining import-resolution
+fixture UNKNOWN to land in `typescript_module_resolver`. More specific buckets
+such as `typescript_paths_resolver`, `typescript_rootdirs_model`,
+`typescript_package_entry_model`, `typescript_commonjs_alias_model`, and
+`typescript_export_graph` are covered by focused unit tests and should be added
+to product fixture baselines only when a committed fixture exercises that
+public product path.
+
 ## Updating The Baseline
 
 When a later analyzer slice intentionally reduces or reclassifies an UNKNOWN:
@@ -58,6 +66,9 @@ When a later analyzer slice intentionally reduces or reclassifies an UNKNOWN:
 1. Update the analyzer and its focused positive/negative tests first.
 2. Prove the replacement fact is fresh, repo-relative, hash-backed, and
    compatible with the relevant family support gate.
+   For TS/JS worker reductions, the replacement must also match the same
+   path/hash/code-unit/range and requested operation provenance; static fallback
+   facts with `provider_resolved=false` are context only.
 3. Keep dynamic, ambiguous, stale, external, or unsupported behavior as typed
    `UNKNOWN`.
 4. Re-run `repogrammar unknowns --json` over the benchmark fixture copy and

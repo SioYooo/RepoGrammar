@@ -43,7 +43,10 @@ use crate::ports::rust_provider::{
     RustProviderCandidate, RustProviderError, RustProviderKind, RustProviderOperation,
     RustProviderOutput, RustProviderProvenance, RustProviderRequest, RustSemanticProvider,
 };
-use crate::ports::semantic_worker::{SemanticWorker, SemanticWorkerError, SemanticWorkerRequest};
+use crate::ports::semantic_worker::{
+    SemanticWorker, SemanticWorkerError, SemanticWorkerOperation, SemanticWorkerOperationKind,
+    SemanticWorkerRequest,
+};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -818,13 +821,16 @@ where
         );
     }
     let (semantic_worker, worker_facts) = record_semantic_worker_facts(
-        &request,
-        &report,
-        &generation,
-        options.semantic_worker,
+        SemanticWorkerFactRecording {
+            request: &request,
+            discovery_report: &report,
+            parser_semantic_facts: &parser_semantic_facts,
+            generation: &generation,
+            semantic_worker: options.semantic_worker,
+            fact_id_offset: local_support_fact_count + rust_provider_fact_count,
+        },
         store,
         &mut warnings,
-        local_support_fact_count + rust_provider_fact_count,
     )?;
     let worker_semantic_facts = worker_facts.len();
     if worker_semantic_facts > 0 {
@@ -3224,31 +3230,43 @@ fn derived_rust_framework_support_fact(
     )
 }
 
+struct SemanticWorkerFactRecording<'a> {
+    request: &'a IndexingRequest,
+    discovery_report: &'a FileDiscoveryReport,
+    parser_semantic_facts: &'a [SemanticFact],
+    generation: &'a GenerationHandle,
+    semantic_worker: Option<&'a dyn SemanticWorker>,
+    fact_id_offset: usize,
+}
+
 fn record_semantic_worker_facts(
-    request: &IndexingRequest,
-    discovery_report: &FileDiscoveryReport,
-    generation: &GenerationHandle,
-    semantic_worker: Option<&dyn SemanticWorker>,
+    input: SemanticWorkerFactRecording<'_>,
     store: &impl IndexStore,
     warnings: &mut Vec<String>,
-    fact_id_offset: usize,
 ) -> Result<(SemanticWorkerRunStatus, Vec<SemanticFact>), RepoGrammarError> {
-    let Some(semantic_worker) = semantic_worker else {
+    let Some(semantic_worker) = input.semantic_worker else {
         return Ok((SemanticWorkerRunStatus::Deferred, Vec::new()));
     };
 
-    if discovery_report.files.is_empty() {
+    if input.discovery_report.files.is_empty() {
         return Ok((SemanticWorkerRunStatus::Deferred, Vec::new()));
     }
 
-    let changed_files = discovery_report
+    let changed_files = input
+        .discovery_report
         .files
         .iter()
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
+    let operations = tsjs_semantic_worker_operations(
+        input.request,
+        input.discovery_report,
+        input.parser_semantic_facts,
+    );
     let mut facts = match semantic_worker.analyze_project(SemanticWorkerRequest {
-        project_root: request.repository_root.clone(),
+        project_root: input.request.repository_root.clone(),
         changed_files,
+        operations,
     }) {
         Ok(facts) => facts,
         Err(error) => {
@@ -3261,8 +3279,74 @@ fn record_semantic_worker_facts(
     };
 
     sort_semantic_facts(&mut facts);
-    record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    record_semantic_facts(store, input.generation, input.fact_id_offset, &facts)?;
     Ok((SemanticWorkerRunStatus::Complete, facts))
+}
+
+fn tsjs_semantic_worker_operations(
+    request: &IndexingRequest,
+    discovery_report: &FileDiscoveryReport,
+    parser_semantic_facts: &[SemanticFact],
+) -> Vec<SemanticWorkerOperation> {
+    let file_hash_by_path = discovery_report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.content_hash.as_str().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let project_config_hash = file_hash_by_path
+        .get("tsconfig.json")
+        .or_else(|| file_hash_by_path.get("jsconfig.json"))
+        .cloned()
+        .unwrap_or_else(zero_content_hash);
+    let package_json_hash = file_hash_by_path
+        .get("package.json")
+        .cloned()
+        .unwrap_or_else(zero_content_hash);
+    let mut operations = Vec::new();
+
+    for fact in parser_semantic_facts {
+        if !tsjs_parser_import_resolution_fact(fact) {
+            continue;
+        }
+        let Some(literal_specifier) = fact_assumption_value(fact, "literal_specifier=") else {
+            continue;
+        };
+        operations.push(SemanticWorkerOperation {
+            operation_id: format!("tsjs-op-{:06}", operations.len()),
+            operation: SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            path: fact.evidence.provenance.path.clone(),
+            content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
+            code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
+            start_byte: fact.evidence.range.start_byte,
+            end_byte: fact.evidence.range.end_byte,
+            literal_specifier: literal_specifier.to_string(),
+            project_config_hash: project_config_hash.clone(),
+            package_json_hash: package_json_hash.clone(),
+            max_files: discovery_report.files.len().max(1),
+            max_bytes: request.max_file_bytes,
+        });
+    }
+
+    operations
+}
+
+fn tsjs_parser_import_resolution_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedImport | SemanticFactKind::Unknown
+    ) && fact.origin.engine == crate::adapters::parsing::tsjs::TSJS_ANCHOR_ENGINE
+        && fact.origin.method == "bounded_import_resolver_v1"
+        && fact_assumption_value(fact, "literal_specifier=").is_some()
+}
+
+fn zero_content_hash() -> String {
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
+}
+
+fn fact_assumption_value<'a>(fact: &'a SemanticFact, prefix: &str) -> Option<&'a str> {
+    fact.assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix(prefix))
 }
 
 fn record_semantic_facts(
@@ -3979,6 +4063,31 @@ mod tests {
             assert!(Path::new(&request.project_root).is_absolute());
             assert_eq!(request.changed_files, self.expected_files);
             self.result.clone()
+        }
+    }
+
+    struct RecordingSemanticWorker {
+        requests: Mutex<Vec<SemanticWorkerRequest>>,
+    }
+
+    impl RecordingSemanticWorker {
+        fn new() -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl SemanticWorker for RecordingSemanticWorker {
+        fn analyze_project(
+            &self,
+            request: SemanticWorkerRequest,
+        ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
+            self.requests
+                .lock()
+                .expect("record semantic worker request")
+                .push(request);
+            Ok(Vec::new())
         }
     }
 
@@ -6939,6 +7048,70 @@ mod tests {
         assert_eq!(outcome.warnings, Vec::<String>::new());
         assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
         assert_eq!(semantic_fact_count(&state, "gen-000001"), 1);
+    }
+
+    #[test]
+    fn optional_semantic_worker_request_includes_tsjs_resolver_operations() {
+        let workspace = TempWorkspace::new("indexing-tsjs-worker-operations");
+        fs::create_dir_all(workspace.path().join("src/app")).expect("create source dirs");
+        let source = "import service from '@app/service';\n";
+        let target = "export const service = true;\n";
+        let config = r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}"#;
+        let package_json = r#"{"dependencies":{"express":"latest"}}"#;
+        fs::write(workspace.path().join("src/route.ts"), source).expect("write route");
+        fs::write(workspace.path().join("src/app/service.ts"), target).expect("write target");
+        fs::write(workspace.path().join("tsconfig.json"), config).expect("write tsconfig");
+        fs::write(workspace.path().join("package.json"), package_json).expect("write package");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let discovered = discover_repository_files(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+        )
+        .expect("discover files");
+        let hash_for = |path: &str| {
+            discovered
+                .files
+                .iter()
+                .find(|file| file.path == path)
+                .expect("discovered file")
+                .content_hash
+                .as_str()
+                .to_string()
+        };
+        let worker = RecordingSemanticWorker::new();
+
+        index_repository_with_discovery_parser_semantic_worker_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &worker,
+            &store,
+        )
+        .expect("index with recording semantic worker");
+
+        let requests = worker.requests.lock().expect("recorded requests");
+        assert_eq!(requests.len(), 1);
+        let operations = &requests[0].operations;
+        assert_eq!(operations.len(), 1);
+        let operation = &operations[0];
+        assert_eq!(
+            operation.operation,
+            SemanticWorkerOperationKind::ResolveModuleSpecifier
+        );
+        assert_eq!(operation.path, "src/route.ts");
+        assert_eq!(operation.content_hash, hash_for("src/route.ts"));
+        assert_eq!(operation.literal_specifier, "@app/service");
+        assert_eq!(operation.project_config_hash, hash_for("tsconfig.json"));
+        assert_eq!(operation.package_json_hash, hash_for("package.json"));
+        assert_eq!(operation.max_files, discovered.files.len());
+        assert_eq!(operation.max_bytes, DEFAULT_MAX_FILE_BYTES);
+        assert!(operation.operation_id.starts_with("tsjs-op-"));
+        assert!(operation
+            .code_unit_id
+            .starts_with("unit:src/route.ts#module:"));
     }
 
     #[test]

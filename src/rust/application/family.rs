@@ -2552,7 +2552,32 @@ fn tsjs_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) 
         TSJS_DERIVED_SUPPORT_METHOD,
         framework_role,
         &required,
-    )
+    ) || tsjs_provider_resolved_support_fact(fact, framework_role, &required)
+}
+
+fn tsjs_provider_resolved_support_fact(
+    fact: &SemanticFact,
+    framework_role: &str,
+    required_assumptions: &[String],
+) -> bool {
+    fact.certainty == FactCertainty::DataflowDerived
+        && fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
+        && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
+        && fact_has_assumption(fact, "provider=typescript")
+        && fact_has_assumption(fact, "provider_resolved=true")
+        && fact_has_assumption(fact, &format!("framework_role={framework_role}"))
+        && fact_assumption_value(fact, "query_operation=").is_some_and(|operation| {
+            matches!(
+                operation,
+                "resolve_module_specifier"
+                    | "resolve_export"
+                    | "resolve_reexport"
+                    | "resolve_package_entry"
+            )
+        })
+        && required_assumptions
+            .iter()
+            .all(|assumption| fact_has_assumption(fact, assumption))
 }
 
 fn java_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -3815,6 +3840,77 @@ mod tests {
             ],
         );
         assert!(unrelated.claims.is_empty());
+    }
+
+    #[test]
+    fn tsjs_provider_resolved_derived_support_requires_provider_provenance() {
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let mut provider_first = tsjs_derived_fact(
+            &first,
+            "express.route.get",
+            "framework:express.route_handler",
+        );
+        provider_first
+            .assumptions
+            .retain(|value| value != "provider_resolved=false");
+        provider_first.assumptions.extend([
+            "provider=typescript".to_string(),
+            "provider_resolved=true".to_string(),
+            "query_operation=resolve_module_specifier".to_string(),
+            "tsconfig_hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
+            "environment_fingerprint=node_static_worker_v1".to_string(),
+        ]);
+        let mut missing_operation = provider_first.clone();
+        missing_operation
+            .assumptions
+            .retain(|value| !value.starts_with("query_operation="));
+
+        let blocked = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                missing_operation,
+                tsjs_derived_fact(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                ),
+            ],
+        );
+        assert!(blocked.claims.is_empty());
+
+        let accepted = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                provider_first,
+                tsjs_derived_fact(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                ),
+                tsjs_derived_fact(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                ),
+            ],
+        );
+        assert_eq!(accepted.claims.len(), 1);
     }
 
     fn tsjs_unknown_fact(

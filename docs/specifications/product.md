@@ -126,13 +126,16 @@ recorded as metadata/typed `UNKNOWN` only; they are not executed and do not by
 themselves provide ambient runner context. React components/hooks remain blocked
 from public family claims even if an explicit TypeScript semantic-worker fact
 names `react`. Production-quality TS/JS semantic analysis, React family support,
-TypeScript compiler-backed evidence, complete re-export/path-alias semantics,
+complete Program/TypeChecker coverage, complete re-export/path-alias semantics,
 Fastify plugin-prefix resolution, Prisma/Drizzle runtime extensions, Next
 server/client semantics, middleware, server actions, re-export semantics, and
 dynamic-wrapper support remain deferred unless a later ADR changes the sequence
-again. Exact local Next dynamic segments, route groups, and parallel routes may
-be recorded as context assumptions on supported page/layout/route anchors; they
-are not independent support evidence.
+again. A bounded optional TypeScript worker operation slice may produce
+compiler-backed module-resolution facts when a TypeScript compiler API is
+available, but static fallback facts remain structural context and do not
+support family claims. Exact local Next dynamic segments, route groups, and
+parallel routes may be recorded as context assumptions on supported
+page/layout/route anchors; they are not independent support evidence.
 
 Rust support in the v0.2 preview is limited to RepoGrammar self-dogfooding. It
 uses Tree-sitter Rust for structural code-unit extraction and RepoGrammar-owned
@@ -185,13 +188,13 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings, including CommonJS destructuring aliases, plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories and local `drizzle(...)` db bindings, including CommonJS destructuring aliases, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
-| Full JS/TS semantics | Not supported | No compiler-backed TypeScript analysis, full alias/re-export semantics, runtime DI, or dynamic wrapper execution. |
+| Full JS/TS semantics | Not supported | Only bounded optional TypeScript worker operations exist; no full Program/TypeChecker semantics, runtime DI, dynamic wrapper execution, or broad JS/TS family support. |
 | Rust self-dogfood | Internal v0.2 preview | RepoGrammar-owned implementation-family evidence only; Tree-sitter structural anchors with no Cargo/rustc/proc-macro execution. |
 | Rust provider-backed project model | Preview | Default indexing can refresh Cargo metadata `PROJECT_CONFIG` facts for discovered manifests without build-script/proc-macro execution, and parser-origin cfg UNKNOWNs can carry bounded Cargo feature context; rust-analyzer/rustc/rustdoc JSON adapters and provider-backed family support remain deferred. |
 | Java Spring MVC | Structural v0.2 preview | Exact imported/FQN Spring MVC route annotations inside exact controllers; route constants and runtime dispatch remain typed `UNKNOWN` subclaims. |
 | Java Spring/Spring Boot components | Structural v0.2 preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain runtime `UNKNOWN`s. |
 | Java Spring Data | Structural v0.2 preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, module selection, and classpath resolution remain `UNKNOWN`. |
-| TS/JS provider-backed semantics | Planned preview | Provider ports exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
+| TS/JS provider-backed semantics | Planned preview | Provider ports and bounded worker operations exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 

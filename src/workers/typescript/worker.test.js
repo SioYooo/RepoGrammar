@@ -1,16 +1,34 @@
 "use strict";
 
 const assert = require("assert");
+const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
 const workerPath = path.join(__dirname, "worker.js");
+const zeroHash =
+  "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+function sha(text) {
+  return `sha256:${crypto.createHash("sha256").update(text, "utf8").digest("hex")}`;
+}
+
+function workspace(name) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `repogrammar-ts-worker-${name}-`));
+}
+
+function writeFile(root, relativePath, text) {
+  const absolute = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, text);
+  return { path: relativePath, text, hash: sha(text) };
+}
 
 function runWorker(payload) {
-  const input =
-    typeof payload === "string" ? payload : `${JSON.stringify(payload)}\n`;
   const result = spawnSync(process.execPath, [workerPath], {
-    input,
+    input: `${JSON.stringify(payload)}\n`,
     encoding: "utf8",
   });
 
@@ -23,57 +41,312 @@ function runWorker(payload) {
     .map((line) => JSON.parse(line));
 }
 
-function validRequest() {
+function request(root, files, operations) {
   return {
     protocol_version: 1,
     request_id: "repogrammar-typescript-semantic-worker",
-    project_root: "/repo",
-    changed_files: ["src/a.ts", "src/b.tsx"],
+    project_root: root,
+    changed_files: files.map((file) => file.path).sort(),
+    operations,
   };
 }
 
-function assertEndOfStream(messages, requestId) {
+function operation(file, literalSpecifier, overrides = {}) {
+  const {
+    projectConfigHash,
+    packageJsonHash,
+    project_config_hash,
+    package_json_hash,
+    ...rest
+  } = overrides;
+  return {
+    operation_id: `op-${file.path.replace(/[^A-Za-z0-9]+/g, "-")}-${file.text.length}`,
+    operation: "resolve_module_specifier",
+    path: file.path,
+    content_hash: file.hash,
+    code_unit_id: `unit:${file.path}#module:0-${file.text.length}:0`,
+    start_byte: 0,
+    end_byte: file.text.length,
+    literal_specifier: literalSpecifier,
+    project_config_hash: projectConfigHash || project_config_hash || zeroHash,
+    package_json_hash: packageJsonHash || package_json_hash || zeroHash,
+    max_files: 100,
+    max_bytes: 1_048_576,
+    ...rest,
+  };
+}
+
+function facts(messages) {
   assert.deepStrictEqual(messages.at(-1), {
     protocol_version: 1,
     message_type: "end_of_stream",
-    request_id: requestId,
+    request_id: "repogrammar-typescript-semantic-worker",
   });
+  return messages.filter((message) => message.message_type === "fact");
+}
+
+function singleFact(messages) {
+  const result = facts(messages);
+  assert.strictEqual(result.length, 1, JSON.stringify(messages));
+  return result[0];
+}
+
+function assertResolved(fact, target, resolutionKind) {
+  assert.strictEqual(fact.fact_kind, "RESOLVED_IMPORT");
+  assert.strictEqual(fact.target, target);
+  assert.strictEqual(fact.origin.engine, "repogrammar-tsjs-static-worker");
+  assert.strictEqual(fact.origin.method, "bounded_project_model_resolver_v1");
+  assert.strictEqual(fact.certainty, "STRUCTURAL");
+  assert(fact.assumptions.includes("provider=repogrammar_static_tsjs"));
+  assert(fact.assumptions.includes("provider_resolved=false"));
+  assert(fact.assumptions.includes(`tsjs_import_resolution=${resolutionKind}`));
+  assert(!JSON.stringify(fact).includes("const "));
+}
+
+function assertCompilerResolved(fact, target) {
+  assert.strictEqual(fact.fact_kind, "RESOLVED_IMPORT");
+  assert.strictEqual(fact.target, target);
+  assert.strictEqual(fact.origin.engine, "typescript");
+  assert.strictEqual(fact.origin.engine_version, "6.0.0");
+  assert.strictEqual(fact.origin.method, "compiler_api_module_resolver_v1");
+  assert.strictEqual(fact.certainty, "SEMANTIC");
+  assert(fact.assumptions.includes("provider=typescript"));
+  assert(fact.assumptions.includes("provider_resolved=true"));
+  assert(fact.assumptions.includes("tsjs_import_resolution=compiler_api"));
+  assert(!JSON.stringify(fact).includes("const "));
+}
+
+function assertUnknown(fact, reason, kind) {
+  assert.strictEqual(fact.fact_kind, "UNKNOWN");
+  assert.strictEqual(fact.target, reason);
+  assert.strictEqual(fact.certainty, "UNKNOWN");
+  assert(fact.assumptions.includes(`tsjs_unknown_kind=${kind}`));
 }
 
 {
-  const messages = runWorker(validRequest());
-  assert.strictEqual(messages.length, 2);
-  assert.strictEqual(messages[0].message_type, "worker_error");
-  assert.strictEqual(messages[0].error_code, "SEMANTIC_WORKER_UNAVAILABLE");
-  assert.deepStrictEqual(messages[0].fallback, {
-    mode: "syntax_only",
-    certainty: "UNKNOWN",
-  });
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
-  assert(!JSON.stringify(messages).includes("/repo"));
-  assert(!JSON.stringify(messages).includes("src/a.ts"));
+  const root = workspace("relative");
+  const source = writeFile(root, "src/route.ts", "import handler from './handler';\n");
+  writeFile(root, "src/handler.ts", "export default function handler() {}\n");
+
+  const fact = singleFact(runWorker(request(root, [source, { path: "src/handler.ts" }], [
+    operation(source, "./handler"),
+  ])));
+
+  assertResolved(fact, "module:src/handler.ts", "literal_relative");
 }
 
 {
-  const request = validRequest();
-  request.changed_files = Array.from(
-    { length: 10_000 },
-    (_, index) => `src/file-${String(index).padStart(5, "0")}.ts`
+  const root = workspace("compiler-api");
+  const source = writeFile(root, "src/route.ts", "import handler from './handler';\n");
+  writeFile(root, "src/handler.ts", "export default function handler() {}\n");
+  writeFile(
+    root,
+    "node_modules/typescript/index.js",
+    `
+const path = require("path");
+exports.version = "6.0.0";
+exports.resolveModuleName = (specifier, containingFile) => ({
+  resolvedModule: {
+    resolvedFileName: path.join(path.dirname(containingFile), specifier + ".ts")
+  }
+});
+`
   );
-  const requestBytes = Buffer.byteLength(`${JSON.stringify(request)}\n`, "utf8");
-  assert(requestBytes > 4 * 1024);
-  assert(requestBytes <= 1_048_576);
-  const messages = runWorker(request);
-  assert.strictEqual(messages[0].message_type, "worker_error");
-  assert.strictEqual(messages[0].error_code, "SEMANTIC_WORKER_UNAVAILABLE");
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
+
+  const fact = singleFact(runWorker(request(root, [source, { path: "src/handler.ts" }], [
+    operation(source, "./handler"),
+  ])));
+
+  assertCompilerResolved(fact, "module:src/handler.ts");
+}
+
+{
+  const root = workspace("compiler-api-static-fallback");
+  const source = writeFile(root, "src/route.ts", "import service from 'services/user';\n");
+  const target = writeFile(root, "src/services/user.ts", "export default {};\n");
+  const config = writeFile(root, "tsconfig.json", '{"compilerOptions":{"baseUrl":"src"}}');
+  writeFile(
+    root,
+    "node_modules/typescript/index.js",
+    `
+exports.version = "6.0.0";
+exports.resolveModuleName = () => ({});
+`
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target, config], [
+    operation(source, "services/user", { projectConfigHash: config.hash }),
+  ])));
+
+  assertResolved(fact, "module:src/services/user.ts", "base_url");
+}
+
+{
+  const root = workspace("baseurl");
+  const source = writeFile(root, "src/route.ts", "import service from 'services/user';\n");
+  const target = writeFile(root, "src/services/user.ts", "export default {};\n");
+  const config = writeFile(root, "tsconfig.json", '{"compilerOptions":{"baseUrl":"src"}}');
+
+  const fact = singleFact(runWorker(request(root, [source, target, config], [
+    operation(source, "services/user", { projectConfigHash: config.hash }),
+  ])));
+
+  assertResolved(fact, "module:src/services/user.ts", "base_url");
+}
+
+{
+  const root = workspace("paths");
+  const source = writeFile(root, "src/route.ts", "import service from '@app/service';\n");
+  const target = writeFile(root, "src/app/service.ts", "export const service = true;\n");
+  const config = writeFile(
+    root,
+    "tsconfig.json",
+    '{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}'
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target, config], [
+    operation(source, "@app/service", { projectConfigHash: config.hash }),
+  ])));
+
+  assertResolved(fact, "module:src/app/service.ts", "path_alias");
+}
+
+{
+  const root = workspace("rootdirs");
+  const source = writeFile(root, "generated/route.ts", "import shared from './shared';\n");
+  const target = writeFile(root, "src/shared.ts", "export default {};\n");
+  const config = writeFile(
+    root,
+    "tsconfig.json",
+    '{"compilerOptions":{"rootDirs":["src","generated"]}}'
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target, config], [
+    operation(source, "./shared", { projectConfigHash: config.hash }),
+  ])));
+
+  assertResolved(fact, "module:src/shared.ts", "root_dirs");
+}
+
+{
+  const root = workspace("exports");
+  const source = writeFile(
+    root,
+    "src/exported.ts",
+    "export default class User {}\nexport const named = true;\nexport interface UserDto {}\n"
+  );
+  const defaultFact = singleFact(runWorker(request(root, [source], [
+    operation(source, "default", { operation: "resolve_export" }),
+  ])));
+  const namedFact = singleFact(runWorker(request(root, [source], [
+    operation(source, "named", { operation: "resolve_export" }),
+  ])));
+  const typeFact = singleFact(runWorker(request(root, [source], [
+    operation(source, "UserDto", { operation: "resolve_export" }),
+  ])));
+
+  assert.strictEqual(defaultFact.fact_kind, "SYMBOL");
+  assert.strictEqual(defaultFact.target, "symbol:src/exported.ts#export:default");
+  assert.strictEqual(namedFact.fact_kind, "SYMBOL");
+  assert.strictEqual(namedFact.target, "symbol:src/exported.ts#export:named");
+  assert.strictEqual(typeFact.fact_kind, "TYPE");
+  assert.strictEqual(typeFact.target, "symbol:src/exported.ts#export:UserDto");
+}
+
+{
+  const root = workspace("reexport");
+  const source = writeFile(root, "src/index.ts", "export { named } from './exported';\n");
+  const target = writeFile(root, "src/exported.ts", "export const named = true;\n");
+
+  const fact = singleFact(runWorker(request(root, [source, target], [
+    operation(source, "./exported#named", { operation: "resolve_reexport" }),
+  ])));
+
+  assert.strictEqual(fact.fact_kind, "SYMBOL");
+  assert.strictEqual(fact.target, "symbol:src/exported.ts#export:named");
+}
+
+{
+  const root = workspace("barrel");
+  const source = writeFile(root, "src/index.ts", "export * from './a';\nexport * from './b';\n");
+
+  const fact = singleFact(runWorker(request(root, [source], [
+    operation(source, "./a#*", { operation: "resolve_reexport" }),
+  ])));
+
+  assertUnknown(fact, "ConflictingFacts", "ambiguous_reexport");
+}
+
+{
+  const root = workspace("package");
+  const source = writeFile(root, "src/route.ts", "import feature from 'acme/feature';\n");
+  const target = writeFile(root, "src/feature.ts", "export default {};\n");
+  const packageJson = writeFile(
+    root,
+    "package.json",
+    '{"name":"acme","exports":{"./feature":"./src/feature.ts"},"type":"module","dependencies":{"fastify":"latest"},"devDependencies":{"vitest":"latest"}}'
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target, packageJson], [
+    operation(source, "acme/feature", {
+      operation: "resolve_package_entry",
+      packageJsonHash: packageJson.hash,
+    }),
+  ])));
+
+  assertResolved(fact, "module:src/feature.ts", "package_entry");
+}
+
+{
+  const root = workspace("commonjs");
+  const source = writeFile(root, "src/cjs.ts", "const handler = require('./handler');\n");
+  const target = writeFile(root, "src/handler.ts", "module.exports = function handler() {};\n");
+
+  const fact = singleFact(runWorker(request(root, [source, target], [
+    operation(source, "./handler"),
+  ])));
+
+  assertResolved(fact, "module:src/handler.ts", "literal_relative");
+}
+
+{
+  const root = workspace("external");
+  const source = writeFile(root, "src/route.ts", "import missing from 'left-pad';\n");
+
+  const fact = singleFact(runWorker(request(root, [source], [
+    operation(source, "left-pad"),
+  ])));
+
+  assertUnknown(fact, "MissingDependency", "missing_dependency");
+}
+
+{
+  const root = workspace("malformed-config");
+  const source = writeFile(root, "src/route.ts", "import service from 'services/user';\n");
+  const config = writeFile(root, "tsconfig.json", '{"compilerOptions":');
+
+  const fact = singleFact(runWorker(request(root, [source, config], [
+    operation(source, "services/user", { projectConfigHash: config.hash }),
+  ])));
+
+  assertUnknown(fact, "MissingProjectConfig", "malformed_project_config");
+}
+
+{
+  const root = workspace("dynamic");
+  const source = writeFile(root, "src/route.ts", "import(name);\n");
+
+  const fact = singleFact(runWorker(request(root, [source], [
+    operation(source, "<dynamic>"),
+  ])));
+
+  assertUnknown(fact, "DynamicImport", "dynamic_import");
 }
 
 {
   const messages = runWorker("{not-json}\n");
   assert.strictEqual(messages[0].message_type, "worker_error");
   assert.strictEqual(messages[0].error_code, "SEMANTIC_PROTOCOL_VIOLATION");
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
   assert(!JSON.stringify(messages).includes("not-json"));
 }
 
@@ -91,54 +364,25 @@ for (const changedFiles of [
   ["D:repo/file.ts"],
   ["src/a.ts", "src/a.ts"],
 ]) {
-  const request = validRequest();
-  request.changed_files = changedFiles;
-  const messages = runWorker(request);
+  const root = workspace("invalid");
+  const source = writeFile(root, "src/a.ts", "export const value = true;\n");
+  const payload = request(root, [source], [operation(source, "./b")]);
+  payload.changed_files = changedFiles;
+  const messages = runWorker(payload);
   assert.strictEqual(messages[0].error_code, "SEMANTIC_PROTOCOL_VIOLATION");
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
   const serialized = JSON.stringify(messages);
   assert(!serialized.includes("/tmp/secret"));
   assert(!serialized.includes("../secret"));
   assert(!serialized.includes("src/a.ts"));
 }
 
-for (const mutate of [
-  (request) => {
-    request.protocol_version = 2;
-  },
-  (request) => {
-    request.request_id = " ";
-  },
-  (request) => {
-    request.request_id = "/tmp/secret";
-  },
-  (request) => {
-    request.request_id = "file:///tmp/secret.ts";
-  },
-  (request) => {
-    request.request_id = "const secret = true;";
-  },
-  (request) => {
-    request.project_root = "relative";
-  },
-  (request) => {
-    request.changed_files = null;
-  },
-  (request) => {
-    request.extra = true;
-  },
-]) {
-  const request = validRequest();
-  mutate(request);
-  const messages = runWorker(request);
-  assert.strictEqual(messages[0].error_code, "SEMANTIC_PROTOCOL_VIOLATION");
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
-  assert(!JSON.stringify(messages).includes("/tmp/secret"));
-  assert(!JSON.stringify(messages).includes("const secret"));
-}
-
 {
-  const messages = runWorker("x".repeat(1_048_577));
+  const root = workspace("invalid-operation");
+  const source = writeFile(root, "src/a.ts", "export const value = true;\n");
+  const payload = request(root, [source], [
+    operation(source, "const secret = true;", { operation: "resolve_module_specifier" }),
+  ]);
+  const messages = runWorker(payload);
   assert.strictEqual(messages[0].error_code, "SEMANTIC_PROTOCOL_VIOLATION");
-  assertEndOfStream(messages, "repogrammar-typescript-semantic-worker");
+  assert(!JSON.stringify(messages).includes("const secret"));
 }

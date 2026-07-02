@@ -31,6 +31,42 @@ impl SemanticWorkerMessageKind {
 pub struct SemanticWorkerRequest {
     pub project_root: String,
     pub changed_files: Vec<String>,
+    pub operations: Vec<SemanticWorkerOperation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SemanticWorkerOperationKind {
+    ResolveModuleSpecifier,
+    ResolveExport,
+    ResolveReexport,
+    ResolvePackageEntry,
+}
+
+impl SemanticWorkerOperationKind {
+    pub fn as_protocol_str(self) -> &'static str {
+        match self {
+            Self::ResolveModuleSpecifier => "resolve_module_specifier",
+            Self::ResolveExport => "resolve_export",
+            Self::ResolveReexport => "resolve_reexport",
+            Self::ResolvePackageEntry => "resolve_package_entry",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticWorkerOperation {
+    pub operation_id: String,
+    pub operation: SemanticWorkerOperationKind,
+    pub path: String,
+    pub content_hash: String,
+    pub code_unit_id: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub literal_specifier: String,
+    pub project_config_hash: String,
+    pub package_json_hash: String,
+    pub max_files: usize,
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +143,7 @@ mod tests {
             "request_id",
             "project_root",
             "changed_files",
+            "operations",
         ] {
             assert!(
                 required.iter().any(|candidate| candidate == field),
@@ -118,6 +155,19 @@ mod tests {
             SEMANTIC_WORKER_PROTOCOL_VERSION
         );
         assert_eq!(schema["properties"]["changed_files"]["uniqueItems"], true);
+        assert_eq!(
+            schema["properties"]["operations"]["items"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["operations"]["items"]["properties"]["operation"]["enum"],
+            json!([
+                "resolve_module_specifier",
+                "resolve_export",
+                "resolve_reexport",
+                "resolve_package_entry"
+            ])
+        );
         let changed_file_pattern = schema["properties"]["changed_files"]["items"]["pattern"]
             .as_str()
             .expect("changed file item must define a path-safety pattern");
@@ -184,6 +234,7 @@ mod tests {
             "repogrammar-typescript-semantic-worker"
         );
         assert_eq!(request["changed_files"], json!(["src/a.ts", "src/b.tsx"]));
+        assert_eq!(request["operations"], json!([]));
     }
 
     #[test]
@@ -307,6 +358,42 @@ mod tests {
             {
                 let mut request = valid_worker_request();
                 request["changed_files"] = json!(["file:///tmp/source.ts"]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"] = Value::Null;
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"] = json!([{"operation":"resolve_module_specifier"}]);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"][0]["path"] = json!("/tmp/source.ts");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"][0]["content_hash"] = json!("sha256:fixture");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"][0]["start_byte"] = json!(2);
+                request["operations"][0]["end_byte"] = json!(1);
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"][0]["literal_specifier"] = json!("import x from 'secret'");
+                request
+            },
+            {
+                let mut request = valid_worker_request();
+                request["operations"][0]["max_files"] = json!(0);
                 request
             },
         ];
@@ -508,6 +595,7 @@ mod tests {
                 "request_id",
                 "project_root",
                 "changed_files",
+                "operations",
             ],
         )?;
         validate_required_fields(
@@ -517,6 +605,7 @@ mod tests {
                 "request_id",
                 "project_root",
                 "changed_files",
+                "operations",
             ],
         )?;
 
@@ -552,6 +641,83 @@ mod tests {
             }
         }
 
+        let operations = object
+            .get("operations")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "operations must be an array".to_string())?;
+        for operation in operations {
+            validate_worker_operation(operation)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_worker_operation(value: &Value) -> Result<(), String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "operation must be a JSON object".to_string())?;
+        validate_allowed_fields(
+            object,
+            &[
+                "operation_id",
+                "operation",
+                "path",
+                "content_hash",
+                "code_unit_id",
+                "start_byte",
+                "end_byte",
+                "literal_specifier",
+                "project_config_hash",
+                "package_json_hash",
+                "max_files",
+                "max_bytes",
+            ],
+        )?;
+        validate_required_fields(
+            object,
+            &[
+                "operation_id",
+                "operation",
+                "path",
+                "content_hash",
+                "code_unit_id",
+                "start_byte",
+                "end_byte",
+                "literal_specifier",
+                "project_config_hash",
+                "package_json_hash",
+                "max_files",
+                "max_bytes",
+            ],
+        )?;
+        validate_protocol_text(required_string(object, "operation_id")?, "operation_id")?;
+        match required_string(object, "operation")? {
+            "resolve_module_specifier"
+            | "resolve_export"
+            | "resolve_reexport"
+            | "resolve_package_entry" => {}
+            _ => return Err("operation token is not supported".to_string()),
+        }
+        validate_request_changed_file(required_string(object, "path")?)?;
+        ContentHash::new(required_string(object, "content_hash")?)
+            .map_err(|error| format!("invalid operation content_hash: {error}"))?;
+        required_string(object, "code_unit_id")?;
+        validate_protocol_text(
+            required_string(object, "literal_specifier")?,
+            "literal_specifier",
+        )?;
+        ContentHash::new(required_string(object, "project_config_hash")?)
+            .map_err(|error| format!("invalid project_config_hash: {error}"))?;
+        ContentHash::new(required_string(object, "package_json_hash")?)
+            .map_err(|error| format!("invalid package_json_hash: {error}"))?;
+        let start_byte = required_u64(object, "start_byte")?;
+        let end_byte = required_u64(object, "end_byte")?;
+        if start_byte > end_byte {
+            return Err("operation range is invalid".to_string());
+        }
+        if required_u64(object, "max_files")? == 0 || required_u64(object, "max_bytes")? == 0 {
+            return Err("operation bounds must be positive".to_string());
+        }
         Ok(())
     }
 
@@ -874,7 +1040,21 @@ mod tests {
             "protocol_version": 1,
             "request_id": "repogrammar-typescript-semantic-worker",
             "project_root": "/repo",
-            "changed_files": ["src/a.ts", "src/b.tsx"]
+            "changed_files": ["src/a.ts", "src/b.tsx"],
+            "operations": [{
+                "operation": "resolve_module_specifier",
+                "operation_id": "op-000001",
+                "path": "src/a.ts",
+                "content_hash": "sha256:7c6e428e33561b59254d2efa13efac30fc391e9dc5d42f6c58132aaa8b2c8a03",
+                "code_unit_id": "unit:src/a.ts#module:0-42:0",
+                "start_byte": 0,
+                "end_byte": 42,
+                "literal_specifier": "./b",
+                "project_config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "package_json_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "max_files": 100,
+                "max_bytes": 1048576
+            }]
         })
     }
 }

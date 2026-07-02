@@ -245,7 +245,9 @@ Mechanism buckets should be actionable analyzer/provider codes, for example
 `python_import_graph`, `pytest_fixture_graph`, `fastapi_dependency_graph`,
 `python_package_reexport_model`, `python_star_import_model`,
 `pytest_plugin_fixture_model`,
-`typescript_paths_resolver`, `typescript_export_graph`,
+`typescript_module_resolver`, `typescript_paths_resolver`,
+`typescript_rootdirs_model`, `typescript_package_entry_model`,
+`typescript_commonjs_alias_model`, `typescript_export_graph`,
 `fastify_receiver_model`, `prisma_client_model`, `drizzle_db_model`,
 `rust_module_graph`, `cargo_feature_cfg_model`, `rust_macro_boundary`,
 `rust_trait_dispatch_model`, `java_spring_route_literal_model`,
@@ -256,6 +258,12 @@ source-free aggregate inventory for persisted semantic `UNKNOWN` facts. They do
 not claim to count every query-time, family-store, preflight, or storage
 fallback `UNKNOWN`. Unknown-rate reduction must not be reported as quality
 improvement unless false certainty is also measured or controlled.
+For TS/JS import/export unknowns, the inventory may suppress a parser-origin
+UNKNOWN only when a same-generation TypeScript compiler fact with
+`provider=typescript`, `provider_resolved=true`, the matching
+`query_operation`, and the same repo-relative path, strict hash, code-unit id,
+and byte range proves the operation. Static worker fallback facts with
+`provider_resolved=false` remain context and do not suppress UNKNOWNs.
 
 The repository-level UNKNOWN regression benchmark is documented in
 `docs/experiments/unknown-regression-benchmark.md`. It pins release-fixture

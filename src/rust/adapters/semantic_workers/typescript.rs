@@ -11,10 +11,11 @@ use crate::core::model::{
 };
 use crate::core::policy::paths::looks_like_absolute_path;
 use crate::ports::semantic_worker::{
-    SemanticWorker, SemanticWorkerError, SemanticWorkerRequest, SEMANTIC_VERSION_UNSUPPORTED_CODE,
-    SEMANTIC_WORKER_PROTOCOL_VERSION,
+    SemanticWorker, SemanticWorkerError, SemanticWorkerOperation, SemanticWorkerRequest,
+    SEMANTIC_VERSION_UNSUPPORTED_CODE, SEMANTIC_WORKER_PROTOCOL_VERSION,
 };
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -81,10 +82,14 @@ impl SemanticWorker for TypeScriptSemanticWorkerBoundary {
     ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
         validate_request(&mut request)?;
         let allowed_paths = normalized_changed_files(&request.changed_files);
+        let operation_scope = operation_scope(&request.operations);
         let output = self.run_worker(request)?;
-        parse_worker_output(&output, REQUEST_ID, &allowed_paths)
+        parse_worker_output_with_operations(&output, REQUEST_ID, &allowed_paths, &operation_scope)
     }
 }
+
+type OperationEvidenceKey = (String, String, String, usize, usize);
+type OperationScope = BTreeMap<OperationEvidenceKey, BTreeSet<(String, String)>>;
 
 fn parse_major_version(version: &str) -> Option<u16> {
     version.split('.').next()?.parse().ok()
@@ -98,6 +103,58 @@ fn validate_request(request: &mut SemanticWorkerRequest) -> Result<(), SemanticW
                 "semantic worker changed files must be repository-relative".to_string(),
             )
         })?;
+    }
+    for operation in &request.operations {
+        validate_operation(operation)?;
+    }
+    Ok(())
+}
+
+fn validate_operation(operation: &SemanticWorkerOperation) -> Result<(), SemanticWorkerError> {
+    protocol_text(&operation.operation_id, 0).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation id must be sanitized".to_string(),
+        )
+    })?;
+    validate_repo_relative_path(&operation.path).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation path must be repository-relative".to_string(),
+        )
+    })?;
+    ContentHash::new(operation.content_hash.clone()).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation content hash must be strict SHA-256".to_string(),
+        )
+    })?;
+    CodeUnitId::new(operation.code_unit_id.clone()).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation code unit id must be valid".to_string(),
+        )
+    })?;
+    if operation.start_byte > operation.end_byte {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation range must be valid".to_string(),
+        ));
+    }
+    protocol_text(&operation.literal_specifier, 0).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation specifier must be sanitized".to_string(),
+        )
+    })?;
+    ContentHash::new(operation.project_config_hash.clone()).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker project config hash must be strict SHA-256".to_string(),
+        )
+    })?;
+    ContentHash::new(operation.package_json_hash.clone()).map_err(|_| {
+        SemanticWorkerError::ProtocolViolation(
+            "semantic worker package json hash must be strict SHA-256".to_string(),
+        )
+    })?;
+    if operation.max_files == 0 || operation.max_bytes == 0 {
+        return Err(SemanticWorkerError::ProtocolViolation(
+            "semantic worker operation bounds must be positive".to_string(),
+        ));
     }
     Ok(())
 }
@@ -134,6 +191,26 @@ fn validate_project_root(project_root: &str) -> Result<String, SemanticWorkerErr
 
 fn normalized_changed_files(changed_files: &[String]) -> BTreeSet<String> {
     changed_files.iter().cloned().collect()
+}
+
+fn operation_scope(operations: &[SemanticWorkerOperation]) -> OperationScope {
+    let mut scope = BTreeMap::new();
+    for operation in operations {
+        scope
+            .entry((
+                operation.path.clone(),
+                operation.content_hash.clone(),
+                operation.code_unit_id.clone(),
+                operation.start_byte,
+                operation.end_byte,
+            ))
+            .or_insert_with(BTreeSet::new)
+            .insert((
+                operation.operation_id.clone(),
+                operation.operation.as_protocol_str().to_string(),
+            ));
+    }
+    scope
 }
 
 impl TypeScriptSemanticWorkerBoundary {
@@ -234,11 +311,30 @@ fn worker_request_bytes(
 ) -> Result<Vec<u8>, SemanticWorkerError> {
     request.changed_files.sort();
     request.changed_files.dedup();
+    request.operations.sort_by(|left, right| {
+        (
+            left.path.as_str(),
+            left.start_byte,
+            left.end_byte,
+            left.operation_id.as_str(),
+            left.operation.as_protocol_str(),
+            left.literal_specifier.as_str(),
+        )
+            .cmp(&(
+                right.path.as_str(),
+                right.start_byte,
+                right.end_byte,
+                right.operation_id.as_str(),
+                right.operation.as_protocol_str(),
+                right.literal_specifier.as_str(),
+            ))
+    });
     let payload = json!({
         "protocol_version": SEMANTIC_WORKER_PROTOCOL_VERSION,
         "request_id": REQUEST_ID,
         "project_root": request.project_root,
         "changed_files": request.changed_files,
+        "operations": request.operations.iter().map(operation_json).collect::<Vec<_>>(),
     });
     let request_bytes = serde_json::to_vec(&payload).map_err(|_| {
         SemanticWorkerError::ProtocolViolation(
@@ -255,6 +351,23 @@ fn worker_request_bytes(
         ));
     }
     Ok(request_bytes)
+}
+
+fn operation_json(operation: &SemanticWorkerOperation) -> Value {
+    json!({
+        "operation_id": operation.operation_id,
+        "operation": operation.operation.as_protocol_str(),
+        "path": operation.path,
+        "content_hash": operation.content_hash,
+        "code_unit_id": operation.code_unit_id,
+        "start_byte": operation.start_byte,
+        "end_byte": operation.end_byte,
+        "literal_specifier": operation.literal_specifier,
+        "project_config_hash": operation.project_config_hash,
+        "package_json_hash": operation.package_json_hash,
+        "max_files": operation.max_files,
+        "max_bytes": operation.max_bytes,
+    })
 }
 
 fn read_pipe(mut pipe: impl Read) -> Result<Vec<u8>, SemanticWorkerError> {
@@ -298,10 +411,25 @@ fn join_reader_before_deadline(
     join_reader(reader)
 }
 
+#[cfg(test)]
 fn parse_worker_output(
     output: &str,
     expected_request_id: &str,
     allowed_paths: &BTreeSet<String>,
+) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
+    parse_worker_output_with_operations(
+        output,
+        expected_request_id,
+        allowed_paths,
+        &BTreeMap::new(),
+    )
+}
+
+fn parse_worker_output_with_operations(
+    output: &str,
+    expected_request_id: &str,
+    allowed_paths: &BTreeSet<String>,
+    operation_scope: &OperationScope,
 ) -> Result<Vec<SemanticFact>, SemanticWorkerError> {
     let mut facts = Vec::new();
     let mut saw_end_of_stream = false;
@@ -346,7 +474,7 @@ fn parse_worker_output(
         match message_type {
             "fact" => {
                 let fact = parse_fact_message(object, line_number)?;
-                validate_fact_scope(&fact, allowed_paths, line_number)?;
+                validate_fact_scope(&fact, allowed_paths, operation_scope, line_number)?;
                 facts.push(fact);
             }
             "progress" => validate_progress_message(object, line_number)?,
@@ -384,8 +512,37 @@ fn parse_worker_output(
 fn validate_fact_scope(
     fact: &SemanticFact,
     allowed_paths: &BTreeSet<String>,
+    operation_scope: &OperationScope,
     line_number: usize,
 ) -> Result<(), SemanticWorkerError> {
+    if !operation_scope.is_empty() {
+        let key = (
+            fact.evidence.provenance.path.clone(),
+            fact.evidence.provenance.content_hash.as_str().to_string(),
+            fact.evidence.code_unit_id.as_str().to_string(),
+            fact.evidence.range.start_byte,
+            fact.evidence.range.end_byte,
+        );
+        let Some(allowed_operations) = operation_scope.get(&key) else {
+            return Err(protocol_error(
+                line_number,
+                "fact evidence did not match a requested operation",
+            ));
+        };
+        let operation_id = fact_assumption_value(fact, "operation_id=");
+        let operation = fact_assumption_value(fact, "query_operation=");
+        if !operation_id.zip(operation).is_some_and(|candidate| {
+            allowed_operations
+                .iter()
+                .any(|allowed| allowed.0 == candidate.0 && allowed.1 == candidate.1)
+        }) {
+            return Err(protocol_error(
+                line_number,
+                "fact operation provenance did not match a requested operation",
+            ));
+        }
+        return Ok(());
+    }
     if allowed_paths.contains(&fact.evidence.provenance.path) {
         Ok(())
     } else {
@@ -394,6 +551,12 @@ fn validate_fact_scope(
             "fact evidence path was not requested",
         ))
     }
+}
+
+fn fact_assumption_value<'a>(fact: &'a SemanticFact, prefix: &str) -> Option<&'a str> {
+    fact.assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix(prefix))
 }
 
 fn validate_envelope(
@@ -1083,6 +1246,86 @@ mod tests {
     }
 
     #[test]
+    fn worker_output_parser_matches_requested_operation_evidence() {
+        let operation = SemanticWorkerOperation {
+            operation_id: "op-000001".to_string(),
+            operation:
+                crate::ports::semantic_worker::SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            path: "src/handlers/user.ts".to_string(),
+            content_hash: "sha256:7c6e428e33561b59254d2efa13efac30fc391e9dc5d42f6c58132aaa8b2c8a03"
+                .to_string(),
+            code_unit_id: "unit:src/handlers/user.ts#import:express".to_string(),
+            start_byte: 0,
+            end_byte: 42,
+            literal_specifier: "express".to_string(),
+            project_config_hash:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            package_json_hash:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            max_files: 10,
+            max_bytes: 1024,
+        };
+        let reexport_operation = SemanticWorkerOperation {
+            operation_id: "op-000002".to_string(),
+            operation: crate::ports::semantic_worker::SemanticWorkerOperationKind::ResolveReexport,
+            literal_specifier: "express#default".to_string(),
+            ..operation.clone()
+        };
+        let scope = operation_scope(&[operation, reexport_operation]);
+        let mut fact = valid_fact_message();
+        fact["assumptions"] = json!([
+            "operation_id=op-000001",
+            "query_operation=resolve_module_specifier"
+        ]);
+
+        let accepted = parse_worker_output_with_operations(
+            &ndjson(vec![fact.clone(), valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &requested_fact_paths(),
+            &scope,
+        )
+        .expect("matching operation evidence should parse");
+        assert_eq!(accepted.len(), 1);
+
+        fact["assumptions"] = json!(["operation_id=op-000002", "query_operation=resolve_reexport"]);
+        let accepted = parse_worker_output_with_operations(
+            &ndjson(vec![fact.clone(), valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &requested_fact_paths(),
+            &scope,
+        )
+        .expect("second operation with matching evidence should parse");
+        assert_eq!(accepted.len(), 1);
+
+        fact["assumptions"] = json!(["query_operation=resolve_module_specifier"]);
+        let error = parse_worker_output_with_operations(
+            &ndjson(vec![fact.clone(), valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &requested_fact_paths(),
+            &scope,
+        )
+        .expect_err("missing operation id must fail");
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+
+        fact["assumptions"] = json!([
+            "operation_id=op-000001",
+            "query_operation=resolve_module_specifier"
+        ]);
+        fact["evidence"]["content_hash"] =
+            json!("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        let error = parse_worker_output_with_operations(
+            &ndjson(vec![fact, valid_end_of_stream_message()]),
+            REQUEST_ID,
+            &requested_fact_paths(),
+            &scope,
+        )
+        .expect_err("mismatched operation hash must fail");
+        assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
+    }
+
+    #[test]
     fn unsupported_protocol_fields_do_not_leak_field_names() {
         let mut fact = valid_fact_message();
         fact["/tmp/secret UNIQUE_SENTINEL"] = json!(true);
@@ -1185,6 +1428,7 @@ mod tests {
                 "src/a.ts".to_string(),
                 "src/b.tsx".to_string(),
             ],
+            operations: Vec::new(),
         })
         .expect("request payload must serialize");
         let payload: Value = serde_json::from_slice(&payload).expect("payload must parse");
@@ -1201,6 +1445,7 @@ mod tests {
         let payload = worker_request_bytes(SemanticWorkerRequest {
             project_root: "/repo".to_string(),
             changed_files,
+            operations: Vec::new(),
         })
         .expect("many changed files below the worker stdin limit should serialize");
 
@@ -1240,6 +1485,7 @@ mod tests {
             .analyze_project(SemanticWorkerRequest {
                 project_root: workspace.path().display().to_string(),
                 changed_files: vec!["src/handlers/user.ts".to_string()],
+                operations: Vec::new(),
             })
             .expect("worker process should return facts");
 
@@ -1311,6 +1557,7 @@ mod tests {
                     "src/a.ts".to_string(),
                     "src/z.ts".to_string(),
                 ],
+                operations: Vec::new(),
             })
             .expect("worker should accept EOS-only response");
 
@@ -1344,6 +1591,7 @@ mod tests {
             .analyze_project(SemanticWorkerRequest {
                 project_root: workspace.path().display().to_string(),
                 changed_files: Vec::new(),
+                operations: Vec::new(),
             })
             .expect_err("facts for an empty request scope must fail");
 
@@ -1394,6 +1642,7 @@ mod tests {
                 .analyze_project(SemanticWorkerRequest {
                     project_root: workspace.path().display().to_string(),
                     changed_files: vec![changed_file.to_string()],
+                    operations: Vec::new(),
                 })
                 .expect_err("unsafe changed file must be rejected before spawn");
 
@@ -1407,6 +1656,7 @@ mod tests {
             .analyze_project(SemanticWorkerRequest {
                 project_root: workspace.path().display().to_string(),
                 changed_files: Vec::new(),
+                operations: Vec::new(),
             })
             .expect_err("relative worker executable must be rejected before spawn");
         assert!(matches!(error, SemanticWorkerError::Unavailable(_)));
@@ -1457,6 +1707,7 @@ mod tests {
                 .analyze_project(SemanticWorkerRequest {
                     project_root,
                     changed_files: Vec::new(),
+                    operations: Vec::new(),
                 })
                 .expect_err("invalid project root must be rejected");
             assert!(matches!(error, SemanticWorkerError::ProtocolViolation(_)));
@@ -1474,6 +1725,7 @@ mod tests {
             .analyze_project(SemanticWorkerRequest {
                 project_root: link.display().to_string(),
                 changed_files: Vec::new(),
+                operations: Vec::new(),
             })
             .expect_err("symlink project root must be rejected");
 
@@ -1485,6 +1737,7 @@ mod tests {
         SemanticWorkerRequest {
             project_root: workspace.path().display().to_string(),
             changed_files: vec!["src/handlers/user.ts".to_string()],
+            operations: Vec::new(),
         }
     }
 
@@ -1497,6 +1750,7 @@ mod tests {
                 return SemanticWorkerRequest {
                     project_root: project_root.to_string(),
                     changed_files,
+                    operations: Vec::new(),
                 };
             }
             assert!(
@@ -1541,6 +1795,7 @@ mod tests {
             "request_id": REQUEST_ID,
             "project_root": project_root,
             "changed_files": changed_files,
+            "operations": [],
         }))
         .expect("request serialization should not fail")
         .len()

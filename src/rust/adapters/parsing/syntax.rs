@@ -364,6 +364,7 @@ fn tsjs_import_resolution_facts(
                         reason: "DynamicImport",
                         affected_claim: "tsjs_import_resolution",
                         kind: "dynamic_import",
+                        literal_specifier: None,
                         note: "dynamic TS/JS import expression is not resolved",
                     },
                 )?,
@@ -383,6 +384,7 @@ fn tsjs_import_resolution_facts(
                         reason: "BuildVariantAmbiguity",
                         affected_claim: "tsjs_import_resolution",
                         kind: "conditional_require",
+                        literal_specifier: None,
                         note: "conditional TS/JS require call is not resolved",
                     },
                 )?,
@@ -402,6 +404,7 @@ fn tsjs_import_resolution_facts(
                         reason: "DynamicImport",
                         affected_claim: "tsjs_import_resolution",
                         kind: "dynamic_require",
+                        literal_specifier: None,
                         note: "dynamic TS/JS require call is not resolved",
                     },
                 )?,
@@ -421,6 +424,7 @@ fn tsjs_import_resolution_facts(
                         reason: "ConflictingFacts",
                         affected_claim: "tsjs_reexport_resolution",
                         kind: "ambiguous_reexport",
+                        literal_specifier: None,
                         note: "star re-export is ambiguous without a semantic provider",
                     },
                 )?,
@@ -446,6 +450,7 @@ fn tsjs_import_resolution_facts(
                         module_unit,
                         line_start,
                         line_end,
+                        &specifier,
                         &path,
                         resolution_kind,
                     )?,
@@ -462,6 +467,7 @@ fn tsjs_import_resolution_facts(
                             reason,
                             affected_claim: "tsjs_import_resolution",
                             kind,
+                            literal_specifier: Some(&specifier),
                             note: "bounded TS/JS import resolution could not prove a unique target",
                         },
                     )?,
@@ -516,6 +522,7 @@ fn tsjs_resolved_import_fact(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
+    literal_specifier: &str,
     target_path: &str,
     resolution_kind: &'static str,
 ) -> Result<SemanticFact, ParseError> {
@@ -543,16 +550,18 @@ fn tsjs_resolved_import_fact(
         .map_err(ParseError::Internal)?,
         assumptions: vec![
             format!("tsjs_import_resolution={resolution_kind}"),
+            format!("literal_specifier={literal_specifier}"),
             "provider_resolved=false".to_string(),
         ],
     })
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TsJsUnknownSpec {
+struct TsJsUnknownSpec<'a> {
     reason: &'static str,
     affected_claim: &'static str,
     kind: &'static str,
+    literal_specifier: Option<&'a str>,
     note: &'static str,
 }
 
@@ -561,7 +570,7 @@ fn tsjs_source_unknown_fact(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
-    spec: TsJsUnknownSpec,
+    spec: TsJsUnknownSpec<'_>,
 ) -> Result<SemanticFact, ParseError> {
     Ok(SemanticFact {
         kind: SemanticFactKind::Unknown,
@@ -585,10 +594,16 @@ fn tsjs_source_unknown_fact(
             spec.note,
         )
         .map_err(ParseError::Internal)?,
-        assumptions: vec![
-            format!("affected_claim={}", spec.affected_claim),
-            format!("tsjs_unknown_kind={}", spec.kind),
-        ],
+        assumptions: {
+            let mut assumptions = vec![
+                format!("affected_claim={}", spec.affected_claim),
+                format!("tsjs_unknown_kind={}", spec.kind),
+            ];
+            if let Some(literal_specifier) = spec.literal_specifier {
+                assumptions.push(format!("literal_specifier={literal_specifier}"));
+            }
+            assumptions
+        },
     })
 }
 
