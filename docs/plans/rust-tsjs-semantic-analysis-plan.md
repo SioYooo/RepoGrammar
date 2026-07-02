@@ -55,6 +55,15 @@ unavailable Cargo, unreadable project configuration, or missing manifest
 candidates. It rejects requests that claim build-script or proc-macro execution
 and does not prove Rust symbol/type/call/family support.
 
+The transitional TS/JS syntax path now carries a bounded project-context slice:
+root `tsconfig.json`/`jsconfig.json` `paths` aliases and safe `rootDirs` entries
+are parsed as structural project metadata, and unique repo-local literal
+relative, path-alias, or rootDirs imports can become `STRUCTURAL`
+`RESOLVED_IMPORT` facts. Direct relative resolution wins before rootDirs
+fallback. Unresolved or conflicting rootDirs candidates remain typed
+`UNKNOWN`; these facts are context/abstention evidence only and do not prove
+TypeScript compiler-backed semantics or family support.
+
 ## Research Sources
 
 Primary sources and high-quality papers reviewed on 2026-06-29:

@@ -71,8 +71,9 @@ bounded Express, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle shapes,
 typed `UNKNOWN` facts for dynamic, unsafe, or unresolved
 receiver/runner/support-target/framework-magic boundaries, and structural
 project-config facts for bounded `package.json`, `tsconfig.json`,
-`jsconfig.json`, Jest config, and Vitest config inventory. Project-config facts
-remain context only. Only application-layer `repogrammar-tsjs-derived`
+`jsconfig.json`, Jest config, and Vitest config inventory, including safe JSON
+path-alias and rootDirs metadata. Project-config facts remain context only.
+Only application-layer `repogrammar-tsjs-derived`
 `DATAFLOW_DERIVED` facts with exact whitelisted targets and framework-specific
 `derived_from=tsjs_<framework>_structural_anchors` assumptions can support
 conservative TS/JS families, and those families require repeated compatible

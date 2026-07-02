@@ -103,12 +103,13 @@ Some unknowns block only specific claims:
   other exact-anchor units in the same repository can still form a family when
   they have enough independent compatible support.
 - TS/JS dynamic imports, conditional or non-literal `require`, unresolved
-  repo-local imports, unresolved or conflicting path aliases, ambiguous star
-  re-exports, and missing ambient test-runner project context must remain typed
-  `UNKNOWN`. These unknowns may be blocking only when they affect framework
-  identity, runner/receiver binding, support target, or another emitted family
-  claim; otherwise they remain context/read-plan guard evidence and must not be
-  guessed away.
+  repo-local imports, unresolved or conflicting path aliases, unresolved or
+  conflicting rootDirs candidates, ambiguous star re-exports, and missing
+  ambient test-runner project context must remain typed `UNKNOWN`. These
+  unknowns may be blocking only when they affect framework identity,
+  runner/receiver binding, support target, or another emitted family claim;
+  otherwise they remain context/read-plan guard evidence and must not be guessed
+  away.
 - The TS/JS parser maps granular v0.2 cases onto the stable reason-code set:
   dynamic `import(...)` is `DynamicImport`; non-literal or conditional
   `require`, dynamic route/test calls, Next server-client/middleware/server
@@ -118,12 +119,13 @@ Some unknowns block only specific claims:
   `FrameworkMagic` or `BuildVariantAmbiguity`; exact local Next dynamic
   segments, route groups, and parallel routes are stored as context assumptions
   on accepted anchors rather than UNKNOWNs by themselves; unresolved relative
-  imports, unresolved path aliases,
+  imports, unresolved path aliases, unresolved rootDirs candidates,
   unresolved Express/Fastify receivers, unresolved Prisma clients, unresolved
   Drizzle db/table bindings, and missing ambient runner or Next package context
   are `UnresolvedImport` or `MissingProjectConfig` as applicable; reassigned or
-  shadowed receivers, unsafe test runner bindings, conflicting path aliases, and
-  ambiguous star re-exports are `ConflictingFacts`. These mappings are
+  shadowed receivers, unsafe test runner bindings, conflicting path aliases,
+  conflicting rootDirs candidates, and ambiguous star re-exports are
+  `ConflictingFacts`. These mappings are
   intentionally conservative and do not create new public reason codes for every
   syntax shape.
 - Rust self-dogfood maps unresolved external modules to `UnresolvedImport`,

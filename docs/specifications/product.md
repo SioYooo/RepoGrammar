@@ -111,11 +111,12 @@ conservative exact-anchor families for Express, Jest/Vitest, Next.js, Fastify,
 Prisma, and Drizzle only when there are at least three complete-link-compatible
 derived support facts and no claim-relevant blocking `UNKNOWN`s. Bounded TS/JS
 project inventory may record package/config test-runner context, Next package
-context, and JSON path aliases, and the syntax parser may record unique
-repo-local literal relative/path-alias imports as `STRUCTURAL` context. Dynamic
-imports, non-literal or conditional `require`, unresolved aliases/imports,
-ambiguous re-exports, dynamic framework magic, raw query builders, and missing
-project context remain typed `UNKNOWN` rather than family support.
+context, JSON path aliases, and safe JSON `rootDirs`, and the syntax parser may
+record unique repo-local literal relative/path-alias/rootDirs imports as
+`STRUCTURAL` context. Dynamic imports, non-literal or conditional `require`,
+unresolved aliases/imports/rootDirs targets, ambiguous re-exports, dynamic
+framework magic, raw query builders, and missing project context remain typed
+`UNKNOWN` rather than family support.
 Jest/Vitest script configs such as `jest.config.ts` or `vitest.config.js` are
 recorded as metadata/typed `UNKNOWN` only; they are not executed and do not by
 themselves provide ambient runner context. React components/hooks remain blocked

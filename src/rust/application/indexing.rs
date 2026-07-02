@@ -1603,6 +1603,7 @@ fn parser_project_context(
     python_module_files.sort_by(|left, right| left.path.cmp(&right.path));
     let tsjs_module_paths = tsjs_module_paths(report);
     let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
+    let tsjs_root_dirs = tsjs_root_dirs_from_project_config(request, report, source_store)?;
     let tsjs_package_dependencies =
         tsjs_package_dependencies_from_project_config(request, report, source_store)?;
     let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
@@ -1652,6 +1653,7 @@ fn parser_project_context(
         python_conftest_files,
         tsjs_module_paths,
         tsjs_path_aliases,
+        tsjs_root_dirs,
         tsjs_package_dependencies,
         tsjs_has_test_runner_context,
         rust_module_paths,
@@ -1810,6 +1812,61 @@ fn tsjs_project_config_target_pattern(base_url: Option<&str>, target: &str) -> O
         return None;
     }
     Some(candidate)
+}
+
+fn tsjs_root_dirs_from_project_config(
+    request: &IndexingRequest,
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+) -> Result<Vec<String>, RepoGrammarError> {
+    let mut root_dirs = BTreeSet::new();
+    for config_path in ["tsconfig.json", "jsconfig.json"] {
+        let Some(file) = report.files.iter().find(|file| {
+            file.language == DiscoveredLanguage::TsJsConfig && file.path == config_path
+        }) else {
+            continue;
+        };
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&source.text) else {
+            continue;
+        };
+        let Some(root_dirs_value) = value
+            .get("compilerOptions")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|compiler_options| compiler_options.get("rootDirs"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        root_dirs.extend(
+            root_dirs_value
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(tsjs_project_config_root_dir),
+        );
+    }
+    Ok(root_dirs.into_iter().collect())
+}
+
+fn tsjs_project_config_root_dir(root_dir: &str) -> Option<String> {
+    let normalized = root_dir
+        .trim()
+        .trim_start_matches("./")
+        .trim_end_matches('/');
+    if normalized.is_empty() || normalized.contains('*') || normalized.contains('?') {
+        return None;
+    }
+    if validate_repo_relative_path(normalized).is_err() {
+        return None;
+    }
+    Some(normalized.to_string())
 }
 
 fn tsjs_has_test_runner_context(
@@ -7208,7 +7265,7 @@ extraPaths = ["src/lib", "C:/secret"]
         .expect("write package");
         fs::write(
             workspace.path().join("tsconfig.json"),
-            r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app":["app.ts"],"@lib/*":["lib/*"],"@unsafe/*":["../outside/*"]}}}"#,
+            r#"{"compilerOptions":{"baseUrl":"src","rootDirs":["src","generated","../outside","src/*"],"paths":{"@app":["app.ts"],"@lib/*":["lib/*"],"@unsafe/*":["../outside/*"]}}}"#,
         )
         .expect("write tsconfig");
         fs::write(
@@ -7265,6 +7322,7 @@ extraPaths = ["src/lib", "C:/secret"]
             );
             assert_eq!(context.tsjs_path_aliases[3].alias_pattern, "@test/*");
             assert_eq!(context.tsjs_path_aliases[3].target_patterns, ["tests/*"]);
+            assert_eq!(context.tsjs_root_dirs, ["generated", "src"]);
             assert!(context.tsjs_has_test_runner_context);
             assert!(context.tsjs_module_paths.iter().all(|path| {
                 (path.ends_with(".ts") || path.ends_with(".js"))
