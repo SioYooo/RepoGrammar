@@ -149,11 +149,16 @@ Some unknowns block only specific claims:
   `java_spring_controller_identity`, `java_spring_framework_identity`,
   `java_spring_repository_identity`, or `java_family_membership`. Nonliteral
   Spring MVC route paths, Spring Boot component scans, dependency injection,
-  AOP/proxy behavior, generated Spring Data implementations, and classpath or
-  Maven/Gradle-sensitive facts remain explicit `UNKNOWN` subclaims and must not
-  be used as proof of runtime equivalence. Java/Spring support must not be
-  guessed from annotation simple names, custom composed annotations, directory
-  names, dependency filenames, or fact text substrings.
+  AOP/proxy behavior, and generated Spring Data implementations remain explicit
+  non-blocking `UNKNOWN` subclaims when exact anchor identity is otherwise
+  supported: `java_spring_route_path`, `java_spring_component_scan`,
+  `java_spring_dependency_injection`, `java_spring_proxy_semantics`, and
+  `java_spring_generated_repository`. Classpath or Maven/Gradle-sensitive facts
+  remain unsupported context unless a later project/module-level representation
+  is introduced. These subclaims must not be used as proof of runtime
+  equivalence. Java/Spring support must not be guessed from annotation simple
+  names, custom composed annotations, directory names, dependency filenames, or
+  fact text substrings.
 - Fuzzy path or path-suffix query targets that match evidence in more than one
   stored family must become a blocking `InsufficientSupport` `UNKNOWN` for
   `query target ambiguity`. The recovery guidance should name the candidate

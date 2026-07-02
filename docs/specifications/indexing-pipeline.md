@@ -152,14 +152,24 @@ nonliteral route paths, route mappings outside exact controller classes,
 missing project/classpath context, dependency injection, component scan, AOP
 proxy behavior, repository factories, Maven/Gradle metadata, javac, and
 annotation processors remain typed `UNKNOWN` or non-supporting context. The
-application layer promotes accepted Java anchors to `DATAFLOW_DERIVED` support
-facts with engine `repogrammar-java-derived` and method
+parser emits non-blocking runtime subclaim `UNKNOWN`s for exact Spring
+component scans, dependency injection, proxy semantics, nonliteral route paths,
+and generated Spring Data repositories, while classpath and build-tool effects
+remain unsupported context until a clean project/module-level representation
+exists. Route path shape is conservative: only direct string literals and pure
+literal arrays are `literal`; constants, identifiers, concatenations, and mixed
+literal/nonliteral arrays are nonliteral route-path `UNKNOWN`s. The application
+layer promotes accepted Java anchors to `DATAFLOW_DERIVED` support facts with
+engine `repogrammar-java-derived` and method
 `bounded_tree_sitter_java_anchor_v1`, carrying `provider_resolved=false`,
 `derived_from=tree_sitter_java_structural_anchors`, the role-compatible support
-family, and `framework_role=<role>`. Java/Spring families require at least
-three complete-link-compatible support facts and no claim-relevant blocking
-Java `UNKNOWN`; raw parser `STRUCTURAL` facts and `FRAMEWORK_HEURISTIC` role
-facts are insufficient by themselves.
+family, and `framework_role=<role>`. Spring MVC route-family compatibility
+requires matching `http_method` and `route_path_shape` evidence at minimum, so
+GET and POST `@RequestMapping` handlers do not cluster merely because the
+annotation name matches. Java/Spring families require at least three
+complete-link-compatible support facts and no claim-relevant blocking Java
+`UNKNOWN`; raw parser `STRUCTURAL` facts and `FRAMEWORK_HEURISTIC` role facts
+are insufficient by themselves.
 The future provider-backed path is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md` and must use owned TS/JS
 provider facts before widening these claims.

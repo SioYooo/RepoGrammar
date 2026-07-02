@@ -204,15 +204,44 @@ impl<'a> JavaTreeScanner<'a> {
                     node_text(self.document.text, node),
                 ),
             )?);
-            if anchor.anchor_kind == "spring_boot_application" {
-                self.semantic_facts.push(unknown_fact(
-                    &self.document,
-                    &unit,
-                    UnknownReasonCode::RuntimeDependencyInjection,
-                    "java_spring_component_scan",
-                    "spring_boot_component_scan",
-                    "Spring Boot component scan is runtime framework behavior",
-                )?);
+            match anchor.anchor_kind {
+                "spring_boot_application" => {
+                    self.semantic_facts.push(unknown_fact(
+                        &self.document,
+                        &unit,
+                        UnknownReasonCode::RuntimeDependencyInjection,
+                        "java_spring_component_scan",
+                        "spring_boot_component_scan",
+                        "Spring Boot component scan is runtime framework behavior",
+                    )?);
+                }
+                "spring_component" => {
+                    self.semantic_facts.push(unknown_fact(
+                        &self.document,
+                        &unit,
+                        UnknownReasonCode::RuntimeDependencyInjection,
+                        "java_spring_component_scan",
+                        "spring_component_scan",
+                        "Spring component discovery depends on runtime component scan behavior",
+                    )?);
+                    self.semantic_facts.push(unknown_fact(
+                        &self.document,
+                        &unit,
+                        UnknownReasonCode::RuntimeDependencyInjection,
+                        "java_spring_dependency_injection",
+                        "spring_dependency_injection",
+                        "Spring dependency injection bindings are runtime framework behavior",
+                    )?);
+                    self.semantic_facts.push(unknown_fact(
+                        &self.document,
+                        &unit,
+                        UnknownReasonCode::FrameworkMagic,
+                        "java_spring_proxy_semantics",
+                        "spring_proxy_semantics",
+                        "Spring AOP/proxy semantics are runtime framework behavior",
+                    )?);
+                }
+                _ => {}
             }
         } else if contains_spring_known_annotation_name(&annotations) {
             self.semantic_facts.push(unknown_fact(
@@ -256,6 +285,14 @@ impl<'a> JavaTreeScanner<'a> {
                 &unit,
                 &anchor,
                 class_shape_assumptions(anchor.anchor_kind, anchor.annotation, &annotations, text),
+            )?);
+            self.semantic_facts.push(unknown_fact(
+                &self.document,
+                &unit,
+                UnknownReasonCode::FrameworkMagic,
+                "java_spring_generated_repository",
+                "spring_data_generated_repository",
+                "Spring Data repository implementations are generated runtime framework behavior",
             )?);
         }
         Ok(VisitContext::default())
@@ -694,13 +731,156 @@ fn request_mapping_http_method(segment: &str) -> Option<&'static str> {
 }
 
 fn route_path_shape(segment: &str) -> &'static str {
-    if first_quoted_string(segment).is_some() {
-        "literal"
-    } else if segment.contains('(') {
-        "dynamic"
-    } else {
-        "none"
+    let Some(arguments) = annotation_arguments(segment) else {
+        return "none";
+    };
+    let expressions = route_path_argument_expressions(arguments);
+    if expressions.is_empty() {
+        return "none";
     }
+    if expressions
+        .iter()
+        .all(|expression| route_path_expression_is_literal(expression))
+    {
+        "literal"
+    } else {
+        "dynamic"
+    }
+}
+
+fn annotation_arguments(segment: &str) -> Option<&str> {
+    let open = segment.find('(')?;
+    let close = segment.rfind(')')?;
+    (close > open).then(|| segment[open + 1..close].trim())
+}
+
+fn route_path_argument_expressions(arguments: &str) -> Vec<&str> {
+    let parts = split_top_level_commas(arguments);
+    let named_route_parts = parts
+        .iter()
+        .filter_map(|part| {
+            let (name, value) = split_top_level_assignment(part)?;
+            matches!(name.trim(), "value" | "path").then_some(value.trim())
+        })
+        .collect::<Vec<_>>();
+    if !named_route_parts.is_empty() {
+        return named_route_parts;
+    }
+    if parts
+        .iter()
+        .any(|part| split_top_level_assignment(part).is_some())
+    {
+        return Vec::new();
+    }
+    parts
+        .into_iter()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn route_path_expression_is_literal(expression: &str) -> bool {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Some(inner) = trimmed
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        let entries = split_top_level_commas(inner);
+        return !entries.is_empty()
+            && entries
+                .iter()
+                .all(|entry| single_string_literal_consumes(entry.trim()));
+    }
+    single_string_literal_consumes(trimmed)
+}
+
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(text[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let trailing = text[start..].trim();
+    if !trailing.is_empty() {
+        parts.push(trailing);
+    }
+    parts
+}
+
+fn split_top_level_assignment(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth -= 1,
+            '=' if depth == 0 => return Some((&text[..index], &text[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn single_string_literal_consumes(text: &str) -> bool {
+    let mut chars = text.char_indices();
+    let Some((start_index, character)) = chars.next() else {
+        return false;
+    };
+    if start_index != 0 || character != '"' {
+        return false;
+    }
+    let mut escaped = false;
+    for (end_index, character) in chars {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            return text[end_index + character.len_utf8()..].trim().is_empty();
+        }
+    }
+    false
 }
 
 fn java_visibility_shape(annotations_or_header: &str) -> &'static str {
@@ -970,31 +1150,6 @@ fn modifier_text(source: &str, node: Node<'_>, fallback_kind: &str) -> String {
     text.split(marker).next().unwrap_or("").to_string()
 }
 
-fn first_quoted_string(text: &str) -> Option<String> {
-    let mut chars = text.char_indices();
-    while let Some((start_index, character)) = chars.next() {
-        if character != '"' {
-            continue;
-        }
-        let value_start = start_index + 1;
-        let mut escaped = false;
-        for (end_index, character) in chars.by_ref() {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if character == '\\' {
-                escaped = true;
-                continue;
-            }
-            if character == '"' {
-                return Some(text[value_start..end_index].to_string());
-            }
-        }
-    }
-    None
-}
-
 fn identifier_tokens(text: &str) -> Vec<String> {
     text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|part| !part.is_empty())
@@ -1082,6 +1237,35 @@ mod tests {
             .iter()
             .filter(|fact| fact.kind == SemanticFactKind::Unknown)
             .map(|fact| fact.target.as_ref().expect("target").as_str().to_string())
+            .collect()
+    }
+
+    fn unknown_affected_claims(report: &ParseReport) -> Vec<String> {
+        let mut claims = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::Unknown)
+            .flat_map(|fact| fact.assumptions.iter())
+            .filter_map(|assumption| assumption.strip_prefix("affected_claim="))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        claims.sort();
+        claims
+    }
+
+    fn route_assumption_values(report: &ParseReport, prefix: &str) -> Vec<String> {
+        report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind != SemanticFactKind::Unknown)
+            .filter(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == "java_anchor_kind=spring_mvc_route")
+            })
+            .flat_map(|fact| fact.assumptions.iter())
+            .filter_map(|assumption| assumption.strip_prefix(prefix))
+            .map(str::to_string)
             .collect()
     }
 
@@ -1193,6 +1377,29 @@ interface BookRepository extends JpaRepository<Book, Long> {
             targets(&repository),
             vec!["spring.data.jpa.repository.JpaRepository".to_string()]
         );
+        assert!(unknown_affected_claims(&repository)
+            .contains(&"java_spring_generated_repository".to_string()));
+    }
+
+    #[test]
+    fn spring_components_emit_runtime_unknown_subclaims() {
+        let report = parse(
+            r#"
+package com.example;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class BookService {
+}
+"#,
+        );
+
+        assert!(unit_kinds(&report).contains(&"spring_component"));
+        let claims = unknown_affected_claims(&report);
+        assert!(claims.contains(&"java_spring_component_scan".to_string()));
+        assert!(claims.contains(&"java_spring_dependency_injection".to_string()));
+        assert!(claims.contains(&"java_spring_proxy_semantics".to_string()));
     }
 
     #[test]
@@ -1222,6 +1429,67 @@ class DynamicController {
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "affected_claim=java_spring_route_path")
+        }));
+    }
+
+    #[test]
+    fn route_path_shape_classifies_only_pure_literals_as_literal() {
+        let report = parse(
+            r#"
+package com.example;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+class ShapeController {
+    static final String VERSION = "v1";
+
+    @GetMapping("/x")
+    String literal() {
+        return "ok";
+    }
+
+    @GetMapping(Paths.X)
+    String constant() {
+        return "ok";
+    }
+
+    @GetMapping("/api/" + VERSION)
+    String concatenated() {
+        return "ok";
+    }
+
+    @GetMapping({"/a", Paths.B})
+    String mixedArray() {
+        return "ok";
+    }
+}
+"#,
+        );
+
+        assert_eq!(
+            route_assumption_values(&report, "route_path_shape="),
+            vec![
+                "literal".to_string(),
+                "dynamic".to_string(),
+                "dynamic".to_string(),
+                "dynamic".to_string(),
+            ]
+        );
+        assert_eq!(
+            unknown_affected_claims(&report)
+                .into_iter()
+                .filter(|claim| claim == "java_spring_route_path")
+                .count(),
+            3
+        );
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "java_unknown_kind=non_literal_route_path")
         }));
     }
 
