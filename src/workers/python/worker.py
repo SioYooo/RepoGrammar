@@ -33,6 +33,8 @@ MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
 MAX_RUST_PARSE_FACT_TARGET_CHARS = 256
 MAX_CONFIG_TEXT_BYTES = 1_048_576
+PYTHON_IMPORT_GRAPH = "repo_local_python_import_graph"
+PYTEST_FIXTURE_GRAPH = "repo_local_pytest_fixture_graph"
 ROUTE_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 FASTAPI_PARAMETER_MARKERS = {
     "fastapi.Body": ("fastapi_request_body_model", "fastapi.request_body"),
@@ -298,6 +300,105 @@ def build_module_index(paths: list[str], source_roots: list[str]) -> dict[str, l
         for module_name in module_names_for_path(path, source_roots):
             modules.setdefault(module_name, []).append(path)
     return {module_name: sorted(module_paths) for module_name, module_paths in sorted(modules.items())}
+
+
+def literal_str_list(node: ast.AST) -> list[str] | None:
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    values: list[str] = []
+    for item in node.elts:
+        if isinstance(item, ast.Constant) and isinstance(item.value, str) and is_python_identifier(item.value):
+            values.append(item.value)
+        else:
+            return None
+    return values
+
+
+def module_direct_symbols(tree: ast.Module) -> dict[str, str]:
+    symbols: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            symbols.setdefault(node.name, "TYPE")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.setdefault(node.name, "SYMBOL")
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for name in assignment_target_names(node):
+                if name != "__all__":
+                    symbols.setdefault(name, "SYMBOL")
+    return symbols
+
+
+def module_literal_all(tree: ast.Module) -> set[str] | None:
+    literal: set[str] | None = None
+    for node in tree.body:
+        value: ast.AST | None = None
+        if isinstance(node, ast.Assign):
+            if not any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+                continue
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "__all__":
+            value = node.value
+        if value is None:
+            continue
+        values = literal_str_list(value)
+        if values is None:
+            return None
+        literal = set(values)
+    return literal
+
+
+def build_module_symbol_index(
+    file_records: list[tuple[str, str, str]],
+    source_roots: list[str],
+) -> tuple[dict[str, dict[str, tuple[str, str]]], dict[str, set[str]]]:
+    parsed_modules: dict[str, tuple[str, ast.Module]] = {}
+    symbol_index: dict[str, dict[str, tuple[str, str]]] = {}
+    literal_all_index: dict[str, set[str]] = {}
+    for path, source, _file_hash in sorted(file_records):
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(source, filename=path)
+        except SyntaxError:
+            continue
+        for module_name in module_names_for_path(path, source_roots):
+            parsed_modules[module_name] = (path, tree)
+            direct_symbols = module_direct_symbols(tree)
+            if direct_symbols:
+                symbol_index[module_name] = {
+                    name: (kind, f"{module_name}.{name}") for name, kind in sorted(direct_symbols.items())
+                }
+            literal_all = module_literal_all(tree)
+            if literal_all is not None:
+                literal_all_index[module_name] = literal_all
+
+    for module_name, (path, tree) in sorted(parsed_modules.items()):
+        if not (path == "__init__.py" or path.endswith("/__init__.py")):
+            continue
+        package_symbols = symbol_index.setdefault(module_name, {})
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            imported_module = (
+                relative_import_base([module_name], path, node.level, node.module)
+                if node.level
+                else node.module
+            )
+            if imported_module is None:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    for exported in sorted(literal_all_index.get(imported_module, set())):
+                        resolved = symbol_index.get(imported_module, {}).get(exported)
+                        if resolved is not None:
+                            package_symbols.setdefault(exported, resolved)
+                    continue
+                local_name = alias.asname or alias.name
+                resolved = symbol_index.get(imported_module, {}).get(alias.name)
+                if resolved is not None:
+                    package_symbols.setdefault(local_name, resolved)
+
+    return symbol_index, literal_all_index
 
 
 def parent_path(path: str) -> str:
@@ -631,6 +732,39 @@ def structural_fact(
     )
 
 
+def dataflow_derived_fact(
+    *,
+    kind: str,
+    subject_unit_id: str,
+    target: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+    anchor_kind: str,
+    derived_from: str,
+) -> dict[str, Any]:
+    return fact(
+        kind=kind,
+        subject=subject_unit_id,
+        target=target,
+        certainty="DATAFLOW_DERIVED",
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        subject_unit_id=subject_unit_id,
+        start=start,
+        end=end,
+        note=f"CPython ast {derived_from} {anchor_kind}",
+        assumptions=[
+            f"python_anchor_kind={anchor_kind}",
+            "provider_resolved=false",
+            f"derived_from={derived_from}",
+        ],
+    )
+
+
 def unknown_fact(
     *,
     subject_unit_id: str,
@@ -669,6 +803,19 @@ def import_fact(
     end: int,
     anchor_kind: str,
 ) -> dict[str, Any]:
+    if anchor_kind == "repo_local_import_binding":
+        return dataflow_derived_fact(
+            kind="RESOLVED_IMPORT",
+            subject_unit_id=subject_unit_id,
+            target=target,
+            path=path,
+            content_hash_value=content_hash_value,
+            repository_revision=repository_revision,
+            start=start,
+            end=end,
+            anchor_kind=anchor_kind,
+            derived_from=PYTHON_IMPORT_GRAPH,
+        )
     return structural_fact(
         kind="RESOLVED_IMPORT",
         subject_unit_id=subject_unit_id,
@@ -679,6 +826,31 @@ def import_fact(
         start=start,
         end=end,
         anchor_kind=anchor_kind,
+    )
+
+
+def repo_local_symbol_fact(
+    *,
+    subject_unit_id: str,
+    target: str,
+    symbol_kind: str,
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> dict[str, Any]:
+    return dataflow_derived_fact(
+        kind=symbol_kind,
+        subject_unit_id=subject_unit_id,
+        target=target,
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        start=start,
+        end=end,
+        anchor_kind="repo_local_import_symbol",
+        derived_from=PYTHON_IMPORT_GRAPH,
     )
 
 
@@ -724,6 +896,16 @@ def repo_local_prefix_exists(target: str, module_index: dict[str, list[str]] | N
     return False
 
 
+def repo_local_symbol_resolution(
+    module_name: str,
+    symbol_name: str,
+    module_symbols: dict[str, dict[str, tuple[str, str]]] | None,
+) -> tuple[str, str] | None:
+    if module_symbols is None:
+        return None
+    return module_symbols.get(module_name, {}).get(symbol_name)
+
+
 def relative_import_base(current_modules: list[str], path: str, level: int, module: str | None) -> str | None:
     if not current_modules or level < 1:
         return None
@@ -753,6 +935,8 @@ def collect_import_aliases(
     module_unit_id: str,
     module_index: dict[str, list[str]] | None = None,
     source_roots: list[str] | None = None,
+    module_symbols: dict[str, dict[str, tuple[str, str]]] | None = None,
+    module_all_names: dict[str, set[str]] | None = None,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     aliases: dict[str, str] = {}
     facts: list[dict[str, Any]] = []
@@ -820,16 +1004,47 @@ def collect_import_aliases(
                 continue
             for alias in node.names:
                 if alias.name == "*":
-                    facts.append(
-                        unresolved_import_fact(
-                            subject_unit_id=module_unit_id,
-                            path=path,
-                            content_hash_value=content_hash_value,
-                            repository_revision=repository_revision,
-                            start=start,
-                            end=end,
+                    star_names = sorted((module_all_names or {}).get(relative_base, set()))
+                    if not star_names:
+                        facts.append(
+                            unresolved_import_fact(
+                                subject_unit_id=module_unit_id,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
                         )
-                    )
+                        continue
+                    for star_name in star_names:
+                        resolved_symbol = repo_local_symbol_resolution(relative_base, star_name, module_symbols)
+                        if resolved_symbol is None:
+                            facts.append(
+                                unresolved_import_fact(
+                                    subject_unit_id=module_unit_id,
+                                    path=path,
+                                    content_hash_value=content_hash_value,
+                                    repository_revision=repository_revision,
+                                    start=start,
+                                    end=end,
+                                )
+                            )
+                            break
+                        symbol_kind, symbol_target = resolved_symbol
+                        aliases.setdefault(star_name, symbol_target)
+                        facts.append(
+                            repo_local_symbol_fact(
+                                subject_unit_id=module_unit_id,
+                                target=symbol_target,
+                                symbol_kind=symbol_kind,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
+                        )
                     continue
                 target = f"{relative_base}.{alias.name}" if relative_base else alias.name
                 repo_resolution = repo_local_module_resolution(target, module_index)
@@ -847,6 +1062,34 @@ def collect_import_aliases(
                             anchor_kind="repo_local_import_binding",
                         )
                     )
+                elif repo_local_module_resolution(relative_base, module_index) == "resolved":
+                    resolved_symbol = repo_local_symbol_resolution(relative_base, alias.name, module_symbols)
+                    if resolved_symbol is not None:
+                        symbol_kind, symbol_target = resolved_symbol
+                        aliases[alias.asname or alias.name] = symbol_target
+                        facts.append(
+                            repo_local_symbol_fact(
+                                subject_unit_id=module_unit_id,
+                                target=symbol_target,
+                                symbol_kind=symbol_kind,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
+                        )
+                    else:
+                        facts.append(
+                            unresolved_import_fact(
+                                subject_unit_id=module_unit_id,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
+                        )
                 else:
                     facts.append(
                         unresolved_import_fact(
@@ -861,16 +1104,47 @@ def collect_import_aliases(
         elif node.module:
             for alias in node.names:
                 if alias.name == "*":
-                    facts.append(
-                        unresolved_import_fact(
-                            subject_unit_id=module_unit_id,
-                            path=path,
-                            content_hash_value=content_hash_value,
-                            repository_revision=repository_revision,
-                            start=start,
-                            end=end,
+                    star_names = sorted((module_all_names or {}).get(node.module, set()))
+                    if not star_names or repo_local_module_resolution(node.module, module_index) != "resolved":
+                        facts.append(
+                            unresolved_import_fact(
+                                subject_unit_id=module_unit_id,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
                         )
-                    )
+                        continue
+                    for star_name in star_names:
+                        resolved_symbol = repo_local_symbol_resolution(node.module, star_name, module_symbols)
+                        if resolved_symbol is None:
+                            facts.append(
+                                unresolved_import_fact(
+                                    subject_unit_id=module_unit_id,
+                                    path=path,
+                                    content_hash_value=content_hash_value,
+                                    repository_revision=repository_revision,
+                                    start=start,
+                                    end=end,
+                                )
+                            )
+                            break
+                        symbol_kind, symbol_target = resolved_symbol
+                        aliases.setdefault(star_name, symbol_target)
+                        facts.append(
+                            repo_local_symbol_fact(
+                                subject_unit_id=module_unit_id,
+                                target=symbol_target,
+                                symbol_kind=symbol_kind,
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=start,
+                                end=end,
+                            )
+                        )
                     continue
                 target = f"{node.module}.{alias.name}"
                 repo_resolution = repo_local_module_resolution(target, module_index)
@@ -886,7 +1160,10 @@ def collect_import_aliases(
                         )
                     )
                     continue
-                if repo_resolution == "missing" and repo_local_prefix_exists(target, module_index):
+                resolved_symbol = None
+                if repo_resolution == "missing" and repo_local_module_resolution(node.module, module_index) == "resolved":
+                    resolved_symbol = repo_local_symbol_resolution(node.module, alias.name, module_symbols)
+                if repo_resolution == "missing" and resolved_symbol is None and repo_local_prefix_exists(target, module_index):
                     facts.append(
                         unresolved_import_fact(
                             subject_unit_id=module_unit_id,
@@ -898,21 +1175,37 @@ def collect_import_aliases(
                         )
                     )
                     continue
-                aliases[alias.asname or alias.name] = target
-                facts.append(
-                    import_fact(
-                        subject_unit_id=module_unit_id,
-                        target=target,
-                        path=path,
-                        content_hash_value=content_hash_value,
-                        repository_revision=repository_revision,
-                        start=start,
-                        end=end,
-                        anchor_kind="repo_local_import_binding"
-                        if repo_resolution == "resolved"
-                        else "import_binding",
+                if resolved_symbol is not None:
+                    symbol_kind, symbol_target = resolved_symbol
+                    aliases[alias.asname or alias.name] = symbol_target
+                    facts.append(
+                        repo_local_symbol_fact(
+                            subject_unit_id=module_unit_id,
+                            target=symbol_target,
+                            symbol_kind=symbol_kind,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                        )
                     )
-                )
+                else:
+                    aliases[alias.asname or alias.name] = target
+                    facts.append(
+                        import_fact(
+                            subject_unit_id=module_unit_id,
+                            target=target,
+                            path=path,
+                            content_hash_value=content_hash_value,
+                            repository_revision=repository_revision,
+                            start=start,
+                            end=end,
+                            anchor_kind="repo_local_import_binding"
+                            if repo_resolution == "resolved"
+                            else "import_binding",
+                        )
+                    )
     return aliases, facts
 
 
@@ -2447,6 +2740,23 @@ def add_pytest_fixture_context_fact(
     start: int,
     end: int,
 ) -> None:
+    if anchor_kind in {"pytest_fixture_edge", "pytest_conftest_fixture_edge"}:
+        add_fact(
+            facts,
+            dataflow_derived_fact(
+                kind="SYMBOL",
+                subject_unit_id=subject_unit_id,
+                target=target,
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+                anchor_kind=anchor_kind,
+                derived_from=PYTEST_FIXTURE_GRAPH,
+            ),
+        )
+        return
     add_fact(
         facts,
         structural_fact(
@@ -2461,6 +2771,98 @@ def add_pytest_fixture_context_fact(
             anchor_kind=anchor_kind,
         ),
     )
+
+
+def add_pytest_fixture_binding_for_name(
+    facts: list[dict[str, Any]],
+    subject_unit_id: str,
+    fixture_name: str,
+    fixture_name_counts: dict[str, int],
+    conftest_fixture_name_counts: dict[str, int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    start: int,
+    end: int,
+) -> None:
+    if fixture_name_counts.get(fixture_name, 0) == 1:
+        add_pytest_fixture_context_fact(
+            facts,
+            subject_unit_id,
+            f"pytest.fixture.{fixture_name}",
+            "pytest_fixture_edge",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+    elif fixture_name_counts.get(fixture_name, 0) > 1:
+        add_pytest_fixture_unknown(
+            facts,
+            subject_unit_id,
+            "ConflictingFacts",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+    elif conftest_fixture_name_counts.get(fixture_name, 0) == 1:
+        add_pytest_fixture_context_fact(
+            facts,
+            subject_unit_id,
+            f"pytest.fixture.{fixture_name}",
+            "pytest_conftest_fixture_edge",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+    elif conftest_fixture_name_counts.get(fixture_name, 0) > 1:
+        add_pytest_fixture_unknown(
+            facts,
+            subject_unit_id,
+            "ConflictingFacts",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+    elif fixture_name in PYTEST_BUILTIN_FIXTURES:
+        add_pytest_fixture_context_fact(
+            facts,
+            subject_unit_id,
+            f"pytest.builtin_fixture.{fixture_name}",
+            "pytest_builtin_fixture_context",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+    else:
+        add_pytest_fixture_unknown(
+            facts,
+            subject_unit_id,
+            "PytestFixtureInjection",
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
+
+
+def literal_getfixturevalue_name(call: ast.Call) -> str | None:
+    if dotted_name(call.func) != "request.getfixturevalue" or not call.args:
+        return None
+    first = call.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str) and is_python_identifier(first.value):
+        return first.value
+    return None
 
 
 def collect_fixture_facts(
@@ -2533,65 +2935,25 @@ def collect_fixture_facts(
                 start,
                 end,
             )
-        elif fixture_name_counts.get(arg.arg, 0) == 1:
-            add_pytest_fixture_context_fact(
-                facts,
-                subject_unit_id,
-                f"pytest.fixture.{arg.arg}",
-                "pytest_fixture_edge",
-                path,
-                content_hash_value,
-                repository_revision,
-                start,
-                end,
-            )
-        elif fixture_name_counts.get(arg.arg, 0) > 1:
-            add_pytest_fixture_unknown(
-                facts,
-                subject_unit_id,
-                "ConflictingFacts",
-                path,
-                content_hash_value,
-                repository_revision,
-                start,
-                end,
-            )
-        elif conftest_fixture_name_counts.get(arg.arg, 0) == 1:
-            add_pytest_fixture_context_fact(
-                facts,
-                subject_unit_id,
-                f"pytest.fixture.{arg.arg}",
-                "pytest_conftest_fixture_edge",
-                path,
-                content_hash_value,
-                repository_revision,
-                start,
-                end,
-            )
-        elif conftest_fixture_name_counts.get(arg.arg, 0) > 1:
-            add_pytest_fixture_unknown(
-                facts,
-                subject_unit_id,
-                "ConflictingFacts",
-                path,
-                content_hash_value,
-                repository_revision,
-                start,
-                end,
-            )
-        elif arg.arg in PYTEST_BUILTIN_FIXTURES:
-            add_pytest_fixture_context_fact(
-                facts,
-                subject_unit_id,
-                f"pytest.builtin_fixture.{arg.arg}",
-                "pytest_builtin_fixture_context",
-                path,
-                content_hash_value,
-                repository_revision,
-                start,
-                end,
-            )
         else:
+            add_pytest_fixture_binding_for_name(
+                facts,
+                subject_unit_id,
+                arg.arg,
+                fixture_name_counts,
+                conftest_fixture_name_counts,
+                path,
+                content_hash_value,
+                repository_revision,
+                start,
+                end,
+            )
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call) or dotted_name(call.func) != "request.getfixturevalue":
+            continue
+        start, end = node_range(starts, call)
+        fixture_name = literal_getfixturevalue_name(call)
+        if fixture_name is None:
             add_pytest_fixture_unknown(
                 facts,
                 subject_unit_id,
@@ -2602,6 +2964,19 @@ def collect_fixture_facts(
                 start,
                 end,
             )
+            continue
+        add_pytest_fixture_binding_for_name(
+            facts,
+            subject_unit_id,
+            fixture_name,
+            fixture_name_counts,
+            conftest_fixture_name_counts,
+            path,
+            content_hash_value,
+            repository_revision,
+            start,
+            end,
+        )
 
 
 def analyze_source(
@@ -2612,6 +2987,8 @@ def analyze_source(
     module_index: dict[str, list[str]] | None = None,
     source_roots: list[str] | None = None,
     conftest_fixture_name_counts: dict[str, int] | None = None,
+    module_symbols: dict[str, dict[str, tuple[str, str]]] | None = None,
+    module_all_names: dict[str, set[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     starts = byte_line_starts(source)
     units: list[dict[str, Any]] = []
@@ -2645,6 +3022,8 @@ def analyze_source(
         module_unit_id,
         module_index,
         source_roots or [],
+        module_symbols,
+        module_all_names,
     )
     for item in import_facts:
         add_fact(facts, item)
@@ -2971,7 +3350,7 @@ def parse_document(payload: dict[str, Any]) -> int:
         "repository_revision",
         "text",
     }
-    allowed_fields = {*required_fields, "module_paths", "source_roots", "conftest_files"}
+    allowed_fields = {*required_fields, "module_paths", "source_roots", "conftest_files", "module_files"}
     if not isinstance(payload, dict) or not required_fields.issubset(payload) or set(payload) - allowed_fields:
         return 2
     if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_document":
@@ -2984,10 +3363,12 @@ def parse_document(payload: dict[str, Any]) -> int:
     module_paths = safe_path_list(payload.get("module_paths"), require_python=True)
     source_roots = safe_path_list(payload.get("source_roots"), require_python=False)
     conftest_files = safe_conftest_file_records(payload.get("conftest_files"))
-    if module_paths is None or source_roots is None or conftest_files is None:
+    module_files = safe_module_file_records(payload.get("module_files"))
+    if module_paths is None or source_roots is None or conftest_files is None or module_files is None:
         return 2
     source_roots = sorted(set([*source_roots, *infer_source_roots(module_paths)]))
     module_index = build_module_index(module_paths, source_roots)
+    module_symbols, module_all_names = build_module_symbol_index(module_files, source_roots)
     fixture_index = conftest_fixture_index(conftest_files)
     units, diagnostics, facts = analyze_source(
         payload["path"],
@@ -2997,6 +3378,8 @@ def parse_document(payload: dict[str, Any]) -> int:
         module_index if module_paths else None,
         source_roots,
         applicable_conftest_fixture_name_counts(payload["path"], fixture_index),
+        module_symbols if module_files else None,
+        module_all_names if module_files else None,
     )
     message(
         {
@@ -3248,6 +3631,32 @@ def safe_conftest_file_records(value: Any) -> list[tuple[str, str, str]] | None:
     return records
 
 
+def safe_module_file_records(value: Any) -> list[tuple[str, str, str]] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    records: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"path", "text"}:
+            return None
+        path = item.get("path")
+        text = item.get("text")
+        if (
+            not is_safe_repo_relative_path(path)
+            or not isinstance(text, str)
+            or path in seen
+            or not path.endswith(".py")
+            or len(text.encode("utf-8")) > MAX_SOURCE_BYTES
+        ):
+            return None
+        seen.add(path)
+        records.append((path, text, ""))
+    records.sort(key=lambda record: record[0])
+    return records
+
+
 def emit_fact_message(request_id: str, fact_payload: dict[str, Any]) -> None:
     message(
         {
@@ -3321,6 +3730,7 @@ def analyze_project(payload: dict[str, Any]) -> int:
         [relative_path for relative_path, _source, _file_hash in file_records],
         source_roots,
     )
+    module_symbols, module_all_names = build_module_symbol_index(file_records, source_roots)
     fixture_index = conftest_fixture_index(file_records)
     for relative_path, source, file_hash in file_records:
         units, _diagnostics, facts = analyze_source(
@@ -3331,6 +3741,8 @@ def analyze_project(payload: dict[str, Any]) -> int:
             module_index,
             source_roots,
             applicable_conftest_fixture_name_counts(relative_path, fixture_index),
+            module_symbols,
+            module_all_names,
         )
         for fact_payload in facts:
             emit_fact_message(request_id, fact_payload)

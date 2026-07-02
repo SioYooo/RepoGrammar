@@ -236,6 +236,8 @@ low-cardinality codes such as `run_sync`, `add_project_config`,
 recovery guidance, repository paths, code snippets, code-unit ids, or fact ids.
 Mechanism buckets should be actionable analyzer/provider codes, for example
 `python_import_graph`, `pytest_fixture_graph`, `fastapi_dependency_graph`,
+`python_package_reexport_model`, `python_star_import_model`,
+`pytest_plugin_fixture_model`,
 `typescript_paths_resolver`, `typescript_export_graph`,
 `fastify_receiver_model`, `prisma_client_model`, `drizzle_db_model`,
 `rust_module_graph`, `cargo_feature_cfg_model`, `rust_macro_boundary`,

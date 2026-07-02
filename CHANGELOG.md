@@ -51,6 +51,14 @@
 - Installer wrapper stale-PATH cleanup now exits nonzero when a requested prune
   cannot remove an outdated `repogrammar` copy, instead of reporting a
   successful install or prune with the stale executable still ahead on PATH.
+- Python indexing now builds a bounded static repo-local import and pytest
+  fixture graph from CPython `ast` context. Unique local module imports, direct
+  imported top-level symbols, static package re-exports, literal `__all__` star
+  imports, same-file/conftest fixture edges, and literal
+  `request.getfixturevalue("name")` lookups are persisted as source-tied
+  `DATAFLOW_DERIVED` graph facts with `provider_resolved=false`; ambiguous,
+  dynamic, plugin, unsafe star, external, or unresolved cases remain typed
+  `UNKNOWN`.
 
 ### Added
 

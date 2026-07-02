@@ -881,7 +881,10 @@ fn family_features_by_unit(
                         entry.insert(format!("decorator_anchor:{}", stable_token(target)));
                     }
                 }
-                "import_binding" | "repo_local_import_binding" | "dynamic_import_literal" => {
+                "import_binding"
+                | "repo_local_import_binding"
+                | "repo_local_import_symbol"
+                | "dynamic_import_literal" => {
                     if let Some(target) = target {
                         entry.insert(format!("import_context:{}", stable_token(target)));
                     }

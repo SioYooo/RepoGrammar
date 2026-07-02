@@ -76,23 +76,28 @@ RepoGrammar should not run every analyzer over every file. The cascade is:
 
 ### Current Implementation Slice
 
-The current implementation covers the first structural slice only:
+The current implementation covers a bounded static CPython `ast` slice only:
 
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
-- CPython `ast` structural fact output for import bindings, decorator anchors,
-  class bases, simple call targets, bounded same-function application call
-  targets, pytest test-function anchors, alias-aware pytest fixture decorators,
-  literal pytest fixture `name=` aliases, same-file pytest test and fixture
-  dependency edges, literal pytest parametrize argument anchors, typed dynamic
-  import, `sys.path` mutation, dynamic call, dynamic decorator, unresolved bare
-  decorator, monkey-patch, dynamic pytest fixture-name, and unresolved import
-  `UNKNOWN` facts. Top-level import bindings are the only file-level alias
-  source for exact framework anchors; function-local imports are not promoted to
-  file-global aliases. Framework import visibility is source-position scoped:
-  units before a top-level shadowing definition or assignment may still use the
-  import alias, while later units cannot use the shadowed name for exact family
-  support;
+- CPython `ast` structural fact output for ordinary import bindings, decorator
+  anchors, class bases, simple call targets, bounded same-function application
+  call targets, pytest test-function anchors, alias-aware pytest fixture
+  decorators, literal pytest fixture `name=` aliases, literal pytest
+  parametrize argument anchors, typed dynamic import, `sys.path` mutation,
+  dynamic call, dynamic decorator, unresolved bare decorator, monkey-patch,
+  dynamic pytest fixture-name, and unresolved import `UNKNOWN` facts. Unique
+  repo-local import bindings, direct imported top-level class/function/module
+  symbols, static package `__init__.py` re-exports, literal-`__all__` star
+  imports, and same-file or applicable `conftest.py` fixture edges are emitted as
+  `DATAFLOW_DERIVED` graph facts with `provider_resolved=false` and an explicit
+  `derived_from=repo_local_python_import_graph` or
+  `derived_from=repo_local_pytest_fixture_graph` marker. Top-level import
+  bindings are the only file-level alias source for exact framework anchors;
+  function-local imports are not promoted to file-global aliases. Framework
+  import visibility is source-position scoped: units before a top-level shadowing
+  definition or assignment may still use the import alias, while later units
+  cannot use the shadowed name for exact family support;
 - path-derived module-name anchors and CPython `symtable` structural scope
   anchors for imported, assigned, and namespace symbols;
 - a private `tomllib` project-config parser mode for safe `pyproject.toml`
@@ -101,24 +106,27 @@ The current implementation covers the first structural slice only:
   is unavailable;
 - semantic-worker-compatible project-mode module graph construction that uses
   safe `.py` paths plus sanitized `pyproject.toml` source roots when `tomllib`
-  is available, emits `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
-  repo-local module matches, resolves requested-project `conftest.py` fixture
-  names through pytest's directory hierarchy as structural fixture-edge facts
-  only when the applicable name is unique, emits `ConflictingFacts` `UNKNOWN`
-  for duplicate applicable conftest fixture names, emits metadata-only external
-  context for known pytest built-in fixtures such as `tmp_path` and `capsys`,
-  and emits typed `UNKNOWN` for ambiguous/missing repo-local imports,
-  plugin-style fixture names without an allowlist or provider, or `sys.path`
-  mutation;
+  is available, emits graph-derived `RESOLVED_IMPORT` facts only for unique
+  repo-local module matches, emits graph-derived `SYMBOL`/`TYPE` facts only for
+  direct imported top-level symbols or static package re-exports visible in
+  bounded source context, resolves requested-project `conftest.py` fixture names
+  through pytest's directory hierarchy as graph-derived fixture-edge facts only
+  when the applicable name is unique, emits `ConflictingFacts` `UNKNOWN` for
+  duplicate applicable conftest fixture names, emits metadata-only structural
+  context for known pytest built-in fixtures such as `tmp_path` and `capsys`, and
+  emits typed `UNKNOWN` for ambiguous/missing repo-local imports, unsafe star
+  imports without literal `__all__`, plugin-style fixture names without an
+  allowlist or provider, or `sys.path` mutation;
 - default parser-mode indexing now passes the discovered repo-relative `.py`
-  inventory, sanitized root `pyproject.toml` source roots from the existing
-  `tomllib` project-config parser output, and bounded, hash-checked discovered
-  `conftest.py` file contents into the private CPython parse-document request
-  so the same source-tied parse pass can emit unique repo-local import facts,
-  `pytest.test` anchors, pytest same-file fixture dependency edges, pytest
-  parent-directory `conftest.py` fixture-edge facts, known builtin-fixture
-  context, and typed unresolved/ambiguous import or fixture `UNKNOWN`s without
-  launching a separate Python semantic worker;
+  inventory, bounded module file texts, sanitized root `pyproject.toml` source
+  roots from the existing `tomllib` project-config parser output, and bounded,
+  hash-checked discovered `conftest.py` file contents into the private CPython
+  parse-document request so the same source-tied parse pass can emit unique
+  repo-local import facts, direct imported symbol facts, `pytest.test` anchors,
+  pytest same-file fixture dependency edges, pytest parent-directory
+  `conftest.py` fixture-edge facts, known builtin-fixture context, and typed
+  unresolved/ambiguous import or fixture `UNKNOWN`s without launching a separate
+  Python semantic worker or executing Python/pytest code;
 - default parser-mode indexing discovers root `pyproject.toml` as
   `python-config`, reads it through the Rust source-store path/hash boundary,
   calls the private `parse_project_config` worker mode, and persists a
@@ -290,19 +298,22 @@ The current implementation covers the first structural slice only:
 
 These worker facts use current protocol fact and certainty tokens only:
 `RESOLVED_IMPORT`, `RESOLVED_CALL`, `SYMBOL`, `TYPE`, `PROJECT_CONFIG`, and
-`UNKNOWN` with `STRUCTURAL` or `UNKNOWN` certainty. They are repo-relative,
-hash-backed, and snippet-free, but they are still worker-local structural
-anchors or config metadata. Default product indexing persists them only as
-internal structural/`UNKNOWN` semantic fact records. It does not expose raw
-parser facts through CLI/MCP query commands or treat them as semantic-provider
-claims. The current product path may feed only separately synthesized
+`UNKNOWN` with `STRUCTURAL`, `DATAFLOW_DERIVED`, or `UNKNOWN` certainty. The
+only parser-origin `DATAFLOW_DERIVED` facts accepted by product indexing are
+source-local repo graph facts with `provider_resolved=false` plus
+`derived_from=repo_local_python_import_graph` or
+`derived_from=repo_local_pytest_fixture_graph`; all other CPython facts remain
+structural or `UNKNOWN`. They are repo-relative, hash-backed, and snippet-free,
+but they are still bounded static graph evidence, not semantic-provider claims.
+Default product indexing does not expose raw parser facts through CLI/MCP query
+commands. The current product path may additionally feed separately synthesized
 `repogrammar-python-derived` / `bounded_ast_anchor_v1` facts to EC-MVFI-lite,
 and those facts use `DATAFLOW_DERIVED`, `provider_resolved=false`, and
 same-generation code-unit evidence. They are synthesized only for exact
 compatible framework anchors on a unit with one framework role and no
-claim-relevant parser-origin blocking `UNKNOWN`. This is
-sound-by-abstention bounded Python framework-family claims, not sound Python
-semantic analysis.
+claim-relevant parser-origin blocking `UNKNOWN`. This is sound-by-abstention
+bounded Python framework-family claims, not sound Python semantic analysis or
+external dependency proof.
 
 The strong Python release smoke path is test-only. It uses the existing
 transitional worker executable boundary to inject fixture-controlled
@@ -592,10 +603,13 @@ Algorithm:
 6. Map each remaining parameter to a unique applicable fixture definition.
    Duplicate applicable `conftest.py` definitions remain ambiguous until a
    provider proves pytest's exact runtime resolution.
-7. Mark known pytest built-in fixtures as external fixture context. Plugin
+7. Resolve literal `request.getfixturevalue("name")` with the same exact
+   fixture lookup as parameter injection. Nonliteral `getfixturevalue(...)`
+   stays `PytestFixtureInjection` `UNKNOWN`.
+8. Mark known pytest built-in fixtures as external fixture context. Plugin
    fixtures are external context only when a declared allowlist or provider
    proves the binding.
-8. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
+9. Emit `ConflictingFacts` or `PytestFixtureInjection` `UNKNOWN` for ambiguous,
    dynamic, duplicate, or unresolved plugin-defined bindings.
 
 ### Layer 8: Python EC-MVFI-lite

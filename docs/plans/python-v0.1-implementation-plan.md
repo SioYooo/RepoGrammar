@@ -79,12 +79,19 @@ Current progress: `.py` discovery, CPython `ast` code-unit extraction,
 path-derived module-name anchors, CPython `symtable` structural scope anchors,
 private `tomllib` project-config summaries, and semantic-worker-compatible
 project-mode module-level repo-local import resolution are implemented. Default
-indexing now passes discovered repo-relative `.py` inventory, sanitized root
-`pyproject.toml` source roots from parser/tomllib project-config facts, and
-bounded discovered `conftest.py` context into private parse-document requests
-so source-tied repo-local import, same-file fixture dependency, and
-parent-directory fixture-edge facts can be persisted as structural
-parser-origin facts. Default indexing also discovers root
+indexing now passes discovered repo-relative `.py` inventory, bounded module
+file texts, sanitized root `pyproject.toml` source roots from parser/tomllib
+project-config facts, and bounded discovered `conftest.py` context into private
+parse-document requests so source-tied repo-local import, direct imported
+top-level symbol, static `__init__.py` re-export, literal-`__all__` star import,
+same-file fixture dependency, literal `request.getfixturevalue("name")`, and
+parent-directory fixture-edge facts can be persisted as approved parser-origin
+`DATAFLOW_DERIVED` graph facts. Unsafe star imports, ambiguous imports,
+unresolved imports, dynamic fixture names, nonliteral `getfixturevalue`, plugin
+fixtures, and duplicate applicable fixture definitions remain typed `UNKNOWN`.
+Because module source context can change imported-symbol resolution, Python
+`.py` deltas now force full project-context sync rather than copy-forwarding
+stale cross-file graph facts. Default indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim
@@ -114,8 +121,8 @@ separate `DATAFLOW_DERIVED` support facts from
 exact canonical CPython anchors only when a unit has one Python framework role
 and no claim-relevant parser-origin blocking `UNKNOWN`. This implements
 sound-by-abstention bounded Python framework-family claims, not sound Python
-semantic analysis; raw parser facts and framework heuristics still remain
-blocked from direct claim input. Non-blocking subclaim `UNKNOWN`s such as
+semantic analysis; raw structural parser facts and framework heuristics still
+remain blocked from direct claim input. Non-blocking subclaim `UNKNOWN`s such as
 FastAPI dependency-target uncertainty are preserved in family detail/query
 metadata when membership support remains valid. The family builder now applies
 bounded complete-link clustering over Python support-family and parser-context
