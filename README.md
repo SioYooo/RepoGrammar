@@ -53,11 +53,13 @@ Prisma, and Drizzle adapters: a family is claimed solely when an exact local
 anchor is promoted to application-layer `DATAFLOW_DERIVED` support. Lookalikes,
 package-only evidence, reassigned or shadowed bindings, dynamic receivers or
 methods, custom test wrappers, React components/hooks, Next middleware/server
-actions/re-exports, Fastify plugin prefixes, Prisma bulk/injected/raw clients,
-and Drizzle raw/dynamic builders stay `UNKNOWN`. Next dynamic segments, route
-groups, and parallel routes are retained as bounded context on exact local
-page/layout/route anchors rather than treated as membership proof by
-themselves. TS/JS family claims require at least three compatible
+actions/re-exports, Fastify dynamic or imported plugin registrations, Prisma
+bulk/injected/raw clients, and Drizzle raw/dynamic builders stay `UNKNOWN`.
+Exact local Fastify `register(plugin, { prefix: "..." })` calls record
+plugin/prefix context only and do not prove route support. Next dynamic
+segments, route groups, and parallel routes are retained as bounded context on
+exact local page/layout/route anchors rather than treated as membership proof
+by themselves. TS/JS family claims require at least three compatible
 exact-anchor support facts and use conservative complete-link clustering so
 incompatible handler/test/component/query shapes do not single-link into one
 family. Bounded `package.json`, `tsconfig.json`, `jsconfig.json`, and
@@ -106,7 +108,7 @@ analysis.
 | JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls and exact literal `app.use("/prefix", router)` mount context only; support requires at least three complete-link-compatible examples, and dynamic prefixes/middleware side effects remain unsupported. |
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
 | JS/TS Next.js | v0.2 compiler-cross-checked preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; configured TypeScript workers can provider-cross-check exact route/page/layout/API export identity, while dynamic segments, route groups, parallel routes, middleware, server/client semantics, server actions, and re-exported routes remain context or `UNKNOWN`. |
-| JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; exact local `register(plugin, { prefix: "..." })` records plugin/prefix context only, while dynamic methods/options, imported plugins, plugin side effects, and dynamic prefixes remain `UNKNOWN`. |
 | JS/TS Prisma | v0.2 compiler-cross-checked preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; configured TypeScript workers can provider-cross-check relative repo-local named shared-client imports, while bulk operations, injected clients, external shared clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | v0.2 compiler-cross-checked preview | Exact Drizzle table factories and local `drizzle(...)` db bindings remain structural; configured TypeScript workers can provider-cross-check relative repo-local named db/table imports for whitelisted `select`/`insert`/`update`/`delete` and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, external imports, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
@@ -358,9 +360,9 @@ analyzer. In this preview:
 - Dynamic Python behavior often produces typed `UNKNOWN`.
 - JS/TS preview support is limited to exact-anchor Express, Jest/Vitest,
   Next.js, Fastify, Prisma, and Drizzle families. Full JS/TS semantics, React,
-  dynamic wrappers, executable Jest/Vitest/Next config semantics, Fastify plugin
-  prefix resolution, Prisma/Drizzle runtime extensions, and complete
-  alias/re-export resolution are deferred.
+  dynamic wrappers, executable Jest/Vitest/Next config semantics, Fastify
+  dynamic prefix and plugin-effect resolution, Prisma/Drizzle runtime
+  extensions, and complete alias/re-export resolution are deferred.
 - Source snippets are not returned by default.
 - Full Python semantic providers, runtime observation, and broader language
   support are deferred.

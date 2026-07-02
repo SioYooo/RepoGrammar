@@ -127,10 +127,11 @@ themselves provide ambient runner context. React components/hooks remain blocked
 from public family claims even if an explicit TypeScript semantic-worker fact
 names `react`. Production-quality TS/JS semantic analysis, React family support,
 complete Program/TypeChecker coverage, complete re-export/path-alias semantics,
-Fastify plugin-prefix resolution, Prisma/Drizzle runtime extensions, Next
-server/client semantics, middleware, server actions, re-export semantics, and
-dynamic-wrapper support remain deferred unless a later ADR changes the sequence
-again. A bounded optional TypeScript worker operation slice may produce
+Fastify plugin-effect and dynamic-prefix resolution, Prisma/Drizzle runtime
+extensions, Next server/client semantics, middleware, server actions, re-export
+semantics, and dynamic-wrapper support remain deferred unless a later ADR
+changes the sequence again. A bounded optional TypeScript worker operation
+slice may produce
 compiler-backed module-resolution facts and may cross-check exact Next.js
 file-convention export identity, relative repo-local Express/Fastify named
 handler imports, relative repo-local Prisma shared-client bindings, or relative
@@ -196,7 +197,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | JS/TS Express | Conservative v0.2 preview | Exact import/require bindings, including CommonJS destructuring aliases, plus direct literal route calls and exact literal `app.use("/prefix", router)` mount context; support>=3 and complete-link compatibility required, while dynamic prefixes and middleware side effects remain unsupported. |
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
 | JS/TS Next.js | Compiler-cross-checked v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; configured TypeScript workers can cross-check exact route/page/layout/API export identity, while dynamic segments, route groups, parallel routes, middleware, server/client semantics, server actions, and re-exported routes remain context or `UNKNOWN`. |
-| JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver, including CommonJS destructuring aliases, plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
+| JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver, including CommonJS destructuring aliases, plus shorthand or literal `app.route` declarations; exact local `register(plugin, { prefix: "..." })` records plugin/prefix context only, while dynamic methods/options, imported plugins, plugin side effects, and dynamic prefixes remain `UNKNOWN`. |
 | JS/TS Prisma | Compiler-cross-checked v0.2 preview | Exact local `new PrismaClient()` bindings, including CommonJS destructuring aliases, plus whitelisted model read/write operations and array `$transaction`; configured TypeScript workers can cross-check relative repo-local named shared-client imports, while bulk operations, injected clients, external shared clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | Compiler-cross-checked v0.2 preview | Exact Drizzle table factories and local `drizzle(...)` db bindings, including CommonJS destructuring aliases, remain structural; configured TypeScript workers can cross-check relative repo-local named db/table imports for whitelisted `select`/`insert`/`update`/`delete` and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, external imports, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |

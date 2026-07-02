@@ -1064,6 +1064,17 @@ impl<'a> SyntaxScanner<'a> {
                     let end = declaration_extent(self.document.text, start, line_end);
                     self.add_unit(CodeUnitKind::FastifyRoute, "route", start, end)?;
                 }
+            } else if let Some((receiver, offset)) = fastify_register_call(line) {
+                if fastify_receivers.contains(receiver) {
+                    let start = line_start + offset;
+                    let end = line_end;
+                    self.add_unit(
+                        CodeUnitKind::FastifyPluginRegistration,
+                        "register",
+                        start,
+                        end,
+                    )?;
+                }
             } else if let Some((receiver, offset)) = dynamic_route_call(line) {
                 let start = line_start + offset;
                 let end = declaration_extent(self.document.text, start, line_end);
@@ -1359,6 +1370,17 @@ fn static_route_call(line: &str) -> Option<(&str, &'static str, usize)> {
 
 fn fastify_full_route_call(line: &str) -> Option<(&str, usize)> {
     let pattern = ".route(";
+    let method_dot = line.find(pattern)?;
+    let start = line[..method_dot]
+        .rfind(|character: char| character.is_whitespace())
+        .map(|offset| offset + 1)
+        .unwrap_or(0);
+    let receiver = line[start..method_dot].trim();
+    (!receiver.is_empty()).then_some((receiver, start))
+}
+
+fn fastify_register_call(line: &str) -> Option<(&str, usize)> {
+    let pattern = ".register(";
     let method_dot = line.find(pattern)?;
     let start = line[..method_dot]
         .rfind(|character: char| character.is_whitespace())

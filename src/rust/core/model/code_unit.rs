@@ -85,6 +85,7 @@ pub enum CodeUnitKind {
     NextPagesApiRoute,
     NextPagesPage,
     FastifyRoute,
+    FastifyPluginRegistration,
     PrismaQuery,
     PrismaTransaction,
     DrizzleSchemaTable,
@@ -138,6 +139,7 @@ impl CodeUnitKind {
             Self::NextPagesApiRoute => "next_pages_api_route",
             Self::NextPagesPage => "next_pages_page",
             Self::FastifyRoute => "fastify_route",
+            Self::FastifyPluginRegistration => "fastify_plugin_registration",
             Self::PrismaQuery => "prisma_query",
             Self::PrismaTransaction => "prisma_transaction",
             Self::DrizzleSchemaTable => "drizzle_schema_table",
@@ -239,6 +241,10 @@ mod tests {
         assert_eq!(Language::Rust.as_str(), "rust");
         assert_eq!(Language::RustConfig.as_str(), "rust-config");
         assert_eq!(CodeUnitKind::AsyncFunction.as_str(), "async_function");
+        assert_eq!(
+            CodeUnitKind::FastifyPluginRegistration.as_str(),
+            "fastify_plugin_registration"
+        );
         assert_eq!(CodeUnitKind::FastApiRoute.as_str(), "fastapi_route");
         assert_eq!(CodeUnitKind::PytestTest.as_str(), "pytest_test");
         assert_eq!(CodeUnitKind::PytestFixture.as_str(), "pytest_fixture");

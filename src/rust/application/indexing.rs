@@ -5343,6 +5343,22 @@ mod tests {
     }
 
     #[test]
+    fn fastify_plugin_registration_context_does_not_derive_route_support() {
+        let unit = indexed_tsjs_unit("src/plugins.ts", "fastify_plugin_registration", 0);
+        let parser_fact = tsjs_structural_anchor_fact(&unit, "fastify.plugin.register");
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:fastify.route_handler");
+
+        let derived = derive_tsjs_framework_support_facts(
+            std::slice::from_ref(&unit),
+            std::slice::from_ref(&parser_fact),
+            std::slice::from_ref(&role_fact),
+        )
+        .expect("derive structural tsjs support");
+
+        assert!(derived.is_empty());
+    }
+
+    #[test]
     fn provider_resolved_tsjs_binding_facts_derive_prisma_support() {
         let first = indexed_tsjs_unit("src/users.ts", "prisma_query", 0);
         let second = indexed_tsjs_unit("src/accounts.ts", "prisma_query", 1);

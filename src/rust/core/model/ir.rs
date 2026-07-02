@@ -43,6 +43,7 @@ pub enum IrNodeKind {
     NextPagesApiRoute,
     NextPagesPage,
     FastifyRoute,
+    FastifyPluginRegistration,
     PrismaQuery,
     PrismaTransaction,
     DrizzleSchemaTable,
@@ -78,6 +79,7 @@ impl IrNodeKind {
             CodeUnitKind::NextPagesApiRoute => Self::NextPagesApiRoute,
             CodeUnitKind::NextPagesPage => Self::NextPagesPage,
             CodeUnitKind::FastifyRoute => Self::FastifyRoute,
+            CodeUnitKind::FastifyPluginRegistration => Self::FastifyPluginRegistration,
             CodeUnitKind::PrismaQuery => Self::PrismaQuery,
             CodeUnitKind::PrismaTransaction => Self::PrismaTransaction,
             CodeUnitKind::DrizzleSchemaTable => Self::DrizzleSchemaTable,
@@ -129,6 +131,7 @@ impl IrNodeKind {
             "next_pages_api_route" => Ok(Self::NextPagesApiRoute),
             "next_pages_page" => Ok(Self::NextPagesPage),
             "fastify_route" => Ok(Self::FastifyRoute),
+            "fastify_plugin_registration" => Ok(Self::FastifyPluginRegistration),
             "prisma_query" => Ok(Self::PrismaQuery),
             "prisma_transaction" => Ok(Self::PrismaTransaction),
             "drizzle_schema_table" => Ok(Self::DrizzleSchemaTable),
@@ -165,6 +168,7 @@ impl IrNodeKind {
             Self::NextPagesApiRoute => "next_pages_api_route",
             Self::NextPagesPage => "next_pages_page",
             Self::FastifyRoute => "fastify_route",
+            Self::FastifyPluginRegistration => "fastify_plugin_registration",
             Self::PrismaQuery => "prisma_query",
             Self::PrismaTransaction => "prisma_transaction",
             Self::DrizzleSchemaTable => "drizzle_schema_table",
@@ -289,6 +293,18 @@ mod tests {
         assert_eq!(node.kind, IrNodeKind::Function);
         assert_eq!(node.range.start_byte, 0);
         assert_eq!(node.provenance.path, "src/a.ts");
+    }
+
+    #[test]
+    fn fastify_plugin_registration_ir_kind_uses_stable_token() {
+        let kind = IrNodeKind::from_code_unit_kind(&CodeUnitKind::FastifyPluginRegistration);
+        assert_eq!(kind, IrNodeKind::FastifyPluginRegistration);
+        assert_eq!(kind.as_str(), "fastify_plugin_registration");
+        assert_eq!(
+            IrNodeKind::parse_protocol_str("fastify_plugin_registration")
+                .expect("parse fastify plugin registration"),
+            IrNodeKind::FastifyPluginRegistration
+        );
     }
 
     #[test]

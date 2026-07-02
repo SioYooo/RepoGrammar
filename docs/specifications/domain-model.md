@@ -12,8 +12,9 @@ provenance. It must not contain Tree-sitter nodes or transport-specific types.
 Current syntax-only indexing can persist transitional TS/JS `CodeUnit` records
 for modules, functions, assigned arrow functions, classes, methods, React
 function components, custom hooks, Express route calls, Next.js App/Pages
-Router conventions, Fastify route declarations, Prisma query/transaction calls,
-Drizzle schema/query/transaction anchors, and Jest/Vitest suite or test blocks.
+Router conventions, Fastify route declarations and plugin registrations, Prisma
+query/transaction calls, Drizzle schema/query/transaction anchors, and
+Jest/Vitest suite or test blocks.
 The first Python v0.1 slice can also persist CPython
 `ast`-derived records for modules, functions, async functions, classes, methods,
 FastAPI route-shaped functions, pytest tests and fixtures, Pydantic model-shaped

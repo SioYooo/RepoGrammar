@@ -104,11 +104,13 @@ bindings and file conventions match the adapter registry. Exact bindings may
 come from ES imports, CommonJS `require`, or CommonJS destructuring aliases from
 the exact supported package, but not from custom wrappers or injected clients:
 Express app/router calls, exact literal `app.use("/prefix", router)` mount
-context for subsequent exact router routes, Jest/Vitest runners, Next App/Pages conventions with
-`next` package context, Fastify factory receivers plus shorthand routes or full
-`app.route` declarations with literal method, literal `url`/`path`, and an
-exact `handler` field, local `new PrismaClient()` clients, and Drizzle
-table/db/query bindings. Relative repo-local named Express/Fastify handler
+context for subsequent exact router routes, Jest/Vitest runners, Next
+App/Pages conventions with `next` package context, Fastify factory receivers
+plus shorthand routes or full `app.route` declarations with literal method,
+literal `url`/`path`, and an exact `handler` field, exact local
+`register(plugin, { prefix: "..." })` plugin/prefix context that is not a
+support target, local `new PrismaClient()` clients, and Drizzle table/db/query
+bindings. Relative repo-local named Express/Fastify handler
 imports and Prisma shared-client imports such as `import { prisma } from
 "./db"` are provider-required candidates; Drizzle query anchors with relative
 repo-local named `db` and table imports are provider-required candidates as
@@ -122,8 +124,8 @@ and route-handler anchors; middleware, server actions, re-exports, and
 server/client semantics remain unsupported. Dynamic receivers, custom wrappers,
 dynamic methods, dynamic Express router prefixes, middleware side effects,
 conditional imports, external route handlers, missing route handlers, Fastify
-plugin prefixes, Fastify full routes without literal
-`url`/`path` or handler fields, Prisma
+imported plugins, plugin side effects, dynamic plugin prefixes, Fastify full
+routes without literal `url`/`path` or handler fields, Prisma
 bulk/raw/injected clients, and Drizzle raw/dynamic builders emit typed
 `UNKNOWN` for the affected claim instead of support. The application layer
 promotes accepted anchors to `DATAFLOW_DERIVED` support facts with engine
@@ -327,8 +329,8 @@ The current implementation uses dependency-free syntax-only extractor adapters
 as bootstrap parser boundaries. The TS/JS extractor recognizes modules,
 functions, assigned arrow functions, classes, methods, React function
 components, custom hooks, Express route calls, Next.js route/page conventions,
-Fastify routes, Prisma queries/transactions, Drizzle schema/query/transaction
-anchors, and Jest/Vitest
+Fastify routes and plugin registrations, Prisma queries/transactions, Drizzle
+schema/query/transaction anchors, and Jest/Vitest
 `describe`/`it`/`test` blocks by structural syntax only. The Python extractor
 uses a checked-in CPython `ast` worker and recognizes modules, functions,
 async functions, classes, methods, FastAPI route-shaped functions, pytest tests
@@ -520,8 +522,8 @@ bases, FastAPI route/dependency roles, pytest tests/fixtures, Pydantic models,
 and SQLAlchemy model/session roles. Current stored TS/JS unit kinds are
 syntax-only and include module, function, arrow function, class, method, React
 component, React hook, Express route, Next.js App/Pages route/page/layout units,
-Fastify route, Prisma query/transaction, Drizzle schema/query/transaction, test
-suite, and test case.
+Fastify route and plugin registration, Prisma query/transaction, Drizzle
+schema/query/transaction, test suite, and test case.
 
 ## Normalization and fingerprinting
 
@@ -593,14 +595,16 @@ The current lightweight TS/JS adapter maps syntax-only code-unit kinds for
 Express routes, React components, React hooks, Jest/Vitest suites/tests,
 Next.js conventions, Fastify routes, Prisma queries/transactions, and Drizzle
 schema/query/transaction anchors into syntax-origin `FRAMEWORK_ROLE` fact
-records. It records
+records. Fastify plugin-registration code units are context-only and do not map
+to a route-handler role. The adapter records
 repo-relative evidence and unresolved-binding assumptions. For the conservative
 v0.2 path, the parser also emits structural exact-anchor facts for those
 framework adapters; the application layer may derive `DATAFLOW_DERIVED` support
 from those exact anchors. It still does not perform TypeScript compiler-backed
 binding/export propagation, React runtime behavior, Next server/client or
-middleware semantics, Fastify plugin-prefix resolution, Prisma/Drizzle runtime
-extensions, dependency injection, or lifecycle semantics. Exact local Next
+middleware semantics, Fastify plugin side effects or dynamic prefixes,
+Prisma/Drizzle runtime extensions, dependency injection, or lifecycle
+semantics. Exact local Next
 dynamic segments, route groups, and parallel routes remain context assumptions
 on accepted file-convention anchors rather than blocking those anchors by
 themselves.

@@ -68,6 +68,11 @@
   repo-local relative import resolution. Unique rootDirs targets become
   `STRUCTURAL` `RESOLVED_IMPORT` context facts, while unresolved or conflicting
   rootDirs candidates remain typed `UNKNOWN`.
+- Fastify exact-anchor parsing now records exact local
+  `register(plugin, { prefix: "..." })` plugin/prefix context as
+  `fastify.plugin.register` without adding it to Fastify route support targets.
+  Dynamic prefixes, imported plugins, missing plugins, and plugin side effects
+  remain typed `UNKNOWN` or context only.
 - TS/JS exact-anchor binding now accepts CommonJS destructuring aliases from
   exact supported framework packages, covering Express routers, Fastify
   factories, Prisma clients, and Drizzle table/db factories without treating
@@ -150,8 +155,9 @@
   model operations and array transactions, and Drizzle table/query anchors
   including `db.query.<table>.findMany/findFirst`. Package-only evidence,
   framework-role heuristics, React components/hooks, Next middleware/server
-  actions/re-exports, Fastify plugin prefixes, Prisma bulk/injected/raw clients,
-  and Drizzle raw/dynamic builders remain `UNKNOWN` or non-supporting context.
+  actions/re-exports, Fastify dynamic/imported plugin registrations, Prisma
+  bulk/injected/raw clients, and Drizzle raw/dynamic builders remain `UNKNOWN`
+  or non-supporting context.
   New v0.2 fixtures cover positive Next/Fastify/Prisma/Drizzle families and
   negative package/dynamic/raw/bulk/shadowed cases.
 - Rust structural self-dogfood indexing for RepoGrammar's own implementation

@@ -1014,9 +1014,12 @@ fn claim_specific_required_unknown_mechanism(
             | "next_default_export"
             | "next_pages_api_export"
             | "next_route_handler_export" => Some("typescript_export_graph"),
-            "fastify_receiver_binding" | "fastify_route_shape" | "fastify_route_method" => {
-                Some("fastify_receiver_model")
-            }
+            "fastify_receiver_binding"
+            | "fastify_route_shape"
+            | "fastify_route_method"
+            | "fastify_route_prefix"
+            | "fastify_plugin_binding"
+            | "fastify_plugin_registration" => Some("fastify_receiver_model"),
             "prisma_client_binding" | "prisma_query_shape" | "prisma_transaction_shape" => {
                 Some("prisma_client_model")
             }

@@ -85,6 +85,9 @@ fn anchor_for_unit(
         | CodeUnitKind::NextPagesApiRoute
         | CodeUnitKind::NextPagesPage => next::anchor(document, context, unit, slice),
         CodeUnitKind::FastifyRoute => fastify::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::FastifyPluginRegistration => {
+            fastify::register_anchor(bindings, slice, unit.range.start_byte)
+        }
         CodeUnitKind::PrismaQuery => prisma::query_anchor(bindings, slice, unit.range.start_byte),
         CodeUnitKind::PrismaTransaction => {
             prisma::transaction_anchor(bindings, slice, unit.range.start_byte)
@@ -1057,6 +1060,73 @@ app.route({ method: "POST", url: "/users", handler: async (request, reply) => re
                 "fastify.route.get".to_string(),
                 "fastify.route.route".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn fastify_register_literal_prefix_records_local_plugin_context() {
+        let text = r#"import fastify from "fastify";
+const app = fastify();
+function usersPlugin(instance, _opts, done) {
+  instance.decorate("users", []);
+  done();
+}
+app.register(usersPlugin, { prefix: "/api" });
+"#;
+        let facts = parse_facts("src/fastify-plugin.ts", text);
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            vec!["fastify.plugin.register".to_string()]
+        );
+        let fact = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "fastify.plugin.register")
+            })
+            .expect("fastify plugin registration fact");
+        for expected in [
+            "tsjs_anchor_kind=fastify_plugin_register",
+            "operation=register",
+            "fact_scope=context_only",
+            "prefix_unknown=false",
+            "route_prefix_shape=/api",
+            "plugin_binding=local",
+            "plugin_local_name=usersPlugin",
+            "plugin_effects=unresolved",
+        ] {
+            assert!(fact
+                .assumptions
+                .iter()
+                .any(|assumption| assumption == expected));
+        }
+        assert!(unknown_kinds_from_facts(facts).is_empty());
+    }
+
+    #[test]
+    fn fastify_register_dynamic_or_imported_plugin_context_stays_unknown() {
+        let dynamic_prefix = r#"import fastify from "fastify";
+const app = fastify();
+function usersPlugin(_instance, _opts, done) { done(); }
+const prefix = "/api";
+app.register(usersPlugin, { prefix });
+"#;
+        assert!(targets("src/fastify-dynamic-prefix.ts", dynamic_prefix).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify-dynamic-prefix.ts", dynamic_prefix),
+            vec!["fastify_dynamic_prefix".to_string()]
+        );
+
+        let imported_plugin = r#"import fastify from "fastify";
+import { usersPlugin } from "@acme/fastify-users";
+const app = fastify();
+app.register(usersPlugin, { prefix: "/api" });
+"#;
+        assert!(targets("src/fastify-imported-plugin.ts", imported_plugin).is_empty());
+        assert_eq!(
+            unknown_kinds("src/fastify-imported-plugin.ts", imported_plugin),
+            vec!["imported_fastify_plugin".to_string()]
         );
     }
 
