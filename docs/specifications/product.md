@@ -131,11 +131,15 @@ Fastify plugin-prefix resolution, Prisma/Drizzle runtime extensions, Next
 server/client semantics, middleware, server actions, re-export semantics, and
 dynamic-wrapper support remain deferred unless a later ADR changes the sequence
 again. A bounded optional TypeScript worker operation slice may produce
-compiler-backed module-resolution facts when a TypeScript compiler API is
-available, but static fallback facts remain structural context and do not
-support family claims. Exact local Next dynamic segments, route groups, and
-parallel routes may be recorded as context assumptions on supported
-page/layout/route anchors; they are not independent support evidence.
+compiler-backed module-resolution facts and may cross-check exact Next.js
+file-convention export identity when a TypeScript compiler API is available.
+Only TypeScript-provider `resolve_export` facts that match the parser Next.js
+anchor's path/hash/code-unit/range, export name, framework role, and
+structural-anchor provenance may become TS/JS-derived support. Static fallback
+facts remain structural context and do not support family claims. Exact local
+Next dynamic segments, route groups, and parallel routes may be recorded as
+context assumptions on supported page/layout/route anchors; they are not
+independent support evidence.
 
 Rust support in the v0.2 preview is limited to RepoGrammar self-dogfooding. It
 uses Tree-sitter Rust for structural code-unit extraction and RepoGrammar-owned
@@ -183,7 +187,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; dynamic declarative patterns remain conservative. |
 | JS/TS Express | Conservative v0.2 preview | Exact import/require bindings, including CommonJS destructuring aliases, plus direct literal route calls; support>=3 and complete-link compatibility required. |
 | JS/TS Jest/Vitest | Conservative v0.2 preview | Exact imported/aliased runners or ambient test-file runners with safe project context; support>=3 required. |
-| JS/TS Next.js | Structural v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; dynamic segments, route groups, and parallel routes are context assumptions on exact anchors, while middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Next.js | Compiler-cross-checked v0.2 preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; configured TypeScript workers can cross-check exact route/page/layout/API export identity, while dynamic segments, route groups, parallel routes, middleware, server/client semantics, server actions, and re-exported routes remain context or `UNKNOWN`. |
 | JS/TS Fastify | Structural v0.2 preview | Exact local Fastify factory receiver, including CommonJS destructuring aliases, plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
 | JS/TS Prisma | Structural v0.2 preview | Exact local `new PrismaClient()` bindings, including CommonJS destructuring aliases, plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | Structural v0.2 preview | Exact Drizzle table factories and local `drizzle(...)` db bindings, including CommonJS destructuring aliases, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
@@ -194,7 +198,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | Java Spring MVC | Structural v0.2 preview | Exact imported/FQN Spring MVC route annotations inside exact controllers; route constants and runtime dispatch remain typed `UNKNOWN` subclaims. |
 | Java Spring/Spring Boot components | Structural v0.2 preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain runtime `UNKNOWN`s. |
 | Java Spring Data | Structural v0.2 preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, module selection, and classpath resolution remain `UNKNOWN`. |
-| TS/JS provider-backed semantics | Planned preview | Provider ports and bounded worker operations exist, but TypeScript Program/TypeChecker, Language Service, CodeQL, or abstract-analysis workers do not yet support public families. |
+| TS/JS provider-backed semantics | Limited preview | Bounded TypeScript worker export facts can support exact Next.js file-convention export identity after path/hash/range/role validation; TypeScript Program/TypeChecker, Language Service, CodeQL, abstract-analysis workers, and broad JS/TS provider-backed families remain deferred. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 

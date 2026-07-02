@@ -83,6 +83,13 @@
   operation provenance as `<specifier>#*`, letting configured workers return
   matching `resolve_reexport` context without turning fallback or unresolved
   re-export facts into family support.
+- Configured TypeScript workers now receive `resolve_export` operations for
+  exact Next.js file-convention route/page/layout/API anchors. When the
+  TypeScript compiler API proves the matching export name for the same
+  path/hash/code-unit/range, the application layer records a
+  provider-resolved TS/JS-derived support fact with `provider=typescript` and
+  `query_operation=resolve_export`. Dependency-free fallback export facts still
+  carry `provider_resolved=false` and remain context only.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve

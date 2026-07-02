@@ -164,7 +164,8 @@ hash/range evidence, and supports these operations:
 `resolve_module_specifier`, `resolve_export`, `resolve_reexport`, and
 `resolve_package_entry`. When an official TypeScript module is available from
 the worker environment, the worker may use the compiler API's module resolver
-and emit `SEMANTIC` facts with `provider=typescript`,
+and source-file parser for exact export identity, then emit `SEMANTIC` facts
+with `provider=typescript`,
 `provider_resolved=true`, `query_operation=<operation>`, config/package hashes,
 and a safe environment fingerprint. When no TypeScript API is available, the
 checked-in worker falls back to a dependency-free bounded project-model
@@ -272,13 +273,18 @@ an absolute Node executable as `REPOGRAMMAR_TYPESCRIPT_WORKER` and the worker
 script path as an argument in `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. The
 launcher must not parse shell strings, inherit PATH to satisfy shebang lookup,
 or accept worker arguments without an executable. The operation plan includes
-literal module specifier requests from parser import/export/require facts and
-bounded re-export requests for `export * from "<specifier>"` UNKNOWNs, encoded
-as `<specifier>#*` so provider or fallback facts can be matched back to the
-exact operation. Returned facts are sorted deterministically, translated into
-RepoGrammar-owned storage records, and written only through the storage gate
-that matches evidence against the building generation manifest, content hashes,
-code-unit ranges, and requested operation provenance.
+literal module specifier requests from parser import/export/require facts,
+bounded re-export requests for `export * from "<specifier>"` UNKNOWNs encoded
+as `<specifier>#*`, and `resolve_export` requests for exact Next.js
+file-convention route/page/layout/API anchors. Returned facts are sorted
+deterministically, translated into RepoGrammar-owned storage records, and
+written only through the storage gate that matches evidence against the
+building generation manifest, content hashes, code-unit ranges, and requested
+operation provenance. A TypeScript-provider `resolve_export` fact can feed a
+post-worker TS/JS derived-support fact only when it matches the parser Next.js
+anchor's same path, hash, code unit, range, framework role, and export name.
+Dependency-free fallback facts with `provider_resolved=false` remain context
+only.
 Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and
 protocol violations produce syntax-only fallback statuses and sanitized
 warnings. A worker fact that passes protocol parsing but does not match the

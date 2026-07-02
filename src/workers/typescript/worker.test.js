@@ -116,6 +116,20 @@ function assertCompilerResolved(fact, target) {
   assert(!JSON.stringify(fact).includes("const "));
 }
 
+function assertCompilerResolvedExport(fact, factKind, target, exportName) {
+  assert.strictEqual(fact.fact_kind, factKind);
+  assert.strictEqual(fact.target, target);
+  assert.strictEqual(fact.origin.engine, "typescript");
+  assert.strictEqual(fact.origin.engine_version, "6.0.0");
+  assert.strictEqual(fact.origin.method, "compiler_api_module_resolver_v1");
+  assert.strictEqual(fact.certainty, "SEMANTIC");
+  assert(fact.assumptions.includes("provider=typescript"));
+  assert(fact.assumptions.includes("provider_resolved=true"));
+  assert(fact.assumptions.includes("query_operation=resolve_export"));
+  assert(fact.assumptions.includes(`tsjs_export_name=${exportName}`));
+  assert(!JSON.stringify(fact).includes("export async function"));
+}
+
 function assertUnknown(fact, reason, kind) {
   assert.strictEqual(fact.fact_kind, "UNKNOWN");
   assert.strictEqual(fact.target, reason);
@@ -268,6 +282,64 @@ exports.resolveModuleName = () => ({});
   assert.strictEqual(namedFact.target, "symbol:src/exported.ts#export:named");
   assert.strictEqual(typeFact.fact_kind, "TYPE");
   assert.strictEqual(typeFact.target, "symbol:src/exported.ts#export:UserDto");
+}
+
+{
+  const root = workspace("compiler-api-export");
+  const source = writeFile(
+    root,
+    "src/route.ts",
+    "export async function GET() {}\nexport default function Page() {}\n"
+  );
+  writeFile(
+    root,
+    "node_modules/typescript/index.js",
+    `
+exports.version = "6.0.0";
+exports.resolveModuleName = () => ({});
+exports.ScriptTarget = { Latest: 99 };
+exports.SyntaxKind = { ExportKeyword: 1, DefaultKeyword: 2 };
+exports.getModifiers = (node) => node.modifiers || [];
+exports.createSourceFile = (_fileName, text) => ({
+  statements: [
+    ...(text.includes("function GET") ? [{
+      kind: "function",
+      name: { text: "GET" },
+      modifiers: [{ kind: 1 }],
+    }] : []),
+    ...(text.includes("default function Page") ? [{
+      kind: "function",
+      name: { text: "Page" },
+      modifiers: [{ kind: 1 }, { kind: 2 }],
+    }] : []),
+  ],
+});
+exports.isFunctionDeclaration = (node) => node.kind === "function";
+exports.isClassDeclaration = () => false;
+exports.isEnumDeclaration = () => false;
+exports.isInterfaceDeclaration = () => false;
+exports.isTypeAliasDeclaration = () => false;
+exports.isVariableStatement = () => false;
+exports.isExportAssignment = () => false;
+exports.isExportDeclaration = () => false;
+exports.isNamedExports = () => false;
+`
+  );
+
+  const getFact = singleFact(runWorker(request(root, [source], [
+    operation(source, "GET", { operation: "resolve_export" }),
+  ])));
+  const defaultFact = singleFact(runWorker(request(root, [source], [
+    operation(source, "default", { operation: "resolve_export" }),
+  ])));
+
+  assertCompilerResolvedExport(getFact, "SYMBOL", "symbol:src/route.ts#export:GET", "GET");
+  assertCompilerResolvedExport(
+    defaultFact,
+    "SYMBOL",
+    "symbol:src/route.ts#export:default",
+    "default"
+  );
 }
 
 {

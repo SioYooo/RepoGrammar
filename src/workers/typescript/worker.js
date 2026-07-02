@@ -757,6 +757,105 @@ function exportedFactKind(text, exportName) {
   return null;
 }
 
+function exportedFactKindWithTypeScript(ts, text, exportName, fileName) {
+  if (!ts || typeof ts.createSourceFile !== "function") {
+    return null;
+  }
+  let sourceFile;
+  try {
+    sourceFile = ts.createSourceFile(
+      fileName,
+      text,
+      ts.ScriptTarget && ts.ScriptTarget.Latest ? ts.ScriptTarget.Latest : 99,
+      false
+    );
+  } catch (_error) {
+    return null;
+  }
+  if (!sourceFile || !Array.isArray(sourceFile.statements)) {
+    return null;
+  }
+  for (const statement of sourceFile.statements) {
+    const factKind = exportedStatementFactKind(ts, statement, exportName);
+    if (factKind) {
+      return factKind;
+    }
+  }
+  return null;
+}
+
+function exportedStatementFactKind(ts, statement, exportName) {
+  if (exportName === "default") {
+    if (hasModifier(ts, statement, "ExportKeyword") && hasModifier(ts, statement, "DefaultKeyword")) {
+      return "SYMBOL";
+    }
+    if (typeof ts.isExportAssignment === "function" && ts.isExportAssignment(statement)) {
+      return "SYMBOL";
+    }
+    return null;
+  }
+  if (
+    (typeof ts.isInterfaceDeclaration === "function" && ts.isInterfaceDeclaration(statement)) ||
+    (typeof ts.isTypeAliasDeclaration === "function" && ts.isTypeAliasDeclaration(statement))
+  ) {
+    return exportedDeclarationName(statement) === exportName && hasModifier(ts, statement, "ExportKeyword")
+      ? "TYPE"
+      : null;
+  }
+  if (
+    (typeof ts.isFunctionDeclaration === "function" && ts.isFunctionDeclaration(statement)) ||
+    (typeof ts.isClassDeclaration === "function" && ts.isClassDeclaration(statement)) ||
+    (typeof ts.isEnumDeclaration === "function" && ts.isEnumDeclaration(statement))
+  ) {
+    return exportedDeclarationName(statement) === exportName && hasModifier(ts, statement, "ExportKeyword")
+      ? "SYMBOL"
+      : null;
+  }
+  if (typeof ts.isVariableStatement === "function" && ts.isVariableStatement(statement)) {
+    if (!hasModifier(ts, statement, "ExportKeyword")) {
+      return null;
+    }
+    const declarations = statement.declarationList && statement.declarationList.declarations;
+    if (!Array.isArray(declarations)) {
+      return null;
+    }
+    return declarations.some((declaration) => exportedDeclarationName(declaration) === exportName)
+      ? "SYMBOL"
+      : null;
+  }
+  if (typeof ts.isExportDeclaration === "function" && ts.isExportDeclaration(statement)) {
+    return exportedDeclarationListContains(ts, statement, exportName);
+  }
+  return null;
+}
+
+function exportedDeclarationName(node) {
+  return node && node.name && typeof node.name.text === "string" ? node.name.text : null;
+}
+
+function hasModifier(ts, node, kindName) {
+  const kind = ts.SyntaxKind && ts.SyntaxKind[kindName];
+  if (typeof kind !== "number") {
+    return false;
+  }
+  const modifiers = typeof ts.getModifiers === "function" ? ts.getModifiers(node) : node.modifiers;
+  return Array.isArray(modifiers) && modifiers.some((modifier) => modifier.kind === kind);
+}
+
+function exportedDeclarationListContains(ts, statement, exportName) {
+  const clause = statement.exportClause;
+  if (!clause || typeof ts.isNamedExports !== "function" || !ts.isNamedExports(clause)) {
+    return null;
+  }
+  for (const element of clause.elements || []) {
+    const name = element.name && element.name.text;
+    if (name === exportName) {
+      return statement.isTypeOnly ? "TYPE" : "SYMBOL";
+    }
+  }
+  return null;
+}
+
 function splitReexportSpecifier(value) {
   const index = value.lastIndexOf("#");
   if (index === -1) {
@@ -907,7 +1006,15 @@ function runOperation(requestId, payload, model, operation) {
   }
   if (operation.operation === "resolve_export") {
     const text = readBoundedText(payload.project_root, operation.path, operation.max_bytes);
-    const factKind = text ? exportedFactKind(text, operation.literal_specifier) : null;
+    const providerFactKind = text
+      ? exportedFactKindWithTypeScript(
+          model.typescript,
+          text,
+          operation.literal_specifier,
+          operation.path
+        )
+      : null;
+    const factKind = providerFactKind || (text ? exportedFactKind(text, operation.literal_specifier) : null);
     if (factKind) {
       emitFact(
         requestId,
@@ -915,8 +1022,11 @@ function runOperation(requestId, payload, model, operation) {
         operation,
         factKind,
         `symbol:${operation.path}#export:${operation.literal_specifier}`,
-        "bounded project model resolved TS/JS export symbol",
-        [`tsjs_export_name=${operation.literal_specifier}`]
+        providerFactKind
+          ? "TypeScript compiler resolved TS/JS export symbol"
+          : "bounded project model resolved TS/JS export symbol",
+        [`tsjs_export_name=${operation.literal_specifier}`],
+        { providerResolved: Boolean(providerFactKind) }
       );
     } else {
       emitUnknown(

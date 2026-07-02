@@ -66,9 +66,12 @@ repo-local static import resolver can record relative/path-alias imports as
 structural context, while dynamic imports, conditional `require`, unresolved
 aliases, and star re-exports remain typed `UNKNOWN`. When explicitly configured
 through the semantic-worker environment variables, the checked-in TypeScript
-worker can accept bounded module/export/package operations and use the
-TypeScript compiler API for module resolution if a TypeScript module is
-available to that worker. Without that API it emits only structural fallback
+worker can accept bounded module/export/package operations, use the TypeScript
+compiler API for module resolution, and cross-check exact Next.js
+file-convention export identity when a TypeScript module is available to that
+worker. Only matching TypeScript-provider `resolve_export` facts for exact
+Next.js anchors may become provider-resolved TS/JS-derived support; fallback
+facts remain context only. Without that API it emits only structural fallback
 facts or typed `UNKNOWN`s. This is not full TypeScript/JavaScript semantic
 analysis.
 For Jest/Vitest, package dependencies and JSON config files can provide ambient
@@ -95,7 +98,7 @@ analysis.
 | Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |
 | JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls only; support requires at least three complete-link-compatible examples. |
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
-| JS/TS Next.js | v0.2 structural preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; dynamic segments, route groups, and parallel routes are context assumptions on exact anchors, while middleware, server/client semantics, server actions, and re-exported routes remain `UNKNOWN`. |
+| JS/TS Next.js | v0.2 compiler-cross-checked preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; configured TypeScript workers can provider-cross-check exact route/page/layout/API export identity, while dynamic segments, route groups, parallel routes, middleware, server/client semantics, server actions, and re-exported routes remain context or `UNKNOWN`. |
 | JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
 | JS/TS Prisma | v0.2 structural preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | v0.2 structural preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |

@@ -151,20 +151,25 @@ Jest/Vitest globals require bounded project test-runner
 context from package or config inventory; otherwise they emit
 `MissingProjectConfig` instead of support. React components and hooks remain
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
-emits React-shaped semantic support. TypeScript worker facts are stored as
-bounded semantic context only unless a later ADR defines a role-specific support
-promotion path. Default worker operation planning now includes module
-specifier operations for literal import/export/require facts and re-export
-operations for bounded `export * from "<specifier>"` UNKNOWNs, tagging the
-specifier as `<specifier>#*` for operation provenance. Provider-resolved
-TypeScript compiler facts may suppress a matching parser-origin import/export
-`UNKNOWN` in the aggregate UNKNOWN inventory only when the same
-path/hash/code-unit/range and operation are proven; the parser fact is not
-rewritten into family support. If the checked-in
-worker cannot load a TypeScript compiler API, its dependency-free static
-fallback facts remain `STRUCTURAL` or `UNKNOWN` and carry
-`provider_resolved=false`. This is a token-saving foundation, not full TS/JS
-semantic analysis, and TS/JS remains a transitional substrate rather than the
+emits React-shaped semantic support. TypeScript worker facts are bounded
+semantic context by default, with one role-specific promotion path for exact
+Next.js file-convention export identity: after a configured worker returns a
+TypeScript-provider `resolve_export` fact for the same path/hash/code-unit/range
+as a parser Next.js route/page/layout/API anchor, the application layer may
+record a `DATAFLOW_DERIVED` TS/JS support fact carrying `provider=typescript`,
+`provider_resolved=true`, `query_operation=resolve_export`, the framework role,
+and the structural-anchor provenance. Default worker operation planning now
+includes module specifier operations for literal import/export/require facts,
+re-export operations for bounded `export * from "<specifier>"` UNKNOWNs tagged
+as `<specifier>#*`, and export-identity operations for exact Next.js
+file-convention anchors. Provider-resolved TypeScript compiler facts may
+suppress a matching parser-origin import/export `UNKNOWN` in the aggregate
+UNKNOWN inventory only when the same path/hash/code-unit/range and operation
+are proven; fallback facts and unresolved worker facts are not rewritten into
+family support. If the checked-in worker cannot load a TypeScript compiler API,
+its dependency-free static fallback facts remain `STRUCTURAL` or `UNKNOWN` and
+carry `provider_resolved=false`. This is a token-saving foundation, not full
+TS/JS semantic analysis, and TS/JS remains a transitional substrate rather than the
 official v0.1 target. A parallel Java/Spring preview path exists for
 source-visible
 Spring structural anchors. Discovery includes `.java` files. The Tree-sitter

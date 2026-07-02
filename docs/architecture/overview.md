@@ -55,7 +55,10 @@ TypeScript semantic-worker process boundary can validate NDJSON worker output
 into owned facts. `index` and `sync` can optionally run an explicit worker
 executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON configured argv
 vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and record only facts
-that match the building generation's indexed code-unit evidence.
+that match the building generation's indexed code-unit evidence. The
+application layer can currently promote only matching TypeScript-provider
+`resolve_export` facts for exact Next.js file-convention anchors into
+TS/JS-derived provider-resolved support; fallback worker facts remain context.
 Tree-sitter, full TypeScript compiler `Program`/`TypeChecker` worker support,
 freshness-validated semantic claims beyond bounded worker operations, typed IR
 attributes beyond the structural bootstrap graph, family mining, and stronger

@@ -841,6 +841,31 @@ where
             known_work_units(worker_semantic_facts, worker_semantic_facts),
         );
     }
+    let mut derived_tsjs_provider_support_facts =
+        derive_tsjs_provider_resolved_framework_support_facts(
+            &indexed_code_units,
+            &parser_semantic_facts,
+            &framework_role_facts,
+            &worker_facts,
+        )?;
+    sort_semantic_facts(&mut derived_tsjs_provider_support_facts);
+    let derived_tsjs_provider_support_fact_count = record_semantic_facts(
+        store,
+        &generation,
+        local_support_fact_count + rust_provider_fact_count + worker_semantic_facts,
+        &derived_tsjs_provider_support_facts,
+    )?;
+    if derived_tsjs_provider_support_fact_count > 0 {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "recorded provider-resolved TS/JS support facts",
+            known_work_units(
+                derived_tsjs_provider_support_fact_count,
+                derived_tsjs_provider_support_fact_count,
+            ),
+        );
+    }
 
     if let Some(family_store) = options.family_store {
         emit_progress(
@@ -857,7 +882,8 @@ where
                 + derived_java_support_facts.len()
                 + derived_rust_support_facts.len()
                 + rust_provider_facts.len()
-                + worker_facts.len(),
+                + worker_facts.len()
+                + derived_tsjs_provider_support_facts.len(),
         );
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
@@ -867,6 +893,7 @@ where
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
+        family_facts.extend(derived_tsjs_provider_support_facts);
         let family_count = record_family_claims(
             family_store,
             &generation,
@@ -903,7 +930,10 @@ where
         indexed_units,
         // `local_support_fact_count` sums local parser/framework/derived facts;
         // add provider and worker facts so the reported total matches storage.
-        semantic_facts: local_support_fact_count + rust_provider_fact_count + worker_semantic_facts,
+        semantic_facts: local_support_fact_count
+            + rust_provider_fact_count
+            + worker_semantic_facts
+            + derived_tsjs_provider_support_fact_count,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -2818,6 +2848,189 @@ fn derive_tsjs_framework_support_facts(
     Ok(derived)
 }
 
+fn derive_tsjs_provider_resolved_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+    worker_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let export_proofs = tsjs_provider_resolved_export_proofs(worker_facts);
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_tsjs_structural_anchor_fact(fact) {
+            continue;
+        }
+        let Some(export_name) = tsjs_framework_export_operation_literal(fact) else {
+            continue;
+        };
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if !is_tsjs_language(&unit.language) || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if tsjs_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        let proof_key = TsJsProviderExportProofKey::from_fact(fact, &export_name);
+        let Some(worker_fact) = export_proofs.get(&proof_key) else {
+            continue;
+        };
+        if !seen.insert((unit.id.clone(), target.to_string(), export_name.clone())) {
+            continue;
+        }
+        derived.push(derived_tsjs_provider_resolved_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+            fact,
+            worker_fact,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TsJsProviderExportProofKey {
+    path: String,
+    content_hash: String,
+    code_unit_id: String,
+    start_byte: usize,
+    end_byte: usize,
+    export_name: String,
+}
+
+impl TsJsProviderExportProofKey {
+    fn from_fact(fact: &SemanticFact, export_name: &str) -> Self {
+        Self {
+            path: fact.evidence.provenance.path.clone(),
+            content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
+            code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
+            start_byte: fact.evidence.range.start_byte,
+            end_byte: fact.evidence.range.end_byte,
+            export_name: export_name.to_string(),
+        }
+    }
+}
+
+fn tsjs_provider_resolved_export_proofs(
+    worker_facts: &[SemanticFact],
+) -> BTreeMap<TsJsProviderExportProofKey, SemanticFact> {
+    let mut proofs = BTreeMap::new();
+    for fact in worker_facts {
+        if !tsjs_provider_resolved_export_fact(fact) {
+            continue;
+        }
+        let Some(export_name) = fact_assumption_value(fact, "tsjs_export_name=") else {
+            continue;
+        };
+        proofs.insert(
+            TsJsProviderExportProofKey::from_fact(fact, export_name),
+            fact.clone(),
+        );
+    }
+    proofs
+}
+
+fn tsjs_provider_resolved_export_fact(fact: &SemanticFact) -> bool {
+    matches!(
+        fact.kind,
+        SemanticFactKind::ResolvedCall | SemanticFactKind::Symbol | SemanticFactKind::Type
+    ) && fact.certainty == FactCertainty::Semantic
+        && fact.origin.engine == "typescript"
+        && fact.origin.method == "compiler_api_module_resolver_v1"
+        && fact_assumption_value(fact, "provider=") == Some("typescript")
+        && fact_assumption_value(fact, "provider_resolved=") == Some("true")
+        && fact_assumption_value(fact, "query_operation=") == Some("resolve_export")
+}
+
+fn derived_tsjs_provider_resolved_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+    source_fact: &SemanticFact,
+    worker_fact: &SemanticFact,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider=typescript".to_string(),
+        "provider_resolved=true".to_string(),
+        "derived_from=tsjs_structural_anchors".to_string(),
+    ];
+    if let Some(derived_from) = tsjs::derived_from_for_target(target) {
+        assumptions.push(format!("derived_from={derived_from}"));
+    }
+    assumptions.push(format!("framework_role={framework_role}"));
+    for assumption in &source_fact.assumptions {
+        if !assumptions.iter().any(|existing| existing == assumption)
+            && !assumption.starts_with("provider=")
+            && !assumption.starts_with("provider_resolved=")
+            && !assumption.starts_with("framework_role=")
+        {
+            assumptions.push(assumption.clone());
+        }
+    }
+    for assumption in &worker_fact.assumptions {
+        if tsjs_worker_support_assumption_is_safe(assumption)
+            && !assumptions.iter().any(|existing| existing == assumption)
+        {
+            assumptions.push(assumption.clone());
+        }
+    }
+    if !assumptions
+        .iter()
+        .any(|assumption| assumption.starts_with("tsjs_anchor_kind="))
+    {
+        assumptions.push(format!("tsjs_anchor_kind={}", unit.kind));
+    }
+    assumptions.sort();
+    assumptions.dedup();
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: TSJS_DERIVED_SUPPORT_ENGINE,
+            method: TSJS_DERIVED_SUPPORT_METHOD,
+            note: "provider-resolved TS/JS framework export support",
+            assumptions,
+        },
+    )
+}
+
+fn tsjs_worker_support_assumption_is_safe(assumption: &str) -> bool {
+    assumption == "provider=typescript"
+        || assumption == "provider_resolved=true"
+        || assumption.starts_with("operation_id=")
+        || assumption.starts_with("query_operation=")
+        || assumption.starts_with("tsconfig_hash=")
+        || assumption.starts_with("package_json_hash=")
+        || assumption.starts_with("environment_fingerprint=")
+        || assumption.starts_with("tsjs_export_name=")
+}
+
 fn is_tsjs_language(language: &str) -> bool {
     language == "typescript" || language == "javascript"
 }
@@ -3302,6 +3515,12 @@ fn tsjs_semantic_worker_operations(
         .get("package.json")
         .cloned()
         .unwrap_or_else(zero_content_hash);
+    let operation_context = TsJsSemanticWorkerOperationContext {
+        project_config_hash,
+        package_json_hash,
+        max_files: discovery_report.files.len().max(1),
+        max_bytes: request.max_file_bytes,
+    };
     let mut operations = Vec::new();
 
     for fact in parser_semantic_facts {
@@ -3314,23 +3533,58 @@ fn tsjs_semantic_worker_operations(
         let Some(operation_kind) = tsjs_semantic_worker_operation_kind(fact) else {
             continue;
         };
-        operations.push(SemanticWorkerOperation {
-            operation_id: format!("tsjs-op-{:06}", operations.len()),
-            operation: operation_kind,
-            path: fact.evidence.provenance.path.clone(),
-            content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
-            code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
-            start_byte: fact.evidence.range.start_byte,
-            end_byte: fact.evidence.range.end_byte,
-            literal_specifier: literal_specifier.to_string(),
-            project_config_hash: project_config_hash.clone(),
-            package_json_hash: package_json_hash.clone(),
-            max_files: discovery_report.files.len().max(1),
-            max_bytes: request.max_file_bytes,
-        });
+        push_tsjs_semantic_worker_operation(
+            &mut operations,
+            fact,
+            operation_kind,
+            literal_specifier,
+            &operation_context,
+        );
+    }
+    for fact in parser_semantic_facts {
+        let Some(literal_specifier) = tsjs_framework_export_operation_literal(fact) else {
+            continue;
+        };
+        push_tsjs_semantic_worker_operation(
+            &mut operations,
+            fact,
+            SemanticWorkerOperationKind::ResolveExport,
+            &literal_specifier,
+            &operation_context,
+        );
     }
 
     operations
+}
+
+struct TsJsSemanticWorkerOperationContext {
+    project_config_hash: String,
+    package_json_hash: String,
+    max_files: usize,
+    max_bytes: u64,
+}
+
+fn push_tsjs_semantic_worker_operation(
+    operations: &mut Vec<SemanticWorkerOperation>,
+    fact: &SemanticFact,
+    operation: SemanticWorkerOperationKind,
+    literal_specifier: &str,
+    context: &TsJsSemanticWorkerOperationContext,
+) {
+    operations.push(SemanticWorkerOperation {
+        operation_id: format!("tsjs-op-{:06}", operations.len()),
+        operation,
+        path: fact.evidence.provenance.path.clone(),
+        content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
+        code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
+        start_byte: fact.evidence.range.start_byte,
+        end_byte: fact.evidence.range.end_byte,
+        literal_specifier: literal_specifier.to_string(),
+        project_config_hash: context.project_config_hash.clone(),
+        package_json_hash: context.package_json_hash.clone(),
+        max_files: context.max_files,
+        max_bytes: context.max_bytes,
+    });
 }
 
 fn tsjs_semantic_worker_operation_kind(fact: &SemanticFact) -> Option<SemanticWorkerOperationKind> {
@@ -3352,6 +3606,21 @@ fn tsjs_parser_import_resolution_fact(fact: &SemanticFact) -> bool {
     ) && fact.origin.engine == crate::adapters::parsing::tsjs::TSJS_ANCHOR_ENGINE
         && fact.origin.method == "bounded_import_resolver_v1"
         && fact_assumption_value(fact, "literal_specifier=").is_some()
+}
+
+fn tsjs_framework_export_operation_literal(fact: &SemanticFact) -> Option<String> {
+    if !is_tsjs_structural_anchor_fact(fact) {
+        return None;
+    }
+    match fact_assumption_value(fact, "tsjs_anchor_kind=") {
+        Some("next_route_handler") => {
+            fact_assumption_value(fact, "http_method=").map(ToString::to_string)
+        }
+        Some("next_app_page" | "next_app_layout" | "next_pages_api_route" | "next_pages_page") => {
+            Some("default".to_string())
+        }
+        _ => None,
+    }
 }
 
 fn zero_content_hash() -> String {
@@ -4329,6 +4598,57 @@ mod tests {
         }
     }
 
+    fn tsjs_next_route_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        method: &str,
+    ) -> SemanticFact {
+        let mut fact = tsjs_structural_anchor_fact(unit, target);
+        fact.assumptions.push(format!("http_method={method}"));
+        fact
+    }
+
+    fn tsjs_provider_export_fact(unit: &IndexedCodeUnitRecord, export_name: &str) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Symbol,
+            subject: format!("{}#resolve_export:{export_name}", unit.path),
+            target: Some(
+                SymbolId::new(format!("symbol:{}#export:{export_name}", unit.path))
+                    .expect("valid target"),
+            ),
+            origin: FactOrigin {
+                engine: "typescript".to_string(),
+                engine_version: "6.0.0".to_string(),
+                method: "compiler_api_module_resolver_v1".to_string(),
+            },
+            certainty: FactCertainty::Semantic,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "TypeScript compiler resolved TS/JS export symbol",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "provider=typescript".to_string(),
+                "provider_resolved=true".to_string(),
+                "environment_fingerprint=node_typescript_compiler_api_v1".to_string(),
+                format!("operation_id=op-{export_name}"),
+                "query_operation=resolve_export".to_string(),
+                "tsconfig_hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+                format!("tsjs_export_name={export_name}"),
+            ],
+        }
+    }
+
     fn java_structural_anchor_fact(unit: &IndexedCodeUnitRecord, target: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::ResolvedCall,
@@ -4564,6 +4884,115 @@ mod tests {
     }
 
     #[test]
+    fn provider_resolved_tsjs_export_facts_derive_next_support() {
+        let first = indexed_tsjs_unit("app/users/route.ts", "next_route_handler", 0);
+        let second = indexed_tsjs_unit("app/accounts/route.ts", "next_route_handler", 1);
+        let third = indexed_tsjs_unit("app/orders/route.ts", "next_route_handler", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            tsjs_next_route_anchor_fact(&first, "next.route.GET", "GET"),
+            tsjs_next_route_anchor_fact(&second, "next.route.GET", "GET"),
+            tsjs_next_route_anchor_fact(&third, "next.route.GET", "GET"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:next.route.handler"))
+            .collect::<Vec<_>>();
+        let worker_facts = units
+            .iter()
+            .map(|unit| tsjs_provider_export_fact(unit, "GET"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_provider_resolved_framework_support_facts(
+            &units,
+            &parser_facts,
+            &role_facts,
+            &worker_facts,
+        )
+        .expect("derive provider-resolved next support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact.origin.engine == TSJS_DERIVED_SUPPORT_ENGINE
+                && fact.origin.method == TSJS_DERIVED_SUPPORT_METHOD
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider=typescript")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "query_operation=resolve_export")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=tsjs_next_structural_anchors")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(
+            report.claims[0].framework_role,
+            "framework:next.route.handler"
+        );
+    }
+
+    #[test]
+    fn provider_resolved_tsjs_export_support_rejects_fallback_or_mismatched_worker_facts() {
+        let unit = indexed_tsjs_unit("app/users/route.ts", "next_route_handler", 0);
+        let parser_fact = tsjs_next_route_anchor_fact(&unit, "next.route.GET", "GET");
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:next.route.handler");
+
+        let mut fallback_fact = tsjs_provider_export_fact(&unit, "GET");
+        fallback_fact.certainty = FactCertainty::Structural;
+        fallback_fact.origin.engine = "repogrammar-tsjs-static-worker".to_string();
+        fallback_fact.origin.method = "bounded_project_model_resolver_v1".to_string();
+        fallback_fact
+            .assumptions
+            .retain(|assumption| assumption != "provider=typescript");
+        fallback_fact
+            .assumptions
+            .retain(|assumption| assumption != "provider_resolved=true");
+        fallback_fact
+            .assumptions
+            .push("provider=repogrammar_static_tsjs".to_string());
+        fallback_fact
+            .assumptions
+            .push("provider_resolved=false".to_string());
+
+        let fallback = derive_tsjs_provider_resolved_framework_support_facts(
+            std::slice::from_ref(&unit),
+            std::slice::from_ref(&parser_fact),
+            std::slice::from_ref(&role_fact),
+            std::slice::from_ref(&fallback_fact),
+        )
+        .expect("fallback worker fact is valid input");
+        assert!(fallback.is_empty());
+
+        let mut mismatched = tsjs_provider_export_fact(&unit, "default");
+        mismatched
+            .assumptions
+            .retain(|assumption| !assumption.starts_with("tsjs_export_name="));
+        mismatched
+            .assumptions
+            .push("tsjs_export_name=default".to_string());
+        let mismatch = derive_tsjs_provider_resolved_framework_support_facts(
+            &[unit],
+            &[parser_fact],
+            &[role_fact],
+            &[mismatched],
+        )
+        .expect("mismatched worker fact is valid input");
+        assert!(mismatch.is_empty());
+    }
+
+    #[test]
     fn tsjs_package_config_facts_do_not_derive_framework_support() {
         let unit = indexed_tsjs_unit("src/a.ts", "next_app_page", 0);
         let package_fact = SemanticFact {
@@ -4731,6 +5160,95 @@ mod tests {
         )
     }
 
+    fn provider_export_facts_for_next_routes(
+        workspace: &TempWorkspace,
+    ) -> (Vec<String>, Vec<SemanticFact>) {
+        let request = IndexingRequest::new(workspace.path().display().to_string());
+        let report = discover_repository_files(request.clone(), &FilesystemFileDiscovery)
+            .expect("discover files for next provider support");
+        let parser = SyntaxCodeUnitParser;
+        let parser_context =
+            parser_project_context(&request, &report, &FilesystemSourceStore, &parser)
+                .expect("build parser context");
+        let mut facts = Vec::new();
+        for file in &report.files {
+            let source = FilesystemSourceStore
+                .read_source(SourceReadRequest {
+                    repository_root: request.repository_root.clone(),
+                    path: file.path.clone(),
+                    expected_content_hash: file.content_hash.clone(),
+                    max_file_bytes: request.max_file_bytes,
+                })
+                .expect("read source for next provider support");
+            let parse_report = parser
+                .parse_with_context(
+                    SourceDocument {
+                        path: &source.path,
+                        language: language_from_discovered(file.language),
+                        content_hash: source.content_hash.clone(),
+                        repository_revision: RepositoryRevision::new("UNKNOWN")
+                            .expect("valid revision"),
+                        text: &source.text,
+                    },
+                    &parser_context,
+                )
+                .expect("parse source for next provider support");
+            for unit in parse_report
+                .units
+                .into_iter()
+                .filter(|unit| unit.kind == CodeUnitKind::NextRouteHandler)
+            {
+                facts.push(tsjs_provider_export_fact_for_code_unit(&unit, "GET"));
+            }
+        }
+        (
+            report.files.iter().map(|file| file.path.clone()).collect(),
+            facts,
+        )
+    }
+
+    fn tsjs_provider_export_fact_for_code_unit(unit: &CodeUnit, export_name: &str) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Symbol,
+            subject: format!(
+                "{}#resolve_export:{}-{}",
+                unit.provenance.path, unit.range.start_byte, unit.range.end_byte
+            ),
+            target: Some(
+                SymbolId::new(format!(
+                    "symbol:{}#export:{export_name}",
+                    unit.provenance.path
+                ))
+                .expect("valid target"),
+            ),
+            origin: FactOrigin {
+                engine: "typescript".to_string(),
+                engine_version: "6.0.0".to_string(),
+                method: "compiler_api_module_resolver_v1".to_string(),
+            },
+            certainty: FactCertainty::Semantic,
+            evidence: Evidence::new(
+                unit.id.clone(),
+                unit.range.clone(),
+                unit.provenance.clone(),
+                "TypeScript compiler resolved TS/JS export symbol",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "provider=typescript".to_string(),
+                "provider_resolved=true".to_string(),
+                "environment_fingerprint=node_typescript_compiler_api_v1".to_string(),
+                format!("operation_id=op-{export_name}"),
+                "query_operation=resolve_export".to_string(),
+                "tsconfig_hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+                format!("tsjs_export_name={export_name}"),
+            ],
+        }
+    }
+
     fn semantic_fact_count(state: &Path, generation_id: &str) -> u32 {
         let connection =
             Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
@@ -4741,6 +5259,28 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("count semantic facts")
+    }
+
+    fn provider_resolved_tsjs_support_fact_count(state: &Path, generation_id: &str) -> u32 {
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
+        connection
+            .query_row(
+                "SELECT count(*) FROM semantic_facts \
+                 WHERE generation_id = ?1 \
+                 AND origin_engine = ?2 \
+                 AND origin_method = ?3 \
+                 AND certainty = 'DATAFLOW_DERIVED' \
+                 AND assumptions_json LIKE '%provider_resolved=true%' \
+                 AND assumptions_json LIKE '%query_operation=resolve_export%'",
+                params![
+                    generation_id,
+                    TSJS_DERIVED_SUPPORT_ENGINE,
+                    TSJS_DERIVED_SUPPORT_METHOD
+                ],
+                |row| row.get(0),
+            )
+            .expect("count provider-resolved tsjs support facts")
     }
 
     fn semantic_fact_ids(state: &Path, generation_id: &str) -> Vec<(String, String)> {
@@ -6985,6 +7525,68 @@ mod tests {
     }
 
     #[test]
+    fn provider_resolved_next_export_support_is_recorded_after_worker() {
+        let workspace = TempWorkspace::new("indexing-provider-next-export-support");
+        for route in ["users", "accounts", "orders"] {
+            let path = workspace.path().join(format!("app/{route}/route.ts"));
+            fs::create_dir_all(path.parent().expect("route parent")).expect("create route dir");
+            fs::write(
+                path,
+                "export async function GET() { return Response.json([]); }\n",
+            )
+            .expect("write next route");
+        }
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"next":"latest"}}"#,
+        )
+        .expect("write package json");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let (expected_files, facts) = provider_export_facts_for_next_routes(&workspace);
+        assert_eq!(facts.len(), 3);
+        let worker = StaticSemanticWorker {
+            expected_files,
+            result: Ok(facts),
+        };
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &detector,
+                &worker,
+                &store,
+            )
+            .expect("index provider-resolved next support");
+
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(
+            provider_resolved_tsjs_support_fact_count(&state, "gen-000001"),
+            3
+        );
+        assert_eq!(
+            outcome.semantic_facts as u32,
+            semantic_fact_count(&state, "gen-000001")
+        );
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.families.len(), 1);
+        let family = store
+            .show_family(&families.families[0].family_id)
+            .expect("show family")
+            .expect("family exists");
+        assert_eq!(family.members.len(), 3);
+        assert!(family
+            .members
+            .iter()
+            .all(|member| member.role == "framework:next.route.handler"));
+    }
+
+    #[test]
     fn reported_semantic_facts_count_includes_derived_tsjs_support_facts() {
         // A resolved Express server produces exact TS/JS anchors that are promoted
         // to bounded TS/JS-derived support facts and recorded in the generation.
@@ -7069,14 +7671,18 @@ mod tests {
     fn optional_semantic_worker_request_includes_tsjs_resolver_operations() {
         let workspace = TempWorkspace::new("indexing-tsjs-worker-operations");
         fs::create_dir_all(workspace.path().join("src/app")).expect("create source dirs");
+        fs::create_dir_all(workspace.path().join("app/users")).expect("create next dirs");
         let source = "import service from '@app/service';\nexport * from './barrel';\n";
         let target = "export const service = true;\n";
         let barrel = "export const value = true;\n";
+        let next_route = "export async function GET() { return Response.json([]); }\n";
         let config = r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}"#;
-        let package_json = r#"{"dependencies":{"express":"latest"}}"#;
+        let package_json = r#"{"dependencies":{"express":"latest","next":"latest"}}"#;
         fs::write(workspace.path().join("src/route.ts"), source).expect("write route");
         fs::write(workspace.path().join("src/app/service.ts"), target).expect("write target");
         fs::write(workspace.path().join("src/barrel.ts"), barrel).expect("write barrel");
+        fs::write(workspace.path().join("app/users/route.ts"), next_route)
+            .expect("write next route");
         fs::write(workspace.path().join("tsconfig.json"), config).expect("write tsconfig");
         fs::write(workspace.path().join("package.json"), package_json).expect("write package");
         let state = workspace.path().join(".repogrammar");
@@ -7112,7 +7718,7 @@ mod tests {
         let requests = worker.requests.lock().expect("recorded requests");
         assert_eq!(requests.len(), 1);
         let operations = &requests[0].operations;
-        assert_eq!(operations.len(), 2);
+        assert_eq!(operations.len(), 3);
         let operation = &operations[0];
         assert_eq!(
             operation.operation,
@@ -7148,6 +7754,25 @@ mod tests {
         assert!(reexport_operation
             .code_unit_id
             .starts_with("unit:src/route.ts#module:"));
+        let export_operation = &operations[2];
+        assert_eq!(
+            export_operation.operation,
+            SemanticWorkerOperationKind::ResolveExport
+        );
+        assert_eq!(export_operation.path, "app/users/route.ts");
+        assert_eq!(
+            export_operation.content_hash,
+            hash_for("app/users/route.ts")
+        );
+        assert_eq!(export_operation.literal_specifier, "GET");
+        assert_eq!(
+            export_operation.project_config_hash,
+            hash_for("tsconfig.json")
+        );
+        assert_eq!(export_operation.package_json_hash, hash_for("package.json"));
+        assert!(export_operation
+            .code_unit_id
+            .starts_with("unit:app/users/route.ts#next_route_handler:"));
     }
 
     #[test]
