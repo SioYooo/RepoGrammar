@@ -412,6 +412,8 @@ fn tsjs_import_resolution_facts(
             continue;
         }
         if is_export_star_line(line) {
+            let literal_specifier = first_quoted_after(line.trim_start(), " from ")
+                .map(|specifier| format!("{specifier}#*"));
             push_unique_import_fact(
                 &mut facts,
                 &mut seen,
@@ -424,7 +426,7 @@ fn tsjs_import_resolution_facts(
                         reason: "ConflictingFacts",
                         affected_claim: "tsjs_reexport_resolution",
                         kind: "ambiguous_reexport",
-                        literal_specifier: None,
+                        literal_specifier: literal_specifier.as_deref(),
                         note: "star re-export is ambiguous without a semantic provider",
                     },
                 )?,
@@ -2339,6 +2341,17 @@ import ambiguous from "./ambiguous";
         assert!(unknown_kinds.contains("conditional_require"));
         assert!(unknown_kinds.contains("ambiguous_reexport"));
         assert!(unknown_kinds.contains("ambiguous_import"));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=ambiguous_reexport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "literal_specifier=./a#*")
+        }));
     }
 
     #[test]

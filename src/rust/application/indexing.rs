@@ -3311,9 +3311,12 @@ fn tsjs_semantic_worker_operations(
         let Some(literal_specifier) = fact_assumption_value(fact, "literal_specifier=") else {
             continue;
         };
+        let Some(operation_kind) = tsjs_semantic_worker_operation_kind(fact) else {
+            continue;
+        };
         operations.push(SemanticWorkerOperation {
             operation_id: format!("tsjs-op-{:06}", operations.len()),
-            operation: SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            operation: operation_kind,
             path: fact.evidence.provenance.path.clone(),
             content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
             code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
@@ -3328,6 +3331,18 @@ fn tsjs_semantic_worker_operations(
     }
 
     operations
+}
+
+fn tsjs_semantic_worker_operation_kind(fact: &SemanticFact) -> Option<SemanticWorkerOperationKind> {
+    match fact_assumption_value(fact, "affected_claim=") {
+        Some("tsjs_reexport_resolution") => Some(SemanticWorkerOperationKind::ResolveReexport),
+        Some("tsjs_export_resolution") => Some(SemanticWorkerOperationKind::ResolveExport),
+        Some("tsjs_package_entry") => Some(SemanticWorkerOperationKind::ResolvePackageEntry),
+        Some("tsjs_import_resolution") | None => {
+            Some(SemanticWorkerOperationKind::ResolveModuleSpecifier)
+        }
+        Some(_) => None,
+    }
 }
 
 fn tsjs_parser_import_resolution_fact(fact: &SemanticFact) -> bool {
@@ -7054,12 +7069,14 @@ mod tests {
     fn optional_semantic_worker_request_includes_tsjs_resolver_operations() {
         let workspace = TempWorkspace::new("indexing-tsjs-worker-operations");
         fs::create_dir_all(workspace.path().join("src/app")).expect("create source dirs");
-        let source = "import service from '@app/service';\n";
+        let source = "import service from '@app/service';\nexport * from './barrel';\n";
         let target = "export const service = true;\n";
+        let barrel = "export const value = true;\n";
         let config = r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}"#;
         let package_json = r#"{"dependencies":{"express":"latest"}}"#;
         fs::write(workspace.path().join("src/route.ts"), source).expect("write route");
         fs::write(workspace.path().join("src/app/service.ts"), target).expect("write target");
+        fs::write(workspace.path().join("src/barrel.ts"), barrel).expect("write barrel");
         fs::write(workspace.path().join("tsconfig.json"), config).expect("write tsconfig");
         fs::write(workspace.path().join("package.json"), package_json).expect("write package");
         let state = workspace.path().join(".repogrammar");
@@ -7095,7 +7112,7 @@ mod tests {
         let requests = worker.requests.lock().expect("recorded requests");
         assert_eq!(requests.len(), 1);
         let operations = &requests[0].operations;
-        assert_eq!(operations.len(), 1);
+        assert_eq!(operations.len(), 2);
         let operation = &operations[0];
         assert_eq!(
             operation.operation,
@@ -7110,6 +7127,25 @@ mod tests {
         assert_eq!(operation.max_bytes, DEFAULT_MAX_FILE_BYTES);
         assert!(operation.operation_id.starts_with("tsjs-op-"));
         assert!(operation
+            .code_unit_id
+            .starts_with("unit:src/route.ts#module:"));
+        let reexport_operation = &operations[1];
+        assert_eq!(
+            reexport_operation.operation,
+            SemanticWorkerOperationKind::ResolveReexport
+        );
+        assert_eq!(reexport_operation.path, "src/route.ts");
+        assert_eq!(reexport_operation.content_hash, hash_for("src/route.ts"));
+        assert_eq!(reexport_operation.literal_specifier, "./barrel#*");
+        assert_eq!(
+            reexport_operation.project_config_hash,
+            hash_for("tsconfig.json")
+        );
+        assert_eq!(
+            reexport_operation.package_json_hash,
+            hash_for("package.json")
+        );
+        assert!(reexport_operation
             .code_unit_id
             .starts_with("unit:src/route.ts#module:"));
     }

@@ -271,11 +271,14 @@ vector as a JSON array of non-blank strings. For the checked-in Node worker, use
 an absolute Node executable as `REPOGRAMMAR_TYPESCRIPT_WORKER` and the worker
 script path as an argument in `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. The
 launcher must not parse shell strings, inherit PATH to satisfy shebang lookup,
-or accept worker arguments without an executable. Returned facts are sorted
-deterministically, translated into RepoGrammar-owned storage records, and
-written only through the storage gate that matches evidence against the
-building generation manifest, content hashes, code-unit ranges, and requested
-operation provenance.
+or accept worker arguments without an executable. The operation plan includes
+literal module specifier requests from parser import/export/require facts and
+bounded re-export requests for `export * from "<specifier>"` UNKNOWNs, encoded
+as `<specifier>#*` so provider or fallback facts can be matched back to the
+exact operation. Returned facts are sorted deterministically, translated into
+RepoGrammar-owned storage records, and written only through the storage gate
+that matches evidence against the building generation manifest, content hashes,
+code-unit ranges, and requested operation provenance.
 Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and
 protocol violations produce syntax-only fallback statuses and sanitized
 warnings. A worker fact that passes protocol parsing but does not match the

@@ -79,6 +79,10 @@
   structural fallback facts or typed `UNKNOWN`s with `provider_resolved=false`.
   Rust-side validation now matches returned facts against the requested
   path/hash/code-unit/range and operation provenance before storage.
+  `export * from "<specifier>"` parser UNKNOWNs now carry bounded re-export
+  operation provenance as `<specifier>#*`, letting configured workers return
+  matching `resolve_reexport` context without turning fallback or unresolved
+  re-export facts into family support.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve

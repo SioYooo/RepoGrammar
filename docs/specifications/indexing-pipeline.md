@@ -153,10 +153,14 @@ context from package or config inventory; otherwise they emit
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
 emits React-shaped semantic support. TypeScript worker facts are stored as
 bounded semantic context only unless a later ADR defines a role-specific support
-promotion path. Provider-resolved TypeScript compiler facts may suppress a
-matching parser-origin import/export `UNKNOWN` in the aggregate UNKNOWN
-inventory only when the same path/hash/code-unit/range and operation are
-proven; the parser fact is not rewritten into family support. If the checked-in
+promotion path. Default worker operation planning now includes module
+specifier operations for literal import/export/require facts and re-export
+operations for bounded `export * from "<specifier>"` UNKNOWNs, tagging the
+specifier as `<specifier>#*` for operation provenance. Provider-resolved
+TypeScript compiler facts may suppress a matching parser-origin import/export
+`UNKNOWN` in the aggregate UNKNOWN inventory only when the same
+path/hash/code-unit/range and operation are proven; the parser fact is not
+rewritten into family support. If the checked-in
 worker cannot load a TypeScript compiler API, its dependency-free static
 fallback facts remain `STRUCTURAL` or `UNKNOWN` and carry
 `provider_resolved=false`. This is a token-saving foundation, not full TS/JS
