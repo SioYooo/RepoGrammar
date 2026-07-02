@@ -104,6 +104,10 @@
   `./handlers#listUsers` before those imported-handler routes contribute
   support. External handler imports, missing handlers, fallback worker facts,
   and unresolved worker facts remain non-supporting context or typed `UNKNOWN`.
+- Express route anchors now record exact literal `app.use("/prefix", router)`
+  mounts on subsequent exact router routes as `route_prefix_shape` and
+  `effective_route_path_shape` context. Dynamic prefixes, middleware side
+  effects, and wrapper routers remain outside support.
 - Drizzle query anchors now treat relative repo-local named `db` and table
   imports as provider-required candidates. Configured TypeScript workers must
   prove every required `resolve_reexport` binding, such as `./db#db` and

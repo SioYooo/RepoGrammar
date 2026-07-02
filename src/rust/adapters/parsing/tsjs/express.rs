@@ -40,14 +40,26 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
             note: "TS/JS route receiver is reassigned or redeclared",
         });
     }
+    let path_shape = route_path_shape(slice);
     let mut assumptions = vec![
         "tsjs_anchor_kind=express_route".to_string(),
         format!("route_method={method}"),
         format!("handler_shape={}", handler_shape(slice)),
         format!("async_shape={}", async_shape(slice)),
     ];
-    if let Some(path_shape) = route_path_shape(slice) {
+    if let Some(path_shape) = &path_shape {
         assumptions.push(format!("route_path_shape={path_shape}"));
+    }
+    if let Some(prefix_shape) = bindings.express_router_prefixes.get(receiver) {
+        assumptions.push(format!("route_prefix_shape={prefix_shape}"));
+        if let Some(path_shape) = &path_shape {
+            assumptions.push(format!(
+                "effective_route_path_shape={}",
+                effective_route_path_shape(prefix_shape, path_shape)
+            ));
+        }
+    } else {
+        assumptions.push("route_prefix_shape=none".to_string());
     }
     if method != "use" {
         match route_handler_binding_assumptions(bindings, slice, start_byte) {
@@ -60,4 +72,18 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
         fact_kind: SemanticFactKind::ResolvedCall,
         assumptions,
     })
+}
+
+fn effective_route_path_shape(prefix_shape: &str, path_shape: &str) -> String {
+    if prefix_shape == "/" {
+        return path_shape.to_string();
+    }
+    if path_shape == "/" {
+        return prefix_shape.to_string();
+    }
+    format!(
+        "{}/{}",
+        prefix_shape.trim_end_matches('/'),
+        path_shape.trim_start_matches('/')
+    )
 }

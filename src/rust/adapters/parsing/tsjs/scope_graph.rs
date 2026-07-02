@@ -28,6 +28,7 @@ pub(super) struct ScopeGraphLite {
     unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>>,
     scope_intervals: Vec<ScopeInterval>,
     pub(super) express_receivers: BTreeMap<String, ExpressReceiver>,
+    pub(super) express_router_prefixes: BTreeMap<String, String>,
     pub(super) fastify_receivers: BTreeSet<String>,
     pub(super) prisma_clients: BTreeSet<String>,
     pub(super) drizzle_table_factories: BTreeSet<String>,
@@ -97,6 +98,7 @@ impl ScopeGraphLite {
         let scope_intervals = scope_intervals(text);
 
         let mut express_receivers: BTreeMap<String, ExpressReceiver> = BTreeMap::new();
+        let mut express_router_prefixes: BTreeMap<String, String> = BTreeMap::new();
         let mut fastify_receivers = BTreeSet::new();
         let mut prisma_clients = BTreeSet::new();
         let mut drizzle_table_factories = BTreeSet::new();
@@ -138,6 +140,11 @@ impl ScopeGraphLite {
                     drizzle_dbs.insert(name);
                 }
             }
+            if let Some((router, prefix)) =
+                express_router_prefix_mount(line, &express_receivers, &unsafe_names)
+            {
+                express_router_prefixes.entry(router).or_insert(prefix);
+            }
         }
 
         Self {
@@ -147,6 +154,7 @@ impl ScopeGraphLite {
             unsafe_events,
             scope_intervals,
             express_receivers,
+            express_router_prefixes,
             fastify_receivers,
             prisma_clients,
             drizzle_table_factories,
@@ -726,6 +734,36 @@ fn express_receiver_from_rhs(
     } else {
         None
     }
+}
+
+fn express_router_prefix_mount(
+    line: &str,
+    express_receivers: &BTreeMap<String, ExpressReceiver>,
+    unsafe_names: &BTreeSet<String>,
+) -> Option<(String, String)> {
+    let (receiver, method) = super::route_call_parts(line)?;
+    if method != "use"
+        || unsafe_names.contains(receiver)
+        || !matches!(express_receivers.get(receiver), Some(ExpressReceiver::App))
+    {
+        return None;
+    }
+    let arguments = super::call_arguments(line)?;
+    let [prefix_arg, router_arg] = arguments.as_slice() else {
+        return None;
+    };
+    if !super::string_literal_arg(prefix_arg) {
+        return None;
+    }
+    let prefix = super::first_quoted(prefix_arg)?;
+    let (router, after_router) = leading_identifier(router_arg)?;
+    if !router_arg[after_router..].trim().is_empty()
+        || unsafe_names.contains(router)
+        || !matches!(express_receivers.get(router), Some(ExpressReceiver::Router))
+    {
+        return None;
+    }
+    Some((router.to_string(), super::normalize_route_path(&prefix)))
 }
 
 fn fastify_receiver_declaration(

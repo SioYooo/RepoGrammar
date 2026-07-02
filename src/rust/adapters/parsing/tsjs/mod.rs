@@ -365,12 +365,12 @@ fn route_handler_identifier(slice: &str) -> Option<&str> {
     }
 }
 
-fn string_literal_arg(argument: &str) -> bool {
+pub(super) fn string_literal_arg(argument: &str) -> bool {
     let trimmed = argument.trim_start();
     matches!(trimmed.as_bytes().first(), Some(b'"' | b'\''))
 }
 
-fn call_arguments(slice: &str) -> Option<Vec<&str>> {
+pub(super) fn call_arguments(slice: &str) -> Option<Vec<&str>> {
     let open = slice.find('(')?;
     let bytes = slice.as_bytes();
     let mut arguments = Vec::new();
@@ -643,6 +643,71 @@ app.put("/a", (req, res) => { res.end(); });
             targets("src/cjs.js", required),
             vec!["express.route.put".to_string()]
         );
+    }
+
+    #[test]
+    fn express_literal_router_mount_prefix_is_recorded_on_router_routes() {
+        let text = r#"import express from "express";
+import { Router } from "express";
+const app = express();
+const router = Router();
+app.use("/api", router);
+router.get("/users", (_req, res) => { res.json([]); });
+"#;
+        let facts = parse_facts("src/prefixed-router.ts", text);
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            vec![
+                "express.route.get".to_string(),
+                "express.route.use".to_string(),
+            ]
+        );
+        let route = facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "express.route.get")
+            })
+            .expect("router route fact");
+        assert!(route
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "route_prefix_shape=/api"));
+        assert!(route
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "route_path_shape=/users"));
+        assert!(route
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "effective_route_path_shape=/api/users"));
+
+        let dynamic = r#"import express from "express";
+import { Router } from "express";
+const app = express();
+const router = Router();
+const prefix = "/api";
+app.use(prefix, router);
+router.get("/users", (_req, res) => { res.json([]); });
+"#;
+        let dynamic_facts = parse_facts("src/dynamic-prefix-router.ts", dynamic);
+        let dynamic_route = dynamic_facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "express.route.get")
+            })
+            .expect("dynamic-prefix router route fact");
+        assert!(dynamic_route
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "route_prefix_shape=none"));
+        assert!(!dynamic_route
+            .assumptions
+            .iter()
+            .any(|assumption| assumption.starts_with("effective_route_path_shape=")));
     }
 
     #[test]
