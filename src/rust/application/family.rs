@@ -1702,7 +1702,7 @@ fn java_unknown_reason_blocks_family_membership(
     }
 }
 
-fn java_unknown_affected_claim_blocks_family(affected_claim: &str, framework_role: &str) -> bool {
+fn java_unknown_affected_claim_blocks_family(affected_claim: &str, _framework_role: &str) -> bool {
     match affected_claim {
         "java_family_membership"
         | "java_spring_annotation_binding"
@@ -1710,7 +1710,7 @@ fn java_unknown_affected_claim_blocks_family(affected_claim: &str, framework_rol
         | "java_spring_framework_identity"
         | "java_spring_repository_identity" => true,
         claim if claim.starts_with("family:") => true,
-        _ => java_framework_role_is_known(framework_role) && affected_claim.starts_with("java_"),
+        _ => false,
     }
 }
 
@@ -1728,6 +1728,7 @@ fn java_unknown_is_non_blocking_family_subclaim(
             | "java_spring_route_path"
             | "java_spring_dependency_injection"
             | "java_spring_proxy_semantics"
+            | "java_spring_generated_repository"
     ) && java_framework_role_is_known(framework_role)
 }
 
@@ -1988,12 +1989,19 @@ fn java_evidence_pair_is_compatible(
     let roles = prefixed_features(left, features_by_unit, "framework_role:");
     let role = roles.iter().next().map(String::as_str).unwrap_or("");
     match role {
-        "framework_spring_mvc_route" => equal_feature_profiles(
-            left,
-            right,
-            features_by_unit,
-            &["anchor_kind:", "spring_annotation:"],
-        ),
+        "framework_spring_mvc_route" => {
+            equal_feature_profiles(
+                left,
+                right,
+                features_by_unit,
+                &["anchor_kind:", "spring_annotation:"],
+            ) && required_equal_feature_profiles(
+                left,
+                right,
+                features_by_unit,
+                &["http_method:", "route_path_shape:"],
+            )
+        }
         "framework_spring_component" => equal_feature_profiles(
             left,
             right,
@@ -2043,6 +2051,19 @@ fn equal_feature_profiles(
     prefixes.iter().all(|prefix| {
         prefixed_features(left, features_by_unit, prefix)
             == prefixed_features(right, features_by_unit, prefix)
+    })
+}
+
+fn required_equal_feature_profiles(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    prefixes: &[&str],
+) -> bool {
+    prefixes.iter().all(|prefix| {
+        let left_features = prefixed_features(left, features_by_unit, prefix);
+        !left_features.is_empty()
+            && left_features == prefixed_features(right, features_by_unit, prefix)
     })
 }
 
@@ -3140,6 +3161,56 @@ mod tests {
         java_derived_fact_with_assumptions(unit, target, framework_role, Vec::new())
     }
 
+    fn java_route_derived_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+        http_method: &str,
+        route_path_shape: &str,
+    ) -> SemanticFact {
+        let mut fact = java_derived_fact(unit, target, "framework:spring.mvc_route");
+        let annotation = target.rsplit('.').next().unwrap_or("RequestMapping");
+        fact.assumptions.extend([
+            "java_anchor_kind=spring_mvc_route".to_string(),
+            format!("spring_annotation={annotation}"),
+            format!("http_method={http_method}"),
+            format!("route_path_shape={route_path_shape}"),
+        ]);
+        fact.assumptions.sort();
+        fact.assumptions.dedup();
+        fact
+    }
+
+    fn java_unknown_fact(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Unknown,
+            subject: format!("{}#java_unknown", unit.id),
+            target: Some(SymbolId::new(reason.as_protocol_str()).expect("valid UNKNOWN reason")),
+            origin: FactOrigin {
+                engine: JAVA_ANCHOR_ENGINE.to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                method: JAVA_ANCHOR_METHOD.to_string(),
+            },
+            certainty: FactCertainty::Unknown,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "typed Java/Spring UNKNOWN",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![format!("affected_claim={affected_claim}")],
+        }
+    }
+
     fn java_derived_fact_with_assumptions(
         unit: &IndexedCodeUnitRecord,
         target: &str,
@@ -3211,8 +3282,18 @@ mod tests {
             &[
                 role_fact(&first, role),
                 role_fact(&second, role),
-                java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role),
-                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
+                java_route_derived_fact(
+                    &first,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
+                java_route_derived_fact(
+                    &second,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
             ],
         );
         assert_insufficient_support(&low_support);
@@ -3223,15 +3304,179 @@ mod tests {
                 role_fact(&first, role),
                 role_fact(&second, role),
                 role_fact(&third, role),
-                java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role),
-                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
-                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+                java_route_derived_fact(
+                    &first,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
+                java_route_derived_fact(
+                    &second,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
+                java_route_derived_fact(
+                    &third,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
             ],
         );
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].language, "java");
         assert_eq!(report.claims[0].support, 3);
         assert_eq!(report.claims[0].framework_role, role);
+    }
+
+    #[test]
+    fn java_spring_mvc_route_clustering_separates_request_mapping_methods() {
+        let units = (0..6)
+            .map(|index| {
+                java_unit(
+                    &format!("src/main/java/Route{index}Controller.java"),
+                    "spring_mvc_route",
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut facts = units
+            .iter()
+            .map(|unit| role_fact(unit, "framework:spring.mvc_route"))
+            .collect::<Vec<_>>();
+        for unit in units.iter().take(3) {
+            facts.push(java_route_derived_fact(
+                unit,
+                "spring.web.bind.annotation.RequestMapping",
+                "GET",
+                "literal",
+            ));
+        }
+        for unit in units.iter().skip(3) {
+            facts.push(java_route_derived_fact(
+                unit,
+                "spring.web.bind.annotation.RequestMapping",
+                "POST",
+                "literal",
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+
+        assert_eq!(report.claims.len(), 2);
+        let mut supports = report
+            .claims
+            .iter()
+            .map(|claim| (claim.framework_role.as_str(), claim.support))
+            .collect::<Vec<_>>();
+        supports.sort();
+        assert_eq!(
+            supports,
+            [
+                ("framework:spring.mvc_route", 3),
+                ("framework:spring.mvc_route", 3)
+            ]
+        );
+        let family_ids = report
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(family_ids.len(), 2);
+    }
+
+    #[test]
+    fn java_runtime_unknown_subclaims_do_not_block_exact_support() {
+        let components = (0..3)
+            .map(|index| {
+                java_unit(
+                    &format!("src/main/java/Service{index}.java"),
+                    "spring_component",
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut component_facts = components
+            .iter()
+            .map(|unit| role_fact(unit, "framework:spring.component"))
+            .collect::<Vec<_>>();
+        for unit in &components {
+            component_facts.push(java_derived_fact_with_assumptions(
+                unit,
+                "spring.stereotype.Service",
+                "framework:spring.component",
+                vec!["spring_annotation=Service", "java_class_shape=class"],
+            ));
+        }
+        component_facts.extend([
+            java_unknown_fact(
+                &components[0],
+                UnknownReasonCode::RuntimeDependencyInjection,
+                "java_spring_component_scan",
+            ),
+            java_unknown_fact(
+                &components[0],
+                UnknownReasonCode::RuntimeDependencyInjection,
+                "java_spring_dependency_injection",
+            ),
+            java_unknown_fact(
+                &components[0],
+                UnknownReasonCode::FrameworkMagic,
+                "java_spring_proxy_semantics",
+            ),
+        ]);
+
+        let component_report = build_family_claims(&components, &component_facts);
+
+        assert_eq!(component_report.claims.len(), 1);
+        let component_unknowns = &component_report.claims[0].unknowns;
+        for claim in [
+            "java_spring_component_scan",
+            "java_spring_dependency_injection",
+            "java_spring_proxy_semantics",
+        ] {
+            assert!(component_unknowns.iter().any(|unknown| {
+                unknown.class == UnknownClass::NonBlocking
+                    && unknown.affected_claim.ends_with(claim)
+            }));
+        }
+
+        let repositories = (0..3)
+            .map(|index| {
+                java_unit(
+                    &format!("src/main/java/Repository{index}.java"),
+                    "spring_data_repository",
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut repository_facts = repositories
+            .iter()
+            .map(|unit| role_fact(unit, "framework:spring_data.repository"))
+            .collect::<Vec<_>>();
+        for unit in &repositories {
+            repository_facts.push(java_derived_fact(
+                unit,
+                "spring.data.jpa.repository.JpaRepository",
+                "framework:spring_data.repository",
+            ));
+        }
+        repository_facts.push(java_unknown_fact(
+            &repositories[0],
+            UnknownReasonCode::FrameworkMagic,
+            "java_spring_generated_repository",
+        ));
+
+        let repository_report = build_family_claims(&repositories, &repository_facts);
+
+        assert_eq!(repository_report.claims.len(), 1);
+        assert!(repository_report.claims[0].unknowns.iter().any(|unknown| {
+            unknown.class == UnknownClass::NonBlocking
+                && unknown
+                    .affected_claim
+                    .ends_with("java_spring_generated_repository")
+        }));
     }
 
     #[test]
@@ -3273,8 +3518,12 @@ mod tests {
         let third = java_unit("src/main/java/CController.java", "spring_mvc_route", 2);
         let role = "framework:spring.mvc_route";
 
-        let mut wrong_engine =
-            java_derived_fact(&first, "spring.web.bind.annotation.GetMapping", role);
+        let mut wrong_engine = java_route_derived_fact(
+            &first,
+            "spring.web.bind.annotation.GetMapping",
+            "GET",
+            "literal",
+        );
         wrong_engine.origin.engine = "java-lookalike".to_string();
         let report = build_family_claims(
             &[first.clone(), second.clone(), third.clone()],
@@ -3283,8 +3532,18 @@ mod tests {
                 role_fact(&second, role),
                 role_fact(&third, role),
                 wrong_engine,
-                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
-                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+                java_route_derived_fact(
+                    &second,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
+                java_route_derived_fact(
+                    &third,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
             ],
         );
         assert_insufficient_support(&report);
@@ -3295,13 +3554,24 @@ mod tests {
                 role_fact(&first, role),
                 role_fact(&second, role),
                 role_fact(&third, role),
-                java_derived_fact(
+                java_route_derived_fact(
                     &first,
                     "com.example.spring.web.bind.annotation.GetMapping",
-                    role,
+                    "GET",
+                    "literal",
                 ),
-                java_derived_fact(&second, "spring.web.bind.annotation.PostMapping", role),
-                java_derived_fact(&third, "spring.web.bind.annotation.DeleteMapping", role),
+                java_route_derived_fact(
+                    &second,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
+                java_route_derived_fact(
+                    &third,
+                    "spring.web.bind.annotation.GetMapping",
+                    "GET",
+                    "literal",
+                ),
             ],
         );
         assert_insufficient_support(&substring);

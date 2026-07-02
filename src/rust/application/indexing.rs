@@ -4114,6 +4114,9 @@ mod tests {
             assumptions: vec![
                 format!("java_anchor_kind={}", unit.kind),
                 "spring_annotation=GetMapping".to_string(),
+                "http_method=GET".to_string(),
+                "route_path_shape=literal".to_string(),
+                "class_route_path_shape=none".to_string(),
             ],
         }
     }
@@ -4198,8 +4201,8 @@ mod tests {
         let units = vec![first.clone(), second.clone(), third.clone()];
         let parser_facts = vec![
             java_structural_anchor_fact(&first, "spring.web.bind.annotation.GetMapping"),
-            java_structural_anchor_fact(&second, "spring.web.bind.annotation.PostMapping"),
-            java_structural_anchor_fact(&third, "spring.web.bind.annotation.DeleteMapping"),
+            java_structural_anchor_fact(&second, "spring.web.bind.annotation.GetMapping"),
+            java_structural_anchor_fact(&third, "spring.web.bind.annotation.GetMapping"),
         ];
         let role_facts = units
             .iter()
