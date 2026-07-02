@@ -1289,6 +1289,29 @@ fn query_fallback(
     )
 }
 
+fn unknowns_fallback(json: bool, reason: &str, guidance: &str, implemented: bool) -> CliOutput {
+    if json {
+        return CliOutput::failure(
+            2,
+            json_line(json!({
+                "status": "FALLBACK_TO_CODE_SEARCH",
+                "reason": reason,
+                "guidance": guidance,
+                "command": "unknowns",
+                "implemented": implemented,
+                "inventory_available": false,
+            })),
+        );
+    }
+
+    CliOutput::failure(
+        2,
+        format!(
+            "FALLBACK_TO_CODE_SEARCH\nreason: {reason}\nguidance: {guidance}\ninventory_available: false\ncommand: repogrammar unknowns requires a readable active syntax-only index; no pattern-family claims were made\n"
+        ),
+    )
+}
+
 fn indexed_files_human(report: &IndexedFilesReport) -> String {
     let mut output = format!(
         "files: active index metadata\nactive_generation: {}\nindexed_files: {}\nindexing: {}\n",
@@ -2034,7 +2057,8 @@ fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
 
 fn unknown_inventory_human(command: &str, report: &UnknownInventoryReport) -> String {
     let mut output = format!(
-        "{command}: typed UNKNOWN inventory\nactive_generation: {}\ntotal_unknowns: {}\nblocking_unknowns: {}\nnon_blocking_unknowns: {}\nrecoverable_unknowns: {}\nirreducible_unknowns: {}\n",
+        "{command}: typed UNKNOWN inventory\ninventory_scope: {}\nactive_generation: {}\ntotal_unknowns: {}\nblocking_unknowns: {}\nnon_blocking_unknowns: {}\nrecoverable_unknowns: {}\nirreducible_unknowns: {}\n",
+        report.inventory_scope,
         report.active_generation,
         report.total_unknowns,
         report.blocking_unknowns,
@@ -2054,6 +2078,7 @@ fn unknown_inventory_human(command: &str, report: &UnknownInventoryReport) -> St
         "by_framework_role",
         &report.by_framework_role,
     );
+    push_unknown_inventory_bucket_human(&mut output, "by_role_state", &report.by_role_state);
     output.push_str("by_blocks_support:");
     if report.by_blocks_support.is_empty() {
         output.push_str(" none\n");
@@ -2063,7 +2088,7 @@ fn unknown_inventory_human(command: &str, report: &UnknownInventoryReport) -> St
         }
         output.push('\n');
     }
-    push_unknown_inventory_bucket_human(&mut output, "by_recovery", &report.by_recovery);
+    push_unknown_inventory_bucket_human(&mut output, "by_recovery_code", &report.by_recovery_code);
     output
 }
 
@@ -2095,6 +2120,7 @@ fn unknown_inventory_json(command: &str, report: &UnknownInventoryReport) -> Str
 
 fn unknown_inventory_value(report: &UnknownInventoryReport) -> serde_json::Value {
     json!({
+        "inventory_scope": report.inventory_scope,
         "active_generation": report.active_generation,
         "total_unknowns": report.total_unknowns,
         "blocking_unknowns": report.blocking_unknowns,
@@ -2111,13 +2137,17 @@ fn unknown_inventory_value(report: &UnknownInventoryReport) -> serde_json::Value
             "framework_role",
             &report.by_framework_role,
         ),
+        "by_role_state": unknown_inventory_bucket_json("role_state", &report.by_role_state),
         "by_blocks_support": report.by_blocks_support.iter().map(|bucket| {
             json!({
                 "blocks_support": bucket.blocks_support,
                 "count": bucket.count,
             })
         }).collect::<Vec<_>>(),
-        "by_recovery": unknown_inventory_bucket_json("recovery", &report.by_recovery),
+        "by_recovery_code": unknown_inventory_bucket_json(
+            "recovery_code",
+            &report.by_recovery_code,
+        ),
     })
 }
 
@@ -2847,8 +2877,7 @@ where
             let fallback = repository_status_unavailable_fallback(
                 QueryPreflightOperation::ActiveIndexInventory,
             );
-            return query_fallback(
-                "unknowns",
+            return unknowns_fallback(
                 options.json,
                 fallback.reason,
                 fallback.guidance,
@@ -2862,8 +2891,7 @@ where
         &status_report,
     ) {
         QueryPreflightReport::Fallback(fallback) => {
-            return query_fallback(
-                "unknowns",
+            return unknowns_fallback(
                 options.json,
                 fallback.reason,
                 fallback.guidance,
@@ -2878,8 +2906,7 @@ where
             CliOutput::success(unknown_inventory_json("unknowns", &report))
         }
         Ok(report) => CliOutput::success(unknown_inventory_human("unknowns", &report)),
-        Err(_) => query_fallback(
-            "unknowns",
+        Err(_) => unknowns_fallback(
             options.json,
             "repository status is unavailable",
             "run repogrammar doctor",
@@ -2934,7 +2961,12 @@ where
             let fallback = repository_status_unavailable_fallback(
                 QueryPreflightOperation::ActiveIndexInventory,
             );
-            return stats_fallback(options.json, fallback.reason, fallback.guidance);
+            return stats_fallback(
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                options.include_unknowns,
+            );
         }
     };
 
@@ -2943,7 +2975,12 @@ where
         &status_report,
     ) {
         QueryPreflightReport::Fallback(fallback) => {
-            return stats_fallback(options.json, fallback.reason, fallback.guidance);
+            return stats_fallback(
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                options.include_unknowns,
+            );
         }
         QueryPreflightReport::Ready => {}
     }
@@ -2964,6 +3001,7 @@ where
                                 true,
                                 "repository status is unavailable",
                                 "run repogrammar doctor",
+                                options.include_unknowns,
                             );
                         }
                     }
@@ -2988,6 +3026,7 @@ where
                 true,
                 "repository status is unavailable",
                 "run repogrammar doctor",
+                options.include_unknowns,
             ),
         };
     }
@@ -3004,6 +3043,7 @@ where
                             false,
                             "repository status is unavailable",
                             "run repogrammar doctor",
+                            options.include_unknowns,
                         );
                     }
                 }
@@ -3020,6 +3060,7 @@ where
             false,
             "repository status is unavailable",
             "run repogrammar doctor",
+            options.include_unknowns,
         ),
     }
 }
@@ -3081,23 +3122,28 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
 }
 
 const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = "estimated potential only; not measured token savings";
+const REPO_SHAPE_SCOPE: &str = "python_family_eligible_units";
 
-fn stats_fallback(json: bool, reason: &str, guidance: &str) -> CliOutput {
+fn stats_fallback(json: bool, reason: &str, guidance: &str, include_unknowns: bool) -> CliOutput {
     if json {
-        return CliOutput::failure(
-            2,
-            json_line(json!({
-                "status": "FALLBACK_TO_CODE_SEARCH",
-                "reason": reason,
-                "guidance": guidance,
-                "command": "stats",
-                "implemented": true,
-                "token_saving_readiness": TokenSavingReadiness::Unknown.as_str(),
-                "blocking_reasons": stats_fallback_blocking_reasons(reason),
-                "measurement_kind": "ESTIMATED",
-                "caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
-            })),
-        );
+        let mut value = json!({
+            "status": "FALLBACK_TO_CODE_SEARCH",
+            "reason": reason,
+            "guidance": guidance,
+            "command": "stats",
+            "implemented": true,
+            "token_saving_readiness": TokenSavingReadiness::Unknown.as_str(),
+            "blocking_reasons": stats_fallback_blocking_reasons(reason),
+            "measurement_kind": "ESTIMATED",
+            "caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+        });
+        if include_unknowns {
+            value
+                .as_object_mut()
+                .expect("stats fallback JSON root object")
+                .insert("inventory_available".to_string(), json!(false));
+        }
+        return CliOutput::failure(2, json_line(value));
     }
 
     query_fallback("stats", false, reason, guidance, true)
@@ -3117,7 +3163,8 @@ fn stats_human(
     unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
     let mut output = format!(
-        "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
+        "stats: repo-shape diagnostics\nrepo_shape_scope: {}\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
+        REPO_SHAPE_SCOPE,
         report.active_generation,
         report.eligible_code_units,
         report.family_count,
@@ -3179,6 +3226,7 @@ fn stats_json(
         "command": "stats",
         "status": "ok",
         "implemented": true,
+        "repo_shape_scope": REPO_SHAPE_SCOPE,
         "active_generation": report.active_generation,
         "token_saving_readiness": report.token_saving_readiness.as_str(),
         "blocking_reasons": blocking_reasons,
@@ -7124,6 +7172,7 @@ mod tests {
 
         fn unknown_inventory_report() -> UnknownInventoryReport {
             UnknownInventoryReport {
+                inventory_scope: crate::application::query::UNKNOWN_INVENTORY_SCOPE,
                 active_generation: "gen-000001".to_string(),
                 total_unknowns: 2,
                 blocking_unknowns: 1,
@@ -7150,12 +7199,16 @@ mod tests {
                         count: 1,
                     },
                     UnknownInventoryBucket {
-                        key: "repo_local_import_graph".to_string(),
+                        key: "python_import_graph".to_string(),
                         count: 1,
                     },
                 ],
                 by_framework_role: vec![UnknownInventoryBucket {
                     key: "framework:fastapi.route".to_string(),
+                    count: 2,
+                }],
+                by_role_state: vec![UnknownInventoryBucket {
+                    key: "single".to_string(),
                     count: 2,
                 }],
                 by_blocks_support: vec![
@@ -7168,10 +7221,16 @@ mod tests {
                         count: 1,
                     },
                 ],
-                by_recovery: vec![UnknownInventoryBucket {
-                    key: "resolve test UNKNOWN".to_string(),
-                    count: 2,
-                }],
+                by_recovery_code: vec![
+                    UnknownInventoryBucket {
+                        key: "enable_provider".to_string(),
+                        count: 1,
+                    },
+                    UnknownInventoryBucket {
+                        key: "resolve_import_graph".to_string(),
+                        count: 1,
+                    },
+                ],
             }
         }
     }
@@ -8433,6 +8492,7 @@ mod tests {
         assert_eq!(value["command"], "stats");
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
+        assert_eq!(value["repo_shape_scope"], "python_family_eligible_units");
         assert_eq!(
             value["metrics"]["local_pattern_density"].as_f64(),
             Some(0.75)
@@ -8484,6 +8544,10 @@ mod tests {
         assert_eq!(value["command"], "unknowns");
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
+        assert_eq!(
+            value["unknown_inventory"]["inventory_scope"],
+            "persisted_semantic_unknowns"
+        );
         assert_eq!(value["unknown_inventory"]["total_unknowns"], 2);
         assert_eq!(value["unknown_inventory"]["blocking_unknowns"], 1);
         assert_eq!(
@@ -8495,9 +8559,18 @@ mod tests {
             "fastapi_dependency_graph"
         );
         assert_eq!(
+            value["unknown_inventory"]["by_role_state"][0]["role_state"],
+            "single"
+        );
+        assert_eq!(
             value["unknown_inventory"]["by_blocks_support"][1]["blocks_support"],
             true
         );
+        assert_eq!(
+            value["unknown_inventory"]["by_recovery_code"][0]["recovery_code"],
+            "enable_provider"
+        );
+        assert!(value["unknown_inventory"].get("by_recovery").is_none());
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
@@ -8526,6 +8599,10 @@ mod tests {
         assert_eq!(
             value["unknown_inventory"]["by_framework_role"][0]["framework_role"],
             "framework:fastapi.route"
+        );
+        assert_eq!(
+            value["unknown_inventory"]["by_recovery_code"][1]["recovery_code"],
+            "resolve_import_graph"
         );
     }
 
@@ -8644,6 +8721,26 @@ mod tests {
         assert_eq!(fallback["guidance"], "run repogrammar init --yes");
         assert_eq!(fallback["command"], "stats");
         assert_eq!(fallback["implemented"], true);
+        assert!(fallback.get("inventory_available").is_none());
+    }
+
+    #[test]
+    fn stats_unknowns_json_reports_inventory_unavailable_without_active_index() {
+        let workspace = TempWorkspace::new("cli-stats-unknowns-missing-index");
+        let env = |_: &str| None;
+
+        let output = run_with_context(["stats", "--unknowns", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("stats fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(fallback["reason"], "repository is not initialized");
+        assert_eq!(fallback["guidance"], "run repogrammar init --yes");
+        assert_eq!(fallback["command"], "stats");
+        assert_eq!(fallback["implemented"], true);
+        assert_eq!(fallback["inventory_available"], false);
     }
 
     #[test]
@@ -8662,6 +8759,7 @@ mod tests {
         assert_eq!(fallback["guidance"], "run repogrammar init --yes");
         assert_eq!(fallback["command"], "unknowns");
         assert_eq!(fallback["implemented"], true);
+        assert_eq!(fallback["inventory_available"], false);
     }
 
     #[test]

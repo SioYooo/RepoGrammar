@@ -327,8 +327,11 @@ pub struct UnknownInventoryBlocksSupportBucket {
     pub count: usize,
 }
 
+pub const UNKNOWN_INVENTORY_SCOPE: &str = "persisted_semantic_unknowns";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownInventoryReport {
+    pub inventory_scope: &'static str,
     pub active_generation: String,
     pub total_unknowns: usize,
     pub blocking_unknowns: usize,
@@ -339,8 +342,9 @@ pub struct UnknownInventoryReport {
     pub by_reason_code: Vec<UnknownInventoryBucket>,
     pub by_required_mechanism: Vec<UnknownInventoryBucket>,
     pub by_framework_role: Vec<UnknownInventoryBucket>,
+    pub by_role_state: Vec<UnknownInventoryBucket>,
     pub by_blocks_support: Vec<UnknownInventoryBlocksSupportBucket>,
-    pub by_recovery: Vec<UnknownInventoryBucket>,
+    pub by_recovery_code: Vec<UnknownInventoryBucket>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -603,8 +607,26 @@ struct UnknownInventoryEntry {
     class: UnknownClass,
     required_mechanism: String,
     framework_role: String,
+    role_state: UnknownInventoryRoleState,
     blocks_support: bool,
-    recovery: String,
+    recovery_code: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnknownInventoryRoleState {
+    None,
+    Single,
+    Ambiguous,
+}
+
+impl UnknownInventoryRoleState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Single => "single",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
 }
 
 fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInventoryReport {
@@ -632,14 +654,14 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
                 .unwrap_or("unknown");
             let affected_claim = assumption_value(&fact.assumptions, "affected_claim")
                 .unwrap_or_else(|| default_unknown_affected_claim(language).to_string());
-            let framework_role = assumption_value(&fact.assumptions, "framework_role")
-                .or_else(|| inventory_single_framework_role(&roles_by_unit, &fact.code_unit_id))
-                .unwrap_or_else(|| "unknown".to_string());
+            let (framework_role, role_state) =
+                inventory_framework_role(&fact.assumptions, &roles_by_unit, &fact.code_unit_id);
             let family_effect = classify_unknown_family_effect(
                 language,
                 reason,
                 &affected_claim,
-                (framework_role != "unknown").then_some(framework_role.as_str()),
+                (role_state == UnknownInventoryRoleState::Single)
+                    .then_some(framework_role.as_str()),
                 &fact.origin_engine,
                 &fact.origin_method,
             );
@@ -650,31 +672,23 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
                 .map(|unknown| unknown.class)
                 .or(explicit_class)
                 .unwrap_or_else(|| default_unknown_class(reason));
-            let blocks_support = family_effect
-                .as_ref()
-                .is_some_and(|unknown| unknown.class == UnknownClass::Blocking)
+            let blocks_support = role_state == UnknownInventoryRoleState::Ambiguous
+                || family_effect
+                    .as_ref()
+                    .is_some_and(|unknown| unknown.class == UnknownClass::Blocking)
                 || class == UnknownClass::Blocking;
             let required_mechanism =
                 required_unknown_mechanism(language, reason, &affected_claim, &framework_role);
-            let recovery = assumption_value(&fact.assumptions, "recovery")
-                .or_else(|| family_effect.and_then(|unknown| unknown.recovery))
-                .unwrap_or_else(|| {
-                    default_unknown_recovery(
-                        language,
-                        reason,
-                        &affected_claim,
-                        &framework_role,
-                        &required_mechanism,
-                    )
-                });
+            let recovery_code = unknown_recovery_code(reason, &required_mechanism);
             UnknownInventoryEntry {
                 language: language.to_string(),
                 reason,
                 class,
                 required_mechanism,
                 framework_role,
+                role_state,
                 blocks_support,
-                recovery,
+                recovery_code,
             }
         })
         .collect::<Vec<_>>();
@@ -685,8 +699,9 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
             left.class.as_protocol_str(),
             left.required_mechanism.as_str(),
             left.framework_role.as_str(),
+            left.role_state.as_str(),
             left.blocks_support,
-            left.recovery.as_str(),
+            left.recovery_code,
         )
             .cmp(&(
                 right.language.as_str(),
@@ -694,12 +709,14 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
                 right.class.as_protocol_str(),
                 right.required_mechanism.as_str(),
                 right.framework_role.as_str(),
+                right.role_state.as_str(),
                 right.blocks_support,
-                right.recovery.as_str(),
+                right.recovery_code,
             ))
     });
 
     UnknownInventoryReport {
+        inventory_scope: UNKNOWN_INVENTORY_SCOPE,
         active_generation: snapshot.generation_id,
         total_unknowns: entries.len(),
         blocking_unknowns: count_unknown_class(&entries, UnknownClass::Blocking),
@@ -714,8 +731,9 @@ fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInvento
         by_framework_role: aggregate_unknown_bucket(&entries, |entry| {
             entry.framework_role.as_str()
         }),
+        by_role_state: aggregate_unknown_bucket(&entries, |entry| entry.role_state.as_str()),
         by_blocks_support: aggregate_blocks_support(&entries),
-        by_recovery: aggregate_unknown_bucket(&entries, |entry| entry.recovery.as_str()),
+        by_recovery_code: aggregate_unknown_bucket(&entries, |entry| entry.recovery_code),
     }
 }
 
@@ -749,15 +767,30 @@ fn inventory_framework_roles_by_unit(
     roles
 }
 
-fn inventory_single_framework_role(
+fn inventory_framework_role(
+    assumptions: &[String],
     roles_by_unit: &BTreeMap<String, BTreeSet<String>>,
     code_unit_id: &str,
-) -> Option<String> {
-    let roles = roles_by_unit.get(code_unit_id)?;
-    if roles.len() == 1 {
-        roles.iter().next().cloned()
-    } else {
-        Some("ambiguous".to_string())
+) -> (String, UnknownInventoryRoleState) {
+    if let Some(role) = assumption_value(assumptions, "framework_role") {
+        let state = match role.as_str() {
+            "unknown" => UnknownInventoryRoleState::None,
+            "ambiguous" => UnknownInventoryRoleState::Ambiguous,
+            _ => UnknownInventoryRoleState::Single,
+        };
+        return (role, state);
+    }
+
+    match roles_by_unit.get(code_unit_id) {
+        None => ("unknown".to_string(), UnknownInventoryRoleState::None),
+        Some(roles) if roles.len() == 1 => (
+            roles.iter().next().expect("single role").clone(),
+            UnknownInventoryRoleState::Single,
+        ),
+        Some(_) => (
+            "ambiguous".to_string(),
+            UnknownInventoryRoleState::Ambiguous,
+        ),
     }
 }
 
@@ -798,12 +831,18 @@ fn required_unknown_mechanism(
     affected_claim: &str,
     framework_role: &str,
 ) -> String {
+    if let Some(mechanism) =
+        claim_specific_required_unknown_mechanism(language, affected_claim, framework_role)
+    {
+        return mechanism.to_string();
+    }
+
     match reason {
         UnknownReasonCode::StaleEvidence => "source_refresh".to_string(),
         UnknownReasonCode::ConflictingFacts => "conflict_resolution".to_string(),
         UnknownReasonCode::InsufficientSupport => "compatible_support_evidence".to_string(),
         UnknownReasonCode::MissingProjectConfig => "project_config_reader".to_string(),
-        UnknownReasonCode::MissingDependency => "dependency_metadata_provider".to_string(),
+        UnknownReasonCode::MissingDependency => "resolve_dependency_metadata".to_string(),
         UnknownReasonCode::PytestFixtureInjection => "pytest_fixture_graph".to_string(),
         UnknownReasonCode::RuntimeDependencyInjection => {
             if language == "python"
@@ -811,17 +850,19 @@ fn required_unknown_mechanism(
                     || affected_claim.starts_with("fastapi_"))
             {
                 "fastapi_dependency_graph".to_string()
+            } else if language == "java" && affected_claim.starts_with("java_spring_") {
+                "spring_di_model".to_string()
             } else {
                 "dependency_injection_model".to_string()
             }
         }
         UnknownReasonCode::UnresolvedImport | UnknownReasonCode::DynamicImport => {
             if language == "python" {
-                "repo_local_import_graph".to_string()
+                "python_import_graph".to_string()
             } else if is_tsjs_language(language) {
-                "typescript_module_resolver".to_string()
+                "typescript_paths_resolver".to_string()
             } else if language == "rust" {
-                "cargo_module_resolver".to_string()
+                "rust_module_graph".to_string()
             } else if language == "java" {
                 "java_project_graph".to_string()
             } else {
@@ -834,55 +875,144 @@ fn required_unknown_mechanism(
             } else if language == "python" && framework_role.starts_with("framework:fastapi") {
                 "fastapi_dependency_graph".to_string()
             } else if is_tsjs_language(language) {
-                "typescript_compiler_worker".to_string()
+                "typescript_export_graph".to_string()
             } else if language == "rust" {
-                "cargo_metadata_cfg_graph".to_string()
+                "cargo_feature_cfg_model".to_string()
             } else if language == "java" {
-                "java_project_graph".to_string()
+                "spring_component_scan_model".to_string()
             } else {
                 "framework_semantic_provider".to_string()
             }
         }
         UnknownReasonCode::MacroOrPreprocessor | UnknownReasonCode::BuildVariantAmbiguity => {
             if language == "rust" {
-                "cargo_metadata_cfg_graph".to_string()
+                if reason == UnknownReasonCode::MacroOrPreprocessor {
+                    "rust_macro_boundary".to_string()
+                } else {
+                    "cargo_feature_cfg_model".to_string()
+                }
             } else {
                 "build_variant_model".to_string()
             }
         }
-        UnknownReasonCode::MonkeyPatch => "runtime_trace_or_manual_hint".to_string(),
+        UnknownReasonCode::MonkeyPatch => "runtime_trace_required".to_string(),
     }
 }
 
-fn default_unknown_recovery(
+fn claim_specific_required_unknown_mechanism(
     language: &str,
-    reason: UnknownReasonCode,
     affected_claim: &str,
     framework_role: &str,
-    required_mechanism: &str,
-) -> String {
+) -> Option<&'static str> {
+    if language == "python" {
+        return match affected_claim {
+            "python_import_resolution" => Some("python_import_graph"),
+            "pytest_fixture_binding" => Some("pytest_fixture_graph"),
+            "fastapi_dependency_target" => Some("fastapi_dependency_graph"),
+            _ if framework_role.starts_with("framework:pytest")
+                && affected_claim.contains("fixture") =>
+            {
+                Some("pytest_fixture_graph")
+            }
+            _ if framework_role.starts_with("framework:fastapi")
+                && affected_claim.starts_with("fastapi_") =>
+            {
+                Some("fastapi_dependency_graph")
+            }
+            _ => None,
+        };
+    }
+
+    if is_tsjs_language(language) {
+        return match affected_claim {
+            "tsjs_path_alias" | "tsjs_import_resolution" => Some("typescript_paths_resolver"),
+            "tsjs_reexport_resolution"
+            | "next_default_export"
+            | "next_pages_api_export"
+            | "next_route_handler_export" => Some("typescript_export_graph"),
+            "fastify_receiver_binding" | "fastify_route_shape" | "fastify_route_method" => {
+                Some("fastify_receiver_model")
+            }
+            "prisma_client_binding" | "prisma_query_shape" | "prisma_transaction_shape" => {
+                Some("prisma_client_model")
+            }
+            "drizzle_schema_table"
+            | "drizzle_table_binding"
+            | "drizzle_query_shape"
+            | "drizzle_db_binding"
+            | "drizzle_transaction_shape" => Some("drizzle_db_model"),
+            _ => None,
+        };
+    }
+
+    if language == "rust" {
+        return match affected_claim {
+            "rust_module_resolution" => Some("rust_module_graph"),
+            "rust_build_variant" => Some("cargo_feature_cfg_model"),
+            "rust_macro_expansion" => Some("rust_macro_boundary"),
+            "rust_trait_dispatch" => Some("rust_trait_dispatch_model"),
+            _ => None,
+        };
+    }
+
+    if language == "java" {
+        return match affected_claim {
+            "java_spring_route_path" => Some("java_spring_route_literal_model"),
+            "java_spring_component_scan" => Some("spring_component_scan_model"),
+            "java_spring_dependency_injection" => Some("spring_di_model"),
+            "java_spring_proxy_semantics" => Some("spring_proxy_model"),
+            "java_spring_generated_repository" => Some("spring_data_repository_model"),
+            _ => None,
+        };
+    }
+
+    None
+}
+
+fn unknown_recovery_code(reason: UnknownReasonCode, required_mechanism: &str) -> &'static str {
     match reason {
-        UnknownReasonCode::StaleEvidence => "run repogrammar sync or resync".to_string(),
-        UnknownReasonCode::ConflictingFacts => {
-            "resolve conflicting semantic facts before claiming support".to_string()
+        UnknownReasonCode::StaleEvidence => "run_sync",
+        UnknownReasonCode::MissingProjectConfig => "add_project_config",
+        UnknownReasonCode::MissingDependency => "resolve_dependency_metadata",
+        UnknownReasonCode::UnresolvedImport | UnknownReasonCode::DynamicImport => {
+            "resolve_import_graph"
         }
-        UnknownReasonCode::InsufficientSupport => {
-            "add compatible source-backed support evidence".to_string()
+        UnknownReasonCode::PytestFixtureInjection => "resolve_fixture_graph",
+        UnknownReasonCode::RuntimeDependencyInjection => {
+            if required_mechanism == "pytest_fixture_graph" {
+                "resolve_fixture_graph"
+            } else {
+                "enable_provider"
+            }
         }
-        UnknownReasonCode::MissingProjectConfig => {
-            "add or repair project configuration needed by the provider".to_string()
+        UnknownReasonCode::FrameworkMagic => match required_mechanism {
+            "python_import_graph"
+            | "typescript_paths_resolver"
+            | "typescript_export_graph"
+            | "rust_module_graph"
+            | "java_project_graph" => "resolve_import_graph",
+            "pytest_fixture_graph" => "resolve_fixture_graph",
+            "fastapi_dependency_graph"
+            | "fastify_receiver_model"
+            | "prisma_client_model"
+            | "drizzle_db_model"
+            | "java_spring_route_literal_model"
+            | "spring_component_scan_model"
+            | "spring_di_model"
+            | "spring_proxy_model"
+            | "spring_data_repository_model" => "enable_provider",
+            "cargo_feature_cfg_model" | "rust_macro_boundary" | "rust_trait_dispatch_model" => {
+                "manual_review_required"
+            }
+            _ => "manual_review_required",
+        },
+        UnknownReasonCode::MacroOrPreprocessor | UnknownReasonCode::BuildVariantAmbiguity => {
+            "manual_review_required"
         }
-        UnknownReasonCode::MissingDependency => {
-            "make dependency metadata available to the provider".to_string()
+        UnknownReasonCode::MonkeyPatch => "runtime_trace_required",
+        UnknownReasonCode::ConflictingFacts | UnknownReasonCode::InsufficientSupport => {
+            "manual_review_required"
         }
-        UnknownReasonCode::MonkeyPatch => {
-            "treat monkey-patched behavior as unresolved unless a runtime trace proves it"
-                .to_string()
-        }
-        _ => format!(
-            "reduce {reason} for {language}:{framework_role}:{affected_claim} with {required_mechanism}",
-            reason = reason.as_protocol_str()
-        ),
     }
 }
 
@@ -926,7 +1056,10 @@ fn aggregate_blocks_support(
 }
 
 fn is_tsjs_language(language: &str) -> bool {
-    matches!(language, "typescript" | "tsx" | "javascript" | "jsx")
+    matches!(
+        language,
+        "typescript" | "typescript-react" | "tsx" | "javascript" | "javascript-react" | "jsx"
+    )
 }
 
 pub fn repo_shape_diagnostics(
@@ -3246,10 +3379,19 @@ mod tests {
     }
 
     fn indexed_python_unit(path: &str, kind: &str, index: usize) -> IndexedCodeUnitRecord {
+        indexed_language_unit(path, "python", kind, index)
+    }
+
+    fn indexed_language_unit(
+        path: &str,
+        language: &str,
+        kind: &str,
+        index: usize,
+    ) -> IndexedCodeUnitRecord {
         IndexedCodeUnitRecord {
             id: format!("unit:{path}#{kind}:{index}"),
             path: path.to_string(),
-            language: "python".to_string(),
+            language: language.to_string(),
             kind: kind.to_string(),
             start_byte: index * 10,
             end_byte: index * 10 + 8,
@@ -3279,6 +3421,15 @@ mod tests {
         reason: UnknownReasonCode,
         affected_claim: &str,
     ) -> IndexedSemanticFactRecord {
+        unknown_fact_for_unit_with_assumptions(unit, reason, affected_claim, Vec::new())
+    }
+
+    fn unknown_fact_for_unit_with_assumptions(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+        extra_assumptions: Vec<String>,
+    ) -> IndexedSemanticFactRecord {
         let mut fact = semantic_fact_with_certainty("UNKNOWN");
         fact.fact_id = format!("semantic-fact:{}:{}", unit.id, reason.as_protocol_str());
         fact.kind = "UNKNOWN".to_string();
@@ -3291,6 +3442,7 @@ mod tests {
             "syntax_anchor".to_string()
         };
         fact.assumptions = vec![format!("affected_claim={affected_claim}")];
+        fact.assumptions.extend(extra_assumptions);
         fact.code_unit_id = unit.id.clone();
         fact.path = unit.path.clone();
         fact.content_hash = unit.content_hash.clone();
@@ -3691,6 +3843,7 @@ mod tests {
 
         let report = unknown_inventory(&store).expect("unknown inventory");
 
+        assert_eq!(report.inventory_scope, UNKNOWN_INVENTORY_SCOPE);
         assert_eq!(report.active_generation, "gen-000001");
         assert_eq!(report.total_unknowns, 2);
         assert_eq!(report.blocking_unknowns, 1);
@@ -3702,7 +3855,7 @@ mod tests {
             1
         );
         assert_eq!(
-            bucket_count(&report.by_required_mechanism, "repo_local_import_graph"),
+            bucket_count(&report.by_required_mechanism, "python_import_graph"),
             1
         );
         assert_eq!(
@@ -3713,8 +3866,121 @@ mod tests {
             bucket_count(&report.by_framework_role, "framework:fastapi.route"),
             2
         );
+        assert_eq!(bucket_count(&report.by_role_state, "single"), 2);
         assert_eq!(blocks_support_count(&report.by_blocks_support, true), 1);
         assert_eq!(blocks_support_count(&report.by_blocks_support, false), 1);
+        assert_eq!(
+            bucket_count(&report.by_recovery_code, "resolve_import_graph"),
+            1
+        );
+        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 1);
+    }
+
+    #[test]
+    fn unknown_inventory_counts_ambiguous_roles_as_support_risk() {
+        let unit = indexed_python_unit("app/routes.py", "handler", 0);
+        let facts = vec![
+            framework_role_fact(&unit, "framework:fastapi.route"),
+            framework_role_fact(&unit, "framework:pytest.fixture"),
+            unknown_fact_for_unit(
+                &unit,
+                UnknownReasonCode::InsufficientSupport,
+                "python_family_membership",
+            ),
+        ];
+        let store = FakeStore::new(facts).with_units(vec![unit]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+
+        assert_eq!(report.total_unknowns, 1);
+        assert_eq!(bucket_count(&report.by_framework_role, "ambiguous"), 1);
+        assert_eq!(bucket_count(&report.by_role_state, "ambiguous"), 1);
+        assert_eq!(blocks_support_count(&report.by_blocks_support, true), 1);
+    }
+
+    #[test]
+    fn unknown_inventory_maps_required_mechanisms_by_language_and_claim() {
+        let python = indexed_language_unit("tests/test_app.py", "python", "pytest_test", 0);
+        let tsx = indexed_language_unit("src/routes.tsx", "typescript-react", "handler", 1);
+        let rust = indexed_language_unit("src/lib.rs", "rust", "function", 2);
+        let java = indexed_language_unit("src/main/App.java", "java", "method", 3);
+        let facts = vec![
+            framework_role_fact(&python, "framework:pytest.fixture"),
+            unknown_fact_for_unit(
+                &python,
+                UnknownReasonCode::PytestFixtureInjection,
+                "pytest_fixture_binding",
+            ),
+            framework_role_fact(&tsx, "framework:fastify.route"),
+            unknown_fact_for_unit(
+                &tsx,
+                UnknownReasonCode::FrameworkMagic,
+                "fastify_receiver_binding",
+            ),
+            unknown_fact_for_unit(
+                &rust,
+                UnknownReasonCode::MacroOrPreprocessor,
+                "rust_macro_expansion",
+            ),
+            framework_role_fact(&java, "framework:spring.controller"),
+            unknown_fact_for_unit(
+                &java,
+                UnknownReasonCode::FrameworkMagic,
+                "java_spring_route_path",
+            ),
+        ];
+        let store = FakeStore::new(facts).with_units(vec![python, tsx, rust, java]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+
+        assert_eq!(
+            bucket_count(&report.by_required_mechanism, "pytest_fixture_graph"),
+            1
+        );
+        assert_eq!(
+            bucket_count(&report.by_required_mechanism, "fastify_receiver_model"),
+            1
+        );
+        assert_eq!(
+            bucket_count(&report.by_required_mechanism, "rust_macro_boundary"),
+            1
+        );
+        assert_eq!(
+            bucket_count(
+                &report.by_required_mechanism,
+                "java_spring_route_literal_model"
+            ),
+            1
+        );
+        assert_eq!(bucket_count(&report.by_language, "typescript-react"), 1);
+    }
+
+    #[test]
+    fn unknown_inventory_recovery_codes_ignore_free_text_assumptions() {
+        let unit = indexed_language_unit("src/app.ts", "typescript", "handler", 0);
+        let leaking_recovery =
+            "recovery=/Users/example/project/src/app.ts code_unit_id=unit:src/app.ts fact_id=semantic-fact:secret fn handler()"
+                .to_string();
+        let facts = vec![unknown_fact_for_unit_with_assumptions(
+            &unit,
+            UnknownReasonCode::UnresolvedImport,
+            "tsjs_import_resolution",
+            vec![leaking_recovery],
+        )];
+        let store = FakeStore::new(facts).with_units(vec![unit]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+        let recovery_debug = format!("{:?}", report.by_recovery_code);
+
+        assert_eq!(
+            bucket_count(&report.by_recovery_code, "resolve_import_graph"),
+            1
+        );
+        assert!(!recovery_debug.contains("/Users/example"));
+        assert!(!recovery_debug.contains("src/app.ts"));
+        assert!(!recovery_debug.contains("code_unit_id"));
+        assert!(!recovery_debug.contains("fact_id"));
+        assert!(!recovery_debug.contains("fn handler"));
     }
 
     #[test]

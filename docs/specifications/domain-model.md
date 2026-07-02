@@ -224,7 +224,7 @@ stale evidence, and insufficient support.
 The canonical taxonomy and propagation rules live in
 `docs/specifications/unknowns.md`. New domain behavior that emits or consumes
 unknowns must update that file when it introduces a public reason code, class,
-or recovery action.
+recovery code, recovery action, or mechanism bucket.
 
 ## Freshness
 

@@ -81,8 +81,9 @@ be used alone to make causal claims about token savings.
 
 ## CLI status
 
-`repogrammar stats --json` reports v0.1 repo-shape diagnostics when repository
-state is initialized and an active generation is readable. The output must keep
+`repogrammar stats --json` reports v0.1 Python-family repo-shape diagnostics
+when repository state is initialized and an active generation is readable. The
+output must include `repo_shape_scope: python_family_eligible_units` and keep
 measured `token_savings`, `token_savings_ratio`, and `measurement_source` as
 `null` unless a paired baseline/treatment measurement exists. Current
 diagnostics may report
@@ -96,7 +97,11 @@ Top-level stats output must also report `token_saving_readiness`,
 `blocking_reasons`, `measurement_kind`, and `caveat`. When no comparable paired
 experiment exists, top-level `measurement_kind` remains `ESTIMATED`,
 `blocking_reasons` includes `no_paired_experiment`, and the caveat states that
-the value is estimated potential only, not measured token savings.
+the value is estimated potential only, not measured token savings. With
+`--unknowns`, stats may additionally embed the source-free persisted semantic
+`unknown_inventory` object. That object carries
+`inventory_scope: persisted_semantic_unknowns` and must not be interpreted as a
+Python-only repo-shape readiness metric.
 
 Stats output is allowed to include aggregate counts and diagnostic ratios, but
 it must not include source snippets, query text, repository names, absolute
@@ -105,7 +110,9 @@ usage may be counted only as aggregate/bucketed values. Missing repository
 state or a missing active index should use the standard parseable fallback
 rather than inventing repository metrics, while still reporting unknown
 readiness, estimated measurement kind, a not-measured caveat, and blocking
-reasons.
+reasons. When `--unknowns` was requested and inventory is unavailable, fallback
+JSON must include `inventory_available: false` to mark a not-ready inventory
+rather than an internal crash.
 `stats --json` never opens a telemetry network connection. When anonymous
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics
