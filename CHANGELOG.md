@@ -59,6 +59,10 @@
   `DATAFLOW_DERIVED` graph facts with `provider_resolved=false`; ambiguous,
   dynamic, plugin, unsafe star, external, or unresolved cases remain typed
   `UNKNOWN`.
+- SQLAlchemy repository-method exact anchors now include typed
+  `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
+  calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy
+  context.
 
 ### Added
 

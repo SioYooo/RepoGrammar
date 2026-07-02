@@ -422,8 +422,8 @@ allowed.
   pytest test/fixture dependency-edge, builtin-fixture context, and
   parametrize-argument anchors staying out of family support, SQLAlchemy relationship and Session.add
   structural anchors staying out of family support and claim-input readiness, SQLAlchemy
-  `Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars` and
-  async equivalents becoming exact repository-method anchors, bounded
+  `Session.get`/`Session.commit`/`Session.rollback`/`Session.scalar`/`Session.scalars`
+  and async equivalents becoming exact repository-method anchors, bounded
   SQLAlchemy `self.session`/`self.db` role propagation from `__init__`, and
   reassigned receivers not becoming exact session-call anchors, Pydantic field,
   field-type, model-config, nested Config, computed-field, field-validator,

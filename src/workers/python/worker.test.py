@@ -135,6 +135,9 @@ class UserRepository:
     def stream_users(self, session: Session):
         return session.scalars("select users")
 
+    def load_user(self, session: Session):
+        return session.get(User, 1)
+
     async def list_accounts(self, db: AsyncSession):
         return await db.execute("select accounts")
 
@@ -143,6 +146,9 @@ class UserRepository:
 
     async def stream_accounts(self, db: AsyncSession):
         return await db.scalars("select accounts")
+
+    async def load_account(self, db: AsyncSession):
+        return await db.get(User, 1)
 
 class StoredSessionRepository:
     def __init__(self, session: Session, db: AsyncSession):
@@ -272,6 +278,22 @@ assert not any(
     }
     for kind in generic_unit_kinds
 )
+non_sqlalchemy_get_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "cache_repository.py",
+        "content_hash": "sha256:" + "b" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+class CacheRepository:
+    def read_cache(self, cache):
+        return cache.get("users")
+""",
+    }
+)
+non_sqlalchemy_get_kinds = [unit["kind"] for unit in non_sqlalchemy_get_messages[0]["units"]]
+assert "sqlalchemy_repository_method" not in non_sqlalchemy_get_kinds
 parse_facts = parse_messages[0]["facts"]
 assert any(fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "fastapi.APIRouter" for fact in parse_facts)
 assert any(fact["fact_kind"] == "SYMBOL" and fact["target"] == "app" for fact in parse_facts)
@@ -339,6 +361,12 @@ assert any(
 )
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.orm.Session.get"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.execute"
     for fact in parse_facts
 )
@@ -351,6 +379,12 @@ assert any(
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.scalars"
+    and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "sqlalchemy.ext.asyncio.AsyncSession.get"
     and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
     for fact in parse_facts
 )

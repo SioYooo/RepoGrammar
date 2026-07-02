@@ -2273,6 +2273,22 @@ mod tests {
             member_role: "framework:sqlalchemy.repository_method",
         },
         PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-session-get-strong-evidence",
+            family_id:
+                "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+            support_target: "sqlalchemy.orm.Session.get",
+            evidence_path: "repository.py",
+            member_role: "framework:sqlalchemy.repository_method",
+        },
+        PythonExactAnchorSmokeCase {
+            fixture: "sqlalchemy-async-session-get-strong-evidence",
+            family_id:
+                "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+            support_target: "sqlalchemy.ext.asyncio.AsyncSession.get",
+            evidence_path: "repository.py",
+            member_role: "framework:sqlalchemy.repository_method",
+        },
+        PythonExactAnchorSmokeCase {
             fixture: "sqlalchemy-session-commit-strong-evidence",
             family_id:
                 "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",

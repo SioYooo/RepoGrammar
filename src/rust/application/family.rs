@@ -2654,11 +2654,13 @@ pub(crate) fn python_support_target_is_role_compatible(
             target,
             "sqlalchemy.select"
                 | "sqlalchemy.orm.Session.execute"
+                | "sqlalchemy.orm.Session.get"
                 | "sqlalchemy.orm.Session.commit"
                 | "sqlalchemy.orm.Session.rollback"
                 | "sqlalchemy.orm.Session.scalar"
                 | "sqlalchemy.orm.Session.scalars"
                 | "sqlalchemy.ext.asyncio.AsyncSession.execute"
+                | "sqlalchemy.ext.asyncio.AsyncSession.get"
                 | "sqlalchemy.ext.asyncio.AsyncSession.commit"
                 | "sqlalchemy.ext.asyncio.AsyncSession.rollback"
                 | "sqlalchemy.ext.asyncio.AsyncSession.scalar"

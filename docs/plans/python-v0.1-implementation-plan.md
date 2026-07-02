@@ -259,7 +259,7 @@ FastAPI family path through derived support, and a test-only strong FastAPI
 semantic-support fixture for explicit worker family read and stale-evidence
 smoke coverage. They also include a no-worker FastAPI exact-anchor target
 variation fixture and SQLAlchemy session exact-anchor fixtures covering
-`execute`, direct `scalar`/`scalars` calls, and direct sync/async
+`execute`, direct `get`/`scalar`/`scalars` calls, and direct sync/async
 `commit`/`rollback` transaction anchors, plus an alias-aware pytest fixture
 exact-anchor smoke fixture. Product-path tests also cover auxiliary FastAPI
 request-shape and SQLAlchemy context/effect anchors as metadata-only facts.
