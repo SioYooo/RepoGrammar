@@ -34,7 +34,9 @@
 - Source-level Rust `#[cfg]` / `#[cfg_attr]` UNKNOWNs may carry bounded nearest
   `Cargo.toml` feature context, including simple feature predicates and whether
   each feature is declared. This is `cargo_feature_cfg_model` triage only; it
-  does not evaluate cfgs or make the unit eligible family support.
+  does not evaluate cfgs or make the unit eligible family support. Family/query
+  recovery may summarize the feature state for agents while keeping the claim
+  blocking.
 - Java/Spring preview UNKNOWNs are claim-scoped: unresolved Spring annotation
   imports/FQNs and unsupported controller/repository identity can block Java
   family support, while nonliteral route paths, component scan, DI/proxy,

@@ -92,6 +92,8 @@ use the nearest Cargo manifest to record simple feature predicates and
 declared/undeclared feature state as assumptions. This is only
 `cargo_feature_cfg_model` triage: RepoGrammar still does not evaluate cfgs,
 select targets/features, or treat Cargo feature metadata as family support.
+Family/query recovery text may summarize that feature state for agents without
+changing the blocking UNKNOWN classification.
 A parallel, deliberately conservative TS/JS path exists for Express,
 Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle exact anchors. The syntax
 parser emits `STRUCTURAL` exact-anchor facts only when local framework-specific
