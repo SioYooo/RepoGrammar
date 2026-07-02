@@ -107,17 +107,19 @@ Express app/router calls, Jest/Vitest runners, Next App/Pages conventions with
 `next` package context, Fastify factory receivers plus shorthand routes or full
 `app.route` declarations with literal method, literal `url`/`path`, and an
 exact `handler` field, local `new PrismaClient()` clients, and Drizzle
-table/db/query bindings. Relative repo-local named Prisma shared-client imports
-such as `import { prisma } from "./db"` are provider-required candidates: they
-do not enter the structural support path, and they may become support only when
-a configured TypeScript worker proves the matching `resolve_reexport`
-operation for the same path/hash/code-unit/range. Exact local
+table/db/query bindings. Relative repo-local named Express/Fastify handler
+imports and Prisma shared-client imports such as `import { prisma } from
+"./db"` are provider-required candidates: they do not enter the structural
+support path, and they may become support only when a configured TypeScript
+worker proves the matching `resolve_reexport` operation for the same
+path/hash/code-unit/range. Exact local
 Next dynamic segments, route
 groups, and parallel routes are retained as context assumptions on page/layout
 and route-handler anchors; middleware, server actions, re-exports, and
 server/client semantics remain unsupported. Dynamic receivers, custom wrappers,
-dynamic methods, conditional imports, Fastify plugin prefixes, Fastify full
-routes without literal `url`/`path` or handler fields, Prisma
+dynamic methods, conditional imports, external route handlers, missing route
+handlers, Fastify plugin prefixes, Fastify full routes without literal
+`url`/`path` or handler fields, Prisma
 bulk/raw/injected clients, and Drizzle raw/dynamic builders emit typed
 `UNKNOWN` for the affected claim instead of support. The application layer
 promotes accepted anchors to `DATAFLOW_DERIVED` support facts with engine
@@ -157,13 +159,15 @@ context from package or config inventory; otherwise they emit
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
 emits React-shaped semantic support. TypeScript worker facts are bounded
 semantic context by default, with one role-specific promotion path for exact
-Next.js file-convention export identity and one path-scoped promotion path for
-relative repo-local Prisma shared-client imports: after a configured worker
-returns a TypeScript-provider `resolve_export` fact for the same
+Next.js file-convention export identity and path-scoped promotion paths for
+relative repo-local Express/Fastify route handler imports and Prisma
+shared-client imports: after a configured worker returns a TypeScript-provider
+`resolve_export` fact for the same
 path/hash/code-unit/range as a parser Next.js route/page/layout/API anchor, or
 a TypeScript-provider `resolve_reexport` fact for the same
-path/hash/code-unit/range as a provider-required Prisma anchor with a matching
-named import such as `./db#prisma`, the application layer may record a
+path/hash/code-unit/range as a provider-required Express/Fastify handler or
+Prisma anchor with a matching named import such as `./handlers#listUsers` or
+`./db#prisma`, the application layer may record a
 `DATAFLOW_DERIVED` TS/JS support fact carrying `provider=typescript`,
 `provider_resolved=true`, the
 matching `query_operation`, the framework role, and the structural-anchor
@@ -171,7 +175,8 @@ provenance. Default worker operation planning now includes module specifier
 operations for literal import/export/require facts, re-export operations for
 bounded `export * from "<specifier>"` UNKNOWNs tagged as `<specifier>#*`,
 export-identity operations for exact Next.js file-convention anchors, and
-provider-required Prisma binding operations tagged as `<specifier>#<export>`.
+provider-required route-handler or Prisma binding operations tagged as
+`<specifier>#<export>`.
 Provider-resolved TypeScript compiler facts may
 suppress a matching parser-origin import/export `UNKNOWN` in the aggregate
 UNKNOWN inventory only when the same path/hash/code-unit/range and operation

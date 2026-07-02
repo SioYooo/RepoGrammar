@@ -375,6 +375,7 @@ exports.isNamedExports = () => false;
   const root = workspace("compiler-api-reexport");
   const source = writeFile(root, "src/repository.ts", "import { prisma } from './db';\n");
   const target = writeFile(root, "src/db.ts", "export const prisma = new PrismaClient();\n");
+  const handlerTarget = writeFile(root, "src/handlers.ts", "export function listUsers() {}\n");
   writeFile(
     root,
     "node_modules/typescript/index.js",
@@ -390,13 +391,20 @@ exports.ScriptTarget = { Latest: 99 };
 exports.SyntaxKind = { ExportKeyword: 1 };
 exports.getModifiers = (node) => node.modifiers || [];
 exports.createSourceFile = (_fileName, text) => ({
-  statements: text.includes("const prisma") ? [{
-    kind: "variable",
-    modifiers: [{ kind: 1 }],
-    declarationList: { declarations: [{ name: { text: "prisma" } }] },
-  }] : [],
+  statements: [
+    ...(text.includes("const prisma") ? [{
+      kind: "variable",
+      modifiers: [{ kind: 1 }],
+      declarationList: { declarations: [{ name: { text: "prisma" } }] },
+    }] : []),
+    ...(text.includes("function listUsers") ? [{
+      kind: "function",
+      name: { text: "listUsers" },
+      modifiers: [{ kind: 1 }],
+    }] : []),
+  ],
 });
-exports.isFunctionDeclaration = () => false;
+exports.isFunctionDeclaration = (node) => node.kind === "function";
 exports.isClassDeclaration = () => false;
 exports.isEnumDeclaration = () => false;
 exports.isInterfaceDeclaration = () => false;
@@ -408,8 +416,11 @@ exports.isNamedExports = () => false;
 `
   );
 
-  const fact = singleFact(runWorker(request(root, [source, target], [
+  const fact = singleFact(runWorker(request(root, [source, target, handlerTarget], [
     operation(source, "./db#prisma", { operation: "resolve_reexport" }),
+  ])));
+  const handlerFact = singleFact(runWorker(request(root, [source, target, handlerTarget], [
+    operation(source, "./handlers#listUsers", { operation: "resolve_reexport" }),
   ])));
 
   assertCompilerResolvedReexport(
@@ -418,6 +429,13 @@ exports.isNamedExports = () => false;
     "symbol:src/db.ts#export:prisma",
     "prisma",
     "./db"
+  );
+  assertCompilerResolvedReexport(
+    handlerFact,
+    "SYMBOL",
+    "symbol:src/handlers.ts#export:listUsers",
+    "listUsers",
+    "./handlers"
   );
 }
 

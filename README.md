@@ -68,11 +68,13 @@ aliases, and star re-exports remain typed `UNKNOWN`. When explicitly configured
 through the semantic-worker environment variables, the checked-in TypeScript
 worker can accept bounded module/export/package operations, use the TypeScript
 compiler API for module resolution, and cross-check exact Next.js
-file-convention export identity or relative repo-local Prisma shared-client
-bindings when a TypeScript module is available to that worker. Only matching
+file-convention export identity, relative repo-local Express/Fastify named
+handler imports, or relative repo-local Prisma shared-client bindings when a
+TypeScript module is available to that worker. Only matching
 TypeScript-provider `resolve_export` facts for exact Next.js anchors and
-`resolve_reexport` facts for provider-required Prisma `import { prisma } from
-"./db"` bindings may become provider-resolved TS/JS-derived support; fallback
+`resolve_reexport` facts for provider-required Express/Fastify handler imports
+or Prisma `import { prisma } from "./db"` bindings may become
+provider-resolved TS/JS-derived support; fallback
 facts remain context only. Without that API it emits only structural fallback
 facts or typed `UNKNOWN`s. This is not full TypeScript/JavaScript semantic
 analysis.

@@ -302,6 +302,121 @@ pub(super) fn handler_shape(slice: &str) -> &'static str {
     }
 }
 
+fn route_handler_binding_assumptions(
+    bindings: &ScopeGraphLite,
+    slice: &str,
+    start_byte: usize,
+) -> Result<Vec<String>, UnknownAnchor> {
+    let Some(handler) = route_handler_identifier(slice) else {
+        return Ok(Vec::new());
+    };
+    if bindings.name_is_unsafe_at(handler, start_byte) {
+        return Err(UnknownAnchor {
+            reason: crate::core::model::UnknownReasonCode::ConflictingFacts,
+            affected_claim: "tsjs_handler_binding",
+            kind: "unsafe_route_handler_binding",
+            note: "TS/JS route handler binding is reassigned, redeclared, or shadowed",
+        });
+    }
+    if let Some((specifier, export_name)) = bindings.repo_local_named_import(handler) {
+        return Ok(vec![
+            "provider_required=typescript".to_string(),
+            "binding_kind=tsjs_route_handler".to_string(),
+            format!("binding_local_name={handler}"),
+            format!("binding_import_specifier={specifier}"),
+            format!("binding_export_name={export_name}"),
+            "required_mechanism=typescript_export_graph".to_string(),
+        ]);
+    }
+    if bindings.imports.contains_key(handler) {
+        return Err(UnknownAnchor {
+            reason: crate::core::model::UnknownReasonCode::UnresolvedImport,
+            affected_claim: "tsjs_handler_binding",
+            kind: "external_route_handler",
+            note: "TS/JS route handler is imported from outside a relative repo-local module",
+        });
+    }
+    if bindings.local_decls.contains(handler) {
+        return Ok(vec![
+            "handler_binding=local".to_string(),
+            format!("handler_local_name={handler}"),
+        ]);
+    }
+    Err(UnknownAnchor {
+        reason: crate::core::model::UnknownReasonCode::UnresolvedImport,
+        affected_claim: "tsjs_handler_binding",
+        kind: "missing_route_handler",
+        note: "TS/JS route handler identifier is not declared or imported",
+    })
+}
+
+fn route_handler_identifier(slice: &str) -> Option<&str> {
+    let arguments = call_arguments(slice)?;
+    let candidate = match arguments.as_slice() {
+        [first, second] if string_literal_arg(first) => *second,
+        [only] => *only,
+        _ => return None,
+    };
+    let (handler, after_handler) = leading_identifier(candidate)?;
+    if candidate[after_handler..].trim().is_empty() {
+        Some(handler)
+    } else {
+        None
+    }
+}
+
+fn string_literal_arg(argument: &str) -> bool {
+    let trimmed = argument.trim_start();
+    matches!(trimmed.as_bytes().first(), Some(b'"' | b'\''))
+}
+
+fn call_arguments(slice: &str) -> Option<Vec<&str>> {
+    let open = slice.find('(')?;
+    let bytes = slice.as_bytes();
+    let mut arguments = Vec::new();
+    let mut start = open + 1;
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escape = false;
+    for index in open + 1..bytes.len() {
+        let byte = bytes[index];
+        if let Some(quote_byte) = quote {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if byte == b'\\' {
+                escape = true;
+                continue;
+            }
+            if byte == quote_byte {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' | b'`' => quote = Some(byte),
+            b'(' | b'{' | b'[' => depth += 1,
+            b')' => {
+                if depth == 0 {
+                    arguments.push(slice[start..index].trim());
+                    return Some(arguments);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+            }
+            b',' if depth == 0 => {
+                arguments.push(slice[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub(super) fn async_shape(slice: &str) -> &'static str {
     if slice.contains("async ") || slice.contains("async(") || slice.contains("async (") {
         "async"
@@ -647,6 +762,104 @@ app[method]("/users", (req, res) => { res.json([]); });
     }
 
     #[test]
+    fn express_and_fastify_imported_handlers_are_provider_required_candidates() {
+        let express = r#"import express from "express";
+import { listUsers } from "./handlers";
+const app = express();
+app.get("/users", listUsers);
+"#;
+        let express_facts = parse_facts("src/server.ts", express);
+        assert_eq!(
+            targets_from_facts(express_facts.clone()),
+            vec!["express.route.get".to_string()]
+        );
+        let express_fact = express_facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "express.route.get")
+            })
+            .expect("express route fact");
+        assert!(express_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "provider_required=typescript"));
+        assert!(express_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "binding_kind=tsjs_route_handler"));
+        assert!(express_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "binding_import_specifier=./handlers"));
+        assert!(express_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "binding_export_name=listUsers"));
+
+        let fastify = r#"import fastify from "fastify";
+import { listUsers } from "./handlers";
+const app = fastify();
+app.get("/users", listUsers);
+"#;
+        let fastify_facts = parse_facts("src/fastify.ts", fastify);
+        assert_eq!(
+            targets_from_facts(fastify_facts.clone()),
+            vec!["fastify.route.get".to_string()]
+        );
+        let fastify_fact = fastify_facts
+            .iter()
+            .find(|fact| {
+                fact.target
+                    .as_ref()
+                    .is_some_and(|target| target.as_str() == "fastify.route.get")
+            })
+            .expect("fastify route fact");
+        assert!(fastify_fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "provider_required=typescript"));
+
+        let local_handler = r#"import express from "express";
+const app = express();
+function listUsers(_req, res) { res.json([]); }
+app.get("/users", listUsers);
+"#;
+        let local_facts = parse_facts("src/local-handler.ts", local_handler);
+        assert_eq!(
+            targets_from_facts(local_facts.clone()),
+            vec!["express.route.get".to_string()]
+        );
+        assert!(local_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "handler_binding=local")
+        }));
+
+        let external = r#"import express from "express";
+import { listUsers } from "@acme/handlers";
+const app = express();
+app.get("/users", listUsers);
+"#;
+        assert!(targets("src/external-handler.ts", external).is_empty());
+        assert_eq!(
+            unknown_kinds("src/external-handler.ts", external),
+            vec!["external_route_handler".to_string()]
+        );
+
+        let missing = r#"import express from "express";
+const app = express();
+app.get("/users", listUsers);
+"#;
+        assert!(targets("src/missing-handler.ts", missing).is_empty());
+        assert_eq!(
+            unknown_kinds("src/missing-handler.ts", missing),
+            vec!["missing_route_handler".to_string()]
+        );
+    }
+
+    #[test]
     fn jest_vitest_imported_runners_anchor_suites_and_tests() {
         let text = r#"import { describe, it, test } from "vitest";
 describe("users", () => {
@@ -870,6 +1083,10 @@ function f() {
 
 function g() {
   app.get("/ok", handler);
+}
+
+function handler(_req, res) {
+  res.end();
 }
 "#;
         assert_eq!(

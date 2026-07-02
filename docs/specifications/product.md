@@ -132,14 +132,16 @@ server/client semantics, middleware, server actions, re-export semantics, and
 dynamic-wrapper support remain deferred unless a later ADR changes the sequence
 again. A bounded optional TypeScript worker operation slice may produce
 compiler-backed module-resolution facts and may cross-check exact Next.js
-file-convention export identity or relative repo-local Prisma shared-client
-bindings when a TypeScript compiler API is available. Only TypeScript-provider
+file-convention export identity, relative repo-local Express/Fastify named
+handler imports, or relative repo-local Prisma shared-client bindings when a
+TypeScript compiler API is available. Only TypeScript-provider
 `resolve_export` facts that match the parser Next.js anchor's
 path/hash/code-unit/range, export name, framework role, and structural-anchor
 provenance, or TypeScript-provider `resolve_reexport` facts that match a
-provider-required Prisma anchor's path/hash/code-unit/range and named relative
-client import such as `./db#prisma`, may become TS/JS-derived support. Static
-fallback facts remain structural context and do not support family claims. Exact local
+provider-required Express/Fastify handler or Prisma anchor's
+path/hash/code-unit/range and named relative import such as
+`./handlers#listUsers` or `./db#prisma`, may become TS/JS-derived support.
+Static fallback facts remain structural context and do not support family claims. Exact local
 Next dynamic segments, route groups, and parallel routes may be recorded as
 context assumptions on supported page/layout/route anchors; they are not
 independent support evidence.
@@ -201,7 +203,7 @@ support facts and no claim-relevant blocking `UNKNOWN`.
 | Java Spring MVC | Structural v0.2 preview | Exact imported/FQN Spring MVC route annotations inside exact controllers; route constants and runtime dispatch remain typed `UNKNOWN` subclaims. |
 | Java Spring/Spring Boot components | Structural v0.2 preview | Exact Spring stereotypes and `@SpringBootApplication`; component scan, DI, auto-configuration, and proxy behavior remain runtime `UNKNOWN`s. |
 | Java Spring Data | Structural v0.2 preview | Exact imported/FQN `JpaRepository` inheritance or `@RepositoryDefinition`; generated implementations, repository factories, module selection, and classpath resolution remain `UNKNOWN`. |
-| TS/JS provider-backed semantics | Limited preview | Bounded TypeScript worker export/binding facts can support exact Next.js file-convention export identity and relative repo-local Prisma shared-client binding after path/hash/code-unit/range/role validation; TypeScript Program/TypeChecker, Language Service, CodeQL, abstract-analysis workers, and broad JS/TS provider-backed families remain deferred. |
+| TS/JS provider-backed semantics | Limited preview | Bounded TypeScript worker export/binding facts can support exact Next.js file-convention export identity, relative repo-local Express/Fastify named handler imports, and relative repo-local Prisma shared-client binding after path/hash/code-unit/range/role validation; TypeScript Program/TypeChecker, Language Service, CodeQL, abstract-analysis workers, and broad JS/TS provider-backed families remain deferred. |
 | Source snippets | Explicit opt-in only | Default output is metadata-only; bounded source spans require explicit CLI/MCP opt-in and hash checks. |
 | Token savings | Not claimed by default | Only paired baseline/treatment experiments may report measured savings. |
 

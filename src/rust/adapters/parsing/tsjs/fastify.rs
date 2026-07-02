@@ -1,8 +1,8 @@
 use super::scope_graph::ScopeGraphLite;
 use super::{
     async_shape, handler_shape, normalize_route_path, object_literal_has_field,
-    object_literal_string_field, route_call_parts, route_path_shape, Anchor, AnchorOutcome,
-    UnknownAnchor,
+    object_literal_string_field, route_call_parts, route_handler_binding_assumptions,
+    route_path_shape, Anchor, AnchorOutcome, UnknownAnchor,
 };
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
@@ -59,6 +59,10 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
     ];
     if let Some(path_shape) = route_path_shape(slice) {
         assumptions.push(format!("route_path_shape={path_shape}"));
+    }
+    match route_handler_binding_assumptions(bindings, slice, start_byte) {
+        Ok(extra) => assumptions.extend(extra),
+        Err(unknown) => return AnchorOutcome::Unknown(unknown),
     }
     AnchorOutcome::Anchor(Anchor {
         target: format!("fastify.route.{method}"),

@@ -58,9 +58,9 @@ vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and record only facts
 that match the building generation's indexed code-unit evidence. The
 application layer can currently promote only matching TypeScript-provider
 `resolve_export` facts for exact Next.js file-convention anchors and
-`resolve_reexport` facts for relative repo-local Prisma shared-client imports
-into TS/JS-derived provider-resolved support; fallback worker facts remain
-context.
+`resolve_reexport` facts for relative repo-local Express/Fastify named handler
+imports or Prisma shared-client imports into TS/JS-derived provider-resolved
+support; fallback worker facts remain context.
 Tree-sitter, full TypeScript compiler `Program`/`TypeChecker` worker support,
 freshness-validated semantic claims beyond bounded worker operations, typed IR
 attributes beyond the structural bootstrap graph, family mining, and stronger

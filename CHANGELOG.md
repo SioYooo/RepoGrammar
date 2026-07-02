@@ -98,6 +98,12 @@
   provider-resolved Prisma support. External shared clients, fallback worker
   facts, callback transactions, dynamic operations, and raw SQL remain
   non-supporting context or typed `UNKNOWN`.
+- Express and Fastify shorthand routes now treat relative repo-local named
+  handler imports as provider-required candidates. Configured TypeScript
+  workers must prove a matching `resolve_reexport` operation such as
+  `./handlers#listUsers` before those imported-handler routes contribute
+  support. External handler imports, missing handlers, fallback worker facts,
+  and unresolved worker facts remain non-supporting context or typed `UNKNOWN`.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve

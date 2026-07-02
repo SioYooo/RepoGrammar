@@ -2972,7 +2972,9 @@ fn tsjs_provider_resolved_proof_for_framework_fact<'a>(
     if let Some(literal_specifier) = tsjs_provider_binding_operation_literal(fact) {
         let proof_key = TsJsProviderBindingProofKey::from_fact(fact, &literal_specifier);
         if let Some(worker_fact) = binding_proofs.get(&proof_key) {
-            return Some((format!("binding:{literal_specifier}"), worker_fact));
+            if tsjs_provider_resolved_binding_kind_matches(fact, worker_fact) {
+                return Some((format!("binding:{literal_specifier}"), worker_fact));
+            }
         }
     }
     None
@@ -3034,6 +3036,20 @@ fn tsjs_provider_resolved_binding_fact(fact: &SemanticFact) -> bool {
     matches!(fact.kind, SemanticFactKind::Symbol | SemanticFactKind::Type)
         && tsjs_provider_resolved_compiler_fact(fact)
         && fact_assumption_value(fact, "query_operation=") == Some("resolve_reexport")
+}
+
+fn tsjs_provider_resolved_binding_kind_matches(
+    anchor_fact: &SemanticFact,
+    worker_fact: &SemanticFact,
+) -> bool {
+    match fact_assumption_value(anchor_fact, "binding_kind=") {
+        Some("prisma_client") => matches!(
+            worker_fact.kind,
+            SemanticFactKind::Symbol | SemanticFactKind::Type
+        ),
+        Some("tsjs_route_handler") => matches!(worker_fact.kind, SemanticFactKind::Symbol),
+        _ => false,
+    }
 }
 
 fn tsjs_provider_resolved_compiler_fact(fact: &SemanticFact) -> bool {
@@ -4733,6 +4749,22 @@ mod tests {
         fact
     }
 
+    fn tsjs_provider_required_route_handler_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+    ) -> SemanticFact {
+        let mut fact = tsjs_structural_anchor_fact(unit, target);
+        fact.assumptions.extend([
+            "provider_required=typescript".to_string(),
+            "binding_kind=tsjs_route_handler".to_string(),
+            "binding_local_name=listUsers".to_string(),
+            "binding_import_specifier=./handlers".to_string(),
+            "binding_export_name=listUsers".to_string(),
+            "required_mechanism=typescript_export_graph".to_string(),
+        ]);
+        fact
+    }
+
     fn tsjs_provider_export_fact(unit: &IndexedCodeUnitRecord, export_name: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::Symbol,
@@ -4779,8 +4811,22 @@ mod tests {
         import_specifier: &str,
         export_name: &str,
     ) -> SemanticFact {
+        tsjs_provider_binding_fact_with_kind(
+            unit,
+            import_specifier,
+            export_name,
+            SemanticFactKind::Symbol,
+        )
+    }
+
+    fn tsjs_provider_binding_fact_with_kind(
+        unit: &IndexedCodeUnitRecord,
+        import_specifier: &str,
+        export_name: &str,
+        kind: SemanticFactKind,
+    ) -> SemanticFact {
         SemanticFact {
-            kind: SemanticFactKind::Symbol,
+            kind,
             subject: format!("{}#resolve_reexport:{import_specifier}#{export_name}", unit.path),
             target: Some(
                 SymbolId::new(format!("symbol:src/db.ts#export:{export_name}"))
@@ -5237,6 +5283,60 @@ mod tests {
         let report = build_family_claims(&units, &family_facts);
         assert_eq!(report.claims.len(), 1);
         assert_eq!(report.claims[0].framework_role, "framework:prisma.query");
+    }
+
+    #[test]
+    fn provider_resolved_tsjs_route_handler_bindings_derive_express_support() {
+        let first = indexed_tsjs_unit("src/users.ts", "express_route", 0);
+        let second = indexed_tsjs_unit("src/accounts.ts", "express_route", 1);
+        let third = indexed_tsjs_unit("src/orders.ts", "express_route", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            tsjs_provider_required_route_handler_anchor_fact(&first, "express.route.get"),
+            tsjs_provider_required_route_handler_anchor_fact(&second, "express.route.get"),
+            tsjs_provider_required_route_handler_anchor_fact(&third, "express.route.get"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:express.route_handler"))
+            .collect::<Vec<_>>();
+        let worker_facts = units
+            .iter()
+            .map(|unit| tsjs_provider_binding_fact(unit, "./handlers", "listUsers"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_provider_resolved_framework_support_facts(
+            &units,
+            &parser_facts,
+            &role_facts,
+            &worker_facts,
+        )
+        .expect("derive provider-resolved express handler support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding_kind=tsjs_route_handler")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "query_operation=resolve_reexport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=tsjs_express_structural_anchors")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(
+            report.claims[0].framework_role,
+            "framework:express.route_handler"
+        );
     }
 
     #[test]
