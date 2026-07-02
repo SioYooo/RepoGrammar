@@ -120,6 +120,9 @@ class UserOut(BaseModel):
 class Base(DeclarativeBase):
     pass
 
+class Account(Base):
+    id: Mapped[int] = mapped_column(primary_key=True)
+
 class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     accounts = relationship("Account")
@@ -340,6 +343,13 @@ assert any(
     for fact in parse_facts
 )
 assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "sqlalchemy.relationship_target.Account"
+    and "python_anchor_kind=sqlalchemy_relationship_target" in fact["assumptions"]
+    and "fact_scope=context_only" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
     fact["fact_kind"] == "RESOLVED_CALL" and fact["target"] == "sqlalchemy.orm.Session.add"
     for fact in parse_facts
 )
@@ -412,6 +422,50 @@ assert any(
     and "python_anchor_kind=sqlalchemy_session_call" in fact["assumptions"]
     for fact in parse_facts
 )
+
+dynamic_relationship_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "dynamic_relationship.py",
+        "content_hash": "sha256:" + "e" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from sqlalchemy.orm import DeclarativeBase, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+def resolve_target():
+    return "Account"
+
+class User(Base):
+    accounts = relationship(resolve_target())
+
+class AuditLog(Base):
+    owner = relationship("ExternalAccount")
+""",
+    }
+)
+dynamic_relationship_facts = dynamic_relationship_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=sqlalchemy_relationship_target" in fact["assumptions"]
+    for fact in dynamic_relationship_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "affected_claim=sqlalchemy_relationship_target" in fact["assumptions"]
+    for fact in dynamic_relationship_facts
+)
+assert not any(
+    fact.get("target") == "sqlalchemy.relationship_target.Account"
+    for fact in dynamic_relationship_facts
+)
+assert "resolve_target()" not in json.dumps(dynamic_relationship_messages)
+
 assert any(
     fact["fact_kind"] == "RESOLVED_CALL"
     and fact["target"] == "app.services.UserService.list_users"

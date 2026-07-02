@@ -190,7 +190,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `staticmethod` stay structural metadata;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
-  calls, plus bounded parameter-role propagation that canonicalizes typed
+  calls. Literal `relationship("LocalModel")` targets are recorded as local
+  relationship-target context when the target is a same-module class; dynamic,
+  nonlocal, or unsupported relationship targets remain typed `UNKNOWN`. This
+  also includes bounded parameter-role propagation that canonicalizes typed
   `Session` and `AsyncSession` calls such as `session.execute(...)`,
   `session.get(...)`, `session.commit()`, `session.rollback()`,
   `session.scalar(...)`, `session.scalars(...)`, and `session.add(...)` to
@@ -285,6 +288,8 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `model_config`, nested `Config`, `computed_field`, `field_validator`, legacy
   `validator`, and `model_validator` anchors remain model schema/config/member
   metadata and are also excluded from membership support derivation.
+  SQLAlchemy relationship-target anchors remain model relationship context
+  only, while dynamic or nonlocal targets preserve `UNKNOWN`.
 - a Rust `ports::python_provider` boundary for future candidate-scoped
   Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
   provider cache-key dimensions, and recoverable provider-unavailable

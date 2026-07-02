@@ -1231,10 +1231,19 @@ fn validate_python_fact_assumptions(
             let has_boundary = assumptions
                 .iter()
                 .any(|value| value == "binding unresolved without provider");
-            if assumptions.len() == 2
+            let default_structural_assumptions = assumptions.len() == 2
                 && anchor.is_some_and(python_anchor_kind_is_supported)
+                && has_boundary;
+            let relationship_context_assumptions = assumptions.len() == 4
+                && anchor == Some("sqlalchemy_relationship_target")
                 && has_boundary
-            {
+                && assumptions
+                    .iter()
+                    .any(|value| value == "fact_scope=context_only")
+                && assumptions
+                    .iter()
+                    .any(|value| value == "relationship_target_binding=local_literal");
+            if default_structural_assumptions || relationship_context_assumptions {
                 Ok(())
             } else {
                 Err(ParseError::Internal(
@@ -1355,6 +1364,7 @@ fn python_affected_claim_is_supported(value: &str) -> bool {
             | "python_call_target"
             | "python_framework_identity"
             | "fastapi_dependency_target"
+            | "sqlalchemy_relationship_target"
             | "pytest_fixture_binding"
             | "python_project_config"
     )
@@ -1399,6 +1409,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "sqlalchemy_mapped_field"
             | "sqlalchemy_mapped_column"
             | "sqlalchemy_relationship"
+            | "sqlalchemy_relationship_target"
             | "module_name"
             | "scope_imported"
             | "scope_namespace"
@@ -2943,6 +2954,18 @@ class StoredSessionRepository:
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=sqlalchemy_relationship")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.relationship_target.Account")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "python_anchor_kind=sqlalchemy_relationship_target"
+                })
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "fact_scope=context_only")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::ResolvedCall

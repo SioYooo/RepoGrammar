@@ -2141,8 +2141,83 @@ def add_pydantic_model_config_fact(
     )
 
 
+def sqlalchemy_relationship_target_node(call: ast.Call) -> ast.AST | None:
+    if call.args:
+        return call.args[0]
+    for keyword in call.keywords:
+        if keyword.arg == "argument":
+            return keyword.value
+    return None
+
+
+def add_sqlalchemy_relationship_target_fact(
+    call: ast.Call,
+    local_class_names: set[str],
+    starts: list[int],
+    path: str,
+    content_hash_value: str,
+    repository_revision: str,
+    subject_unit_id: str,
+    facts: list[dict[str, Any]],
+) -> None:
+    target_node = sqlalchemy_relationship_target_node(call)
+    if target_node is None:
+        return
+    start, end = node_range(starts, target_node)
+    target_value = literal_string_value(target_node)
+    if target_value is None:
+        add_fact(
+            facts,
+            unknown_fact(
+                subject_unit_id=subject_unit_id,
+                reason_code="FrameworkMagic",
+                affected_claim="sqlalchemy_relationship_target",
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+            ),
+        )
+        return
+    if not is_python_identifier(target_value) or target_value not in local_class_names:
+        add_fact(
+            facts,
+            unknown_fact(
+                subject_unit_id=subject_unit_id,
+                reason_code="UnresolvedImport",
+                affected_claim="sqlalchemy_relationship_target",
+                path=path,
+                content_hash_value=content_hash_value,
+                repository_revision=repository_revision,
+                start=start,
+                end=end,
+            ),
+        )
+        return
+    fact_data = structural_fact(
+        kind="SYMBOL",
+        subject_unit_id=subject_unit_id,
+        target=f"sqlalchemy.relationship_target.{target_value}",
+        path=path,
+        content_hash_value=content_hash_value,
+        repository_revision=repository_revision,
+        start=start,
+        end=end,
+        anchor_kind="sqlalchemy_relationship_target",
+    )
+    fact_data["assumptions"].extend(
+        [
+            "fact_scope=context_only",
+            "relationship_target_binding=local_literal",
+        ]
+    )
+    add_fact(facts, fact_data)
+
+
 def collect_sqlalchemy_model_field_facts(
     node: ast.ClassDef,
+    local_class_names: set[str],
     starts: list[int],
     path: str,
     content_hash_value: str,
@@ -2201,6 +2276,17 @@ def collect_sqlalchemy_model_field_facts(
                         anchor_kind=anchor_kind,
                     ),
                 )
+                if canonical_value == "sqlalchemy.orm.relationship" and isinstance(value, ast.Call):
+                    add_sqlalchemy_relationship_target_fact(
+                        value,
+                        local_class_names,
+                        starts,
+                        path,
+                        content_hash_value,
+                        repository_revision,
+                        subject_unit_id,
+                        facts,
+                    )
 
 
 def canonical_call_name(
@@ -3177,6 +3263,7 @@ def analyze_source(
     for item in import_facts:
         add_fact(facts, item)
     defined_names = top_level_defined_names(tree)
+    local_class_names = {item.name for item in tree.body if isinstance(item, ast.ClassDef)}
     collect_module_identity_and_scope_facts(
         tree,
         path,
@@ -3407,6 +3494,7 @@ def analyze_source(
             )
             collect_sqlalchemy_model_field_facts(
                 item,
+                local_class_names,
                 starts,
                 path,
                 content_hash_value,

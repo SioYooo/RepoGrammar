@@ -63,6 +63,9 @@
   exact local or repo-local imported router-prefix context without treating it
   as route-family support. Dynamic prefixes, unresolved/external routers, and
   router factories remain typed `UNKNOWN`.
+- SQLAlchemy `relationship("LocalModel")` calls now record same-module literal
+  relationship-target context without treating it as model-family support.
+  Dynamic or nonlocal relationship targets remain typed `UNKNOWN`.
 - SQLAlchemy repository-method exact anchors now include typed
   `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
   calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy

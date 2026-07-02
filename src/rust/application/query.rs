@@ -993,10 +993,16 @@ fn claim_specific_required_unknown_mechanism(
             "fastapi_dependency_target" | "fastapi_router_binding" | "fastapi_router_prefix" => {
                 Some("fastapi_dependency_graph")
             }
+            "sqlalchemy_relationship_target" => Some("sqlalchemy_model_graph"),
             _ if framework_role.starts_with("framework:pytest")
                 && affected_claim.contains("fixture") =>
             {
                 Some("pytest_fixture_graph")
+            }
+            _ if framework_role.starts_with("framework:sqlalchemy")
+                && affected_claim.starts_with("sqlalchemy_") =>
+            {
+                Some("sqlalchemy_model_graph")
             }
             _ if framework_role.starts_with("framework:fastapi")
                 && affected_claim.starts_with("fastapi_") =>

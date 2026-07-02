@@ -376,7 +376,8 @@ returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field
 annotation targets, `model_config`, nested `Config`, `computed_field`,
 validator, and `model_validator` declarations, SQLAlchemy mapped fields,
-`relationship(...)` calls, typed SQLAlchemy session calls including `add`,
+`relationship(...)` calls, local literal relationship-target context for
+`relationship("LocalModel")`, typed SQLAlchemy session calls including `add`,
 `execute`, `scalar`, `scalars`, `commit`, and `rollback`, and bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple call targets, bounded
@@ -391,7 +392,8 @@ context, literal pytest parametrize argument anchors, path-derived module names,
 and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for dynamic
 import, `__import__`,
 `locals()[...]`, `eval`, `exec`, `compile`, unresolved import, framework magic,
-dynamic or unresolved decorators, dynamic Pydantic model factories, dynamic pytest fixture names,
+dynamic or unresolved decorators, dynamic Pydantic model factories, dynamic
+SQLAlchemy relationship targets, dynamic pytest fixture names,
 duplicate conftest fixture bindings, plugin-style fixture names without an
 allowlist or provider, and unresolved pytest fixture injection cases. Literal
 pytest parametrize arguments are structural parametrize facts, not unresolved
