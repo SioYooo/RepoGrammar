@@ -104,6 +104,13 @@
   `./handlers#listUsers` before those imported-handler routes contribute
   support. External handler imports, missing handlers, fallback worker facts,
   and unresolved worker facts remain non-supporting context or typed `UNKNOWN`.
+- Drizzle query anchors now treat relative repo-local named `db` and table
+  imports as provider-required candidates. Configured TypeScript workers must
+  prove every required `resolve_reexport` binding, such as `./db#db` and
+  `./schema#users`, for the same path/hash/code-unit/range before those
+  imported Drizzle query shapes contribute support. External imports, missing
+  proofs, fallback worker facts, dynamic builders, and raw SQL remain
+  non-supporting context or typed `UNKNOWN`.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve

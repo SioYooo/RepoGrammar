@@ -2958,6 +2958,27 @@ impl TsJsProviderBindingProofKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TsJsProviderRequiredBinding {
+    kind: String,
+    import_specifier: String,
+    export_name: String,
+}
+
+impl TsJsProviderRequiredBinding {
+    fn literal_specifier(&self) -> String {
+        format!("{}#{}", self.import_specifier, self.export_name)
+    }
+}
+
+#[derive(Debug, Default)]
+struct TsJsProviderRequiredBindingFields {
+    kind: Option<String>,
+    local_name: Option<String>,
+    import_specifier: Option<String>,
+    export_name: Option<String>,
+}
+
 fn tsjs_provider_resolved_proof_for_framework_fact<'a>(
     fact: &SemanticFact,
     export_proofs: &'a BTreeMap<TsJsProviderExportProofKey, SemanticFact>,
@@ -2969,15 +2990,98 @@ fn tsjs_provider_resolved_proof_for_framework_fact<'a>(
             return Some((format!("export:{export_name}"), worker_fact));
         }
     }
-    if let Some(literal_specifier) = tsjs_provider_binding_operation_literal(fact) {
-        let proof_key = TsJsProviderBindingProofKey::from_fact(fact, &literal_specifier);
-        if let Some(worker_fact) = binding_proofs.get(&proof_key) {
-            if tsjs_provider_resolved_binding_kind_matches(fact, worker_fact) {
-                return Some((format!("binding:{literal_specifier}"), worker_fact));
+    let required_bindings = tsjs_provider_required_bindings(fact);
+    if !required_bindings.is_empty() {
+        let mut first_worker_fact = None;
+        let mut proof_literals = Vec::new();
+        for binding in required_bindings {
+            let literal_specifier = binding.literal_specifier();
+            let proof_key = TsJsProviderBindingProofKey::from_fact(fact, &literal_specifier);
+            let worker_fact = binding_proofs.get(&proof_key)?;
+            if !tsjs_provider_resolved_binding_kind_matches(&binding.kind, worker_fact) {
+                return None;
             }
+            if first_worker_fact.is_none() {
+                first_worker_fact = Some(worker_fact);
+            }
+            proof_literals.push(literal_specifier);
         }
+        return Some((
+            format!("bindings:{}", proof_literals.join(",")),
+            first_worker_fact?,
+        ));
     }
     None
+}
+
+fn tsjs_provider_required_bindings(fact: &SemanticFact) -> Vec<TsJsProviderRequiredBinding> {
+    if !is_tsjs_structural_anchor_fact(fact) || !tsjs_provider_required_anchor_fact(fact) {
+        return Vec::new();
+    }
+    let mut bindings = Vec::new();
+    if let (Some(kind), Some(_local_name), Some(import_specifier), Some(export_name)) = (
+        fact_assumption_value(fact, "binding_kind="),
+        fact_assumption_value(fact, "binding_local_name="),
+        fact_assumption_value(fact, "binding_import_specifier="),
+        fact_assumption_value(fact, "binding_export_name="),
+    ) {
+        bindings.push(TsJsProviderRequiredBinding {
+            kind: kind.to_string(),
+            import_specifier: import_specifier.to_string(),
+            export_name: export_name.to_string(),
+        });
+    }
+
+    let mut fields_by_id: BTreeMap<String, TsJsProviderRequiredBindingFields> = BTreeMap::new();
+    for assumption in &fact.assumptions {
+        let Some(rest) = assumption.strip_prefix("binding:") else {
+            continue;
+        };
+        let Some((binding_id, field_assignment)) = rest.split_once(':') else {
+            continue;
+        };
+        if binding_id.is_empty() {
+            continue;
+        }
+        let Some((field, value)) = field_assignment.split_once('=') else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        let fields = fields_by_id.entry(binding_id.to_string()).or_default();
+        match field {
+            "kind" => fields.kind = Some(value.to_string()),
+            "local_name" => fields.local_name = Some(value.to_string()),
+            "import_specifier" => fields.import_specifier = Some(value.to_string()),
+            "export_name" => fields.export_name = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    for (_binding_id, fields) in fields_by_id {
+        if let (Some(kind), Some(_local_name), Some(import_specifier), Some(export_name)) = (
+            fields.kind,
+            fields.local_name,
+            fields.import_specifier,
+            fields.export_name,
+        ) {
+            bindings.push(TsJsProviderRequiredBinding {
+                kind,
+                import_specifier,
+                export_name,
+            });
+        }
+    }
+    bindings.sort();
+    bindings.dedup();
+    bindings
+}
+
+fn tsjs_provider_binding_operation_literals(fact: &SemanticFact) -> Vec<String> {
+    tsjs_provider_required_bindings(fact)
+        .iter()
+        .map(TsJsProviderRequiredBinding::literal_specifier)
+        .collect()
 }
 
 fn tsjs_provider_resolved_export_proofs(
@@ -3039,15 +3143,17 @@ fn tsjs_provider_resolved_binding_fact(fact: &SemanticFact) -> bool {
 }
 
 fn tsjs_provider_resolved_binding_kind_matches(
-    anchor_fact: &SemanticFact,
+    binding_kind: &str,
     worker_fact: &SemanticFact,
 ) -> bool {
-    match fact_assumption_value(anchor_fact, "binding_kind=") {
-        Some("prisma_client") => matches!(
+    match binding_kind {
+        "prisma_client" => matches!(
             worker_fact.kind,
             SemanticFactKind::Symbol | SemanticFactKind::Type
         ),
-        Some("tsjs_route_handler") => matches!(worker_fact.kind, SemanticFactKind::Symbol),
+        "tsjs_route_handler" | "drizzle_db" | "drizzle_table" => {
+            matches!(worker_fact.kind, SemanticFactKind::Symbol)
+        }
         _ => false,
     }
 }
@@ -3658,16 +3764,15 @@ fn tsjs_semantic_worker_operations(
         );
     }
     for fact in parser_semantic_facts {
-        let Some(literal_specifier) = tsjs_provider_binding_operation_literal(fact) else {
-            continue;
-        };
-        push_tsjs_semantic_worker_operation(
-            &mut operations,
-            fact,
-            SemanticWorkerOperationKind::ResolveReexport,
-            &literal_specifier,
-            &operation_context,
-        );
+        for literal_specifier in tsjs_provider_binding_operation_literals(fact) {
+            push_tsjs_semantic_worker_operation(
+                &mut operations,
+                fact,
+                SemanticWorkerOperationKind::ResolveReexport,
+                &literal_specifier,
+                &operation_context,
+            );
+        }
     }
 
     operations
@@ -3737,15 +3842,6 @@ fn tsjs_framework_export_operation_literal(fact: &SemanticFact) -> Option<String
         }
         _ => None,
     }
-}
-
-fn tsjs_provider_binding_operation_literal(fact: &SemanticFact) -> Option<String> {
-    if !is_tsjs_structural_anchor_fact(fact) || !tsjs_provider_required_anchor_fact(fact) {
-        return None;
-    }
-    let import_specifier = fact_assumption_value(fact, "binding_import_specifier=")?;
-    let export_name = fact_assumption_value(fact, "binding_export_name=")?;
-    Some(format!("{import_specifier}#{export_name}"))
 }
 
 fn zero_content_hash() -> String {
@@ -4765,6 +4861,26 @@ mod tests {
         fact
     }
 
+    fn tsjs_provider_required_drizzle_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+    ) -> SemanticFact {
+        let mut fact = tsjs_structural_anchor_fact(unit, target);
+        fact.assumptions.extend([
+            "provider_required=typescript".to_string(),
+            "binding:db:kind=drizzle_db".to_string(),
+            "binding:db:local_name=db".to_string(),
+            "binding:db:import_specifier=./db".to_string(),
+            "binding:db:export_name=db".to_string(),
+            "binding:table:kind=drizzle_table".to_string(),
+            "binding:table:local_name=users".to_string(),
+            "binding:table:import_specifier=./schema".to_string(),
+            "binding:table:export_name=users".to_string(),
+            "required_mechanism=typescript_export_graph".to_string(),
+        ]);
+        fact
+    }
+
     fn tsjs_provider_export_fact(unit: &IndexedCodeUnitRecord, export_name: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::Symbol,
@@ -5340,6 +5456,111 @@ mod tests {
     }
 
     #[test]
+    fn provider_resolved_tsjs_drizzle_bindings_require_db_and_table_proofs() {
+        let first = indexed_tsjs_unit("src/users.ts", "drizzle_query", 0);
+        let second = indexed_tsjs_unit("src/accounts.ts", "drizzle_query", 1);
+        let third = indexed_tsjs_unit("src/orders.ts", "drizzle_query", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            tsjs_provider_required_drizzle_anchor_fact(&first, "drizzle.query.select"),
+            tsjs_provider_required_drizzle_anchor_fact(&second, "drizzle.query.insert"),
+            tsjs_provider_required_drizzle_anchor_fact(&third, "drizzle.query.query_findMany"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:drizzle.query"))
+            .collect::<Vec<_>>();
+        let worker_facts = units
+            .iter()
+            .flat_map(|unit| {
+                [
+                    tsjs_provider_binding_fact(unit, "./db", "db"),
+                    tsjs_provider_binding_fact(unit, "./schema", "users"),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_provider_resolved_framework_support_facts(
+            &units,
+            &parser_facts,
+            &role_facts,
+            &worker_facts,
+        )
+        .expect("derive provider-resolved drizzle support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider=typescript")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:db:kind=drizzle_db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:table:kind=drizzle_table")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "query_operation=resolve_reexport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=tsjs_drizzle_structural_anchors")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].framework_role, "framework:drizzle.query");
+
+        let partial = derive_tsjs_provider_resolved_framework_support_facts(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&parser_facts[0]),
+            std::slice::from_ref(&family_facts[0]),
+            &[tsjs_provider_binding_fact(&first, "./db", "db")],
+        )
+        .expect("partial drizzle proof is valid input");
+        assert!(partial.is_empty());
+
+        let mut fallback_table = tsjs_provider_binding_fact(&first, "./schema", "users");
+        fallback_table.certainty = FactCertainty::Structural;
+        fallback_table.origin.engine = "repogrammar-tsjs-static-worker".to_string();
+        fallback_table.origin.method = "bounded_project_model_resolver_v1".to_string();
+        fallback_table
+            .assumptions
+            .retain(|assumption| assumption != "provider=typescript");
+        fallback_table
+            .assumptions
+            .retain(|assumption| assumption != "provider_resolved=true");
+        fallback_table
+            .assumptions
+            .push("provider=repogrammar_static_tsjs".to_string());
+        fallback_table
+            .assumptions
+            .push("provider_resolved=false".to_string());
+        let fallback = derive_tsjs_provider_resolved_framework_support_facts(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&parser_facts[0]),
+            std::slice::from_ref(&family_facts[0]),
+            &[
+                tsjs_provider_binding_fact(&first, "./db", "db"),
+                fallback_table,
+            ],
+        )
+        .expect("fallback drizzle proof is valid input");
+        assert!(fallback.is_empty());
+    }
+
+    #[test]
     fn provider_resolved_tsjs_binding_support_rejects_fallback_or_mismatched_worker_facts() {
         let unit = indexed_tsjs_unit("src/repository.ts", "prisma_query", 0);
         let parser_fact = tsjs_provider_required_prisma_anchor_fact(&unit, "prisma.query.findMany");
@@ -5637,6 +5858,56 @@ mod tests {
                 facts.push(tsjs_provider_binding_fact_for_code_unit(
                     &unit, "./db", "prisma",
                 ));
+            }
+        }
+        (
+            report.files.iter().map(|file| file.path.clone()).collect(),
+            facts,
+        )
+    }
+
+    fn provider_binding_facts_for_drizzle_queries(
+        workspace: &TempWorkspace,
+    ) -> (Vec<String>, Vec<SemanticFact>) {
+        let request = IndexingRequest::new(workspace.path().display().to_string());
+        let report = discover_repository_files(request.clone(), &FilesystemFileDiscovery)
+            .expect("discover files for drizzle provider support");
+        let parser = SyntaxCodeUnitParser;
+        let parser_context =
+            parser_project_context(&request, &report, &FilesystemSourceStore, &parser)
+                .expect("build parser context");
+        let mut facts = Vec::new();
+        for file in &report.files {
+            let source = FilesystemSourceStore
+                .read_source(SourceReadRequest {
+                    repository_root: request.repository_root.clone(),
+                    path: file.path.clone(),
+                    expected_content_hash: file.content_hash.clone(),
+                    max_file_bytes: request.max_file_bytes,
+                })
+                .expect("read source for drizzle provider support");
+            let parse_report = parser
+                .parse_with_context(
+                    SourceDocument {
+                        path: &source.path,
+                        language: language_from_discovered(file.language),
+                        content_hash: source.content_hash.clone(),
+                        repository_revision: RepositoryRevision::new("UNKNOWN")
+                            .expect("valid revision"),
+                        text: &source.text,
+                    },
+                    &parser_context,
+                )
+                .expect("parse source for drizzle provider support");
+            for unit in parse_report
+                .units
+                .into_iter()
+                .filter(|unit| unit.kind == CodeUnitKind::DrizzleQuery)
+            {
+                facts.extend([
+                    tsjs_provider_binding_fact_for_code_unit(&unit, "./db", "db"),
+                    tsjs_provider_binding_fact_for_code_unit(&unit, "./schema", "users"),
+                ]);
             }
         }
         (
@@ -8134,6 +8405,79 @@ mod tests {
     }
 
     #[test]
+    fn provider_resolved_drizzle_binding_support_is_recorded_after_worker() {
+        let workspace = TempWorkspace::new("indexing-provider-drizzle-binding-support");
+        fs::write(workspace.path().join("db.ts"), "export const db = {};\n")
+            .expect("write shared db");
+        fs::write(
+            workspace.path().join("schema.ts"),
+            "export const users = {};\n",
+        )
+        .expect("write shared schema");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"drizzle-orm":"latest"}}"#,
+        )
+        .expect("write package");
+        for name in ["users", "accounts", "orders"] {
+            let path = workspace.path().join(format!("{name}.ts"));
+            fs::write(
+                path,
+                "import { db } from './db';\n\
+                 import { users } from './schema';\n\
+                 export function list() { return db.select().from(users); }\n",
+            )
+            .expect("write repository");
+        }
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let (expected_files, facts) = provider_binding_facts_for_drizzle_queries(&workspace);
+        assert_eq!(facts.len(), 6);
+        let worker = StaticSemanticWorker {
+            expected_files,
+            result: Ok(facts),
+        };
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &detector,
+                &worker,
+                &store,
+            )
+            .expect("index provider-resolved drizzle support");
+
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(
+            provider_resolved_tsjs_support_fact_count(&state, "gen-000001"),
+            3
+        );
+        assert_eq!(
+            outcome.semantic_facts as u32,
+            semantic_fact_count(&state, "gen-000001")
+        );
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.families.len(), 1);
+        let family = store
+            .show_family(&families.families[0].family_id)
+            .expect("show family")
+            .expect("family exists");
+        assert_eq!(family.members.len(), 3);
+        assert!(family
+            .members
+            .iter()
+            .all(|member| member.role == "framework:drizzle.query"));
+        let debug = format!("{family:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("db.select().from"));
+    }
+
+    #[test]
     fn reported_semantic_facts_count_includes_derived_tsjs_support_facts() {
         // A resolved Express server produces exact TS/JS anchors that are promoted
         // to bounded TS/JS-derived support facts and recorded in the generation.
@@ -8221,19 +8565,30 @@ mod tests {
         fs::create_dir_all(workspace.path().join("app/users")).expect("create next dirs");
         let source = "import service from '@app/service';\nexport * from './barrel';\n";
         let repository = "import { prisma } from './db';\nprisma.user.findMany();\n";
+        let drizzle_repository =
+            "import { db } from './drizzle-db';\nimport { users } from './schema';\ndb.select().from(users);\n";
         let target = "export const service = true;\n";
         let barrel = "export const value = true;\n";
         let db = "export const prisma = {};\n";
+        let drizzle_db = "export const db = {};\n";
+        let schema = "export const users = {};\n";
         let next_route = "export async function GET() { return Response.json([]); }\n";
         let config = r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}"#;
-        let package_json =
-            r#"{"dependencies":{"express":"latest","next":"latest","@prisma/client":"latest"}}"#;
+        let package_json = r#"{"dependencies":{"express":"latest","next":"latest","@prisma/client":"latest","drizzle-orm":"latest"}}"#;
         fs::write(workspace.path().join("src/route.ts"), source).expect("write route");
         fs::write(workspace.path().join("src/repository.ts"), repository)
             .expect("write repository");
+        fs::write(
+            workspace.path().join("src/drizzle-repository.ts"),
+            drizzle_repository,
+        )
+        .expect("write drizzle repository");
         fs::write(workspace.path().join("src/app/service.ts"), target).expect("write target");
         fs::write(workspace.path().join("src/barrel.ts"), barrel).expect("write barrel");
         fs::write(workspace.path().join("src/db.ts"), db).expect("write db");
+        fs::write(workspace.path().join("src/drizzle-db.ts"), drizzle_db)
+            .expect("write drizzle db");
+        fs::write(workspace.path().join("src/schema.ts"), schema).expect("write schema");
         fs::write(workspace.path().join("app/users/route.ts"), next_route)
             .expect("write next route");
         fs::write(workspace.path().join("tsconfig.json"), config).expect("write tsconfig");
@@ -8271,7 +8626,7 @@ mod tests {
         let requests = worker.requests.lock().expect("recorded requests");
         assert_eq!(requests.len(), 1);
         let operations = &requests[0].operations;
-        assert_eq!(operations.len(), 5);
+        assert_eq!(operations.len(), 9);
         let find_operation =
             |kind: SemanticWorkerOperationKind, path: &str, literal_specifier: &str| {
                 operations
@@ -8312,6 +8667,30 @@ mod tests {
         assert!(import_operation
             .code_unit_id
             .starts_with("unit:src/repository.ts#module:"));
+        let drizzle_db_import_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            "src/drizzle-repository.ts",
+            "./drizzle-db",
+        );
+        assert_eq!(
+            drizzle_db_import_operation.content_hash,
+            hash_for("src/drizzle-repository.ts")
+        );
+        assert!(drizzle_db_import_operation
+            .code_unit_id
+            .starts_with("unit:src/drizzle-repository.ts#module:"));
+        let drizzle_table_import_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            "src/drizzle-repository.ts",
+            "./schema",
+        );
+        assert_eq!(
+            drizzle_table_import_operation.content_hash,
+            hash_for("src/drizzle-repository.ts")
+        );
+        assert!(drizzle_table_import_operation
+            .code_unit_id
+            .starts_with("unit:src/drizzle-repository.ts#module:"));
         let reexport_operation = find_operation(
             SemanticWorkerOperationKind::ResolveReexport,
             "src/route.ts",
@@ -8378,6 +8757,30 @@ mod tests {
         assert!(binding_operation
             .code_unit_id
             .starts_with("unit:src/repository.ts#prisma_query:"));
+        let drizzle_db_binding_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveReexport,
+            "src/drizzle-repository.ts",
+            "./drizzle-db#db",
+        );
+        assert_eq!(
+            drizzle_db_binding_operation.content_hash,
+            hash_for("src/drizzle-repository.ts")
+        );
+        assert!(drizzle_db_binding_operation
+            .code_unit_id
+            .starts_with("unit:src/drizzle-repository.ts#drizzle_query:"));
+        let drizzle_table_binding_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveReexport,
+            "src/drizzle-repository.ts",
+            "./schema#users",
+        );
+        assert_eq!(
+            drizzle_table_binding_operation.content_hash,
+            hash_for("src/drizzle-repository.ts")
+        );
+        assert!(drizzle_table_binding_operation
+            .code_unit_id
+            .starts_with("unit:src/drizzle-repository.ts#drizzle_query:"));
     }
 
     #[test]

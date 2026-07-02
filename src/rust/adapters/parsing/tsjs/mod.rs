@@ -1362,6 +1362,93 @@ db.select({ unsafe: sql`raw` }).from(users);
     }
 
     #[test]
+    fn drizzle_imported_db_and_table_are_provider_required_candidates() {
+        let text = r#"import { db } from "./db";
+import { users } from "./schema";
+export async function listUsers() {
+  await db.select().from(users);
+  await db.insert(users).values({});
+  await db.update(users).set({});
+  await db.delete(users);
+  await db.query.users.findMany();
+  return db.query.users.findFirst();
+}
+"#;
+        let facts = parse_facts("src/drizzle-repository.ts", text);
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            vec![
+                "drizzle.query.delete".to_string(),
+                "drizzle.query.insert".to_string(),
+                "drizzle.query.query_findFirst".to_string(),
+                "drizzle.query.query_findMany".to_string(),
+                "drizzle.query.select".to_string(),
+                "drizzle.query.update".to_string(),
+            ]
+        );
+        let provider_required = facts
+            .iter()
+            .filter(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_required=typescript")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(provider_required.len(), 6);
+        assert!(provider_required.iter().all(|fact| {
+            fact.certainty == FactCertainty::Structural
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:db:kind=drizzle_db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:db:import_specifier=./db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:db:export_name=db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:table:kind=drizzle_table")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:table:import_specifier=./schema")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding:table:export_name=users")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "required_mechanism=typescript_export_graph")
+        }));
+
+        let external_db = r#"import { db } from "@acme/db";
+import { users } from "./schema";
+db.select().from(users);
+"#;
+        assert!(targets("src/external-drizzle-db.ts", external_db).is_empty());
+        assert_eq!(
+            unknown_kinds("src/external-drizzle-db.ts", external_db),
+            vec!["drizzle_db_binding_unresolved".to_string()]
+        );
+
+        let external_table = r#"import { db } from "./db";
+import { users } from "@acme/schema";
+db.select().from(users);
+"#;
+        assert!(targets("src/external-drizzle-table.ts", external_table).is_empty());
+        assert_eq!(
+            unknown_kinds("src/external-drizzle-table.ts", external_table),
+            vec!["drizzle_table_unresolved".to_string()]
+        );
+    }
+
+    #[test]
     fn jest_vitest_imported_runner_aliases_anchor_suites_and_tests() {
         let text = r#"import { describe as suite, test as case_ } from "vitest";
 suite("orders", () => {

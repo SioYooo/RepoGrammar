@@ -71,7 +71,14 @@ pub(super) fn query_anchor(
             note: "Drizzle query builder shape is dynamic",
         });
     };
-    if bindings.name_is_unsafe_at(db, start_byte) || !bindings.drizzle_dbs.contains(db) {
+    let db_import = if bindings.drizzle_dbs.contains(db) {
+        None
+    } else {
+        bindings.repo_local_named_import(db)
+    };
+    if bindings.name_is_unsafe_at(db, start_byte)
+        || (!bindings.drizzle_dbs.contains(db) && db_import.is_none())
+    {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::UnresolvedImport,
             affected_claim: "drizzle_db_binding",
@@ -79,7 +86,14 @@ pub(super) fn query_anchor(
             note: "Drizzle db binding is not exact",
         });
     }
-    if !bindings.drizzle_tables.contains(table) {
+    let table_import = if bindings.drizzle_tables.contains(table) {
+        None
+    } else {
+        bindings.repo_local_named_import(table)
+    };
+    if bindings.name_is_unsafe_at(table, start_byte)
+        || (!bindings.drizzle_tables.contains(table) && table_import.is_none())
+    {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::UnresolvedImport,
             affected_claim: "drizzle_table_binding",
@@ -87,19 +101,42 @@ pub(super) fn query_anchor(
             note: "Drizzle query table is not an exact table declaration",
         });
     }
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=drizzle_query".to_string(),
+        format!("operation={operation}"),
+        format!("table_name={table}"),
+        format!("where_shape={}", object_clause_shape(slice, "where")),
+        format!("returning_shape={}", slice.contains(".returning(")),
+        format!("join_shape={}", drizzle_join_shape(slice)),
+        format!("transaction_shape={}", slice.contains(".transaction(")),
+        format!("sql_template_present={}", raw_sql_present(slice)),
+    ];
+    if db_import.is_some() || table_import.is_some() {
+        assumptions.push("provider_required=typescript".to_string());
+        assumptions.push("required_mechanism=typescript_export_graph".to_string());
+    }
+    if let Some((import_specifier, export_name)) = db_import {
+        assumptions.extend(provider_required_drizzle_binding_assumptions(
+            "db",
+            "drizzle_db",
+            db,
+            import_specifier,
+            export_name,
+        ));
+    }
+    if let Some((import_specifier, export_name)) = table_import {
+        assumptions.extend(provider_required_drizzle_binding_assumptions(
+            "table",
+            "drizzle_table",
+            table,
+            import_specifier,
+            export_name,
+        ));
+    }
     AnchorOutcome::Anchor(Anchor {
         target: format!("drizzle.query.{operation}"),
         fact_kind: SemanticFactKind::ResolvedCall,
-        assumptions: vec![
-            "tsjs_anchor_kind=drizzle_query".to_string(),
-            format!("operation={operation}"),
-            format!("table_name={table}"),
-            format!("where_shape={}", object_clause_shape(slice, "where")),
-            format!("returning_shape={}", slice.contains(".returning(")),
-            format!("join_shape={}", drizzle_join_shape(slice)),
-            format!("transaction_shape={}", slice.contains(".transaction(")),
-            format!("sql_template_present={}", raw_sql_present(slice)),
-        ],
+        assumptions,
     })
 }
 
@@ -211,6 +248,21 @@ fn drizzle_transaction_db(slice: &str) -> Option<&str> {
         .trim_start()
         .strip_prefix(".transaction(")?;
     Some(db)
+}
+
+fn provider_required_drizzle_binding_assumptions(
+    binding_id: &str,
+    binding_kind: &str,
+    local_name: &str,
+    import_specifier: &str,
+    export_name: &str,
+) -> Vec<String> {
+    vec![
+        format!("binding:{binding_id}:kind={binding_kind}"),
+        format!("binding:{binding_id}:local_name={local_name}"),
+        format!("binding:{binding_id}:import_specifier={import_specifier}"),
+        format!("binding:{binding_id}:export_name={export_name}"),
+    ]
 }
 
 fn drizzle_join_shape(slice: &str) -> &'static str {

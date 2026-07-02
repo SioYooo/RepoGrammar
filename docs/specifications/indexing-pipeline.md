@@ -109,10 +109,12 @@ Express app/router calls, Jest/Vitest runners, Next App/Pages conventions with
 exact `handler` field, local `new PrismaClient()` clients, and Drizzle
 table/db/query bindings. Relative repo-local named Express/Fastify handler
 imports and Prisma shared-client imports such as `import { prisma } from
-"./db"` are provider-required candidates: they do not enter the structural
-support path, and they may become support only when a configured TypeScript
-worker proves the matching `resolve_reexport` operation for the same
-path/hash/code-unit/range. Exact local
+"./db"` are provider-required candidates; Drizzle query anchors with relative
+repo-local named `db` and table imports are provider-required candidates as
+well. They do not enter the structural support path, and they may become
+support only when a configured TypeScript worker proves every matching
+`resolve_reexport` operation for the same path/hash/code-unit/range. Exact
+local
 Next dynamic segments, route
 groups, and parallel routes are retained as context assumptions on page/layout
 and route-handler anchors; middleware, server actions, re-exports, and
@@ -160,14 +162,16 @@ context from package or config inventory; otherwise they emit
 emits React-shaped semantic support. TypeScript worker facts are bounded
 semantic context by default, with one role-specific promotion path for exact
 Next.js file-convention export identity and path-scoped promotion paths for
-relative repo-local Express/Fastify route handler imports and Prisma
-shared-client imports: after a configured worker returns a TypeScript-provider
+relative repo-local Express/Fastify route handler imports, Prisma
+shared-client imports, and Drizzle db/table imports: after a configured worker
+returns a TypeScript-provider
 `resolve_export` fact for the same
 path/hash/code-unit/range as a parser Next.js route/page/layout/API anchor, or
 a TypeScript-provider `resolve_reexport` fact for the same
 path/hash/code-unit/range as a provider-required Express/Fastify handler or
 Prisma anchor with a matching named import such as `./handlers#listUsers` or
-`./db#prisma`, the application layer may record a
+`./db#prisma`, or every required Drizzle named import such as `./db#db` and
+`./schema#users`, the application layer may record a
 `DATAFLOW_DERIVED` TS/JS support fact carrying `provider=typescript`,
 `provider_resolved=true`, the
 matching `query_operation`, the framework role, and the structural-anchor
@@ -175,7 +179,7 @@ provenance. Default worker operation planning now includes module specifier
 operations for literal import/export/require facts, re-export operations for
 bounded `export * from "<specifier>"` UNKNOWNs tagged as `<specifier>#*`,
 export-identity operations for exact Next.js file-convention anchors, and
-provider-required route-handler or Prisma binding operations tagged as
+provider-required route-handler, Prisma, or Drizzle binding operations tagged as
 `<specifier>#<export>`.
 Provider-resolved TypeScript compiler facts may
 suppress a matching parser-origin import/export `UNKNOWN` in the aggregate
