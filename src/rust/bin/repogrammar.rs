@@ -1867,6 +1867,16 @@ mod tests {
             .unwrap_or_else(|error| panic!("parse {command} JSON: {error}"))
     }
 
+    fn required_mechanism_count(inventory_json: &Value, mechanism: &str) -> u64 {
+        inventory_json["unknown_inventory"]["by_required_mechanism"]
+            .as_array()
+            .expect("by_required_mechanism array")
+            .iter()
+            .find(|bucket| bucket["required_mechanism"] == mechanism)
+            .and_then(|bucket| bucket["count"].as_u64())
+            .unwrap_or(0)
+    }
+
     fn assert_no_output_leakage(command: &str, output: &str, workspace: &TempWorkspace) {
         assert!(
             !output.contains(workspace.path().to_string_lossy().as_ref()),
@@ -3220,9 +3230,19 @@ mod tests {
                     && fact.start_byte < fact.end_byte
             }));
             assert!(facts.facts.iter().all(|fact| {
-                !(fact.origin_engine == "python"
+                if !(fact.origin_engine == "python"
                     && fact.origin_method == "cpython_ast"
                     && fact.certainty == "DATAFLOW_DERIVED")
+                {
+                    return true;
+                }
+                fact.assumptions.iter().any(|assumption| {
+                    assumption == "derived_from=repo_local_python_import_graph"
+                        || assumption == "derived_from=repo_local_pytest_fixture_graph"
+                }) && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false")
             }));
             if case.fixture == "pytest-fixture-alias-strong-evidence" {
                 assert!(
@@ -3230,8 +3250,12 @@ mod tests {
                         fact.path == "test_fixture_names.py"
                             && fact.kind == "SYMBOL"
                             && fact.target.as_deref() == Some("pytest.fixture.api_client")
+                            && fact.certainty == "DATAFLOW_DERIVED"
                             && fact.assumptions.iter().any(|assumption| {
                                 assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                            })
+                            && fact.assumptions.iter().any(|assumption| {
+                                assumption == "derived_from=repo_local_pytest_fixture_graph"
                             })
                     }),
                     "facts={:?}",
@@ -5924,11 +5948,18 @@ project_includes = ["src"]
                 fact.path == "src/acme/api.py"
                     && fact.kind == "RESOLVED_IMPORT"
                     && fact.target.as_deref() == Some("acme.services.users")
-                    && fact.certainty == "STRUCTURAL"
+                    && fact.certainty == "DATAFLOW_DERIVED"
                     && fact.origin_engine == "python"
                     && fact.origin_method == "cpython_ast"
                     && fact.assumptions.iter().any(|assumption| {
                         assumption == "python_anchor_kind=repo_local_import_binding"
+                    })
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "provider_resolved=false")
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "derived_from=repo_local_python_import_graph"
                     })
             })
             .collect::<Vec<_>>();
@@ -6053,10 +6084,14 @@ project_includes = ["src"]
                 && fact.target.as_deref() == Some("pytest.fixture.client")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
                 && fact.assumptions.iter().any(|assumption| {
                     assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
                 })
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/conftest.py"
@@ -6064,11 +6099,15 @@ project_includes = ["src"]
                 && fact.target.as_deref() == Some("pytest.fixture.db")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
                 && fact
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/conftest.py"
@@ -6197,8 +6236,22 @@ project_includes = ["src"]
             !derived_targets.contains("pytest.test"),
             "pytest fixture-binding UNKNOWN must block pytest test family support"
         );
+        let graph_fact_ids = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.certainty == "DATAFLOW_DERIVED"
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "derived_from=repo_local_python_import_graph"
+                            || assumption == "derived_from=repo_local_pytest_fixture_graph"
+                    })
+            })
+            .map(|fact| fact.fact_id.clone())
+            .collect::<BTreeSet<_>>();
         for fact in readiness.facts {
-            if derived_fact_ids.contains(&fact.fact_id) {
+            if derived_fact_ids.contains(&fact.fact_id) || graph_fact_ids.contains(&fact.fact_id) {
                 assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));
             } else {
                 let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
@@ -6245,7 +6298,11 @@ project_includes = ["src"]
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("pytest.fixture.client")
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
     }
 
@@ -6719,6 +6776,137 @@ class User(Base):
         );
         assert!(!stats.stdout.contains("def handler"));
         assert!(!stats.stdout.contains("return {'ok': True}"));
+    }
+
+    #[test]
+    fn product_runtime_unknown_inventory_drops_for_resolved_python_imports_and_fixtures() {
+        let resolved = TempWorkspace::new("product-runtime-python-unknowns-resolved");
+        fs::create_dir_all(resolved.path().join("src/acme")).expect("create resolved package");
+        fs::write(resolved.path().join("src/acme/__init__.py"), "").expect("write init");
+        fs::write(
+            resolved.path().join("src/acme/util.py"),
+            "def make_client():\n    return object()\n",
+        )
+        .expect("write util");
+        fs::write(
+            resolved.path().join("src/acme/test_app.py"),
+            r#"
+from acme.util import make_client
+import pytest
+
+@pytest.fixture
+def client():
+    return make_client()
+
+def test_ok(client):
+    assert client is not None
+"#,
+        )
+        .expect("write resolved test");
+        fs::write(
+            resolved.path().join("pyproject.toml"),
+            r#"
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+"#,
+        )
+        .expect("write pyproject");
+
+        let unresolved = TempWorkspace::new("product-runtime-python-unknowns-unresolved");
+        fs::create_dir_all(unresolved.path().join("src/acme")).expect("create unresolved package");
+        fs::write(unresolved.path().join("src/acme/__init__.py"), "").expect("write init");
+        fs::write(
+            unresolved.path().join("src/acme/test_app.py"),
+            r#"
+from acme.missing import make_client
+
+def test_ok(client):
+    assert client is not None
+"#,
+        )
+        .expect("write unresolved test");
+        fs::write(
+            unresolved.path().join("pyproject.toml"),
+            r#"
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+"#,
+        )
+        .expect("write pyproject");
+
+        let runtime = ProductCliRuntime;
+        for workspace in [&resolved, &unresolved] {
+            let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+            let init_json = parse_machine_output("init", &init, workspace);
+            assert_eq!(init_json["status"], "initialized");
+
+            let resync = run_with_runtime(
+                cli_args(
+                    "resync",
+                    workspace.path(),
+                    &["--json", "--progress", "never"],
+                ),
+                &runtime,
+            );
+            let resync_json = parse_machine_output("resync", &resync, workspace);
+            assert_eq!(resync_json["command"], "resync");
+            assert_eq!(resync_json["status"], "complete");
+        }
+
+        let resolved_unknowns =
+            run_with_runtime(cli_args("unknowns", resolved.path(), &["--json"]), &runtime);
+        let resolved_json = parse_machine_output("unknowns", &resolved_unknowns, &resolved);
+        assert_eq!(resolved_json["command"], "unknowns");
+        assert_eq!(resolved_json["status"], "ok");
+        assert_eq!(
+            resolved_json["unknown_inventory"]["inventory_scope"],
+            "persisted_semantic_unknowns"
+        );
+
+        let unresolved_unknowns = run_with_runtime(
+            cli_args("unknowns", unresolved.path(), &["--json"]),
+            &runtime,
+        );
+        let unresolved_json = parse_machine_output("unknowns", &unresolved_unknowns, &unresolved);
+        assert_eq!(unresolved_json["command"], "unknowns");
+        assert_eq!(unresolved_json["status"], "ok");
+        assert_eq!(
+            unresolved_json["unknown_inventory"]["inventory_scope"],
+            "persisted_semantic_unknowns"
+        );
+
+        let unresolved_import_unknowns =
+            required_mechanism_count(&unresolved_json, "python_import_graph");
+        let unresolved_fixture_unknowns =
+            required_mechanism_count(&unresolved_json, "pytest_fixture_graph");
+        assert!(
+            unresolved_import_unknowns >= 1,
+            "unresolved repo must expose import graph UNKNOWN inventory: {unresolved_json}"
+        );
+        assert!(
+            unresolved_fixture_unknowns >= 1,
+            "unresolved repo must expose fixture graph UNKNOWN inventory: {unresolved_json}"
+        );
+        assert!(
+            required_mechanism_count(&resolved_json, "python_import_graph")
+                < unresolved_import_unknowns,
+            "resolved import graph should reduce python_import_graph UNKNOWN inventory"
+        );
+        assert!(
+            required_mechanism_count(&resolved_json, "pytest_fixture_graph")
+                < unresolved_fixture_unknowns,
+            "resolved fixture graph should reduce pytest_fixture_graph UNKNOWN inventory"
+        );
+        for forbidden in ["from acme", "make_client", "assert client", "acme.missing"] {
+            assert!(
+                !resolved_unknowns.stdout.contains(forbidden),
+                "resolved unknowns leaked source text {forbidden}"
+            );
+            assert!(
+                !unresolved_unknowns.stdout.contains(forbidden),
+                "unresolved unknowns leaked source text {forbidden}"
+            );
+        }
     }
 
     #[test]

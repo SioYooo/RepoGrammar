@@ -686,7 +686,17 @@ assert any(
 for fact in parse_facts:
     assert fact["origin"]["engine"] == "python"
     assert fact["origin"]["method"] == "cpython_ast"
-    assert fact["certainty"] in {"STRUCTURAL", "UNKNOWN"}
+    assert fact["certainty"] in {"STRUCTURAL", "DATAFLOW_DERIVED", "UNKNOWN"}
+    if fact["certainty"] == "DATAFLOW_DERIVED":
+        assert "provider_resolved=false" in fact["assumptions"]
+        assert any(
+            assumption
+            in {
+                "derived_from=repo_local_python_import_graph",
+                "derived_from=repo_local_pytest_fixture_graph",
+            }
+            for assumption in fact["assumptions"]
+        )
     assert fact["evidence"]["path"] == "app.py"
     assert fact["evidence"]["content_hash"] == "sha256:" + "0" * 64
     assert "start_byte" in fact["evidence"]
@@ -1690,6 +1700,12 @@ def helper(db):
 
 def test_users(api_client):
     assert api_client
+
+def test_literal_lookup(request):
+    assert request.getfixturevalue("api_client")
+
+def test_dynamic_lookup(request, fixture_name):
+    assert request.getfixturevalue(fixture_name)
 """,
     }
 )
@@ -1716,7 +1732,9 @@ assert any(
 assert any(
     fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "pytest.fixture.api_client"
+    and fact["certainty"] == "DATAFLOW_DERIVED"
     and "python_anchor_kind=pytest_fixture_edge" in fact["assumptions"]
+    and "derived_from=repo_local_pytest_fixture_graph" in fact["assumptions"]
     for fact in fixture_dependency_facts
 )
 assert any(
@@ -1964,10 +1982,12 @@ repo_local_import_facts = [
 ]
 assert len(repo_local_import_facts) == 2
 for fact in repo_local_import_facts:
-    assert fact["certainty"] == "STRUCTURAL"
+    assert fact["certainty"] == "DATAFLOW_DERIVED"
     assert fact["origin"]["method"] == "cpython_ast"
     assert fact["evidence"]["path"] == "src/acme/api.py"
     assert fact["evidence"]["content_hash"] == parse_context_hash
+    assert "provider_resolved=false" in fact["assumptions"]
+    assert "derived_from=repo_local_python_import_graph" in fact["assumptions"]
 assert not any(
     fact["fact_kind"] == "RESOLVED_IMPORT" and fact["target"] == "acme.missing.value"
     for fact in parse_context_facts
@@ -1990,6 +2010,87 @@ assert any(
 serialized_parse_context = json.dumps(parse_context_messages)
 assert "from acme.services" not in serialized_parse_context
 assert "src/acme/services/users.py" not in serialized_parse_context
+
+symbol_context_hash = "sha256:" + "4" * 64
+symbol_context_payload = {
+    "protocol_version": 1,
+    "mode": "parse_document",
+    "path": "src/acme/api.py",
+    "content_hash": symbol_context_hash,
+    "repository_revision": "UNKNOWN",
+    "module_paths": [
+        "src/acme/api.py",
+        "src/acme/__init__.py",
+        "src/acme/models.py",
+    ],
+    "module_files": [
+        {
+            "path": "src/acme/__init__.py",
+            "text": "from .models import User as PublicUser\n",
+        },
+        {
+            "path": "src/acme/models.py",
+            "text": "__all__ = ['User']\nclass User: pass\ndef make_user(): pass\n",
+        },
+        {
+            "path": "src/acme/api.py",
+            "text": "",
+        },
+    ],
+    "source_roots": [],
+    "text": """
+from acme.models import User, make_user
+from acme import PublicUser
+from acme.models import *
+""",
+}
+symbol_context_facts = run_worker(symbol_context_payload)[0]["facts"]
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "acme.models.User"
+    and fact["certainty"] == "DATAFLOW_DERIVED"
+    and "python_anchor_kind=repo_local_import_symbol" in fact["assumptions"]
+    and "derived_from=repo_local_python_import_graph" in fact["assumptions"]
+    for fact in symbol_context_facts
+)
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "acme.models.make_user"
+    and fact["certainty"] == "DATAFLOW_DERIVED"
+    for fact in symbol_context_facts
+)
+assert not any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in symbol_context_facts
+)
+serialized_symbol_context = json.dumps(symbol_context_facts)
+assert "class User" not in serialized_symbol_context
+assert "def make_user" not in serialized_symbol_context
+
+unsafe_star_facts = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "src/acme/api.py",
+        "content_hash": "sha256:" + "3" * 64,
+        "repository_revision": "UNKNOWN",
+        "module_paths": ["src/acme/api.py", "src/acme/models.py"],
+        "module_files": [
+            {"path": "src/acme/models.py", "text": "class User: pass\n"},
+            {"path": "src/acme/api.py", "text": ""},
+        ],
+        "source_roots": [],
+        "text": "from acme.models import *\n",
+    }
+)[0]["facts"]
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "UnresolvedImport"
+    and "affected_claim=python_import_resolution" in fact["assumptions"]
+    for fact in unsafe_star_facts
+)
 
 conftest_parse_messages = run_worker(
     {

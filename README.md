@@ -40,7 +40,11 @@ The scoped v0.1 preview focuses on Python repositories using:
 Current Python claims are bounded framework-family claims, not full Python
 semantic analysis. RepoGrammar requires compatible repeated evidence before it
 emits a confident family claim. Low-support, dynamic, stale, or unresolved cases
-remain `UNKNOWN`.
+remain `UNKNOWN`. The Python preview includes a static repo-local import and
+pytest fixture graph for exact local modules, direct imported top-level symbols,
+literal package re-exports, literal `__all__` star imports, and unambiguous
+same-file or `conftest.py` fixture bindings; it does not execute Python, pytest,
+or project dependencies.
 
 TypeScript and JavaScript are not official v0.1 support targets. A conservative
 v0.2 token-saving foundation adds exact-anchor family support for Express
@@ -80,8 +84,8 @@ analysis.
 
 | Area | Public-preview status | Boundary |
 |---|---|---|
-| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence only; dynamic decorators, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
-| Python pytest | Supported | Bounded test/fixture family evidence; ambiguous fixture injection and dynamic plugin behavior produce `UNKNOWN`. |
+| Python FastAPI | Supported | Bounded exact-anchor framework-family evidence plus static repo-local import context; dynamic decorators, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
+| Python pytest | Supported | Bounded test/fixture family evidence plus static fixture graph context; ambiguous fixture injection, nonliteral lookups, and dynamic plugin behavior produce `UNKNOWN`. |
 | Python Pydantic | Supported | Bounded model/settings family evidence; dynamic model factories and unresolved bases produce `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence; dynamic declarative behavior remains conservative. |
 | JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls only; support requires at least three complete-link-compatible examples. |

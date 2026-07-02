@@ -1500,6 +1500,9 @@ fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
 }
 
 fn sync_path_requires_full_project_context(path: &str) -> bool {
+    if path.ends_with(".py") {
+        return true;
+    }
     matches!(
         path,
         "package.json"
@@ -1579,6 +1582,25 @@ fn parser_project_context(
         .collect();
     let python_source_roots =
         python_source_roots_from_project_config(request, report, source_store, parser)?;
+    let mut python_module_files = Vec::new();
+    for file in &report.files {
+        if file.language != DiscoveredLanguage::Python {
+            continue;
+        }
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        python_module_files.push(ParserProjectFileContext {
+            path: source.path,
+            text: source.text,
+        });
+    }
+    python_module_files.sort_by(|left, right| left.path.cmp(&right.path));
     let tsjs_module_paths = tsjs_module_paths(report);
     let tsjs_path_aliases = tsjs_path_aliases_from_project_config(request, report, source_store)?;
     let tsjs_package_dependencies =
@@ -1625,6 +1647,7 @@ fn parser_project_context(
     python_conftest_files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(ParserProjectContext {
         python_module_paths,
+        python_module_files,
         python_source_roots,
         python_conftest_files,
         tsjs_module_paths,
@@ -3391,9 +3414,11 @@ fn validate_parser_semantic_fact(
     if !matches!(
         fact.certainty,
         FactCertainty::Structural | FactCertainty::Unknown
-    ) {
+    ) && !is_python_parser_graph_derived_fact(fact)
+    {
         return Err(RepoGrammarError::InvalidInput(
-            "parser semantic facts must stay structural or unknown".to_string(),
+            "parser semantic facts must stay structural or unknown unless explicitly graph-derived"
+                .to_string(),
         ));
     }
     if fact.kind == SemanticFactKind::Unknown && fact.certainty != FactCertainty::Unknown {
@@ -3434,6 +3459,44 @@ fn validate_parser_semantic_fact(
         ));
     }
     Ok(())
+}
+
+fn is_python_parser_graph_derived_fact(fact: &SemanticFact) -> bool {
+    if fact.certainty != FactCertainty::DataflowDerived
+        || fact.origin.engine != "python"
+        || fact.origin.method != "cpython_ast"
+        || fact.assumptions.len() != 3
+        || !fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "provider_resolved=false")
+    {
+        return false;
+    }
+    let anchor = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("python_anchor_kind="));
+    let derived_from = fact
+        .assumptions
+        .iter()
+        .find_map(|assumption| assumption.strip_prefix("derived_from="));
+    matches!(
+        (fact.kind.clone(), anchor, derived_from),
+        (
+            SemanticFactKind::ResolvedImport,
+            Some("repo_local_import_binding"),
+            Some("repo_local_python_import_graph")
+        ) | (
+            SemanticFactKind::Symbol | SemanticFactKind::Type,
+            Some("repo_local_import_symbol"),
+            Some("repo_local_python_import_graph")
+        ) | (
+            SemanticFactKind::Symbol,
+            Some("pytest_fixture_edge" | "pytest_conftest_fixture_edge"),
+            Some("repo_local_pytest_fixture_graph")
+        )
+    )
 }
 
 fn sort_ir_nodes(nodes: &mut [IrNode]) {
@@ -3565,6 +3628,8 @@ mod tests {
             "jest.config.json",
             "vitest.config.json",
             "pyproject.toml",
+            "src/app.py",
+            "src/conftest_helper.py",
             "Cargo.toml",
             "Cargo.lock",
             "conftest.py",
@@ -3574,12 +3639,7 @@ mod tests {
         ] {
             assert!(sync_path_requires_full_project_context(path), "{path}");
         }
-        for path in [
-            "src/app.ts",
-            "src/conftest_helper.py",
-            "Cargo.locked",
-            "docs/Cargo.toml.md",
-        ] {
+        for path in ["src/app.ts", "Cargo.locked", "docs/Cargo.toml.md"] {
             assert!(!sync_path_requires_full_project_context(path), "{path}");
         }
     }
@@ -4881,6 +4941,77 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn parser_graph_derived_python_facts_require_safe_origin_assumptions() {
+        let content_hash =
+            strict_hash("sha256:1111111111111111111111111111111111111111111111111111111111111111");
+        let revision = RepositoryRevision::new("test-revision").expect("valid revision");
+        let source = "from acme import models\n";
+        let document = SourceDocument {
+            path: "app.py",
+            language: Language::Python,
+            content_hash: content_hash.clone(),
+            repository_revision: revision.clone(),
+            text: source,
+        };
+        let file = DiscoveredFile {
+            path: "app.py".to_string(),
+            language: DiscoveredLanguage::Python,
+            content_hash: content_hash.clone(),
+            size_bytes: source.len() as u64,
+        };
+        let unit = parser_unit(
+            &document,
+            "unit:app.py#module:module:0-22:0",
+            "app.py",
+            content_hash,
+            0,
+            source.len(),
+        );
+        let fact = SemanticFact {
+            kind: SemanticFactKind::ResolvedImport,
+            subject: unit.id.as_str().to_string(),
+            target: Some(SymbolId::new("acme.models").expect("valid target")),
+            origin: FactOrigin {
+                engine: "python".to_string(),
+                engine_version: "3.13.0".to_string(),
+                method: "cpython_ast".to_string(),
+            },
+            certainty: FactCertainty::DataflowDerived,
+            evidence: Evidence::new(
+                unit.id.clone(),
+                SourceRange::new(0, source.len()).expect("valid range"),
+                Provenance::new("app.py", document.content_hash.clone(), revision)
+                    .expect("valid provenance"),
+                "CPython ast repo_local_python_import_graph repo_local_import_binding",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "python_anchor_kind=repo_local_import_binding".to_string(),
+                "provider_resolved=false".to_string(),
+                "derived_from=repo_local_python_import_graph".to_string(),
+            ],
+        };
+
+        validate_parser_semantic_fact(&file, source, std::slice::from_ref(&unit), &fact)
+            .expect("safe graph-derived fact is valid");
+
+        let mut unsafe_fact = fact;
+        unsafe_fact.assumptions = vec![
+            "python_anchor_kind=repo_local_import_binding".to_string(),
+            "derived_from=repo_local_python_import_graph".to_string(),
+        ];
+        let error =
+            validate_parser_semantic_fact(&file, source, std::slice::from_ref(&unit), &unsafe_fact)
+                .expect_err("missing provider_resolved boundary must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("parser semantic facts must stay structural or unknown"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -7027,6 +7158,14 @@ extraPaths = ["src/lib", "C:/secret"]
         ];
         for context in contexts.iter() {
             assert_eq!(context.python_module_paths, expected);
+            assert_eq!(
+                context
+                    .python_module_files
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<Vec<_>>(),
+                expected.iter().map(String::as_str).collect::<Vec<_>>()
+            );
             assert_eq!(context.python_source_roots, ["src", "src/lib", "tests"]);
             assert_eq!(context.python_conftest_files.len(), 1);
             assert_eq!(context.python_conftest_files[0].path, "tests/conftest.py");
@@ -7043,6 +7182,17 @@ extraPaths = ["src/lib", "C:/secret"]
                     && !Path::new(path).is_absolute()
                     && !path.contains("..")
                     && !path.contains(workspace.path().to_string_lossy().as_ref())));
+            assert!(context.python_module_files.iter().all(|file| {
+                file.path.ends_with(".py")
+                    && !Path::new(&file.path).is_absolute()
+                    && !file.path.contains("..")
+                    && !file
+                        .path
+                        .contains(workspace.path().to_string_lossy().as_ref())
+                    && !file
+                        .text
+                        .contains(workspace.path().to_string_lossy().as_ref())
+            }));
         }
     }
 
