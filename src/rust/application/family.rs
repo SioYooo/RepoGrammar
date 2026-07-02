@@ -1834,6 +1834,69 @@ fn rust_unknown_is_non_blocking_family_subclaim(
         && matches!(affected_claim, "rust_optional_call_shape")
 }
 
+pub(crate) fn classify_unknown_family_effect(
+    language: &str,
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: Option<&str>,
+    origin_engine: &str,
+    origin_method: &str,
+) -> Option<ClaimUnknown> {
+    let framework_role = framework_role?;
+    let (blocks, non_blocking, recovery_scope) = if language == "python" {
+        (
+            python_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role),
+            python_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role),
+            "Python",
+        )
+    } else if is_tsjs_language_name(language) {
+        (
+            tsjs_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role),
+            tsjs_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role),
+            "TS/JS",
+        )
+    } else if language == "java" {
+        if origin_engine != JAVA_ANCHOR_ENGINE || origin_method != JAVA_ANCHOR_METHOD {
+            return None;
+        }
+        (
+            java_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role),
+            java_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role),
+            "Java/Spring",
+        )
+    } else if language == "rust" {
+        (
+            rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role),
+            rust_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role),
+            "Rust",
+        )
+    } else {
+        return None;
+    };
+
+    if blocks {
+        return Some(ClaimUnknown {
+            class: UnknownClass::Blocking,
+            reason,
+            affected_claim: affected_claim.to_string(),
+            recovery: Some(format!(
+                "resolve the blocking {recovery_scope} UNKNOWN before claiming a family"
+            )),
+        });
+    }
+    if non_blocking {
+        return Some(ClaimUnknown {
+            class: UnknownClass::NonBlocking,
+            reason,
+            affected_claim: affected_claim.to_string(),
+            recovery: Some(format!(
+                "resolve this {recovery_scope} subclaim before relying on it"
+            )),
+        });
+    }
+    None
+}
+
 fn fact_evidence_is_within_unit(fact: &SemanticFact, unit: &IndexedCodeUnitRecord) -> bool {
     fact.evidence.provenance.path == unit.path
         && fact.evidence.provenance.content_hash == unit.content_hash

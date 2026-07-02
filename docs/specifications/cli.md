@@ -39,6 +39,7 @@ Agent integration:
 
 Metrics:
 
+- `unknowns`
 - `stats`
 - `telemetry`
 
@@ -476,6 +477,27 @@ Install does not upload telemetry or run paired token-saving experiments.
 
 ## Metrics commands
 
+`repogrammar unknowns` reports aggregate typed `UNKNOWN` inventory for
+initialized repositories with an active readable generation. With `--json`, it
+must return a parseable object with `implemented: true`, `status: ok`, and an
+`unknown_inventory` object containing the active generation, total counts for
+`blocking_unknowns`, `non_blocking_unknowns`, `recoverable_unknowns`, and
+`irreducible_unknowns`, plus rollups named:
+
+- `by_language`
+- `by_reason_code`
+- `by_required_mechanism`
+- `by_framework_role`
+- `by_blocks_support`
+- `by_recovery`
+
+The inventory is diagnostic and source-free. It must not include source
+snippets, query text, repository names, absolute paths, code-unit ids, or fact
+ids by default. Unknown-rate changes are not quality claims unless false
+certainty is also controlled. If repository state or the active index is
+missing, `unknowns --json` uses the same missing-index fallback shape as
+implemented inventory commands and keeps `implemented: true`.
+
 `repogrammar stats` reports repo-shape diagnostics for initialized repositories
 with an active readable generation. With `--json`, it must return a parseable
 object with `implemented: true`, the active generation, metric-kind vocabulary,
@@ -505,6 +527,9 @@ savings. If repository shape is not ready for useful read-displacement
 estimates, `blocking_reasons` must also name concrete causes such as
 `no_supported_units`, `no_families`, or `low_pattern_density`. The output must
 not include source snippets, query text, repository names, or absolute paths.
+With `--unknowns --json`, stats must embed the same source-free
+`unknown_inventory` object produced by `repogrammar unknowns --json`; without
+`--unknowns`, that object must be omitted.
 If repository state or the active index is missing, `stats --json` uses the
 same missing-index fallback shape as implemented inventory commands, keeps
 `implemented: true`, and still reports `token_saving_readiness: unknown`,

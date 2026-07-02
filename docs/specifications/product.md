@@ -264,7 +264,10 @@ caveat.
 implementation failure by default. Some unknowns block specific semantic,
 security, persistence, or conformance claims while still allowing weaker
 structural observations. The canonical taxonomy lives in
-`docs/specifications/unknowns.md`.
+`docs/specifications/unknowns.md`. `repogrammar unknowns --json` and
+`repogrammar stats --unknowns --json` expose source-free aggregate UNKNOWN
+inventory for prioritizing provider and analyzer work; reductions in those
+counts are diagnostic only unless false certainty is also controlled.
 
 ## Installation and telemetry boundaries
 

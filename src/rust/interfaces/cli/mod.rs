@@ -18,6 +18,7 @@ use crate::application::query::{
     IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
     ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
     ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TokenSavingReadiness,
+    UnknownInventoryBucket, UnknownInventoryReport,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -214,6 +215,13 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("stats"))
+    }
+
+    fn unknown_inventory(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<UnknownInventoryReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("unknowns"))
     }
 
     fn install_agent_integration(
@@ -467,6 +475,9 @@ where
         [command, rest @ ..] if command == "stats" => {
             handle_stats(rest, current_dir, env_lookup, runtime)
         }
+        [command, rest @ ..] if command == "unknowns" => {
+            handle_unknowns(rest, current_dir, env_lookup, runtime)
+        }
         [command, rest @ ..] if command == "telemetry" => handle_telemetry(
             rest,
             current_dir,
@@ -552,8 +563,10 @@ fn usage() -> String {
         "      install wires agents; init/resync/autosync remain explicit per-repository analysis steps.",
         "",
         "Metrics:",
-        "  stats [--project <path>] [--json]",
-        "      Report repo-shape diagnostics and estimated potential read displacement.",
+        "  unknowns [--project <path>] [--json]",
+        "      Report aggregate typed UNKNOWN inventory from the active index.",
+        "  stats [--project <path>] [--unknowns] [--json]",
+        "      Report repo-shape diagnostics and optional UNKNOWN inventory.",
         "  telemetry <status|on|off|export|upload|purge|research-*|experiment-*> [options]",
         "      Manage optional anonymous telemetry and local token experiment records.",
         "",
@@ -746,13 +759,24 @@ fn command_usage(command: &str) -> Option<String> {
         ])),
         "install" => Some(install_usage("install", "Configure RepoGrammar as a read-only MCP server for coding agents.")),
         "uninstall" => Some(install_usage("uninstall", "Remove RepoGrammar-owned agent integration receipts and managed entries.")),
-        "stats" => Some(help_text(&[
-            "Usage: repogrammar stats [--project <path>] [--json] [--quiet|--verbose]",
+        "unknowns" => Some(help_text(&[
+            "Usage: repogrammar unknowns [--project <path>] [--json] [--quiet|--verbose]",
             "",
-            "Reports repo-shape diagnostics and estimated potential read displacement. It does not upload telemetry.",
+            "Reports aggregate typed UNKNOWN inventory from the readable active index. It is diagnostic and does not claim quality improvement.",
             "",
             "Options:",
             "  --project <path>                    Repository root. Defaults to the current directory.",
+            "  --json                             Emit machine-readable output.",
+            "  --quiet, --verbose                 Accepted metrics verbosity flags.",
+        ])),
+        "stats" => Some(help_text(&[
+            "Usage: repogrammar stats [--project <path>] [--unknowns] [--json] [--quiet|--verbose]",
+            "",
+            "Reports repo-shape diagnostics and estimated potential read displacement. With --unknowns it embeds aggregate UNKNOWN inventory. It does not upload telemetry.",
+            "",
+            "Options:",
+            "  --project <path>                    Repository root. Defaults to the current directory.",
+            "  --unknowns                         Include aggregate typed UNKNOWN inventory in JSON or human output.",
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted metrics verbosity flags.",
         ])),
@@ -880,7 +904,10 @@ fn is_known_cli_command(command: &str) -> bool {
     is_project_lifecycle_command(command)
         || is_query_command(command)
         || is_installer_command(command)
-        || matches!(command, "stats" | "telemetry" | "version" | "help")
+        || matches!(
+            command,
+            "unknowns" | "stats" | "telemetry" | "version" | "help"
+        )
 }
 
 fn is_project_lifecycle_command(command: &str) -> bool {
@@ -2005,6 +2032,110 @@ fn unknowns_json(unknowns: &[FamilyQueryUnknown]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn unknown_inventory_human(command: &str, report: &UnknownInventoryReport) -> String {
+    let mut output = format!(
+        "{command}: typed UNKNOWN inventory\nactive_generation: {}\ntotal_unknowns: {}\nblocking_unknowns: {}\nnon_blocking_unknowns: {}\nrecoverable_unknowns: {}\nirreducible_unknowns: {}\n",
+        report.active_generation,
+        report.total_unknowns,
+        report.blocking_unknowns,
+        report.non_blocking_unknowns,
+        report.recoverable_unknowns,
+        report.irreducible_unknowns,
+    );
+    push_unknown_inventory_bucket_human(&mut output, "by_language", &report.by_language);
+    push_unknown_inventory_bucket_human(&mut output, "by_reason_code", &report.by_reason_code);
+    push_unknown_inventory_bucket_human(
+        &mut output,
+        "by_required_mechanism",
+        &report.by_required_mechanism,
+    );
+    push_unknown_inventory_bucket_human(
+        &mut output,
+        "by_framework_role",
+        &report.by_framework_role,
+    );
+    output.push_str("by_blocks_support:");
+    if report.by_blocks_support.is_empty() {
+        output.push_str(" none\n");
+    } else {
+        for bucket in &report.by_blocks_support {
+            output.push_str(&format!(" {}={}", bucket.blocks_support, bucket.count));
+        }
+        output.push('\n');
+    }
+    push_unknown_inventory_bucket_human(&mut output, "by_recovery", &report.by_recovery);
+    output
+}
+
+fn push_unknown_inventory_bucket_human(
+    output: &mut String,
+    label: &str,
+    buckets: &[UnknownInventoryBucket],
+) {
+    output.push_str(label);
+    output.push(':');
+    if buckets.is_empty() {
+        output.push_str(" none\n");
+        return;
+    }
+    for bucket in buckets {
+        output.push_str(&format!(" {}={}", bucket.key, bucket.count));
+    }
+    output.push('\n');
+}
+
+fn unknown_inventory_json(command: &str, report: &UnknownInventoryReport) -> String {
+    json_line(json!({
+        "command": command,
+        "status": "ok",
+        "implemented": true,
+        "unknown_inventory": unknown_inventory_value(report),
+    }))
+}
+
+fn unknown_inventory_value(report: &UnknownInventoryReport) -> serde_json::Value {
+    json!({
+        "active_generation": report.active_generation,
+        "total_unknowns": report.total_unknowns,
+        "blocking_unknowns": report.blocking_unknowns,
+        "non_blocking_unknowns": report.non_blocking_unknowns,
+        "recoverable_unknowns": report.recoverable_unknowns,
+        "irreducible_unknowns": report.irreducible_unknowns,
+        "by_language": unknown_inventory_bucket_json("language", &report.by_language),
+        "by_reason_code": unknown_inventory_bucket_json("reason_code", &report.by_reason_code),
+        "by_required_mechanism": unknown_inventory_bucket_json(
+            "required_mechanism",
+            &report.by_required_mechanism,
+        ),
+        "by_framework_role": unknown_inventory_bucket_json(
+            "framework_role",
+            &report.by_framework_role,
+        ),
+        "by_blocks_support": report.by_blocks_support.iter().map(|bucket| {
+            json!({
+                "blocks_support": bucket.blocks_support,
+                "count": bucket.count,
+            })
+        }).collect::<Vec<_>>(),
+        "by_recovery": unknown_inventory_bucket_json("recovery", &report.by_recovery),
+    })
+}
+
+fn unknown_inventory_bucket_json(
+    key_name: &str,
+    buckets: &[UnknownInventoryBucket],
+) -> Vec<serde_json::Value> {
+    buckets
+        .iter()
+        .map(|bucket| {
+            json!({
+                key_name: bucket.key,
+                "count": bucket.count,
+            })
+        })
+        .collect()
+}
+
 fn handle_installer<F>(
     command: &str,
     rest: &[String],
@@ -2687,6 +2818,99 @@ fn install_telemetry_human(report: &TelemetryStatusReport) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct UnknownsOptions {
+    json: bool,
+    project_path: Option<String>,
+}
+
+fn handle_unknowns<F>(
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_unknowns_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let request = RepositoryStatusRequest {
+        path: repository_root(current_dir, options.project_path.as_deref()),
+        state_dir_override: state_dir_override(env_lookup),
+    };
+    let status_report = match runtime.repository_status(request.clone()) {
+        Ok(report) => report,
+        Err(_) => {
+            let fallback = repository_status_unavailable_fallback(
+                QueryPreflightOperation::ActiveIndexInventory,
+            );
+            return query_fallback(
+                "unknowns",
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
+            );
+        }
+    };
+
+    match query_preflight(
+        QueryPreflightOperation::ActiveIndexInventory,
+        &status_report,
+    ) {
+        QueryPreflightReport::Fallback(fallback) => {
+            return query_fallback(
+                "unknowns",
+                options.json,
+                fallback.reason,
+                fallback.guidance,
+                fallback.implemented,
+            );
+        }
+        QueryPreflightReport::Ready => {}
+    }
+
+    match runtime.unknown_inventory(request) {
+        Ok(report) if options.json => {
+            CliOutput::success(unknown_inventory_json("unknowns", &report))
+        }
+        Ok(report) => CliOutput::success(unknown_inventory_human("unknowns", &report)),
+        Err(_) => query_fallback(
+            "unknowns",
+            options.json,
+            "repository status is unavailable",
+            "run repogrammar doctor",
+            true,
+        ),
+    }
+}
+
+fn parse_unknowns_options(rest: &[String]) -> Result<UnknownsOptions, String> {
+    let mut options = UnknownsOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--project" => {
+                let value = option_value(rest, index, "--project", "a project path")?;
+                set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--json" => {
+                options.json = true;
+                index += 1;
+            }
+            "--quiet" | "--verbose" => {
+                index += 1;
+            }
+            other => return Err(format!("unknown unknowns option: {other}")),
+        }
+    }
+    Ok(options)
+}
+
 fn handle_stats<F>(
     rest: &[String],
     current_dir: &Path,
@@ -2732,6 +2956,20 @@ where
                     .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
                 let estimated_rollup =
                     estimated_potential_token_savings_rollup(request.clone()).unwrap_or_default();
+                let unknown_inventory = if options.include_unknowns {
+                    match runtime.unknown_inventory(request.clone()) {
+                        Ok(report) => Some(report),
+                        Err(_) => {
+                            return stats_fallback(
+                                true,
+                                "repository status is unavailable",
+                                "run repogrammar doctor",
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
                 record_stats_telemetry_rollup(
                     current_dir,
                     env_lookup,
@@ -2739,7 +2977,12 @@ where
                     &report,
                     measurement.as_ref(),
                 );
-                CliOutput::success(stats_json(&report, measurement.as_ref(), &estimated_rollup))
+                CliOutput::success(stats_json(
+                    &report,
+                    measurement.as_ref(),
+                    &estimated_rollup,
+                    unknown_inventory.as_ref(),
+                ))
             }
             Err(_) => stats_fallback(
                 true,
@@ -2752,8 +2995,26 @@ where
     match runtime.repo_shape_diagnostics(request.clone()) {
         Ok(report) => {
             let estimated_rollup =
-                estimated_potential_token_savings_rollup(request).unwrap_or_default();
-            CliOutput::success(stats_human(&report, &estimated_rollup))
+                estimated_potential_token_savings_rollup(request.clone()).unwrap_or_default();
+            let unknown_inventory = if options.include_unknowns {
+                match runtime.unknown_inventory(request) {
+                    Ok(report) => Some(report),
+                    Err(_) => {
+                        return stats_fallback(
+                            false,
+                            "repository status is unavailable",
+                            "run repogrammar doctor",
+                        );
+                    }
+                }
+            } else {
+                None
+            };
+            CliOutput::success(stats_human(
+                &report,
+                &estimated_rollup,
+                unknown_inventory.as_ref(),
+            ))
         }
         Err(_) => stats_fallback(
             false,
@@ -2788,6 +3049,7 @@ fn record_stats_telemetry_rollup<F>(
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct StatsOptions {
     json: bool,
+    include_unknowns: bool,
     project_path: Option<String>,
 }
 
@@ -2803,6 +3065,10 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
             }
             "--json" => {
                 options.json = true;
+                index += 1;
+            }
+            "--unknowns" => {
+                options.include_unknowns = true;
                 index += 1;
             }
             "--quiet" | "--verbose" => {
@@ -2848,8 +3114,9 @@ fn stats_fallback_blocking_reasons(reason: &str) -> Vec<&'static str> {
 fn stats_human(
     report: &RepoShapeDiagnosticsReport,
     estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
-    format!(
+    let mut output = format!(
         "stats: repo-shape diagnostics\nactive_generation: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
         report.active_generation,
         report.eligible_code_units,
@@ -2870,13 +3137,21 @@ fn stats_human(
         estimated_rollup.measurement_kind.as_str(),
         estimated_rollup.caveat,
         report.interpretation
-    )
+    );
+    if let Some(unknown_inventory) = unknown_inventory {
+        output.push_str(&unknown_inventory_human(
+            "stats_unknowns",
+            unknown_inventory,
+        ));
+    }
+    output
 }
 
 fn stats_json(
     report: &RepoShapeDiagnosticsReport,
     measurement: Option<&crate::application::telemetry::ExperimentReport>,
     estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
     let paired_measurement_available = measurement
         .and_then(|measurement| measurement.token_savings)
@@ -2900,7 +3175,7 @@ fn stats_json(
         report.blocking_reasons.iter().copied(),
         paired_measurement_available,
     );
-    json_line(json!({
+    let mut value = json!({
         "command": "stats",
         "status": "ok",
         "implemented": true,
@@ -2942,7 +3217,17 @@ fn stats_json(
         "context_compression_ratio": null,
         "interpretation": report.interpretation,
         "claim": "diagnostic only; token saving depends on repeated repo-local patterns and is not measured token savings",
-    }))
+    });
+    if let Some(unknown_inventory) = unknown_inventory {
+        value
+            .as_object_mut()
+            .expect("stats JSON root object")
+            .insert(
+                "unknown_inventory".to_string(),
+                unknown_inventory_value(unknown_inventory),
+            );
+    }
+    json_line(value)
 }
 
 fn stats_blocking_reasons<I>(reasons: I, paired_measurement_available: bool) -> Vec<&'static str>
@@ -6836,6 +7121,59 @@ mod tests {
                 }],
             }
         }
+
+        fn unknown_inventory_report() -> UnknownInventoryReport {
+            UnknownInventoryReport {
+                active_generation: "gen-000001".to_string(),
+                total_unknowns: 2,
+                blocking_unknowns: 1,
+                non_blocking_unknowns: 1,
+                recoverable_unknowns: 0,
+                irreducible_unknowns: 0,
+                by_language: vec![UnknownInventoryBucket {
+                    key: "python".to_string(),
+                    count: 2,
+                }],
+                by_reason_code: vec![
+                    UnknownInventoryBucket {
+                        key: "RuntimeDependencyInjection".to_string(),
+                        count: 1,
+                    },
+                    UnknownInventoryBucket {
+                        key: "UnresolvedImport".to_string(),
+                        count: 1,
+                    },
+                ],
+                by_required_mechanism: vec![
+                    UnknownInventoryBucket {
+                        key: "fastapi_dependency_graph".to_string(),
+                        count: 1,
+                    },
+                    UnknownInventoryBucket {
+                        key: "repo_local_import_graph".to_string(),
+                        count: 1,
+                    },
+                ],
+                by_framework_role: vec![UnknownInventoryBucket {
+                    key: "framework:fastapi.route".to_string(),
+                    count: 2,
+                }],
+                by_blocks_support: vec![
+                    crate::application::query::UnknownInventoryBlocksSupportBucket {
+                        blocks_support: false,
+                        count: 1,
+                    },
+                    crate::application::query::UnknownInventoryBlocksSupportBucket {
+                        blocks_support: true,
+                        count: 1,
+                    },
+                ],
+                by_recovery: vec![UnknownInventoryBucket {
+                    key: "resolve test UNKNOWN".to_string(),
+                    count: 2,
+                }],
+            }
+        }
     }
 
     impl CliRuntime for FamilyQueryRuntime {
@@ -6961,6 +7299,13 @@ mod tests {
                 interpretation:
                     "RepoGrammar can provide integration-pattern context when repeated local patterns exist; third-party-heavy or thin-wrapper repositories may see lower token-saving potential.",
             })
+        }
+
+        fn unknown_inventory(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<UnknownInventoryReport, RepoGrammarError> {
+            Ok(Self::unknown_inventory_report())
         }
     }
 
@@ -8118,9 +8463,70 @@ mod tests {
             .as_str()
             .expect("claim")
             .contains("not measured token savings"));
+        assert!(value.get("unknown_inventory").is_none());
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn unknowns_json_reports_aggregate_inventory_without_paths() {
+        let workspace = TempWorkspace::new("cli-unknowns-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output =
+            run_with_context_and_runtime(["unknowns", "--json"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("unknowns JSON");
+        assert_eq!(value["command"], "unknowns");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["unknown_inventory"]["total_unknowns"], 2);
+        assert_eq!(value["unknown_inventory"]["blocking_unknowns"], 1);
+        assert_eq!(
+            value["unknown_inventory"]["by_language"][0]["language"],
+            "python"
+        );
+        assert_eq!(
+            value["unknown_inventory"]["by_required_mechanism"][0]["required_mechanism"],
+            "fastapi_dependency_graph"
+        );
+        assert_eq!(
+            value["unknown_inventory"]["by_blocks_support"][1]["blocks_support"],
+            true
+        );
+        assert!(!output
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!output.stdout.contains("app/routes.py"));
+        assert!(!output.stdout.contains("src/"));
+    }
+
+    #[test]
+    fn stats_unknowns_json_embeds_aggregate_inventory() {
+        let workspace = TempWorkspace::new("cli-stats-unknowns-json");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let output = run_with_context_and_runtime(
+            ["stats", "--unknowns", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
+        assert_eq!(value["command"], "stats");
+        assert_eq!(value["unknown_inventory"]["total_unknowns"], 2);
+        assert_eq!(
+            value["unknown_inventory"]["by_framework_role"][0]["framework_role"],
+            "framework:fastapi.route"
+        );
     }
 
     #[test]
@@ -8238,6 +8644,37 @@ mod tests {
         assert_eq!(fallback["guidance"], "run repogrammar init --yes");
         assert_eq!(fallback["command"], "stats");
         assert_eq!(fallback["implemented"], true);
+    }
+
+    #[test]
+    fn unknowns_json_uses_fallback_without_active_index() {
+        let workspace = TempWorkspace::new("cli-unknowns-missing-index");
+        let env = |_: &str| None;
+
+        let output = run_with_context(["unknowns", "--json"], workspace.path(), &env);
+
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let fallback: Value =
+            serde_json::from_str(output.stderr.trim()).expect("unknowns fallback must be JSON");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert_eq!(fallback["reason"], "repository is not initialized");
+        assert_eq!(fallback["guidance"], "run repogrammar init --yes");
+        assert_eq!(fallback["command"], "unknowns");
+        assert_eq!(fallback["implemented"], true);
+    }
+
+    #[test]
+    fn unknowns_and_stats_reject_unknown_options() {
+        let unknowns = run(["unknowns", "--mystery"]);
+        assert_eq!(unknowns.status, 2);
+        assert!(unknowns
+            .stderr
+            .contains("unknown unknowns option: --mystery"));
+
+        let stats = run(["stats", "--unknowns", "--mystery"]);
+        assert_eq!(stats.status, 2);
+        assert!(stats.stderr.contains("unknown stats option: --mystery"));
     }
 
     #[test]
