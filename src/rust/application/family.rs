@@ -1757,7 +1757,7 @@ fn rust_family_blocking_unknown(fact: &SemanticFact, framework_role: &str) -> Op
         class: UnknownClass::Blocking,
         reason,
         affected_claim: affected_claim.to_string(),
-        recovery: Some("resolve the blocking Rust UNKNOWN before claiming a family".to_string()),
+        recovery: Some(rust_blocking_unknown_recovery(fact, affected_claim)),
     })
 }
 
@@ -1835,6 +1835,54 @@ fn rust_unknown_is_non_blocking_family_subclaim(
 ) -> bool {
     matches!(reason, UnknownReasonCode::FrameworkMagic)
         && matches!(affected_claim, "rust_optional_call_shape")
+}
+
+fn rust_blocking_unknown_recovery(fact: &SemanticFact, affected_claim: &str) -> String {
+    if affected_claim == "rust_build_variant" {
+        if let Some(recovery) = rust_cfg_feature_recovery(&fact.assumptions) {
+            return recovery;
+        }
+        if fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "rust_cfg_predicate=target")
+        {
+            return "select or model the Rust target cfg before claiming a family".to_string();
+        }
+        if fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "rust_cfg_predicate=complex")
+        {
+            return "manually resolve the complex Rust cfg expression before claiming a family"
+                .to_string();
+        }
+    }
+    "resolve the blocking Rust UNKNOWN before claiming a family".to_string()
+}
+
+fn rust_cfg_feature_recovery(assumptions: &[String]) -> Option<String> {
+    let states = assumptions
+        .iter()
+        .filter_map(|assumption| assumption.strip_prefix("rust_cfg_feature_declared="))
+        .map(|value| {
+            let (feature, state) = value.split_once(':').unwrap_or((value, "unknown"));
+            let state = match state {
+                "true" => "declared",
+                "false" => "undeclared",
+                _ => "unknown",
+            };
+            format!("{feature}:{state}")
+        })
+        .collect::<BTreeSet<_>>();
+    if states.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "resolve Rust cfg feature gate before claiming a family ({})",
+            states.into_iter().collect::<Vec<_>>().join(",")
+        ))
+    }
 }
 
 pub(crate) fn classify_unknown_family_effect(
@@ -3904,6 +3952,32 @@ mod tests {
         assert_eq!(blockers.len(), 1);
         assert_eq!(blockers[0].reason, UnknownReasonCode::BuildVariantAmbiguity);
         assert_eq!(blockers[0].affected_claim, "rust_build_variant");
+    }
+
+    #[test]
+    fn rust_cfg_feature_unknown_recovery_uses_cargo_context() {
+        let unit = unit_with_language("src/rust/application/family.rs", "rust", "rust_function", 0);
+        let mut fact = rust_unknown_fact(
+            &unit,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "rust_build_variant",
+        );
+        fact.assumptions.extend([
+            "rust_cfg_feature=preview".to_string(),
+            "rust_cfg_feature_declared=preview:true".to_string(),
+            "rust_cfg_model=cargo_feature_cfg_model".to_string(),
+            "rust_cfg_predicate=feature".to_string(),
+        ]);
+
+        let unknown = rust_family_blocking_unknown(&fact, "framework:repogrammar.rust_family_gate")
+            .expect("cfg feature UNKNOWN should block Rust support");
+
+        assert_eq!(unknown.class, UnknownClass::Blocking);
+        assert_eq!(unknown.reason, UnknownReasonCode::BuildVariantAmbiguity);
+        assert_eq!(
+            unknown.recovery.as_deref(),
+            Some("resolve Rust cfg feature gate before claiming a family (preview:declared)")
+        );
     }
 
     #[test]

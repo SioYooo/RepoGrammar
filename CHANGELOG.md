@@ -75,8 +75,8 @@
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve
-  `cargo_feature_cfg_model` triage without evaluating cfgs or converting the
-  UNKNOWN into family support.
+  `cargo_feature_cfg_model` triage and family UNKNOWN recovery text without
+  evaluating cfgs or converting the UNKNOWN into family support.
 
 ### Added
 
