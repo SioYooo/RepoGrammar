@@ -250,6 +250,14 @@ not claim to count every query-time, family-store, preflight, or storage
 fallback `UNKNOWN`. Unknown-rate reduction must not be reported as quality
 improvement unless false certainty is also measured or controlled.
 
+The repository-level UNKNOWN regression benchmark is documented in
+`docs/experiments/unknown-regression-benchmark.md`. It pins release-fixture
+inventory buckets by language, reason code, and required mechanism, then checks
+that negative fixtures still produce no family rows. Intentional analyzer
+improvements may update those exact buckets only when the replacement evidence
+has focused positive/negative coverage and preserves the same source-free,
+fail-closed output rules.
+
 ## Test Expectations
 
 New analyzers, providers, query paths, and serializers should include positive,

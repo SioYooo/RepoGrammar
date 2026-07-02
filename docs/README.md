@@ -62,7 +62,8 @@ context lives under `.agents/memories/`.
 - Initialization progress: `specifications/initialization-progress.md`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - UNKNOWN governance: `specifications/unknowns.md` and
-  `specifications/domain-model.md`.
+  `specifications/domain-model.md`; fixture-level regression protocol:
+  `experiments/unknown-regression-benchmark.md`.
 - Indexing pipeline: `specifications/indexing-pipeline.md`.
 - Storage boundaries: `specifications/storage.md`.
 - Repo-local state boundary: `decisions/ADR-0008-repo-local-state-boundary.md`
