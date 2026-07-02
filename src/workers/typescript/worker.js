@@ -476,17 +476,23 @@ function pathAliases(model) {
     if (!Array.isArray(rawTargets) || !isNonBlankString(aliasPattern)) {
       continue;
     }
+    if (wildcardCount(aliasPattern) > 1) {
+      continue;
+    }
     const targetPatterns = rawTargets
       .filter(isNonBlankString)
       .map(normalizeConfigPath)
       .map((target) => (prefix ? `${prefix}/${target}` : target))
+      .filter((target) => wildcardCount(target) <= 1)
       .filter(isSafeRepoRelativePath);
-    if (targetPatterns.length > 0) {
-      aliases.push({ aliasPattern, targetPatterns });
-    }
+    aliases.push({ aliasPattern, targetPatterns });
   }
   aliases.sort((left, right) => left.aliasPattern.localeCompare(right.aliasPattern));
   return aliases;
+}
+
+function wildcardCount(value) {
+  return value.split("*").length - 1;
 }
 
 function normalizeConfigPath(value) {
@@ -551,6 +557,9 @@ function aliasReplacements(specifier, aliasPattern) {
   if (!aliasPattern.includes("*")) {
     return specifier === aliasPattern ? [""] : null;
   }
+  if (wildcardCount(aliasPattern) !== 1) {
+    return null;
+  }
   const [prefix, suffix] = aliasPattern.split("*");
   if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) {
     return null;
@@ -559,7 +568,7 @@ function aliasReplacements(specifier, aliasPattern) {
 }
 
 function applyAliasTarget(targetPattern, replacement) {
-  return targetPattern.includes("*") ? targetPattern.replace("*", replacement) : targetPattern;
+  return targetPattern.includes("*") ? targetPattern.split("*").join(replacement) : targetPattern;
 }
 
 function resolveRootDirs(currentPath, base, dirs, modulePaths) {

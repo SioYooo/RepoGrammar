@@ -212,6 +212,23 @@ exports.resolveModuleName = () => ({});
 }
 
 {
+  const root = workspace("paths-multiple-wildcards");
+  const source = writeFile(root, "src/route.ts", "import service from '@app/service';\n");
+  const target = writeFile(root, "src/app/service/service.ts", "export const service = true;\n");
+  const config = writeFile(
+    root,
+    "tsconfig.json",
+    '{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*/*"]}}}'
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target, config], [
+    operation(source, "@app/service", { projectConfigHash: config.hash }),
+  ])));
+
+  assertUnknown(fact, "UnresolvedImport", "unresolved_path_alias");
+}
+
+{
   const root = workspace("rootdirs");
   const source = writeFile(root, "generated/route.ts", "import shared from './shared';\n");
   const target = writeFile(root, "src/shared.ts", "export default {};\n");
