@@ -30,9 +30,10 @@ use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::query::{
     enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
     list_indexed_files, lookup_family_with_freshness_and_local_context, render_source_spans,
-    repo_shape_diagnostics, FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode,
-    FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan,
+    repo_shape_diagnostics, unknown_inventory, FamilyEvidenceFreshnessRequest, FamilyListReport,
+    FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan,
     RepoShapeDiagnosticsReport, SourceSpanRenderReport, SourceSpanRenderRequest,
+    UnknownInventoryReport,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -1028,6 +1029,14 @@ impl CliRuntime for ProductCliRuntime {
     ) -> Result<RepoShapeDiagnosticsReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
         repo_shape_diagnostics(&store, &store)
+    }
+
+    fn unknown_inventory(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<UnknownInventoryReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        unknown_inventory(&store)
     }
 
     fn install_agent_integration(

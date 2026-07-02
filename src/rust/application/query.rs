@@ -1,6 +1,8 @@
 //! Query use-case boundary for finding repository analogues.
 
-use crate::application::family::FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX;
+use crate::application::family::{
+    classify_unknown_family_effect, FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
+};
 use crate::application::repository::{
     RepositoryImplementationStatus, RepositoryStatus, RepositoryStatusReport,
 };
@@ -20,8 +22,8 @@ use crate::ports::family_store::{
     IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedSemanticFactRecord,
+    ActiveClaimInputSnapshot, IndexStore, IndexStoreError, IndexedCodeUnitRecord,
+    IndexedFileRecord, IndexedSemanticFactRecord,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use std::collections::{BTreeMap, BTreeSet};
@@ -313,6 +315,34 @@ pub struct FamilyQueryUnknown {
     pub recovery: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownInventoryBucket {
+    pub key: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownInventoryBlocksSupportBucket {
+    pub blocks_support: bool,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownInventoryReport {
+    pub active_generation: String,
+    pub total_unknowns: usize,
+    pub blocking_unknowns: usize,
+    pub non_blocking_unknowns: usize,
+    pub recoverable_unknowns: usize,
+    pub irreducible_unknowns: usize,
+    pub by_language: Vec<UnknownInventoryBucket>,
+    pub by_reason_code: Vec<UnknownInventoryBucket>,
+    pub by_required_mechanism: Vec<UnknownInventoryBucket>,
+    pub by_framework_role: Vec<UnknownInventoryBucket>,
+    pub by_blocks_support: Vec<UnknownInventoryBlocksSupportBucket>,
+    pub by_recovery: Vec<UnknownInventoryBucket>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FamilyEvidenceMode {
     #[default]
@@ -555,6 +585,348 @@ pub fn list_semantic_facts(
         active_generation: snapshot.generation_id,
         facts: snapshot.semantic_facts,
     })
+}
+
+pub fn unknown_inventory(
+    store: &impl IndexStore,
+) -> Result<UnknownInventoryReport, RepoGrammarError> {
+    let snapshot = store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    Ok(build_unknown_inventory(snapshot))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnknownInventoryEntry {
+    language: String,
+    reason: UnknownReasonCode,
+    class: UnknownClass,
+    required_mechanism: String,
+    framework_role: String,
+    blocks_support: bool,
+    recovery: String,
+}
+
+fn build_unknown_inventory(snapshot: ActiveClaimInputSnapshot) -> UnknownInventoryReport {
+    let unit_by_id = snapshot
+        .units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let file_language_by_path = snapshot
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.language.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let roles_by_unit = inventory_framework_roles_by_unit(&snapshot.semantic_facts);
+    let mut entries = snapshot
+        .semantic_facts
+        .iter()
+        .filter(|fact| inventory_fact_is_unknown(fact))
+        .map(|fact| {
+            let reason = inventory_unknown_reason(fact);
+            let language = unit_by_id
+                .get(fact.code_unit_id.as_str())
+                .map(|unit| unit.language.as_str())
+                .or_else(|| file_language_by_path.get(fact.path.as_str()).copied())
+                .unwrap_or("unknown");
+            let affected_claim = assumption_value(&fact.assumptions, "affected_claim")
+                .unwrap_or_else(|| default_unknown_affected_claim(language).to_string());
+            let framework_role = assumption_value(&fact.assumptions, "framework_role")
+                .or_else(|| inventory_single_framework_role(&roles_by_unit, &fact.code_unit_id))
+                .unwrap_or_else(|| "unknown".to_string());
+            let family_effect = classify_unknown_family_effect(
+                language,
+                reason,
+                &affected_claim,
+                (framework_role != "unknown").then_some(framework_role.as_str()),
+                &fact.origin_engine,
+                &fact.origin_method,
+            );
+            let explicit_class = assumption_value(&fact.assumptions, "unknown_class")
+                .and_then(|class| UnknownClass::parse_protocol_str(&class).ok());
+            let class = family_effect
+                .as_ref()
+                .map(|unknown| unknown.class)
+                .or(explicit_class)
+                .unwrap_or_else(|| default_unknown_class(reason));
+            let blocks_support = family_effect
+                .as_ref()
+                .is_some_and(|unknown| unknown.class == UnknownClass::Blocking)
+                || class == UnknownClass::Blocking;
+            let required_mechanism =
+                required_unknown_mechanism(language, reason, &affected_claim, &framework_role);
+            let recovery = assumption_value(&fact.assumptions, "recovery")
+                .or_else(|| family_effect.and_then(|unknown| unknown.recovery))
+                .unwrap_or_else(|| {
+                    default_unknown_recovery(
+                        language,
+                        reason,
+                        &affected_claim,
+                        &framework_role,
+                        &required_mechanism,
+                    )
+                });
+            UnknownInventoryEntry {
+                language: language.to_string(),
+                reason,
+                class,
+                required_mechanism,
+                framework_role,
+                blocks_support,
+                recovery,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        (
+            left.language.as_str(),
+            left.reason.as_protocol_str(),
+            left.class.as_protocol_str(),
+            left.required_mechanism.as_str(),
+            left.framework_role.as_str(),
+            left.blocks_support,
+            left.recovery.as_str(),
+        )
+            .cmp(&(
+                right.language.as_str(),
+                right.reason.as_protocol_str(),
+                right.class.as_protocol_str(),
+                right.required_mechanism.as_str(),
+                right.framework_role.as_str(),
+                right.blocks_support,
+                right.recovery.as_str(),
+            ))
+    });
+
+    UnknownInventoryReport {
+        active_generation: snapshot.generation_id,
+        total_unknowns: entries.len(),
+        blocking_unknowns: count_unknown_class(&entries, UnknownClass::Blocking),
+        non_blocking_unknowns: count_unknown_class(&entries, UnknownClass::NonBlocking),
+        recoverable_unknowns: count_unknown_class(&entries, UnknownClass::Recoverable),
+        irreducible_unknowns: count_unknown_class(&entries, UnknownClass::Irreducible),
+        by_language: aggregate_unknown_bucket(&entries, |entry| entry.language.as_str()),
+        by_reason_code: aggregate_unknown_bucket(&entries, |entry| entry.reason.as_protocol_str()),
+        by_required_mechanism: aggregate_unknown_bucket(&entries, |entry| {
+            entry.required_mechanism.as_str()
+        }),
+        by_framework_role: aggregate_unknown_bucket(&entries, |entry| {
+            entry.framework_role.as_str()
+        }),
+        by_blocks_support: aggregate_blocks_support(&entries),
+        by_recovery: aggregate_unknown_bucket(&entries, |entry| entry.recovery.as_str()),
+    }
+}
+
+fn inventory_fact_is_unknown(fact: &IndexedSemanticFactRecord) -> bool {
+    fact.kind == "UNKNOWN" || fact.certainty == "UNKNOWN"
+}
+
+fn inventory_unknown_reason(fact: &IndexedSemanticFactRecord) -> UnknownReasonCode {
+    fact.target
+        .as_deref()
+        .and_then(|target| UnknownReasonCode::parse_protocol_str(target).ok())
+        .unwrap_or(UnknownReasonCode::InsufficientSupport)
+}
+
+fn inventory_framework_roles_by_unit(
+    facts: &[IndexedSemanticFactRecord],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut roles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for fact in facts {
+        if fact.kind != "FRAMEWORK_ROLE" || fact.certainty != "FRAMEWORK_HEURISTIC" {
+            continue;
+        }
+        let Some(target) = fact.target.as_deref() else {
+            continue;
+        };
+        roles
+            .entry(fact.code_unit_id.clone())
+            .or_default()
+            .insert(target.to_string());
+    }
+    roles
+}
+
+fn inventory_single_framework_role(
+    roles_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    code_unit_id: &str,
+) -> Option<String> {
+    let roles = roles_by_unit.get(code_unit_id)?;
+    if roles.len() == 1 {
+        roles.iter().next().cloned()
+    } else {
+        Some("ambiguous".to_string())
+    }
+}
+
+fn assumption_value(assumptions: &[String], key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    assumptions.iter().find_map(|assumption| {
+        assumption
+            .strip_prefix(&prefix)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn default_unknown_affected_claim(language: &str) -> &'static str {
+    if language == "python" {
+        "python_family_membership"
+    } else if is_tsjs_language(language) {
+        "tsjs_family_membership"
+    } else if language == "java" {
+        "java_family_membership"
+    } else if language == "rust" {
+        "rust_family_membership"
+    } else {
+        "semantic_fact"
+    }
+}
+
+fn default_unknown_class(reason: UnknownReasonCode) -> UnknownClass {
+    match reason {
+        UnknownReasonCode::MonkeyPatch => UnknownClass::Irreducible,
+        _ => UnknownClass::Recoverable,
+    }
+}
+
+fn required_unknown_mechanism(
+    language: &str,
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+) -> String {
+    match reason {
+        UnknownReasonCode::StaleEvidence => "source_refresh".to_string(),
+        UnknownReasonCode::ConflictingFacts => "conflict_resolution".to_string(),
+        UnknownReasonCode::InsufficientSupport => "compatible_support_evidence".to_string(),
+        UnknownReasonCode::MissingProjectConfig => "project_config_reader".to_string(),
+        UnknownReasonCode::MissingDependency => "dependency_metadata_provider".to_string(),
+        UnknownReasonCode::PytestFixtureInjection => "pytest_fixture_graph".to_string(),
+        UnknownReasonCode::RuntimeDependencyInjection => {
+            if language == "python"
+                && (framework_role.starts_with("framework:fastapi")
+                    || affected_claim.starts_with("fastapi_"))
+            {
+                "fastapi_dependency_graph".to_string()
+            } else {
+                "dependency_injection_model".to_string()
+            }
+        }
+        UnknownReasonCode::UnresolvedImport | UnknownReasonCode::DynamicImport => {
+            if language == "python" {
+                "repo_local_import_graph".to_string()
+            } else if is_tsjs_language(language) {
+                "typescript_module_resolver".to_string()
+            } else if language == "rust" {
+                "cargo_module_resolver".to_string()
+            } else if language == "java" {
+                "java_project_graph".to_string()
+            } else {
+                "import_resolution_provider".to_string()
+            }
+        }
+        UnknownReasonCode::FrameworkMagic => {
+            if language == "python" && framework_role.starts_with("framework:pytest") {
+                "pytest_fixture_graph".to_string()
+            } else if language == "python" && framework_role.starts_with("framework:fastapi") {
+                "fastapi_dependency_graph".to_string()
+            } else if is_tsjs_language(language) {
+                "typescript_compiler_worker".to_string()
+            } else if language == "rust" {
+                "cargo_metadata_cfg_graph".to_string()
+            } else if language == "java" {
+                "java_project_graph".to_string()
+            } else {
+                "framework_semantic_provider".to_string()
+            }
+        }
+        UnknownReasonCode::MacroOrPreprocessor | UnknownReasonCode::BuildVariantAmbiguity => {
+            if language == "rust" {
+                "cargo_metadata_cfg_graph".to_string()
+            } else {
+                "build_variant_model".to_string()
+            }
+        }
+        UnknownReasonCode::MonkeyPatch => "runtime_trace_or_manual_hint".to_string(),
+    }
+}
+
+fn default_unknown_recovery(
+    language: &str,
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+    framework_role: &str,
+    required_mechanism: &str,
+) -> String {
+    match reason {
+        UnknownReasonCode::StaleEvidence => "run repogrammar sync or resync".to_string(),
+        UnknownReasonCode::ConflictingFacts => {
+            "resolve conflicting semantic facts before claiming support".to_string()
+        }
+        UnknownReasonCode::InsufficientSupport => {
+            "add compatible source-backed support evidence".to_string()
+        }
+        UnknownReasonCode::MissingProjectConfig => {
+            "add or repair project configuration needed by the provider".to_string()
+        }
+        UnknownReasonCode::MissingDependency => {
+            "make dependency metadata available to the provider".to_string()
+        }
+        UnknownReasonCode::MonkeyPatch => {
+            "treat monkey-patched behavior as unresolved unless a runtime trace proves it"
+                .to_string()
+        }
+        _ => format!(
+            "reduce {reason} for {language}:{framework_role}:{affected_claim} with {required_mechanism}",
+            reason = reason.as_protocol_str()
+        ),
+    }
+}
+
+fn count_unknown_class(entries: &[UnknownInventoryEntry], class: UnknownClass) -> usize {
+    entries.iter().filter(|entry| entry.class == class).count()
+}
+
+fn aggregate_unknown_bucket<F>(
+    entries: &[UnknownInventoryEntry],
+    key_fn: F,
+) -> Vec<UnknownInventoryBucket>
+where
+    F: Fn(&UnknownInventoryEntry) -> &str,
+{
+    let mut counts = BTreeMap::<String, usize>::new();
+    for entry in entries {
+        *counts.entry(key_fn(entry).to_string()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(key, count)| UnknownInventoryBucket { key, count })
+        .collect()
+}
+
+fn aggregate_blocks_support(
+    entries: &[UnknownInventoryEntry],
+) -> Vec<UnknownInventoryBlocksSupportBucket> {
+    let mut counts = BTreeMap::<bool, usize>::new();
+    for entry in entries {
+        *counts.entry(entry.blocks_support).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(
+            |(blocks_support, count)| UnknownInventoryBlocksSupportBucket {
+                blocks_support,
+                count,
+            },
+        )
+        .collect()
+}
+
+fn is_tsjs_language(language: &str) -> bool {
+    matches!(language, "typescript" | "tsx" | "javascript" | "jsx")
 }
 
 pub fn repo_shape_diagnostics(
@@ -2885,6 +3257,68 @@ mod tests {
         }
     }
 
+    fn framework_role_fact(unit: &IndexedCodeUnitRecord, role: &str) -> IndexedSemanticFactRecord {
+        let mut fact = semantic_fact_with_certainty("FRAMEWORK_HEURISTIC");
+        fact.fact_id = format!("semantic-fact:{}:role", unit.id);
+        fact.kind = "FRAMEWORK_ROLE".to_string();
+        fact.subject = unit.id.clone();
+        fact.target = Some(role.to_string());
+        fact.origin_engine = "tree-sitter".to_string();
+        fact.origin_method = "framework_role_detector".to_string();
+        fact.code_unit_id = unit.id.clone();
+        fact.path = unit.path.clone();
+        fact.content_hash = unit.content_hash.clone();
+        fact.start_byte = unit.start_byte;
+        fact.end_byte = unit.end_byte;
+        fact.note = "framework role".to_string();
+        fact
+    }
+
+    fn unknown_fact_for_unit(
+        unit: &IndexedCodeUnitRecord,
+        reason: UnknownReasonCode,
+        affected_claim: &str,
+    ) -> IndexedSemanticFactRecord {
+        let mut fact = semantic_fact_with_certainty("UNKNOWN");
+        fact.fact_id = format!("semantic-fact:{}:{}", unit.id, reason.as_protocol_str());
+        fact.kind = "UNKNOWN".to_string();
+        fact.subject = unit.id.clone();
+        fact.target = Some(reason.as_protocol_str().to_string());
+        fact.origin_engine = unit.language.clone();
+        fact.origin_method = if unit.language == "python" {
+            "cpython_ast".to_string()
+        } else {
+            "syntax_anchor".to_string()
+        };
+        fact.assumptions = vec![format!("affected_claim={affected_claim}")];
+        fact.code_unit_id = unit.id.clone();
+        fact.path = unit.path.clone();
+        fact.content_hash = unit.content_hash.clone();
+        fact.start_byte = unit.start_byte;
+        fact.end_byte = unit.end_byte;
+        fact.note = "typed UNKNOWN".to_string();
+        fact
+    }
+
+    fn bucket_count(buckets: &[UnknownInventoryBucket], key: &str) -> usize {
+        buckets
+            .iter()
+            .find(|bucket| bucket.key == key)
+            .map(|bucket| bucket.count)
+            .unwrap_or(0)
+    }
+
+    fn blocks_support_count(
+        buckets: &[UnknownInventoryBlocksSupportBucket],
+        blocks_support: bool,
+    ) -> usize {
+        buckets
+            .iter()
+            .find(|bucket| bucket.blocks_support == blocks_support)
+            .map(|bucket| bucket.count)
+            .unwrap_or(0)
+    }
+
     fn family_evidence(path: &str, index: usize, note: &str) -> IndexedFamilyEvidenceRecord {
         IndexedFamilyEvidenceRecord {
             evidence_id: format!("family-evidence:{index:06}"),
@@ -3228,6 +3662,59 @@ mod tests {
 
         assert_eq!(report.active_generation, "gen-000001");
         assert_eq!(report.facts, vec![semantic_fact()]);
+    }
+
+    #[test]
+    fn unknown_inventory_aggregates_typed_unknowns_from_active_snapshot() {
+        let unit = indexed_python_unit("app/routes.py", "fastapi_route", 0);
+        let facts = vec![
+            framework_role_fact(&unit, "framework:fastapi.route"),
+            unknown_fact_for_unit(
+                &unit,
+                UnknownReasonCode::UnresolvedImport,
+                "python_import_resolution",
+            ),
+            unknown_fact_for_unit(
+                &unit,
+                UnknownReasonCode::RuntimeDependencyInjection,
+                "fastapi_dependency_target",
+            ),
+        ];
+        let store = FakeStore::new(facts)
+            .with_files(vec![IndexedFileRecord {
+                path: unit.path.clone(),
+                content_hash: unit.content_hash.clone(),
+                size_bytes: 42,
+                language: unit.language.clone(),
+            }])
+            .with_units(vec![unit]);
+
+        let report = unknown_inventory(&store).expect("unknown inventory");
+
+        assert_eq!(report.active_generation, "gen-000001");
+        assert_eq!(report.total_unknowns, 2);
+        assert_eq!(report.blocking_unknowns, 1);
+        assert_eq!(report.non_blocking_unknowns, 1);
+        assert_eq!(bucket_count(&report.by_language, "python"), 2);
+        assert_eq!(bucket_count(&report.by_reason_code, "UnresolvedImport"), 1);
+        assert_eq!(
+            bucket_count(&report.by_reason_code, "RuntimeDependencyInjection"),
+            1
+        );
+        assert_eq!(
+            bucket_count(&report.by_required_mechanism, "repo_local_import_graph"),
+            1
+        );
+        assert_eq!(
+            bucket_count(&report.by_required_mechanism, "fastapi_dependency_graph"),
+            1
+        );
+        assert_eq!(
+            bucket_count(&report.by_framework_role, "framework:fastapi.route"),
+            2
+        );
+        assert_eq!(blocks_support_count(&report.by_blocks_support, true), 1);
+        assert_eq!(blocks_support_count(&report.by_blocks_support, false), 1);
     }
 
     #[test]

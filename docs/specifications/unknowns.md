@@ -226,9 +226,12 @@ evidence attempted, freshness status, and suggested recovery action.
 Storage records for families, facts, and evidence must retain enough provenance
 to explain why a fact is unknown or why it was non-blocking for a claim.
 
-Metrics may count unknowns by language, framework, adapter, reason, and stage.
-Unknown-rate reduction must not be reported as quality improvement unless false
-certainty is also measured or controlled.
+Metrics may count unknowns by language, framework role, adapter, reason, stage,
+required mechanism, support-blocking status, and recovery path.
+`repogrammar unknowns --json` and `repogrammar stats --unknowns --json` expose a
+source-free aggregate inventory for this purpose. Unknown-rate reduction must
+not be reported as quality improvement unless false certainty is also measured
+or controlled.
 
 ## Test Expectations
 
