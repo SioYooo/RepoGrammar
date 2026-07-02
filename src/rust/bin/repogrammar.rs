@@ -6662,6 +6662,66 @@ class User(Base):
     }
 
     #[test]
+    fn product_runtime_fresh_resync_reports_unknown_inventory_schema() {
+        let workspace = TempWorkspace::new("product-runtime-unknown-inventory-schema");
+        fs::write(
+            workspace.path().join("app.py"),
+            "def handler():\n    return {'ok': True}\n",
+        )
+        .expect("write source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init_json = parse_machine_output("init", &init, &workspace);
+        assert_eq!(init_json["status"], "initialized");
+
+        let resync = run_with_runtime(
+            cli_args(
+                "resync",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let resync_json = parse_machine_output("resync", &resync, &workspace);
+        assert_eq!(resync_json["command"], "resync");
+        assert_eq!(resync_json["status"], "complete");
+
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+        assert_eq!(unknowns_json["command"], "unknowns");
+        assert_eq!(unknowns_json["status"], "ok");
+        let inventory = &unknowns_json["unknown_inventory"];
+        assert_eq!(inventory["inventory_scope"], "persisted_semantic_unknowns");
+        assert!(inventory["by_role_state"].is_array());
+        assert!(inventory["by_recovery_code"].is_array());
+        assert!(inventory.get("by_recovery").is_none());
+        assert!(!unknowns.stdout.contains("def handler"));
+        assert!(!unknowns.stdout.contains("return {'ok': True}"));
+
+        let stats = run_with_runtime(
+            cli_args("stats", workspace.path(), &["--unknowns", "--json"]),
+            &runtime,
+        );
+        let stats_json = parse_machine_output("stats", &stats, &workspace);
+        assert_eq!(stats_json["command"], "stats");
+        assert_eq!(stats_json["status"], "ok");
+        assert_eq!(
+            stats_json["repo_shape_scope"],
+            "python_family_eligible_units"
+        );
+        assert_eq!(
+            stats_json["unknown_inventory"]["inventory_scope"],
+            "persisted_semantic_unknowns"
+        );
+        assert!(!stats.stdout.contains("def handler"));
+        assert!(!stats.stdout.contains("return {'ok': True}"));
+    }
+
+    #[test]
     fn product_runtime_missing_semantic_worker_falls_back_to_syntax_only() {
         let workspace = TempWorkspace::new("product-runtime-worker-missing");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");

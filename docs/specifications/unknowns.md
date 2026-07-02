@@ -226,12 +226,27 @@ evidence attempted, freshness status, and suggested recovery action.
 Storage records for families, facts, and evidence must retain enough provenance
 to explain why a fact is unknown or why it was non-blocking for a claim.
 
-Metrics may count unknowns by language, framework role, adapter, reason, stage,
-required mechanism, support-blocking status, and recovery path.
+Metrics may count persisted semantic unknowns by language, framework role,
+framework-role state, adapter, reason, stage, required mechanism,
+support-blocking status, and stable recovery code. Recovery buckets must use
+low-cardinality codes such as `run_sync`, `add_project_config`,
+`enable_provider`, `resolve_import_graph`, `resolve_fixture_graph`,
+`resolve_dependency_metadata`, `runtime_trace_required`,
+`manual_review_required`, or reserved `unknown`; they must not use free-text
+recovery guidance, repository paths, code snippets, code-unit ids, or fact ids.
+Mechanism buckets should be actionable analyzer/provider codes, for example
+`python_import_graph`, `pytest_fixture_graph`, `fastapi_dependency_graph`,
+`typescript_paths_resolver`, `typescript_export_graph`,
+`fastify_receiver_model`, `prisma_client_model`, `drizzle_db_model`,
+`rust_module_graph`, `cargo_feature_cfg_model`, `rust_macro_boundary`,
+`rust_trait_dispatch_model`, `java_spring_route_literal_model`,
+`spring_component_scan_model`, `spring_di_model`, `spring_proxy_model`, and
+`spring_data_repository_model`.
 `repogrammar unknowns --json` and `repogrammar stats --unknowns --json` expose a
-source-free aggregate inventory for this purpose. Unknown-rate reduction must
-not be reported as quality improvement unless false certainty is also measured
-or controlled.
+source-free aggregate inventory for persisted semantic `UNKNOWN` facts. They do
+not claim to count every query-time, family-store, preflight, or storage
+fallback `UNKNOWN`. Unknown-rate reduction must not be reported as quality
+improvement unless false certainty is also measured or controlled.
 
 ## Test Expectations
 

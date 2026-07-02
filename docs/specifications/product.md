@@ -249,25 +249,30 @@ Python exact-compatible framework-anchor target diversity inside an already
 ready family; exception evidence remains deferred. Deep mode remains
 metadata-first unless source spans are explicitly requested.
 
-`repogrammar stats --json` reports repo-shape diagnostics for local pattern
-density, family support coverage, abstention rate, and thin-wrapper/token-saving
-risk, plus token-saving readiness and concrete blocking reasons. These
-diagnostics explain when RepoGrammar can reduce context acquisition cost and
-when third-party-heavy or thin-wrapper repositories are unlikely to produce
-large savings. They are not measured token savings or causal claims. Measured
-token savings are reported only when a local paired baseline/treatment token
-experiment has comparable token counts and a measurement source; otherwise
-stats must mark the measurement kind as `ESTIMATED` and include a not-measured
-caveat.
+`repogrammar stats --json` reports Python-family repo-shape diagnostics for
+local pattern density, family support coverage, abstention rate, and
+thin-wrapper/token-saving risk, plus token-saving readiness and concrete
+blocking reasons. The JSON includes
+`repo_shape_scope: python_family_eligible_units` so these readiness diagnostics
+are not confused with multi-language inventory. These diagnostics explain when
+RepoGrammar can reduce context acquisition cost and when third-party-heavy or
+thin-wrapper repositories are unlikely to produce large savings. They are not
+measured token savings or causal claims. Measured token savings are reported
+only when a local paired baseline/treatment token experiment has comparable
+token counts and a measurement source; otherwise stats must mark the
+measurement kind as `ESTIMATED` and include a not-measured caveat.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
 security, persistence, or conformance claims while still allowing weaker
 structural observations. The canonical taxonomy lives in
 `docs/specifications/unknowns.md`. `repogrammar unknowns --json` and
-`repogrammar stats --unknowns --json` expose source-free aggregate UNKNOWN
-inventory for prioritizing provider and analyzer work; reductions in those
-counts are diagnostic only unless false certainty is also controlled.
+`repogrammar stats --unknowns --json` expose source-free aggregate inventory for
+persisted semantic `UNKNOWN` facts. The inventory reports
+`inventory_scope: persisted_semantic_unknowns`, stable recovery-code buckets,
+role-state buckets, mechanism buckets, and support-blocking buckets for
+prioritizing provider and analyzer work; reductions in those counts are
+diagnostic only unless false certainty is also controlled.
 
 ## Installation and telemetry boundaries
 

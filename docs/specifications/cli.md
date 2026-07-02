@@ -477,32 +477,46 @@ Install does not upload telemetry or run paired token-saving experiments.
 
 ## Metrics commands
 
-`repogrammar unknowns` reports aggregate typed `UNKNOWN` inventory for
-initialized repositories with an active readable generation. With `--json`, it
-must return a parseable object with `implemented: true`, `status: ok`, and an
-`unknown_inventory` object containing the active generation, total counts for
-`blocking_unknowns`, `non_blocking_unknowns`, `recoverable_unknowns`, and
-`irreducible_unknowns`, plus rollups named:
+`repogrammar unknowns` reports aggregate persisted semantic `UNKNOWN` inventory
+for initialized repositories with an active readable generation. It does not
+claim to count every query-time, family-store, preflight, or storage fallback
+`UNKNOWN`. With `--json`, it must return a parseable object with
+`implemented: true`, `status: ok`, and an `unknown_inventory` object containing
+`inventory_scope: persisted_semantic_unknowns`, the active generation, total
+counts for `blocking_unknowns`, `non_blocking_unknowns`, `recoverable_unknowns`,
+and `irreducible_unknowns`, plus rollups named:
 
 - `by_language`
 - `by_reason_code`
 - `by_required_mechanism`
 - `by_framework_role`
+- `by_role_state`
 - `by_blocks_support`
-- `by_recovery`
+- `by_recovery_code`
 
 The inventory is diagnostic and source-free. It must not include source
 snippets, query text, repository names, absolute paths, code-unit ids, or fact
-ids by default. Unknown-rate changes are not quality claims unless false
-certainty is also controlled. If repository state or the active index is
-missing, `unknowns --json` uses the same missing-index fallback shape as
-implemented inventory commands and keeps `implemented: true`.
+ids by default. `by_recovery_code` is a stable low-cardinality code bucket,
+never the free-text recovery guidance stored on individual facts. Recovery
+codes include `run_sync`, `add_project_config`, `enable_provider`,
+`resolve_import_graph`, `resolve_fixture_graph`,
+`resolve_dependency_metadata`, `runtime_trace_required`,
+`manual_review_required`, and `unknown`. `by_role_state` uses
+`none`, `single`, or `ambiguous`; ambiguous framework roles are reported as
+support-risk because they block confident family-support interpretation.
+Unknown-rate changes are not quality claims unless false certainty is also
+controlled. If repository state or the active index is missing,
+`unknowns --json` uses exit code 2 with the same missing-index fallback shape as
+implemented inventory commands, keeps `implemented: true`, and includes
+`inventory_available: false`; this means the inventory is not ready, not that
+the command crashed internally.
 
-`repogrammar stats` reports repo-shape diagnostics for initialized repositories
-with an active readable generation. With `--json`, it must return a parseable
-object with `implemented: true`, the active generation, metric-kind vocabulary,
-top-level `token_saving_readiness`, `blocking_reasons`, `measurement_kind`, and
-`caveat` fields,
+`repogrammar stats` reports Python-family repo-shape diagnostics for initialized
+repositories with an active readable generation. With `--json`, it must return
+a parseable object with `implemented: true`,
+`repo_shape_scope: python_family_eligible_units`, the active generation,
+metric-kind vocabulary, top-level `token_saving_readiness`, `blocking_reasons`,
+`measurement_kind`, and `caveat` fields,
 `null` values for measured `token_savings`, `token_savings_ratio`,
 `measurement_source`, and `context_compression_ratio` unless a comparable local
 paired token experiment exists, and diagnostic metrics:
@@ -528,12 +542,17 @@ estimates, `blocking_reasons` must also name concrete causes such as
 `no_supported_units`, `no_families`, or `low_pattern_density`. The output must
 not include source snippets, query text, repository names, or absolute paths.
 With `--unknowns --json`, stats must embed the same source-free
-`unknown_inventory` object produced by `repogrammar unknowns --json`; without
-`--unknowns`, that object must be omitted.
+persisted semantic `unknown_inventory` object produced by
+`repogrammar unknowns --json`; without `--unknowns`, that object must be
+omitted. The `repo_shape_scope` label and the inventory's `inventory_scope`
+label must both remain present so Python-family readiness is not conflated with
+multi-language persisted semantic unknowns.
 If repository state or the active index is missing, `stats --json` uses the
 same missing-index fallback shape as implemented inventory commands, keeps
 `implemented: true`, and still reports `token_saving_readiness: unknown`,
 `measurement_kind: ESTIMATED`, a not-measured caveat, and blocking reasons.
+When `--unknowns` was requested, the fallback must also include
+`inventory_available: false`.
 
 `repogrammar telemetry` owns anonymous product telemetry consent, explicit
 upload, research trace consent, and local paired token experiment recording.
