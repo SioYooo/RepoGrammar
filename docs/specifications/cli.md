@@ -254,17 +254,20 @@ and `mining: deferred`. By default, `semantic_worker` is `deferred`.
 During the current TS/JS and Python framework-role slices, `semantic_facts` may
 be greater than zero even when `semantic_worker` is `deferred`; those records
 are syntax-origin `FRAMEWORK_ROLE` facts with `FRAMEWORK_HEURISTIC` certainty,
-Python parser-origin structural/`UNKNOWN` facts, root `pyproject.toml`
-`PROJECT_CONFIG`/config-`UNKNOWN` records, or TS/JS project-config
-`PROJECT_CONFIG`/config-`UNKNOWN` records. Python and conservative TS/JS
-exact-anchor derivation may also add separate `DATAFLOW_DERIVED` support facts
-without running a semantic worker. These are bounded RepoGrammar support facts,
-not compiler/provider-backed facts.
+Python parser-origin structural/approved graph-derived/`UNKNOWN` facts, root
+`pyproject.toml` `PROJECT_CONFIG`/config-`UNKNOWN` records, or TS/JS
+project-config `PROJECT_CONFIG`/config-`UNKNOWN` records. The only Python
+parser-origin `DATAFLOW_DERIVED` facts accepted here are repo-local import graph
+or pytest fixture graph facts with explicit `provider_resolved=false` provenance;
+Python and conservative TS/JS exact-anchor derivation may also add separate
+`DATAFLOW_DERIVED` support facts without running a semantic worker. These are
+bounded RepoGrammar support/context facts, not compiler/provider-backed facts.
 `sync` attempts a path-level incremental rebuild when the active generation is
 readable, mutable, schema-compatible, and dirty-free, no explicit semantic
 worker is configured, and the delta does not touch project-context files such
-as `package.json`, `tsconfig.json`, `jsconfig.json`, `pyproject.toml`,
-`conftest.py`, `Cargo.toml`, or `Cargo.lock`. Incremental `sync` discovers the
+as any `.py` file, `package.json`, `tsconfig.json`, `jsconfig.json`,
+`pyproject.toml`, `conftest.py`, `Cargo.toml`, or `Cargo.lock`. Incremental
+`sync` discovers the
 current manifest, copies unchanged active file/code-unit/IR/semantic records
 into a new building generation without reparsing those paths, reparses added
 and modified paths, omits removed paths, recomputes local derived support and

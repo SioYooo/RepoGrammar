@@ -293,6 +293,17 @@ fn parse_document_payload(
             json!(context.python_source_roots),
         );
         object.insert(
+            "module_files".to_string(),
+            json!(context
+                .python_module_files
+                .iter()
+                .map(|file| json!({
+                    "path": &file.path,
+                    "text": &file.text,
+                }))
+                .collect::<Vec<_>>()),
+        );
+        object.insert(
             "conftest_files".to_string(),
             json!(context
                 .python_conftest_files
@@ -1130,13 +1141,17 @@ fn validate_python_fact_kind_certainty(
     kind: SemanticFactKind,
     certainty: FactCertainty,
 ) -> Result<(), ParseError> {
-    match (kind, certainty) {
+    match (kind.clone(), certainty) {
         (
             SemanticFactKind::ResolvedCall
             | SemanticFactKind::ResolvedImport
             | SemanticFactKind::Symbol
             | SemanticFactKind::Type,
             FactCertainty::Structural,
+        )
+        | (
+            SemanticFactKind::ResolvedImport | SemanticFactKind::Symbol | SemanticFactKind::Type,
+            FactCertainty::DataflowDerived,
         )
         | (SemanticFactKind::Unknown, FactCertainty::Unknown) => Ok(()),
         _ => Err(ParseError::Internal(
@@ -1164,6 +1179,11 @@ fn validate_python_fact_target(
             FactCertainty::Structural,
             Some(target),
         ) if python_structural_target_is_supported(target) => Ok(()),
+        (
+            SemanticFactKind::ResolvedImport | SemanticFactKind::Symbol | SemanticFactKind::Type,
+            FactCertainty::DataflowDerived,
+            Some(target),
+        ) if python_structural_target_is_supported(target) => Ok(()),
         _ => Err(ParseError::Internal(
             "python ast frontend fact target was unsupported".to_string(),
         )),
@@ -1176,7 +1196,7 @@ fn validate_python_fact_assumptions(
     target: Option<&str>,
     assumptions: &[String],
 ) -> Result<(), ParseError> {
-    match (kind, certainty) {
+    match (kind.clone(), certainty) {
         (SemanticFactKind::Unknown, FactCertainty::Unknown) => {
             let Some(target) = target else {
                 return Err(ParseError::Internal(
@@ -1222,6 +1242,32 @@ fn validate_python_fact_assumptions(
                 ))
             }
         }
+        (
+            SemanticFactKind::ResolvedImport | SemanticFactKind::Symbol | SemanticFactKind::Type,
+            FactCertainty::DataflowDerived,
+        ) => {
+            let anchor = assumptions
+                .iter()
+                .find_map(|value| value.strip_prefix("python_anchor_kind="));
+            let derived_from = assumptions
+                .iter()
+                .find_map(|value| value.strip_prefix("derived_from="));
+            if assumptions.len() == 3
+                && assumptions
+                    .iter()
+                    .any(|value| value == "provider_resolved=false")
+                && anchor.is_some_and(|anchor| {
+                    python_graph_anchor_kind_is_supported(kind.clone(), anchor, derived_from)
+                })
+                && derived_from.is_some()
+            {
+                Ok(())
+            } else {
+                Err(ParseError::Internal(
+                    "python ast frontend graph-derived assumptions were unsupported".to_string(),
+                ))
+            }
+        }
         _ => Err(ParseError::Internal(
             "python ast frontend assumptions were unsupported".to_string(),
         )),
@@ -1247,6 +1293,14 @@ fn validate_python_fact_note(
             FactCertainty::Structural,
         ) if note.starts_with("CPython ast structural ")
             || note.starts_with("CPython tomllib structural ") =>
+        {
+            Ok(())
+        }
+        (
+            SemanticFactKind::ResolvedImport | SemanticFactKind::Symbol | SemanticFactKind::Type,
+            FactCertainty::DataflowDerived,
+        ) if note.starts_with("CPython ast repo_local_python_import_graph ")
+            || note.starts_with("CPython ast repo_local_pytest_fixture_graph ") =>
         {
             Ok(())
         }
@@ -1350,10 +1404,34 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "scope_namespace"
             | "scope_assigned"
             | "repo_local_import_binding"
+            | "repo_local_import_symbol"
             | "project_config"
             | "project_config_name"
             | "project_config_tool"
             | "project_config_source_root"
+    )
+}
+
+fn python_graph_anchor_kind_is_supported(
+    kind: SemanticFactKind,
+    anchor: &str,
+    derived_from: Option<&str>,
+) -> bool {
+    matches!(
+        (kind, anchor, derived_from),
+        (
+            SemanticFactKind::ResolvedImport,
+            "repo_local_import_binding",
+            Some("repo_local_python_import_graph")
+        ) | (
+            SemanticFactKind::Symbol | SemanticFactKind::Type,
+            "repo_local_import_symbol",
+            Some("repo_local_python_import_graph")
+        ) | (
+            SemanticFactKind::Symbol,
+            "pytest_fixture_edge" | "pytest_conftest_fixture_edge",
+            Some("repo_local_pytest_fixture_graph")
+        )
     )
 }
 
@@ -1934,8 +2012,18 @@ def test_users(client, status, missing_fixture):
         for fact in &report.semantic_facts {
             assert!(matches!(
                 fact.certainty,
-                FactCertainty::Structural | FactCertainty::Unknown
+                FactCertainty::Structural | FactCertainty::DataflowDerived | FactCertainty::Unknown
             ));
+            if fact.certainty == FactCertainty::DataflowDerived {
+                assert!(fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false"));
+                assert!(fact.assumptions.iter().any(|assumption| {
+                    assumption == "derived_from=repo_local_python_import_graph"
+                        || assumption == "derived_from=repo_local_pytest_fixture_graph"
+                }));
+            }
             assert_eq!(fact.origin.engine, "python");
             assert_eq!(fact.origin.method, "cpython_ast");
             assert_eq!(fact.evidence.provenance.path, "app.py");
@@ -3107,7 +3195,7 @@ project_includes = ["src"]
     }
 
     #[test]
-    fn parse_with_context_accepts_repo_local_import_binding_without_claim_upgrade() {
+    fn parse_with_context_accepts_repo_local_import_graph_facts_without_source_leakage() {
         let source = "\
 from acme.services import users\n\
 from .services import users as relative_users\n\
@@ -3147,10 +3235,18 @@ from acme.missing import value\n";
             .collect::<Vec<_>>();
         assert_eq!(repo_local_imports.len(), 2);
         assert!(repo_local_imports.iter().all(|fact| {
-            fact.certainty == FactCertainty::Structural
+            fact.certainty == FactCertainty::DataflowDerived
                 && fact.origin.engine == "python"
                 && fact.origin.method == "cpython_ast"
                 && fact.evidence.provenance.path == "src/acme/api.py"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_python_import_graph")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown
@@ -3164,7 +3260,7 @@ from acme.missing import value\n";
         assert!(report.semantic_facts.iter().all(|fact| {
             matches!(
                 fact.certainty,
-                FactCertainty::Structural | FactCertainty::Unknown
+                FactCertainty::Structural | FactCertainty::DataflowDerived | FactCertainty::Unknown
             )
         }));
         let debug = format!("{:?}", report.semantic_facts);
@@ -3178,6 +3274,109 @@ from acme.missing import value\n";
                 "parser facts leaked forbidden text {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn parse_with_context_resolves_repo_local_symbols_reexports_and_safe_star_imports() {
+        let source = "\
+from acme.models import User, make_user\n\
+from acme import PublicUser\n\
+from acme.models import *\n";
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "src/acme/api.py".to_string(),
+                "src/acme/__init__.py".to_string(),
+                "src/acme/models.py".to_string(),
+            ],
+            python_module_files: vec![
+                ParserProjectFileContext {
+                    path: "src/acme/__init__.py".to_string(),
+                    text: "from .models import User as PublicUser\n".to_string(),
+                },
+                ParserProjectFileContext {
+                    path: "src/acme/models.py".to_string(),
+                    text: "__all__ = ['User']\nclass User: pass\ndef make_user(): pass\n"
+                        .to_string(),
+                },
+                ParserProjectFileContext {
+                    path: "src/acme/api.py".to_string(),
+                    text: String::new(),
+                },
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: Vec::new(),
+            ..ParserProjectContext::default()
+        };
+        let report = PythonAstParser::default()
+            .parse_with_context(document_at("src/acme/api.py", source), &context)
+            .expect("parse with repo-local symbol context");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.certainty == FactCertainty::DataflowDerived
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("acme.models.User")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=repo_local_import_symbol")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_python_import_graph")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::DataflowDerived
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("acme.models.make_user")
+        }));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("class User"));
+        assert!(!debug.contains("def make_user"));
+    }
+
+    #[test]
+    fn parse_with_context_keeps_unsafe_star_import_unknown() {
+        let source = "from acme.models import *\n";
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "src/acme/api.py".to_string(),
+                "src/acme/models.py".to_string(),
+            ],
+            python_module_files: vec![
+                ParserProjectFileContext {
+                    path: "src/acme/models.py".to_string(),
+                    text: "class User: pass\n".to_string(),
+                },
+                ParserProjectFileContext {
+                    path: "src/acme/api.py".to_string(),
+                    text: String::new(),
+                },
+            ],
+            python_source_roots: Vec::new(),
+            python_conftest_files: Vec::new(),
+            ..ParserProjectContext::default()
+        };
+        let report = PythonAstParser::default()
+            .parse_with_context(document_at("src/acme/api.py", source), &context)
+            .expect("parse unsafe star import");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.certainty == FactCertainty::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("UnresolvedImport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_import_resolution")
+        }));
     }
 
     #[test]
@@ -3204,9 +3403,13 @@ from acme.missing import value\n";
         assert!(
             report.semantic_facts.iter().any(|fact| {
                 fact.kind == SemanticFactKind::Symbol
+                    && fact.certainty == FactCertainty::DataflowDerived
                     && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.client")
                     && fact.assumptions.iter().any(|assumption| {
                         assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                    })
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "derived_from=repo_local_pytest_fixture_graph"
                     })
             }),
             "units={:?} diagnostics={:?} facts={:?}",
@@ -3248,6 +3451,12 @@ def helper(db):
 
 def test_users(api_client):
     assert api_client
+
+def test_literal_lookup(request):
+    assert request.getfixturevalue("api_client")
+
+def test_dynamic_lookup(request, fixture_name):
+    assert request.getfixturevalue(fixture_name)
 "#;
         let report = PythonAstParser::default()
             .parse(document_at("tests/test_fixture_graph.py", source))
@@ -3283,6 +3492,15 @@ def test_users(api_client):
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.certainty == FactCertainty::DataflowDerived
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pytest.fixture.api_client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown

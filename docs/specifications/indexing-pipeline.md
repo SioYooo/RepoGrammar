@@ -355,13 +355,14 @@ guidance.
 The checked-in Python worker currently has two narrow modes. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. Default
-indexing now passes the discovered repo-relative `.py` inventory, sanitized
-root `pyproject.toml` source roots from the same parser/tomllib project-config
-path, and bounded, hash-checked discovered `conftest.py` file contents into
-that private mode, letting the worker build a bounded module and fixture
-context for the current parse request. That worker pass produces
-repo-relative structural fact payloads
-for imports, unique repo-local import bindings, decorator anchors, class bases,
+indexing now passes the discovered repo-relative `.py` inventory, bounded
+module file texts, sanitized root `pyproject.toml` source roots from the same
+parser/tomllib project-config path, and bounded, hash-checked discovered
+`conftest.py` file contents into that private mode, letting the worker build a
+bounded module, direct-symbol, package re-export, safe literal-star-import, and
+fixture context for the current parse request. That worker pass produces
+repo-relative structural fact payloads for ordinary imports, decorator anchors,
+class bases,
 Pydantic model-member anchors for fields, field annotation targets,
 `model_config`, nested `Config`, `computed_field`, validator, and
 `model_validator` declarations, SQLAlchemy mapped field and relationship
@@ -370,25 +371,34 @@ anchors, typed SQLAlchemy session calls including `add`, `execute`, `scalar`,
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple calls, bounded same-function
 FastAPI service-call context anchors,
-`pytest.test` test-function anchors, same-file pytest test and fixture
-dependency edges, unique parent-directory `conftest.py` pytest fixture edges,
-literal pytest fixture `name=` aliases, known pytest built-in fixture context,
+`pytest.test` test-function anchors, graph-derived unique repo-local import
+bindings, graph-derived direct imported `SYMBOL`/`TYPE` facts for top-level
+class/function/module symbols, static `__init__.py` re-exports, literal-`__all__`
+star imports, same-file pytest test and fixture dependency edges, unique
+parent-directory `conftest.py` pytest fixture edges, literal pytest fixture
+`name=` aliases, literal `request.getfixturevalue("name")` fixture lookups,
+known pytest built-in fixture context,
 FastAPI static
 `response_model=...` schema-slot anchors, static `Depends(get_db)`
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
 `Cookie` request-shape anchors, path-derived module names, CPython `symtable`
 scope anchors, and typed dynamic/unresolved decorator, dynamic call, monkey-patch,
-dynamic/unresolved/ambiguous import, dynamic Pydantic model factory, dynamic
-pytest fixture name, duplicate conftest fixture, plugin fixture,
+dynamic/unresolved/ambiguous import, unsafe star import without literal
+`__all__`, dynamic Pydantic model factory, dynamic pytest fixture name,
+nonliteral `request.getfixturevalue`, duplicate conftest fixture, plugin fixture,
 and fixture-injection `UNKNOWN` cases. The semantic-worker-compatible
 project mode can also resolve requested-project `conftest.py` fixture names
-through pytest's directory hierarchy as structural fixture-edge facts. The Rust
-parser adapter validates and persists parse-document payloads as internal
-`STRUCTURAL` or `UNKNOWN` semantic fact records tied to the same code-unit
-evidence. They may enter the family builder only as context features or
-claim-scoped blocking `UNKNOWN`s; they remain blocked from support readiness as
-insufficient support. Pydantic member/config/computed anchors are
+through pytest's directory hierarchy as graph-derived fixture-edge facts. The
+Rust parser adapter validates and persists parse-document payloads as internal
+`STRUCTURAL`, approved parser-origin `DATAFLOW_DERIVED`, or `UNKNOWN` semantic
+fact records tied to the same code-unit evidence. Parser-origin graph facts must
+carry `provider_resolved=false` and a `derived_from=repo_local_python_import_graph`
+or `derived_from=repo_local_pytest_fixture_graph` assumption; unlabeled parser
+facts remain blocked from support readiness as insufficient support. They may
+enter the family builder only as context features or claim-scoped blocking
+`UNKNOWN`s unless separately synthesized framework support facts pass the exact
+compatibility table. Pydantic member/config/computed anchors are
 schema/config/member context only, and FastAPI service-call anchors are
 handler/service context only. FastAPI request body and request-parameter
 anchors are route-shape context only; none of these categories synthesizes

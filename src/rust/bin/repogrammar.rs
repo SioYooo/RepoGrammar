@@ -3220,9 +3220,19 @@ mod tests {
                     && fact.start_byte < fact.end_byte
             }));
             assert!(facts.facts.iter().all(|fact| {
-                !(fact.origin_engine == "python"
+                if !(fact.origin_engine == "python"
                     && fact.origin_method == "cpython_ast"
                     && fact.certainty == "DATAFLOW_DERIVED")
+                {
+                    return true;
+                }
+                fact.assumptions.iter().any(|assumption| {
+                    assumption == "derived_from=repo_local_python_import_graph"
+                        || assumption == "derived_from=repo_local_pytest_fixture_graph"
+                }) && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=false")
             }));
             if case.fixture == "pytest-fixture-alias-strong-evidence" {
                 assert!(
@@ -3230,8 +3240,12 @@ mod tests {
                         fact.path == "test_fixture_names.py"
                             && fact.kind == "SYMBOL"
                             && fact.target.as_deref() == Some("pytest.fixture.api_client")
+                            && fact.certainty == "DATAFLOW_DERIVED"
                             && fact.assumptions.iter().any(|assumption| {
                                 assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
+                            })
+                            && fact.assumptions.iter().any(|assumption| {
+                                assumption == "derived_from=repo_local_pytest_fixture_graph"
                             })
                     }),
                     "facts={:?}",
@@ -5924,11 +5938,18 @@ project_includes = ["src"]
                 fact.path == "src/acme/api.py"
                     && fact.kind == "RESOLVED_IMPORT"
                     && fact.target.as_deref() == Some("acme.services.users")
-                    && fact.certainty == "STRUCTURAL"
+                    && fact.certainty == "DATAFLOW_DERIVED"
                     && fact.origin_engine == "python"
                     && fact.origin_method == "cpython_ast"
                     && fact.assumptions.iter().any(|assumption| {
                         assumption == "python_anchor_kind=repo_local_import_binding"
+                    })
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "provider_resolved=false")
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "derived_from=repo_local_python_import_graph"
                     })
             })
             .collect::<Vec<_>>();
@@ -6053,10 +6074,14 @@ project_includes = ["src"]
                 && fact.target.as_deref() == Some("pytest.fixture.client")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
                 && fact.assumptions.iter().any(|assumption| {
                     assumption == "python_anchor_kind=pytest_conftest_fixture_edge"
                 })
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/conftest.py"
@@ -6064,11 +6089,15 @@ project_includes = ["src"]
                 && fact.target.as_deref() == Some("pytest.fixture.db")
                 && fact.origin_engine == "python"
                 && fact.origin_method == "cpython_ast"
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
                 && fact
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=pytest_fixture_edge")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/conftest.py"
@@ -6197,8 +6226,22 @@ project_includes = ["src"]
             !derived_targets.contains("pytest.test"),
             "pytest fixture-binding UNKNOWN must block pytest test family support"
         );
+        let graph_fact_ids = facts
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.origin_engine == "python"
+                    && fact.origin_method == "cpython_ast"
+                    && fact.certainty == "DATAFLOW_DERIVED"
+                    && fact.assumptions.iter().any(|assumption| {
+                        assumption == "derived_from=repo_local_python_import_graph"
+                            || assumption == "derived_from=repo_local_pytest_fixture_graph"
+                    })
+            })
+            .map(|fact| fact.fact_id.clone())
+            .collect::<BTreeSet<_>>();
         for fact in readiness.facts {
-            if derived_fact_ids.contains(&fact.fact_id) {
+            if derived_fact_ids.contains(&fact.fact_id) || graph_fact_ids.contains(&fact.fact_id) {
                 assert!(matches!(fact.readiness, ClaimInputReadiness::EligibleInput));
             } else {
                 let ClaimInputReadiness::Blocked { unknown } = fact.readiness else {
@@ -6245,7 +6288,11 @@ project_includes = ["src"]
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
                 && fact.target.as_deref() == Some("pytest.fixture.client")
-                && fact.certainty == "STRUCTURAL"
+                && fact.certainty == "DATAFLOW_DERIVED"
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=repo_local_pytest_fixture_graph")
         }));
     }
 
