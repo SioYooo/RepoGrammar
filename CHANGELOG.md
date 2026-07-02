@@ -66,6 +66,9 @@
 - SQLAlchemy `relationship("LocalModel")` calls now record same-module literal
   relationship-target context without treating it as model-family support.
   Dynamic or nonlocal relationship targets remain typed `UNKNOWN`.
+- SQLAlchemy `Base = declarative_base()` assignments now propagate bounded
+  declarative base context to direct `class Model(Base)` declarations when the
+  imported helper is not shadowed.
 - SQLAlchemy repository-method exact anchors now include typed
   `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
   calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy

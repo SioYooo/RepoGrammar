@@ -189,6 +189,7 @@ The current implementation covers a bounded static CPython `ast` slice only:
   framework role; local decorators and native `property`, `classmethod`, and
   `staticmethod` stay structural metadata;
 - SQLAlchemy 2.0 structural anchors for model class fields using imported
+  `DeclarativeBase` bases, bounded `Base = declarative_base()` assignments,
   `Mapped[...]` annotations, `mapped_column(...)`, and `relationship(...)`
   calls. Literal `relationship("LocalModel")` targets are recorded as local
   relationship-target context when the target is a same-module class; dynamic,
@@ -438,8 +439,8 @@ Compatibility examples:
 - Pydantic model/settings: subclass relation resolves to `pydantic.BaseModel`,
   `pydantic.BaseSettings`, or `pydantic_settings.BaseSettings`.
 - SQLAlchemy model: base or mapped members resolve to
-  `sqlalchemy.orm.DeclarativeBase`, `sqlalchemy.orm.Mapped`, or
-  `sqlalchemy.orm.mapped_column`.
+  `sqlalchemy.orm.DeclarativeBase`, bounded `sqlalchemy.orm.declarative_base`,
+  `sqlalchemy.orm.Mapped`, or `sqlalchemy.orm.mapped_column`.
 - SQLAlchemy repository method: calls on parameters annotated as
   `sqlalchemy.orm.Session` or `sqlalchemy.ext.asyncio.AsyncSession` resolve to
   exact supported sync or async session method targets, including `execute`,

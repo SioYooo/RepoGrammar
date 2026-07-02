@@ -98,6 +98,7 @@ PYDANTIC_MODEL_BASES = {
 }
 SQLALCHEMY_MODEL_BASES = {
     "sqlalchemy.orm.DeclarativeBase",
+    "sqlalchemy.orm.declarative_base",
 }
 SQLALCHEMY_MAPPED_TYPES = {
     "sqlalchemy.orm.Mapped",
@@ -543,10 +544,15 @@ def is_pydantic_model(node: ast.ClassDef, aliases: dict[str, str] | None = None)
     )
 
 
-def is_sqlalchemy_model(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> bool:
+def is_sqlalchemy_model(
+    node: ast.ClassDef,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> bool:
     aliases = aliases or {}
+    assignments = assignments or {}
     if any(
-        canonical_name(name, aliases, {}) in SQLALCHEMY_MODEL_BASES
+        canonical_name(name, aliases, assignments) in SQLALCHEMY_MODEL_BASES
         for name in base_names(node)
     ):
         return True
@@ -609,10 +615,14 @@ def function_kind(
     return "function"
 
 
-def class_kind(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> str:
+def class_kind(
+    node: ast.ClassDef,
+    aliases: dict[str, str] | None = None,
+    assignments: dict[str, str] | None = None,
+) -> str:
     if is_pydantic_model(node, aliases):
         return "pydantic_model"
-    if is_sqlalchemy_model(node, aliases):
+    if is_sqlalchemy_model(node, aliases, assignments):
         return "sqlalchemy_model"
     return "class"
 
@@ -1230,7 +1240,15 @@ def assignment_role(
         if not call_name:
             return None
         canonical = canonical_name(call_name, aliases, {})
-        if canonical in {"fastapi.APIRouter", "fastapi.FastAPI"} or is_constructor_like_target(canonical):
+        if (
+            canonical
+            in {
+                "fastapi.APIRouter",
+                "fastapi.FastAPI",
+                "sqlalchemy.orm.declarative_base",
+            }
+            or is_constructor_like_target(canonical)
+        ):
             return canonical
         return None
     if isinstance(value, ast.Name):
@@ -2000,6 +2018,7 @@ def collect_class_base_facts(
     repository_revision: str,
     subject_unit_id: str,
     aliases: dict[str, str],
+    assignments: dict[str, str],
     facts: list[dict[str, Any]],
 ) -> None:
     for base in node.bases:
@@ -2012,7 +2031,7 @@ def collect_class_base_facts(
             structural_fact(
                 kind="TYPE",
                 subject_unit_id=subject_unit_id,
-                target=canonical_name(name, aliases, {}),
+                target=canonical_name(name, aliases, assignments),
                 path=path,
                 content_hash_value=content_hash_value,
                 repository_revision=repository_revision,
@@ -3334,7 +3353,16 @@ def analyze_source(
         elif isinstance(item, ast.ClassDef):
             start, end = node_range(starts, item)
             item_aliases = aliases_at_offset(tree, starts, aliases, start)
-            units.append(unit(item.name, class_kind(item, item_aliases), start, end, ordinal))
+            item_assignments = collect_assignment_roles_until(tree, starts, aliases, start)
+            units.append(
+                unit(
+                    item.name,
+                    class_kind(item, item_aliases, item_assignments),
+                    start,
+                    end,
+                    ordinal,
+                )
+            )
             unit_by_node[id(item)] = units[-1]
             ordinal += 1
             for child in item.body:
@@ -3480,6 +3508,7 @@ def analyze_source(
                 repository_revision,
                 subject_unit_id,
                 item_aliases,
+                item_assignments,
                 facts,
             )
             collect_pydantic_model_member_facts(

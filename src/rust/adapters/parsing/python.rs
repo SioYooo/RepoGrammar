@@ -2860,6 +2860,37 @@ class AppSettings(BaseSettings):
     }
 
     #[test]
+    fn cpython_frontend_resolves_sqlalchemy_declarative_base_assignments() {
+        let source = r#"
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+"#;
+        let report = PythonAstParser::default()
+            .parse(document(source))
+            .expect("parse python");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind.as_str() == "sqlalchemy_model"));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Type
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("sqlalchemy.orm.declarative_base")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=class_base")
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("Base = declarative_base()"));
+    }
+
+    #[test]
     fn cpython_frontend_extracts_sqlalchemy_model_field_anchors() {
         let source = r#"
 from sqlalchemy.ext.asyncio import AsyncSession

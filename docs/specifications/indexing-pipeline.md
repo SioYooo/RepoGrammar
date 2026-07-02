@@ -422,9 +422,10 @@ class bases,
 Pydantic model-member anchors for fields, field annotation targets,
 `model_config`, nested `Config`, `computed_field`, validator, and
 `model_validator` declarations, SQLAlchemy mapped field and relationship
-anchors, local literal `relationship("LocalModel")` target context, typed
-SQLAlchemy session calls including `add`, `execute`, `scalar`, `scalars`,
-`commit`, and `rollback`, bounded
+anchors, bounded `declarative_base()` class-base bindings, local literal
+`relationship("LocalModel")` target context, typed SQLAlchemy session calls
+including `add`, `execute`, `scalar`, `scalars`, `commit`, and `rollback`,
+bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple calls, bounded same-function
 FastAPI service-call context anchors,

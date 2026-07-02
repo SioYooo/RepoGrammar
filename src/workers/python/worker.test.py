@@ -994,6 +994,34 @@ assert any(
     for fact in aliased_framework_facts
 )
 
+declarative_base_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "declarative_base_models.py",
+        "content_hash": "sha256:" + "5" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": """
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+""",
+    }
+)
+declarative_base_units = declarative_base_messages[0]["units"]
+declarative_base_facts = declarative_base_messages[0]["facts"]
+assert any(unit["kind"] == "sqlalchemy_model" for unit in declarative_base_units)
+assert any(
+    fact["fact_kind"] == "TYPE"
+    and fact["target"] == "sqlalchemy.orm.declarative_base"
+    and "python_anchor_kind=class_base" in fact["assumptions"]
+    for fact in declarative_base_facts
+)
+assert "Base = declarative_base()" not in json.dumps(declarative_base_messages)
+
 local_base_model_messages = run_worker(
     {
         "protocol_version": 1,
@@ -1184,11 +1212,12 @@ shadowed_framework_import_messages = run_worker(
 from fastapi import APIRouter
 from pydantic import BaseModel
 from pytest import fixture
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 
 APIRouter = object
 BaseModel = object
 fixture = object
+declarative_base = object
 Mapped = list
 mapped_column = object
 
@@ -1205,13 +1234,20 @@ class UserOut(BaseModel):
 def client():
     return object()
 
+Base = declarative_base()
+
+class LegacyUser(Base):
+    __tablename__ = "legacy_users"
+
 class User:
     __tablename__ = "users"
     id: Mapped[int] = mapped_column()
 """,
     }
 )
+shadowed_framework_import_units = shadowed_framework_import_messages[0]["units"]
 shadowed_framework_import_facts = shadowed_framework_import_messages[0]["facts"]
+assert not any(unit["kind"] == "sqlalchemy_model" for unit in shadowed_framework_import_units)
 assert not any(
     fact["fact_kind"] == "SYMBOL"
     and fact["target"] == "fastapi.APIRouter.get"
@@ -1238,6 +1274,11 @@ assert not any(
         fact["fact_kind"] == "RESOLVED_CALL"
         and fact["target"] == "sqlalchemy.orm.mapped_column"
         and "python_anchor_kind=sqlalchemy_mapped_column" in fact["assumptions"]
+    )
+    or (
+        fact["fact_kind"] == "TYPE"
+        and fact["target"] == "sqlalchemy.orm.declarative_base"
+        and "python_anchor_kind=class_base" in fact["assumptions"]
     )
     for fact in shadowed_framework_import_facts
 )
