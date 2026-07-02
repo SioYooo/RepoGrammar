@@ -85,6 +85,12 @@
   `cargo_feature_cfg_model` triage and family UNKNOWN recovery text without
   evaluating cfgs or converting the UNKNOWN into family support.
 
+### Fixed
+
+- The TypeScript worker now performs path-alias wildcard substitution with
+  literal all-occurrence replacement and rejects multi-wildcard path aliases as
+  typed `UNKNOWN`s, avoiding incomplete replacement behavior flagged by CodeQL.
+
 ### Added
 
 - UNKNOWN regression benchmark coverage now pins release-fixture
