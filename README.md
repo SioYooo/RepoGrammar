@@ -103,7 +103,7 @@ analysis.
 |---|---|---|
 | Python FastAPI | Supported | Bounded exact-anchor framework-family evidence plus static repo-local import context; literal `include_router(..., prefix="...")` records context only, while dynamic decorators/prefixes, unresolved imports, runtime DI, and stale evidence produce `UNKNOWN`. |
 | Python pytest | Supported | Bounded test/fixture family evidence plus static fixture graph context; ambiguous fixture injection, nonliteral lookups, and dynamic plugin behavior produce `UNKNOWN`. |
-| Python Pydantic | Supported | Bounded model/settings family evidence; dynamic model factories and unresolved bases produce `UNKNOWN`. |
+| Python Pydantic | Supported | Bounded model/settings family evidence plus field and `Field(...)` metadata context; dynamic model factories and unresolved bases produce `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded SQLAlchemy model/repository evidence plus `DeclarativeBase`/`declarative_base()` context and local literal relationship-target context; dynamic declarative behavior and dynamic relationship targets remain conservative. |
 | JS/TS Express | v0.2 conservative preview | Exact import/require binding plus direct literal route calls and exact literal `app.use("/prefix", router)` mount context only; support requires at least three complete-link-compatible examples, and dynamic prefixes/middleware side effects remain unsupported. |
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |

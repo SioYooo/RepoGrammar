@@ -159,9 +159,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `Query`, `Header`, and `Cookie`, alias-aware
   pytest `fixture` decorators and `mark.parametrize` decorators plus literal
   parametrize arguments, and Pydantic model-member anchors for fields, field
-  annotation targets, `model_config`, nested `Config`, `computed_field`,
-  validator, and `model_validator` declarations. These remain CPython `ast`
-  structural facts; they do not become provider-backed semantic facts. Direct
+  annotation targets, imported `Field(...)` metadata calls, `model_config`,
+  nested `Config`, `computed_field`, validator, and `model_validator`
+  declarations. These remain CPython `ast` structural facts; they do not
+  become provider-backed semantic facts. Direct
   pytest parametrize arguments take precedence over same-name fixture bindings,
   indirect parametrize arguments remain typed `PytestFixtureInjection`
   `UNKNOWN`, literal `@pytest.fixture(name="...")` values replace the
@@ -285,7 +286,7 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `Depends(...)`, `HTTPException(...)`, and literal HTTPException status-code
   anchors, plus FastAPI request body and request-parameter anchors, remain
   route schema/context/effect metadata and are explicitly excluded from
-  membership support derivation. Pydantic field, field-type,
+  membership support derivation. Pydantic field, field-type, `Field(...)`,
   `model_config`, nested `Config`, `computed_field`, `field_validator`, legacy
   `validator`, and `model_validator` anchors remain model schema/config/member
   metadata and are also excluded from membership support derivation.
@@ -523,11 +524,12 @@ Pydantic roles:
 - `PYDANTIC_SCHEMA_SLOT`.
 
 Required evidence includes `BaseModel` inheritance, field annotations,
-`model_config` or `Config`, `@field_validator`, legacy `@validator`, and
-`computed_field` / `@model_validator` declarations. In the current
-implementation slice, fields, field types, config, computed fields, and model
-validators are structural schema/member anchors only; they do not derive family
-support without an exact compatible model/base support target.
+`Field(...)` metadata, `model_config` or `Config`, `@field_validator`, legacy
+`@validator`, and `computed_field` / `@model_validator` declarations. In the
+current implementation slice, fields, field types, field metadata, config,
+computed fields, and model validators are structural schema/member anchors
+only; they do not derive family support without an exact compatible model/base
+support target.
 
 SQLAlchemy roles:
 

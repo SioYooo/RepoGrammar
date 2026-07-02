@@ -80,7 +80,7 @@ parse_messages = run_worker(
         "text": """
 from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator, validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from typing import Annotated
@@ -93,7 +93,7 @@ router = APIRouter()
 class UserOut(BaseModel):
     model_config: ConfigDict = ConfigDict(from_attributes=True)
     id: int
-    display_name: str
+    display_name: str = Field(default="", min_length=1)
 
     @field_validator("id")
     @classmethod
@@ -314,6 +314,12 @@ assert any(
     fact["fact_kind"] == "TYPE"
     and fact["target"] == "pydantic.field_type.int"
     and "python_anchor_kind=pydantic_field_type" in fact["assumptions"]
+    for fact in parse_facts
+)
+assert any(
+    fact["fact_kind"] == "RESOLVED_CALL"
+    and fact["target"] == "pydantic.Field"
+    and "python_anchor_kind=pydantic_field_metadata" in fact["assumptions"]
     for fact in parse_facts
 )
 assert any(
@@ -733,6 +739,7 @@ assert not any(
 )
 serialized_dynamic_pydantic_models = json.dumps(dynamic_pydantic_model_messages)
 assert "secret=(str" not in serialized_dynamic_pydantic_models
+assert "min_length" not in json.dumps(parse_messages)
 
 assert any(
     fact["fact_kind"] == "SYMBOL"

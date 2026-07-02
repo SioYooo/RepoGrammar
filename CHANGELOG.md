@@ -69,6 +69,9 @@
 - SQLAlchemy `Base = declarative_base()` assignments now propagate bounded
   declarative base context to direct `class Model(Base)` declarations when the
   imported helper is not shadowed.
+- Pydantic model fields assigned with imported `Field(...)` now record bounded
+  field-metadata context without using metadata arguments as model-family
+  support.
 - SQLAlchemy repository-method exact anchors now include typed
   `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
   calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy

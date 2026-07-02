@@ -2082,8 +2082,27 @@ def collect_pydantic_model_member_facts(
                         start=start,
                         end=end,
                         anchor_kind="pydantic_field",
-                    ),
-                )
+                        ),
+                    )
+                if isinstance(item.value, ast.Call):
+                    value_name = dotted_name(item.value.func)
+                    canonical_value = canonical_name(value_name, aliases, {}) if value_name else None
+                    if canonical_value == "pydantic.Field":
+                        field_start, field_end = node_range(starts, item.value)
+                        add_fact(
+                            facts,
+                            structural_fact(
+                                kind="RESOLVED_CALL",
+                                subject_unit_id=subject_unit_id,
+                                target="pydantic.Field",
+                                path=path,
+                                content_hash_value=content_hash_value,
+                                repository_revision=repository_revision,
+                                start=field_start,
+                                end=field_end,
+                                anchor_kind="pydantic_field_metadata",
+                            ),
+                        )
             annotation = static_type_name(item.annotation)
             if annotation:
                 canonical_annotation = canonical_name(annotation, aliases, {})

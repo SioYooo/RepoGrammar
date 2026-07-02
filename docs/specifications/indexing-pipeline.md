@@ -420,12 +420,12 @@ fixture context for the current parse request. That worker pass produces
 repo-relative structural fact payloads for ordinary imports, decorator anchors,
 class bases,
 Pydantic model-member anchors for fields, field annotation targets,
-`model_config`, nested `Config`, `computed_field`, validator, and
-`model_validator` declarations, SQLAlchemy mapped field and relationship
-anchors, bounded `declarative_base()` class-base bindings, local literal
-`relationship("LocalModel")` target context, typed SQLAlchemy session calls
-including `add`, `execute`, `scalar`, `scalars`, `commit`, and `rollback`,
-bounded
+imported `Field(...)` metadata calls, `model_config`, nested `Config`,
+`computed_field`, validator, and `model_validator` declarations, SQLAlchemy
+mapped field and relationship anchors, bounded `declarative_base()` class-base
+bindings, local literal `relationship("LocalModel")` target context, typed
+SQLAlchemy session calls including `add`, `execute`, `scalar`, `scalars`,
+`commit`, and `rollback`, bounded
 `__init__`-assigned `self.session`/`self.db` receiver propagation with
 same-method reassignment invalidation, simple calls, bounded same-function
 FastAPI service-call context anchors,
@@ -655,7 +655,7 @@ not prove support. Known pytest built-in fixture context targets such as
 `pytest.builtin_fixture.tmp_path`, dynamic fixture-name UNKNOWNs, duplicate
 conftest fixture UNKNOWNs, and plugin-style fixture UNKNOWNs remain
 context/abstention metadata and do not prove support. Pydantic field,
-field-type, `model_config`, nested `Config`,
+field-type, `Field(...)`, `model_config`, nested `Config`,
 computed-field, field-validator, legacy validator, and model-validator anchors
 likewise stay model schema/config/member metadata and do not prove membership
 support; dynamic Pydantic `create_model(...)` factories remain typed UNKNOWNs

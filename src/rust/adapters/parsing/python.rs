@@ -1393,6 +1393,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "pydantic_computed_field"
             | "pydantic_config_class"
             | "pydantic_field"
+            | "pydantic_field_metadata"
             | "pydantic_field_type"
             | "pydantic_model_config"
             | "pydantic_model_validator"
@@ -1632,7 +1633,7 @@ mod tests {
 from fastapi import APIRouter
 from fastapi import Body, Cookie, Depends, Header, HTTPException, Path, Query
 from app.services import UserService, run_query
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator, validator
 from typing import Annotated
 import pytest
 import pytest as pt
@@ -1642,7 +1643,7 @@ router = APIRouter()
 class UserOut(BaseModel):
     model_config: ConfigDict = ConfigDict(from_attributes=True)
     id: int
-    display_name: str
+    display_name: str = Field(default="", min_length=1)
 
     @field_validator("id")
     @classmethod
@@ -1771,6 +1772,14 @@ def test_users(client, status, missing_fixture):
                     .assumptions
                     .iter()
                     .any(|assumption| assumption == "python_anchor_kind=pydantic_field_type")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedCall
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.Field")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_field_metadata")
         }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Symbol
@@ -2049,6 +2058,7 @@ def test_users(client, status, missing_fixture):
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("from fastapi"));
         assert!(!debug.contains("model_config ="));
+        assert!(!debug.contains("min_length"));
         assert!(!debug.contains("arbitrary_types_allowed"));
         assert!(!debug.contains("dynamic_users"));
         assert!(!debug.contains("@router.get"));

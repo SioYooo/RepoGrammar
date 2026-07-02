@@ -374,8 +374,9 @@ The default Python indexing path can now call the checked-in
 CPython `ast` code-unit metadata for `.py` files. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field
-annotation targets, `model_config`, nested `Config`, `computed_field`,
-validator, and `model_validator` declarations, SQLAlchemy mapped fields,
+annotation targets, imported `Field(...)` metadata calls, `model_config`,
+nested `Config`, `computed_field`, validator, and `model_validator`
+declarations, SQLAlchemy mapped fields,
 bounded `declarative_base()` class-base bindings, `relationship(...)` calls,
 local literal relationship-target context for `relationship("LocalModel")`,
 typed SQLAlchemy session calls including `add`, `execute`, `scalar`, `scalars`,
@@ -400,7 +401,7 @@ allowlist or provider, and unresolved pytest fixture injection cases. Literal
 pytest parametrize arguments are structural parametrize facts, not unresolved
 fixture injections.
 Pydantic field,
-field-type, config, computed-field, and model-validator anchors are
+field-type, `Field(...)`, config, computed-field, and model-validator anchors are
 schema/config/member context only, and FastAPI service-call anchors are
 handler/service context only; neither category is an exact family-support
 target. Default indexing passes the
