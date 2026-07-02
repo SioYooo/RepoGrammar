@@ -31,6 +31,10 @@
   self-dogfood families, but nested fixture/package manifests must not globally
   block unrelated root Rust family claims; keep those unknowns scoped to the
   affected package/crate/claim until provider-backed package scope exists.
+- Source-level Rust `#[cfg]` / `#[cfg_attr]` UNKNOWNs may carry bounded nearest
+  `Cargo.toml` feature context, including simple feature predicates and whether
+  each feature is declared. This is `cargo_feature_cfg_model` triage only; it
+  does not evaluate cfgs or make the unit eligible family support.
 - Java/Spring preview UNKNOWNs are claim-scoped: unresolved Spring annotation
   imports/FQNs and unsupported controller/repository identity can block Java
   family support, while nonliteral route paths, component scan, DI/proxy,

@@ -72,6 +72,11 @@
   exact supported framework packages, covering Express routers, Fastify
   factories, Prisma clients, and Drizzle table/db factories without treating
   custom wrappers or injected clients as support.
+- Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
+  context, including the nearest discovered `Cargo.toml`, feature predicate
+  names, and whether each feature is declared there. These assumptions improve
+  `cargo_feature_cfg_model` triage without evaluating cfgs or converting the
+  UNKNOWN into family support.
 
 ### Added
 

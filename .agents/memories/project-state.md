@@ -66,6 +66,9 @@
   target-dependency inventory. Root `Cargo.toml` build-variant UNKNOWN can block
   repository-wide Rust self-dogfood family emission, but nested fixture/package
   manifests must not globally block unrelated root Rust family support.
+  Source-level Rust cfg UNKNOWNs can carry nearest Cargo feature context,
+  including simple feature predicates and declared/undeclared feature state,
+  without evaluating cfgs or changing family support eligibility.
   A conservative v0.2 Java/Spring preview slice now discovers `.java` files,
   parses Java with Tree-sitter Java, recognizes exact imported/FQN Spring MVC,
   stereotype, Spring Boot, and Spring Data anchors, derives

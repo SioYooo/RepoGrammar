@@ -184,6 +184,9 @@ same-generation `Cargo.toml` code units exist; it does not execute build
 scripts or proc macros and does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
 semantic-provider roadmap is tracked in
 `docs/plans/rust-tsjs-semantic-analysis-plan.md`.
+Parser-origin Rust cfg UNKNOWNs can now use nearest discovered Cargo manifests
+to record simple feature predicates and declared/undeclared feature state as
+bounded `cargo_feature_cfg_model` context without evaluating cfgs.
 The v0.2 preview also includes a conservative Java/Spring structural slice:
 `.java` discovery, Tree-sitter Java code-unit extraction, exact imported/FQN
 Spring MVC/stereotype/Spring Boot/Spring Data anchors, application-layer

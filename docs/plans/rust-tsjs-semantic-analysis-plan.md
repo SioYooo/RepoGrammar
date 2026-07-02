@@ -54,6 +54,11 @@ workspace/package/target/feature/dependency metadata into owned
 unavailable Cargo, unreadable project configuration, or missing manifest
 candidates. It rejects requests that claim build-script or proc-macro execution
 and does not prove Rust symbol/type/call/family support.
+The Tree-sitter Rust parser also uses the parser project context's discovered
+`Cargo.toml` texts for bounded cfg triage: `#[cfg]` / `#[cfg_attr]`
+build-variant UNKNOWNs can record simple feature predicates and whether the
+nearest manifest declares them. This is not cfg evaluation and does not change
+the family support gate.
 
 The transitional TS/JS syntax path now carries a bounded project-context slice:
 root `tsconfig.json`/`jsconfig.json` `paths` aliases and safe `rootDirs` entries
