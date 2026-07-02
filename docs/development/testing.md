@@ -464,6 +464,15 @@ allowed.
 - UNKNOWN governance tests must cover blocking, non-blocking, recoverable, and
   irreducible unknowns when those classes enter Rust, CLI, MCP, storage, or
   metrics code.
+- The UNKNOWN regression benchmark test
+  `product_runtime_unknown_regression_benchmark_tracks_mechanisms_without_false_certainty`
+  must be updated whenever an analyzer intentionally reduces or reclassifies
+  persisted semantic `UNKNOWN`s for its release fixtures. It runs real
+  `init`/`resync`/`unknowns --json`/`families --json` product paths over
+  Python, TS/JS, and Rust fixtures, pins language/reason/mechanism buckets, and
+  guards against false certainty by requiring negative fixtures to remain
+  family-free unless the fixture is explicitly promoted with separate
+  positive/negative coverage.
 - Stats CLI tests must cover parseable `--json` output, missing-index fallback,
   allowed metric-kind vocabulary, local-pattern-density/family-coverage/
   abstention diagnostics, thin-wrapper/token-saving risk, readiness/blocking

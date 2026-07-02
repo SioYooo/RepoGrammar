@@ -62,6 +62,11 @@
 
 ### Added
 
+- UNKNOWN regression benchmark coverage now pins release-fixture
+  `unknowns --json` language, reason-code, and required-mechanism buckets for
+  Python dynamic behavior, TS/JS framework negative cases, and Rust macro/cfg
+  boundaries, while also asserting those negative fixtures do not silently form
+  families. The protocol is documented under `docs/experiments/`.
 - Conservative Java/Spring structural-preview support. RepoGrammar now discovers
   `.java` files, uses Tree-sitter Java for structural Java/Spring code units,
   emits exact imported/FQN Spring MVC/stereotype/Spring Boot/Spring Data

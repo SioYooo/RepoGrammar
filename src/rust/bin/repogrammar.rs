@@ -1867,14 +1867,28 @@ mod tests {
             .unwrap_or_else(|error| panic!("parse {command} JSON: {error}"))
     }
 
-    fn required_mechanism_count(inventory_json: &Value, mechanism: &str) -> u64 {
-        inventory_json["unknown_inventory"]["by_required_mechanism"]
+    fn unknown_inventory_bucket_count(
+        inventory_json: &Value,
+        bucket_name: &str,
+        key_name: &str,
+        key: &str,
+    ) -> u64 {
+        inventory_json["unknown_inventory"][bucket_name]
             .as_array()
-            .expect("by_required_mechanism array")
+            .unwrap_or_else(|| panic!("{bucket_name} array"))
             .iter()
-            .find(|bucket| bucket["required_mechanism"] == mechanism)
+            .find(|bucket| bucket[key_name] == key)
             .and_then(|bucket| bucket["count"].as_u64())
             .unwrap_or(0)
+    }
+
+    fn required_mechanism_count(inventory_json: &Value, mechanism: &str) -> u64 {
+        unknown_inventory_bucket_count(
+            inventory_json,
+            "by_required_mechanism",
+            "required_mechanism",
+            mechanism,
+        )
     }
 
     fn assert_no_output_leakage(command: &str, output: &str, workspace: &TempWorkspace) {
@@ -6906,6 +6920,325 @@ pythonpath = ["src"]
                 !unresolved_unknowns.stdout.contains(forbidden),
                 "unresolved unknowns leaked source text {forbidden}"
             );
+        }
+    }
+
+    #[test]
+    fn product_runtime_unknown_regression_benchmark_tracks_mechanisms_without_false_certainty() {
+        #[derive(Clone, Copy)]
+        enum FixtureKind {
+            Python,
+            TsJsV02,
+            RustV02,
+        }
+
+        struct BucketExpectation {
+            key: &'static str,
+            count: u64,
+        }
+
+        struct BenchmarkCase {
+            name: &'static str,
+            fixture_kind: FixtureKind,
+            fixture_name: &'static str,
+            total_unknowns: u64,
+            blocking_unknowns: u64,
+            non_blocking_unknowns: u64,
+            recoverable_unknowns: u64,
+            irreducible_unknowns: u64,
+            languages: &'static [BucketExpectation],
+            reasons: &'static [BucketExpectation],
+            mechanisms: &'static [BucketExpectation],
+            forbidden_output_fragments: &'static [&'static str],
+        }
+
+        const PYTHON_LANGUAGES: &[BucketExpectation] = &[BucketExpectation {
+            key: "python",
+            count: 16,
+        }];
+        const PYTHON_REASONS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "ConflictingFacts",
+                count: 1,
+            },
+            BucketExpectation {
+                key: "DynamicImport",
+                count: 2,
+            },
+            BucketExpectation {
+                key: "FrameworkMagic",
+                count: 9,
+            },
+            BucketExpectation {
+                key: "MonkeyPatch",
+                count: 1,
+            },
+            BucketExpectation {
+                key: "PytestFixtureInjection",
+                count: 1,
+            },
+            BucketExpectation {
+                key: "RuntimeDependencyInjection",
+                count: 2,
+            },
+        ];
+        const PYTHON_MECHANISMS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "fastapi_dependency_graph",
+                count: 1,
+            },
+            BucketExpectation {
+                key: "framework_semantic_provider",
+                count: 9,
+            },
+            BucketExpectation {
+                key: "pytest_fixture_graph",
+                count: 2,
+            },
+            BucketExpectation {
+                key: "python_import_graph",
+                count: 3,
+            },
+            BucketExpectation {
+                key: "runtime_trace_required",
+                count: 1,
+            },
+        ];
+
+        const TSJS_LANGUAGES: &[BucketExpectation] = &[BucketExpectation {
+            key: "typescript",
+            count: 14,
+        }];
+        const TSJS_REASONS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "ConflictingFacts",
+                count: 3,
+            },
+            BucketExpectation {
+                key: "FrameworkMagic",
+                count: 7,
+            },
+            BucketExpectation {
+                key: "UnresolvedImport",
+                count: 4,
+            },
+        ];
+        const TSJS_MECHANISMS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "conflict_resolution",
+                count: 2,
+            },
+            BucketExpectation {
+                key: "drizzle_db_model",
+                count: 3,
+            },
+            BucketExpectation {
+                key: "fastify_receiver_model",
+                count: 2,
+            },
+            BucketExpectation {
+                key: "prisma_client_model",
+                count: 6,
+            },
+            BucketExpectation {
+                key: "typescript_paths_resolver",
+                count: 1,
+            },
+        ];
+
+        const RUST_LANGUAGES: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "rust",
+                count: 9,
+            },
+            BucketExpectation {
+                key: "rust-config",
+                count: 1,
+            },
+        ];
+        const RUST_REASONS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "BuildVariantAmbiguity",
+                count: 3,
+            },
+            BucketExpectation {
+                key: "MacroOrPreprocessor",
+                count: 6,
+            },
+            BucketExpectation {
+                key: "MissingProjectConfig",
+                count: 1,
+            },
+        ];
+        const RUST_MECHANISMS: &[BucketExpectation] = &[
+            BucketExpectation {
+                key: "cargo_feature_cfg_model",
+                count: 3,
+            },
+            BucketExpectation {
+                key: "project_config_reader",
+                count: 1,
+            },
+            BucketExpectation {
+                key: "rust_macro_boundary",
+                count: 6,
+            },
+        ];
+
+        const CASES: &[BenchmarkCase] = &[
+            BenchmarkCase {
+                name: "python_dynamic_unknowns",
+                fixture_kind: FixtureKind::Python,
+                fixture_name: "dynamic-unknown",
+                total_unknowns: 16,
+                blocking_unknowns: 2,
+                non_blocking_unknowns: 1,
+                recoverable_unknowns: 12,
+                irreducible_unknowns: 1,
+                languages: PYTHON_LANGUAGES,
+                reasons: PYTHON_REASONS,
+                mechanisms: PYTHON_MECHANISMS,
+                forbidden_output_fragments: &[
+                    "importlib.import_module",
+                    "setattr(",
+                    "request.getfixturevalue",
+                ],
+            },
+            BenchmarkCase {
+                name: "tsjs_framework_negative_unknowns",
+                fixture_kind: FixtureKind::TsJsV02,
+                fixture_name: "framework_adapter_negative_cases",
+                total_unknowns: 14,
+                blocking_unknowns: 13,
+                non_blocking_unknowns: 0,
+                recoverable_unknowns: 1,
+                irreducible_unknowns: 0,
+                languages: TSJS_LANGUAGES,
+                reasons: TSJS_REASONS,
+                mechanisms: TSJS_MECHANISMS,
+                forbidden_output_fragments: &["app.route", "findMany(", "$queryRaw"],
+            },
+            BenchmarkCase {
+                name: "rust_macro_cfg_unknowns",
+                fixture_kind: FixtureKind::RustV02,
+                fixture_name: "macro_cfg_unknowns",
+                total_unknowns: 10,
+                blocking_unknowns: 3,
+                non_blocking_unknowns: 0,
+                recoverable_unknowns: 7,
+                irreducible_unknowns: 0,
+                languages: RUST_LANGUAGES,
+                reasons: RUST_REASONS,
+                mechanisms: RUST_MECHANISMS,
+                forbidden_output_fragments: &["macro_rules!", "#[cfg", "build.rs"],
+            },
+        ];
+
+        let runtime = ProductCliRuntime;
+        for case in CASES {
+            let workspace = TempWorkspace::new(&format!("unknown-benchmark-{}", case.name));
+            match case.fixture_kind {
+                FixtureKind::Python => {
+                    copy_python_release_fixture(case.fixture_name, workspace.path())
+                }
+                FixtureKind::TsJsV02 => {
+                    copy_release_v0_2_fixture(case.fixture_name, workspace.path())
+                }
+                FixtureKind::RustV02 => {
+                    copy_rust_release_v0_2_fixture(case.fixture_name, workspace.path())
+                }
+            }
+
+            let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+            let init_json = parse_machine_output("init", &init, &workspace);
+            assert_eq!(init_json["status"], "initialized");
+
+            let resync = run_with_runtime(
+                cli_args(
+                    "resync",
+                    workspace.path(),
+                    &["--json", "--progress", "never"],
+                ),
+                &runtime,
+            );
+            let resync_json = parse_machine_output("resync", &resync, &workspace);
+            assert_eq!(resync_json["command"], "resync");
+            assert_eq!(resync_json["status"], "complete");
+
+            let unknowns = run_with_runtime(
+                cli_args("unknowns", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+            assert_eq!(unknowns_json["command"], "unknowns");
+            assert_eq!(unknowns_json["status"], "ok");
+            let inventory = &unknowns_json["unknown_inventory"];
+            assert_eq!(inventory["inventory_scope"], "persisted_semantic_unknowns");
+            assert_eq!(inventory["total_unknowns"], case.total_unknowns);
+            assert_eq!(inventory["blocking_unknowns"], case.blocking_unknowns);
+            assert_eq!(
+                inventory["non_blocking_unknowns"],
+                case.non_blocking_unknowns
+            );
+            assert_eq!(inventory["recoverable_unknowns"], case.recoverable_unknowns);
+            assert_eq!(inventory["irreducible_unknowns"], case.irreducible_unknowns);
+
+            for expectation in case.languages {
+                assert_eq!(
+                    unknown_inventory_bucket_count(
+                        &unknowns_json,
+                        "by_language",
+                        "language",
+                        expectation.key
+                    ),
+                    expectation.count,
+                    "{} language bucket {}",
+                    case.name,
+                    expectation.key
+                );
+            }
+            for expectation in case.reasons {
+                assert_eq!(
+                    unknown_inventory_bucket_count(
+                        &unknowns_json,
+                        "by_reason_code",
+                        "reason_code",
+                        expectation.key
+                    ),
+                    expectation.count,
+                    "{} reason bucket {}",
+                    case.name,
+                    expectation.key
+                );
+            }
+            for expectation in case.mechanisms {
+                assert_eq!(
+                    required_mechanism_count(&unknowns_json, expectation.key),
+                    expectation.count,
+                    "{} mechanism bucket {}",
+                    case.name,
+                    expectation.key
+                );
+            }
+            for forbidden in case.forbidden_output_fragments {
+                assert!(
+                    !unknowns.stdout.contains(forbidden),
+                    "{} leaked source-like output fragment {forbidden}",
+                    case.name
+                );
+            }
+
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert_eq!(families_json["status"], "UNKNOWN");
+            assert!(families_json["families"]
+                .as_array()
+                .expect("families")
+                .is_empty());
+            assert_no_claim_payload("families", &families_json);
         }
     }
 
