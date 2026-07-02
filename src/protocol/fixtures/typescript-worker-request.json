@@ -5,5 +5,6 @@
   "changed_files": [
     "src/a.ts",
     "src/b.tsx"
-  ]
+  ],
+  "operations": []
 }

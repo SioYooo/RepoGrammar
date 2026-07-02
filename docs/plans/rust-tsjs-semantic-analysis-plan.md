@@ -68,6 +68,16 @@ relative, path-alias, or rootDirs imports can become `STRUCTURAL`
 fallback. Unresolved or conflicting rootDirs candidates remain typed
 `UNKNOWN`; these facts are context/abstention evidence only and do not prove
 TypeScript compiler-backed semantics or family support.
+The checked-in TypeScript worker now accepts bounded operation requests for
+module specifiers, exports, re-exports, and package entries. When a TypeScript
+compiler API module is available to the worker, module-resolution facts can be
+reported as `SEMANTIC` with `provider=typescript`,
+`provider_resolved=true`, strict operation provenance, and config/package
+hashes. Without that API, the worker uses only a dependency-free static
+project-model fallback and emits `STRUCTURAL` facts or typed `UNKNOWN`s with
+`provider_resolved=false`. The current slice does not bundle TypeScript, does
+not run package scripts, does not claim full Program/TypeChecker semantic
+coverage, and does not allow fallback facts to support family claims.
 
 ## Research Sources
 
@@ -254,13 +264,18 @@ Provider output should translate to owned facts such as:
 ### TS/JS Minimum Implementation Phases
 
 1. Project discovery for tsconfig/jsconfig references plus package metadata.
-2. TypeScript worker that builds a `Program`, uses the compiler's module
-   resolver, and emits owned module/import/export/symbol facts.
-3. Language Service cache mode for repeated indexing when project hashes match.
-4. Resolved call-target facts only where TypeChecker can prove target identity.
-5. CodeQL or bounded abstract-interpretation dataflow/taint facts for
+2. Bounded TypeScript worker operation slice for module/import/export/package
+   facts with strict path/hash/range provenance. This is implemented for
+   operation-scoped requests and optional compiler module resolution; broader
+   Program construction remains future work.
+3. TypeScript worker that builds a `Program`, uses the compiler's module
+   resolver and `TypeChecker`, and emits owned module/import/export/symbol
+   facts.
+4. Language Service cache mode for repeated indexing when project hashes match.
+5. Resolved call-target facts only where TypeChecker can prove target identity.
+6. CodeQL or bounded abstract-interpretation dataflow/taint facts for
    claim-specific families.
-6. Framework adapters for Express/Fastify/Jest/Vitest/Next/Prisma/Drizzle/React
+7. Framework adapters for Express/Fastify/Jest/Vitest/Next/Prisma/Drizzle/React
    only when provider facts and compatibility tables support the exact claim.
 
 ## Family Builder Requirements

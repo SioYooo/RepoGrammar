@@ -53,16 +53,19 @@ nested fixture/package manifests must not globally block unrelated root Rust
 families.
 When `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit worker executable,
 `index`, `resync`, and full-rebuild `sync` fallback can also ask that worker for
-facts about the discovered repo-relative TS/JS file set. Optional worker
-arguments come from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of
-strings, not a shell command line. Accepted facts are recorded only when they
-match the same building generation's indexed file, code-unit id, content hash,
-and byte range. Incremental `sync` falls back to a full rebuild when an explicit
-worker is configured.
+facts about the discovered repo-relative TS/JS file set. The request includes
+bounded operation scopes for literal module specifiers, exports, re-exports, and
+package entries. Optional worker arguments come from
+`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` as a JSON array of strings, not a
+shell command line. Accepted facts are recorded only when they match the same
+building generation's indexed file, code-unit id, content hash, byte range, and
+requested operation provenance. Incremental `sync` falls back to a full rebuild
+when an explicit worker is configured.
 
-Outside the internal Rust self-dogfood extractor, this slice does not use
-Tree-sitter, call a TypeScript compiler, perform full multi-view alignment, or
-anti-unify templates. It does include
+Outside the internal Rust self-dogfood extractor and explicitly configured
+semantic workers, this slice does not use Tree-sitter, call a TypeScript
+compiler, perform full multi-view alignment, or anti-unify templates. It does
+include
 a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, then applies a bounded
 role-specific complete-link clustering pass over internal support-family
@@ -150,9 +153,16 @@ context from package or config inventory; otherwise they emit
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
 emits React-shaped semantic support. TypeScript worker facts are stored as
 bounded semantic context only unless a later ADR defines a role-specific support
-promotion path. This is a token-saving foundation, not full TS/JS semantic
-analysis, and TS/JS remains a transitional substrate rather than the official
-v0.1 target. A parallel Java/Spring preview path exists for source-visible
+promotion path. Provider-resolved TypeScript compiler facts may suppress a
+matching parser-origin import/export `UNKNOWN` in the aggregate UNKNOWN
+inventory only when the same path/hash/code-unit/range and operation are
+proven; the parser fact is not rewritten into family support. If the checked-in
+worker cannot load a TypeScript compiler API, its dependency-free static
+fallback facts remain `STRUCTURAL` or `UNKNOWN` and carry
+`provider_resolved=false`. This is a token-saving foundation, not full TS/JS
+semantic analysis, and TS/JS remains a transitional substrate rather than the
+official v0.1 target. A parallel Java/Spring preview path exists for
+source-visible
 Spring structural anchors. Discovery includes `.java` files. The Tree-sitter
 Java adapter emits Java module/class/interface/method units, Spring MVC route
 units, Spring component units, Spring Boot application units, Spring Data

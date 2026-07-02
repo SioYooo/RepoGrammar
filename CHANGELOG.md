@@ -72,6 +72,13 @@
   exact supported framework packages, covering Express routers, Fastify
   factories, Prisma clients, and Drizzle table/db factories without treating
   custom wrappers or injected clients as support.
+- TypeScript semantic-worker requests now carry bounded operation scopes for
+  module specifiers, exports, re-exports, and package entries. The checked-in
+  Node worker can use the TypeScript compiler API for provider-resolved module
+  facts when a TypeScript module is available, and otherwise emits only
+  structural fallback facts or typed `UNKNOWN`s with `provider_resolved=false`.
+  Rust-side validation now matches returned facts against the requested
+  path/hash/code-unit/range and operation provenance before storage.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve

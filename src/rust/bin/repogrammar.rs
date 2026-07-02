@@ -7069,7 +7069,7 @@ pythonpath = ["src"]
                 count: 6,
             },
             BucketExpectation {
-                key: "typescript_paths_resolver",
+                key: "typescript_module_resolver",
                 count: 1,
             },
         ];

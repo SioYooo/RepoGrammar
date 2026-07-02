@@ -8,7 +8,8 @@
     "protocol_version",
     "request_id",
     "project_root",
-    "changed_files"
+    "changed_files",
+    "operations"
   ],
   "properties": {
     "protocol_version": {
@@ -33,6 +34,71 @@
       "minLength": 1,
       "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*[\\u0000-\\u001F])(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*\\\\)(?!.*://).+$"
     }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "operation",
+          "path",
+          "content_hash",
+          "code_unit_id",
+          "start_byte",
+          "end_byte",
+          "literal_specifier",
+          "project_config_hash",
+          "package_json_hash",
+          "max_files",
+          "max_bytes"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "resolve_module_specifier",
+              "resolve_export",
+              "resolve_reexport",
+              "resolve_package_entry"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*[\\u0000-\\u001F])(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*\\\\)(?!.*://).+$"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+          },
+          "code_unit_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_byte": { "type": "integer", "minimum": 0 },
+          "end_byte": { "type": "integer", "minimum": 0 },
+          "literal_specifier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "project_config_hash": {
+            "type": "string",
+            "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+          },
+          "package_json_hash": {
+            "type": "string",
+            "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+          },
+          "max_files": { "type": "integer", "minimum": 1 },
+          "max_bytes": { "type": "integer", "minimum": 1 }
+        }
+      }
     }
   }
 }

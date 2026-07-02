@@ -36,8 +36,8 @@ bin --wires together--> interfaces + application + adapters
 - `src/rust/adapters`: concrete implementations for parser, language,
   framework, semantic-worker, persistence, and telemetry ports.
 - `src/rust/bin`: composition roots and process exit behavior.
-- `src/workers`: language-native semantic workers such as future Python workers
-  and the existing TypeScript stub.
+- `src/workers`: language-native semantic workers such as the Python worker and
+  the operation-scoped TypeScript worker.
 - `src/protocol`: versioned protocol notes and schemas shared across workers.
 
 ## Data flow
@@ -56,10 +56,10 @@ into owned facts. `index` and `sync` can optionally run an explicit worker
 executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON configured argv
 vector from `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`, and record only facts
 that match the building generation's indexed code-unit evidence.
-Python discovery/parser/framework analysis, Tree-sitter, TypeScript compiler
-worker code, freshness-validated semantic claims, typed IR attributes beyond
-the structural bootstrap graph, family mining, and stronger query evidence
-remain later boundaries.
+Tree-sitter, full TypeScript compiler `Program`/`TypeChecker` worker support,
+freshness-validated semantic claims beyond bounded worker operations, typed IR
+attributes beyond the structural bootstrap graph, family mining, and stronger
+query evidence remain later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output. The

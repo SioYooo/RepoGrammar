@@ -7,9 +7,11 @@
 - Semantic worker boundary plus v1 protocol tokens, schemas, NDJSON fixtures,
   and a Rust-side TypeScript process adapter that validates worker stdout into
   owned semantic facts without treating those facts as family evidence.
-- Dependency-free TypeScript worker executable stub that validates stdin and
-  reports compiler-backed semantic analysis as unavailable without inspecting
-  source files.
+- Operation-scoped TypeScript worker executable that validates bounded
+  module/export/package resolution requests, uses a TypeScript compiler API for
+  provider-resolved module facts when one is available, and falls back to
+  dependency-free structural `UNKNOWN`/diagnostic facts without enabling family
+  claims by itself.
 - Metadata-only algorithm paper archive under `algorithms/paper/`.
 - Pattern-family-first CLI command surface and safe command-contract parsing.
 - Repo-local lifecycle for `.repogrammar/`, including init/uninit,
@@ -277,12 +279,13 @@ evidence contracts remain validated together.
 ## TypeScript/JavaScript path
 
 - Existing TS/JS discovery, syntax extraction, framework-role facts, worker
-  protocol scaffolding, and fixtures remain transitional substrate.
+  operation protocol, and fixtures remain transitional substrate.
 - A conservative v0.2 token-saving path exists for Express, Jest/Vitest,
   Next.js, Fastify, Prisma, and Drizzle under exact-anchor evidence only. It is
-  not compiler-backed TypeScript analysis, does not support React family claims,
-  and does not perform binding/export propagation beyond the bounded structural
-  project-context resolver.
+  not full TypeScript Program/TypeChecker analysis, does not support React
+  family claims, and does not perform broad binding/export propagation beyond
+  the bounded structural project-context resolver and optional worker
+  operations.
 - Production-quality broad TS/JS family evidence remains deferred until after
   the Python-first path validates the product surface, unless a later ADR
   changes scope again.
@@ -316,8 +319,9 @@ evidence contracts remain validated together.
   safe project configuration, pytest fixture graph recovery, broader usage
   propagation, provider-backed canonical target evidence, and cross-function
   target-centered call recovery in scoped phases.
-- Validate TypeScript worker tooling and package manager before adding
-  TypeScript compiler API dependencies or semantic fact emission.
+- Validate TypeScript package-manager policy and committed dependency shape
+  before bundling a TypeScript compiler dependency or widening compiler-backed
+  worker behavior beyond bounded operation scopes.
 - Implement the Rust provider-backed Cargo project model and rust-analyzer or
   rustc-backed resolved-fact worker described in
   `docs/plans/rust-tsjs-semantic-analysis-plan.md` before widening public Rust
@@ -328,7 +332,8 @@ evidence contracts remain validated together.
 - Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
   syntax-only extractor where the extra precision is justified.
 - Extend the TypeScript semantic worker version policy, generation matching, and
-  storage tests before consuming worker facts in indexing.
+  storage tests before consuming worker facts beyond operation-scoped indexing
+  requests and provider-resolved UNKNOWN reduction.
 - Verify archive metadata, licenses, and SHA-256 values before committing any
   downloaded paper or HTML artifact.
 - Convert parser AST into RepoGrammar-owned unified IR.

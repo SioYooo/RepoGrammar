@@ -289,11 +289,13 @@ allowed.
   that return facts, worker-error output that omits `end_of_stream`,
   unsupported TypeScript versions with semantic certainty, sorted/deduplicated
   request files, and rejected absolute-path or source-like free text.
-- TypeScript worker executable tests must run the dependency-free worker stub
-  through Node, validate parseable NDJSON `worker_error` plus `end_of_stream`
-  output for valid requests, accept large changed-file requests below the
-  shared 1 MiB stdin envelope, reject malformed requests, and prove request
-  paths are not echoed in errors.
+- TypeScript worker executable tests must run the checked-in Node worker,
+  validate bounded operation requests for module/export/package resolution,
+  cover dependency-free structural fallback and TypeScript compiler-API
+  provider-resolved output when a compiler module is available, accept large
+  changed-file requests below the shared 1 MiB stdin envelope, reject malformed
+  requests, and prove request paths and source snippets are not echoed in
+  errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output, syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
@@ -521,7 +523,7 @@ read-only MCP `repogrammar_context` schema/JSON-RPC serving, schema-backed
 family-evidence `covered_claims` write/read validation and query selection,
 installer live-write gating through native MCP CLIs and managed receipts,
 transitional TS/JS release fixture smoke coverage for product CLI JSON paths,
-dependency-free TypeScript worker unavailable-stub behavior,
+operation-scoped TypeScript worker fallback and compiler-API behavior,
 CPython AST Python worker structural parse and NDJSON smoke behavior,
 installer dry-run parsing, deferred `stats --json` metrics contract behavior,
 bounded filesystem source reads for discovery hashing and source-store

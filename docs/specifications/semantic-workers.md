@@ -157,13 +157,22 @@ Version policy:
 - TypeScript 7.1 or later should be evaluated when stable programmatic APIs are
   available.
 
-The bootstrap includes a dependency-free TypeScript worker stub under
-`src/workers/typescript/`. That Node script validates the Rust-to-worker v1
-request shape and returns typed `SEMANTIC_WORKER_UNAVAILABLE` or
-`SEMANTIC_PROTOCOL_VIOLATION` NDJSON fallback messages. It does not run the
-TypeScript compiler, inspect source files, or emit semantic facts. Compiler API
-integration remains deferred until local TypeScript tooling and package-manager
-lockfiles are validated.
+The checked-in TypeScript worker under `src/workers/typescript/` now implements
+a bounded request-operation slice for module/export evidence. It validates the
+Rust-to-worker v1 request shape, accepts only repo-relative paths and strict
+hash/range evidence, and supports these operations:
+`resolve_module_specifier`, `resolve_export`, `resolve_reexport`, and
+`resolve_package_entry`. When an official TypeScript module is available from
+the worker environment, the worker may use the compiler API's module resolver
+and emit `SEMANTIC` facts with `provider=typescript`,
+`provider_resolved=true`, `query_operation=<operation>`, config/package hashes,
+and a safe environment fingerprint. When no TypeScript API is available, the
+checked-in worker falls back to a dependency-free bounded project-model
+resolver that can emit only `STRUCTURAL` exact context or typed `UNKNOWN`; that
+fallback must not be described as compiler-backed provider evidence and must not
+support family claims by itself. Malformed config, missing dependencies,
+ambiguous exports/re-exports, dynamic imports, and unsupported package entries
+remain typed `UNKNOWN`.
 
 ## Protocol
 
@@ -176,10 +185,15 @@ Protocol notes, schemas, and fixtures live under `src/protocol/`.
 
 Rust sends one v1 JSON request object to worker stdin before reading worker
 stdout. The request contains `protocol_version`, `request_id`, an absolute
-canonical `project_root`, and sorted unique repository-relative `changed_files`.
-Request fixtures must reject malformed JSON shape, missing required fields,
-wrong protocol versions, duplicate changed files, absolute paths, traversal,
-Windows absolute paths, URI-like paths, and backslash paths.
+canonical `project_root`, sorted unique repository-relative `changed_files`,
+and a bounded `operations` array. Each TypeScript operation carries an
+operation id, operation token, repo-relative path, strict content hash,
+code-unit id, byte range, literal specifier, project-config hash,
+package-metadata hash, and max-files/max-bytes bounds. Request fixtures must
+reject malformed JSON shape, missing required fields, wrong protocol versions,
+duplicate changed files, absolute paths, traversal, Windows absolute paths,
+URI-like paths, backslash paths, source-like literal specifiers, invalid hashes,
+invalid ranges, and zero bounds.
 
 The v1 NDJSON envelope supports these message types:
 
@@ -232,8 +246,9 @@ vector, not shell interpolation. The Rust-side adapter must reject relative,
 missing, symlink, or non-directory project roots before spawning the worker.
 Requests must be size-bounded before writing to worker stdin so a worker that
 does not read cannot bypass timeout supervision. The Rust-side TypeScript
-adapter and the checked-in Node stub share a 1 MiB stdin envelope for a request,
-counting the newline terminator that Rust writes after the JSON request object.
+adapter and the checked-in Node worker share a 1 MiB stdin envelope for a
+request, counting the newline terminator that Rust writes after the JSON
+request object.
 Timeout handling must not block on stdout or stderr pipes inherited by worker
 descendants after the direct worker process is killed.
 Unsupported TypeScript compiler API versions must not be accepted with
@@ -252,14 +267,15 @@ implemented worker runtime is TypeScript-specific transitional substrate. If
 indexing path sends the discovered repo-relative TS/JS file set to that worker
 after syntax-only code units are recorded for the building generation.
 `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON` may supply the executable argument
-vector as a JSON array of non-blank strings. For the checked-in Node stub, use
+vector as a JSON array of non-blank strings. For the checked-in Node worker, use
 an absolute Node executable as `REPOGRAMMAR_TYPESCRIPT_WORKER` and the worker
 script path as an argument in `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. The
 launcher must not parse shell strings, inherit PATH to satisfy shebang lookup,
 or accept worker arguments without an executable. Returned facts are sorted
 deterministically, translated into RepoGrammar-owned storage records, and
 written only through the storage gate that matches evidence against the
-building generation manifest, content hashes, and code-unit ranges.
+building generation manifest, content hashes, code-unit ranges, and requested
+operation provenance.
 Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and
 protocol violations produce syntax-only fallback statuses and sanitized
 warnings. A worker fact that passes protocol parsing but does not match the
@@ -314,13 +330,15 @@ semantic family membership.
 The bootstrap now pins semantic worker protocol version `1`, defines stable
 Rust mappings for fact-kind and certainty tokens, includes request and output
 schemas plus JSON-parsed request/NDJSON fixture tests, has a Rust-side
-TypeScript process adapter that can send request JSON over stdin, enforce a
-timeout, validate NDJSON stdout, map sanitized worker errors, and translate fact
-messages into RepoGrammar-owned semantic facts, and includes a no-dependency
-Node worker stub that reports semantic analysis as unavailable without echoing
-source paths. `index`, `sync`, and `resync` can optionally execute a configured
-worker via `REPOGRAMMAR_TYPESCRIPT_WORKER` plus
-`REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
+TypeScript process adapter that can send operation-bearing request JSON over
+stdin, enforce a timeout, validate NDJSON stdout, map sanitized worker errors,
+match returned facts to requested operation evidence, and translate fact
+messages into RepoGrammar-owned semantic facts. The checked-in Node worker can
+run a bounded TypeScript compiler-API module-resolution path when the API is
+available, and otherwise returns only dependency-free structural fallback facts
+or typed `UNKNOWN`s without echoing source paths. `index`, `sync`, and `resync`
+can optionally execute a configured worker via `REPOGRAMMAR_TYPESCRIPT_WORKER`
+plus `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`; default indexing still reports
 `semantic_worker: deferred`. The storage/query boundary can load an internal
 active-generation claim-input snapshot after validating files, units, IR
 nodes/edges, stored fact tokens, assumptions JSON, repo-relative evidence paths,
@@ -405,7 +423,7 @@ rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,
 bounded semantic-mode file reads, project-config summary sanitization, and
 framework-role heuristic output.
 
-It still does not bundle a TypeScript compiler dependency, run TypeScript
-compiler APIs, run Pyrefly/Pyright, expose semantic facts through query/MCP
-commands, or treat stored semantic facts as pattern-family evidence without the
-family builder's compatibility and support checks.
+It still does not bundle a TypeScript compiler dependency, run package scripts,
+run Pyrefly/Pyright, expose raw semantic facts through query/MCP commands, or
+treat stored semantic facts as pattern-family evidence without the family
+builder's compatibility and support checks.
