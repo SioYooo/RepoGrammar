@@ -359,9 +359,10 @@ allowed.
   negatives, typed TS/JS `UNKNOWN` facts for unsafe/unresolved receiver, runner,
   route, client, and query boundaries, bounded
   `package.json`/`tsconfig.json`/`jsconfig.json` project-config context, bounded
-  static relative/path-alias import resolution, typed `UNKNOWN` for dynamic
-  import, non-literal or conditional `require`, unresolved/conflicting aliases,
-  ambiguous star re-exports, Jest/Vitest imported positives,
+  static relative/path-alias/rootDirs import resolution, typed `UNKNOWN` for
+  dynamic import, non-literal or conditional `require`,
+  unresolved/conflicting aliases or rootDirs candidates, ambiguous star
+  re-exports, Jest/Vitest imported positives,
   ambient-in-test-file positives only with package/config test-runner context,
   custom-wrapper and foreign-import negatives, that
   `FRAMEWORK_HEURISTIC` facts never derive support, that only

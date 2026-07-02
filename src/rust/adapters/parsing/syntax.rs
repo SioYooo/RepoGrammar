@@ -8,6 +8,7 @@ use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
+use crate::core::policy::paths::validate_repo_relative_path;
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParser,
@@ -195,6 +196,24 @@ fn tsjs_json_project_config_facts(
                     )?);
                 }
             }
+            if let Some(root_dirs) = compiler_options.get("rootDirs").and_then(Value::as_array) {
+                for root_dir in root_dirs
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(tsjs_project_config_root_dir)
+                {
+                    facts.push(tsjs_project_config_fact(
+                        document,
+                        unit,
+                        &format!("tsconfig.root_dir:{root_dir}"),
+                        vec![
+                            json_config_assumption(document.path).to_string(),
+                            "project_config=root_dirs".to_string(),
+                        ],
+                        "bounded rootDirs metadata",
+                    )?);
+                }
+            }
             if let Some(jsx) = compiler_options.get("jsx").and_then(Value::as_str) {
                 facts.push(tsjs_project_config_fact(
                     document,
@@ -210,6 +229,20 @@ fn tsjs_json_project_config_facts(
         }
     }
     Ok(facts)
+}
+
+fn tsjs_project_config_root_dir(root_dir: &str) -> Option<String> {
+    let normalized = root_dir
+        .trim()
+        .trim_start_matches("./")
+        .trim_end_matches('/');
+    if normalized.is_empty() || normalized.contains('*') || normalized.contains('?') {
+        return None;
+    }
+    if validate_repo_relative_path(normalized).is_err() {
+        return None;
+    }
+    Some(normalized.to_string())
 }
 
 fn json_config_assumption(path: &str) -> &'static str {
@@ -400,6 +433,7 @@ fn tsjs_import_resolution_facts(
                 &specifier,
                 &module_paths,
                 &context.tsjs_path_aliases,
+                &context.tsjs_root_dirs,
             ) {
                 ImportResolution::Resolved {
                     path,
@@ -575,6 +609,7 @@ fn resolve_tsjs_import_specifier(
     specifier: &str,
     module_paths: &BTreeSet<String>,
     aliases: &[crate::ports::parser::ParserTsJsPathAlias],
+    root_dirs: &[String],
 ) -> ImportResolution {
     if specifier.starts_with("./") || specifier.starts_with("../") {
         let Some(base) = normalize_relative_specifier(current_path, specifier) else {
@@ -583,7 +618,21 @@ fn resolve_tsjs_import_specifier(
                 kind: "unresolved_import",
             };
         };
-        return resolve_module_base(&base, module_paths, "literal_relative");
+        let direct = resolve_module_base(&base, module_paths, "literal_relative");
+        if matches!(
+            &direct,
+            ImportResolution::Unknown {
+                reason: "UnresolvedImport",
+                kind: "unresolved_import"
+            }
+        ) {
+            if let Some(root_dirs_resolution) =
+                resolve_root_dirs_relative_import(current_path, &base, root_dirs, module_paths)
+            {
+                return root_dirs_resolution;
+            }
+        }
+        return direct;
     }
     let mut matched_alias = false;
     let mut matches = BTreeSet::new();
@@ -625,6 +674,65 @@ fn resolve_tsjs_import_specifier(
         };
     }
     ImportResolution::IgnoredExternal
+}
+
+fn resolve_root_dirs_relative_import(
+    current_path: &str,
+    base: &str,
+    root_dirs: &[String],
+    module_paths: &BTreeSet<String>,
+) -> Option<ImportResolution> {
+    let root_dir_set = root_dirs.iter().collect::<BTreeSet<_>>();
+    let current_root = root_dir_set
+        .iter()
+        .filter(|root_dir| path_is_within_root(current_path, root_dir))
+        .max_by_key(|root_dir| root_dir.len())?;
+    let suffix = path_suffix_within_root(base, current_root)?;
+    if suffix.is_empty() {
+        return None;
+    }
+
+    let mut matches = BTreeSet::new();
+    let mut saw_conflict = false;
+    for root_dir in root_dir_set {
+        let candidate = format!("{root_dir}/{suffix}");
+        match resolve_module_base(&candidate, module_paths, "root_dirs") {
+            ImportResolution::Resolved { path, .. } => {
+                matches.insert(path);
+            }
+            ImportResolution::Unknown {
+                reason: "ConflictingFacts",
+                ..
+            } => saw_conflict = true,
+            ImportResolution::Unknown { .. } | ImportResolution::IgnoredExternal => {}
+        }
+    }
+
+    if saw_conflict || matches.len() > 1 {
+        return Some(ImportResolution::Unknown {
+            reason: "ConflictingFacts",
+            kind: "root_dirs_conflict",
+        });
+    }
+    if let Some(path) = matches.into_iter().next() {
+        return Some(ImportResolution::Resolved {
+            path,
+            resolution_kind: "root_dirs",
+        });
+    }
+    Some(ImportResolution::Unknown {
+        reason: "UnresolvedImport",
+        kind: "unresolved_root_dirs",
+    })
+}
+
+fn path_is_within_root(path: &str, root_dir: &str) -> bool {
+    path.strip_prefix(root_dir)
+        .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn path_suffix_within_root<'a>(path: &'a str, root_dir: &str) -> Option<&'a str> {
+    path.strip_prefix(root_dir)?.strip_prefix('/')
 }
 
 fn resolve_module_base(
@@ -1919,6 +2027,42 @@ describe("users", () => {
     }
 
     #[test]
+    fn tsjs_project_config_json_emits_safe_root_dirs_metadata() {
+        let report = SyntaxCodeUnitParser
+            .parse(SourceDocument {
+                path: "tsconfig.json",
+                language: Language::TsJsConfig,
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                text: r#"{"compilerOptions":{"paths":{"@/*":["src/*"]},"rootDirs":["src","generated","../secret","src/*","C:/repo/src"],"jsx":"react-jsx"}}"#,
+            })
+            .expect("parse tsconfig metadata");
+
+        let targets = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::ProjectConfig)
+            .filter_map(|fact| fact.target.as_ref().map(SymbolId::as_str))
+            .collect::<BTreeSet<_>>();
+
+        assert!(targets.contains("tsconfig.path_alias:@/*"));
+        assert!(targets.contains("tsconfig.root_dir:src"));
+        assert!(targets.contains("tsconfig.root_dir:generated"));
+        assert!(targets.contains("tsconfig.jsx:react-jsx"));
+        assert!(report.semantic_facts.iter().any(|fact| fact
+            .assumptions
+            .iter()
+            .any(|assumption| assumption == "project_config=root_dirs")));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("../secret"));
+        assert!(!debug.contains("tsconfig.root_dir:src/*"));
+        assert!(!debug.contains("C:/repo/src"));
+    }
+
+    #[test]
     fn tsjs_script_config_is_metadata_only_and_unknown() {
         let report = SyntaxCodeUnitParser
             .parse(SourceDocument {
@@ -1957,17 +2101,20 @@ describe("users", () => {
                 "src/api/users.ts".to_string(),
                 "src/api/orders.ts".to_string(),
                 "src/lib/client.ts".to_string(),
+                "generated/api/template.ts".to_string(),
             ],
             tsjs_path_aliases: vec![crate::ports::parser::ParserTsJsPathAlias {
                 alias_pattern: "@/*".to_string(),
                 target_patterns: vec!["src/*".to_string()],
             }],
+            tsjs_root_dirs: vec!["generated".to_string(), "src".to_string()],
             tsjs_has_test_runner_context: true,
             ..ParserProjectContext::default()
         };
         let source = r#"
 import users from "./users";
 import { client } from "@/lib/client";
+import template from "./template";
 import express from "express";
 export { orders } from "./orders";
 "#;
@@ -1985,6 +2132,16 @@ export { orders } from "./orders";
         assert!(resolved_targets.contains("module:src/api/users.ts"));
         assert!(resolved_targets.contains("module:src/api/orders.ts"));
         assert!(resolved_targets.contains("module:src/lib/client.ts"));
+        assert!(resolved_targets.contains("module:generated/api/template.ts"));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::ResolvedImport
+                && fact.target.as_ref().map(SymbolId::as_str)
+                    == Some("module:generated/api/template.ts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_import_resolution=root_dirs")
+        }));
         assert!(!resolved_targets
             .iter()
             .any(|target| target.contains("express")));
@@ -1992,6 +2149,40 @@ export { orders } from "./orders";
             fact.evidence.provenance.path == "src/api/routes.ts"
                 && !format!("{fact:?}").contains("/Users/")
         }));
+    }
+
+    #[test]
+    fn tsjs_context_marks_conflicting_root_dirs_imports_unknown() {
+        let context = ParserProjectContext {
+            tsjs_module_paths: vec![
+                "generated/views/template.ts".to_string(),
+                "mocks/views/template.ts".to_string(),
+            ],
+            tsjs_root_dirs: vec![
+                "generated".to_string(),
+                "mocks".to_string(),
+                "src".to_string(),
+            ],
+            ..ParserProjectContext::default()
+        };
+        let source = r#"import template from "./template";"#;
+
+        let report = SyntaxCodeUnitParser
+            .parse_with_context(document("src/views/view.ts", source), &context)
+            .expect("parse rootDirs conflict");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("ConflictingFacts")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "tsjs_unknown_kind=root_dirs_conflict")
+        }));
+        assert!(!report
+            .semantic_facts
+            .iter()
+            .any(|fact| fact.kind == SemanticFactKind::ResolvedImport));
     }
 
     #[test]

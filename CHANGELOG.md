@@ -63,6 +63,11 @@
   `Session.get(...)` and `AsyncSession.get(...)` receiver calls. Plain `.get`
   calls without a typed SQLAlchemy session receiver remain non-SQLAlchemy
   context.
+- TS/JS project context now records safe JSON `rootDirs` from root
+  `tsconfig.json` / `jsconfig.json` and uses them as a bounded fallback for
+  repo-local relative import resolution. Unique rootDirs targets become
+  `STRUCTURAL` `RESOLVED_IMPORT` context facts, while unresolved or conflicting
+  rootDirs candidates remain typed `UNKNOWN`.
 
 ### Added
 

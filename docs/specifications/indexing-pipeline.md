@@ -121,16 +121,18 @@ context only. Package dependencies and JSON `jest.config.json` /
 `vitest.config.json` files can provide ambient test-runner context; script
 configs such as `jest.config.ts` or `vitest.config.js` are not executed and
 remain metadata/typed `UNKNOWN` only. The parser project context also builds a
-bounded repo-local TS/JS module inventory plus JSON `paths` aliases from
-`tsconfig.json`/`jsconfig.json`; safe `baseUrl` prefixes are applied
-conservatively to alias targets before resolving against discovered repo files.
-It can persist `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique literal
-relative imports or unique path-alias imports that resolve to discovered repo
-files. Dynamic
+bounded repo-local TS/JS module inventory plus safe JSON `paths` aliases and
+`rootDirs` from `tsconfig.json`/`jsconfig.json`; safe `baseUrl` prefixes are
+applied conservatively to alias targets before resolving against discovered
+repo files. It can persist `STRUCTURAL` `RESOLVED_IMPORT` facts only for unique
+literal relative imports, unique path-alias imports, or unique rootDirs
+relative imports that resolve to discovered repo files. Direct repo-local
+relative resolution wins before rootDirs fallback. Dynamic
 `import(...)`, non-literal `require(...)`, conditional `require(...)`,
-unresolved aliases/imports, conflicting alias candidates, and `export *` stay
-typed `UNKNOWN`; those facts are context/abstention evidence and do not become
-family support. Ambient Jest/Vitest globals require bounded project test-runner
+unresolved aliases/imports/rootDirs targets, conflicting alias or rootDirs
+candidates, and `export *` stay typed `UNKNOWN`; those facts are
+context/abstention evidence and do not become family support. Ambient
+Jest/Vitest globals require bounded project test-runner
 context from package or config inventory; otherwise they emit
 `MissingProjectConfig` instead of support. React components and hooks remain
 `UNKNOWN` in this slice, including when an external TypeScript semantic worker
