@@ -2813,6 +2813,9 @@ fn derive_tsjs_framework_support_facts(
         if !is_tsjs_structural_anchor_fact(fact) {
             continue;
         }
+        if tsjs_provider_required_anchor_fact(fact) {
+            continue;
+        }
         let code_unit_id = fact.evidence.code_unit_id.as_str();
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
@@ -2860,6 +2863,7 @@ fn derive_tsjs_provider_resolved_framework_support_facts(
         .collect::<BTreeMap<_, _>>();
     let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
     let export_proofs = tsjs_provider_resolved_export_proofs(worker_facts);
+    let binding_proofs = tsjs_provider_resolved_binding_proofs(worker_facts);
     let mut seen = BTreeSet::new();
     let mut derived = Vec::new();
 
@@ -2867,9 +2871,6 @@ fn derive_tsjs_provider_resolved_framework_support_facts(
         if !is_tsjs_structural_anchor_fact(fact) {
             continue;
         }
-        let Some(export_name) = tsjs_framework_export_operation_literal(fact) else {
-            continue;
-        };
         let code_unit_id = fact.evidence.code_unit_id.as_str();
         let Some(unit) = unit_by_id.get(code_unit_id) else {
             continue;
@@ -2889,11 +2890,12 @@ fn derive_tsjs_provider_resolved_framework_support_facts(
         if tsjs_support_target_is_role_compatible(target, framework_role) != Some(true) {
             continue;
         }
-        let proof_key = TsJsProviderExportProofKey::from_fact(fact, &export_name);
-        let Some(worker_fact) = export_proofs.get(&proof_key) else {
+        let Some((proof_kind, worker_fact)) =
+            tsjs_provider_resolved_proof_for_framework_fact(fact, &export_proofs, &binding_proofs)
+        else {
             continue;
         };
-        if !seen.insert((unit.id.clone(), target.to_string(), export_name.clone())) {
+        if !seen.insert((unit.id.clone(), target.to_string(), proof_kind)) {
             continue;
         }
         derived.push(derived_tsjs_provider_resolved_framework_support_fact(
@@ -2933,6 +2935,49 @@ impl TsJsProviderExportProofKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TsJsProviderBindingProofKey {
+    path: String,
+    content_hash: String,
+    code_unit_id: String,
+    start_byte: usize,
+    end_byte: usize,
+    literal_specifier: String,
+}
+
+impl TsJsProviderBindingProofKey {
+    fn from_fact(fact: &SemanticFact, literal_specifier: &str) -> Self {
+        Self {
+            path: fact.evidence.provenance.path.clone(),
+            content_hash: fact.evidence.provenance.content_hash.as_str().to_string(),
+            code_unit_id: fact.evidence.code_unit_id.as_str().to_string(),
+            start_byte: fact.evidence.range.start_byte,
+            end_byte: fact.evidence.range.end_byte,
+            literal_specifier: literal_specifier.to_string(),
+        }
+    }
+}
+
+fn tsjs_provider_resolved_proof_for_framework_fact<'a>(
+    fact: &SemanticFact,
+    export_proofs: &'a BTreeMap<TsJsProviderExportProofKey, SemanticFact>,
+    binding_proofs: &'a BTreeMap<TsJsProviderBindingProofKey, SemanticFact>,
+) -> Option<(String, &'a SemanticFact)> {
+    if let Some(export_name) = tsjs_framework_export_operation_literal(fact) {
+        let proof_key = TsJsProviderExportProofKey::from_fact(fact, &export_name);
+        if let Some(worker_fact) = export_proofs.get(&proof_key) {
+            return Some((format!("export:{export_name}"), worker_fact));
+        }
+    }
+    if let Some(literal_specifier) = tsjs_provider_binding_operation_literal(fact) {
+        let proof_key = TsJsProviderBindingProofKey::from_fact(fact, &literal_specifier);
+        if let Some(worker_fact) = binding_proofs.get(&proof_key) {
+            return Some((format!("binding:{literal_specifier}"), worker_fact));
+        }
+    }
+    None
+}
+
 fn tsjs_provider_resolved_export_proofs(
     worker_facts: &[SemanticFact],
 ) -> BTreeMap<TsJsProviderExportProofKey, SemanticFact> {
@@ -2952,16 +2997,51 @@ fn tsjs_provider_resolved_export_proofs(
     proofs
 }
 
+fn tsjs_provider_resolved_binding_proofs(
+    worker_facts: &[SemanticFact],
+) -> BTreeMap<TsJsProviderBindingProofKey, SemanticFact> {
+    let mut proofs = BTreeMap::new();
+    for fact in worker_facts {
+        if !tsjs_provider_resolved_binding_fact(fact) {
+            continue;
+        }
+        let Some(export_name) = fact_assumption_value(fact, "tsjs_export_name=") else {
+            continue;
+        };
+        let Some(import_specifier) = fact_assumption_value(fact, "tsjs_import_specifier=") else {
+            continue;
+        };
+        proofs.insert(
+            TsJsProviderBindingProofKey::from_fact(
+                fact,
+                &format!("{import_specifier}#{export_name}"),
+            ),
+            fact.clone(),
+        );
+    }
+    proofs
+}
+
 fn tsjs_provider_resolved_export_fact(fact: &SemanticFact) -> bool {
     matches!(
         fact.kind,
         SemanticFactKind::ResolvedCall | SemanticFactKind::Symbol | SemanticFactKind::Type
-    ) && fact.certainty == FactCertainty::Semantic
+    ) && tsjs_provider_resolved_compiler_fact(fact)
+        && fact_assumption_value(fact, "query_operation=") == Some("resolve_export")
+}
+
+fn tsjs_provider_resolved_binding_fact(fact: &SemanticFact) -> bool {
+    matches!(fact.kind, SemanticFactKind::Symbol | SemanticFactKind::Type)
+        && tsjs_provider_resolved_compiler_fact(fact)
+        && fact_assumption_value(fact, "query_operation=") == Some("resolve_reexport")
+}
+
+fn tsjs_provider_resolved_compiler_fact(fact: &SemanticFact) -> bool {
+    fact.certainty == FactCertainty::Semantic
         && fact.origin.engine == "typescript"
         && fact.origin.method == "compiler_api_module_resolver_v1"
         && fact_assumption_value(fact, "provider=") == Some("typescript")
         && fact_assumption_value(fact, "provider_resolved=") == Some("true")
-        && fact_assumption_value(fact, "query_operation=") == Some("resolve_export")
 }
 
 fn derived_tsjs_provider_resolved_framework_support_fact(
@@ -3014,7 +3094,7 @@ fn derived_tsjs_provider_resolved_framework_support_fact(
         DerivedSupportSpec {
             engine: TSJS_DERIVED_SUPPORT_ENGINE,
             method: TSJS_DERIVED_SUPPORT_METHOD,
-            note: "provider-resolved TS/JS framework export support",
+            note: "provider-resolved TS/JS framework binding support",
             assumptions,
         },
     )
@@ -3029,6 +3109,14 @@ fn tsjs_worker_support_assumption_is_safe(assumption: &str) -> bool {
         || assumption.starts_with("package_json_hash=")
         || assumption.starts_with("environment_fingerprint=")
         || assumption.starts_with("tsjs_export_name=")
+        || assumption.starts_with("tsjs_import_specifier=")
+        || assumption.starts_with("tsjs_import_resolution=")
+}
+
+fn tsjs_provider_required_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.assumptions
+        .iter()
+        .any(|assumption| assumption == "provider_required=typescript")
 }
 
 fn is_tsjs_language(language: &str) -> bool {
@@ -3553,6 +3641,18 @@ fn tsjs_semantic_worker_operations(
             &operation_context,
         );
     }
+    for fact in parser_semantic_facts {
+        let Some(literal_specifier) = tsjs_provider_binding_operation_literal(fact) else {
+            continue;
+        };
+        push_tsjs_semantic_worker_operation(
+            &mut operations,
+            fact,
+            SemanticWorkerOperationKind::ResolveReexport,
+            &literal_specifier,
+            &operation_context,
+        );
+    }
 
     operations
 }
@@ -3621,6 +3721,15 @@ fn tsjs_framework_export_operation_literal(fact: &SemanticFact) -> Option<String
         }
         _ => None,
     }
+}
+
+fn tsjs_provider_binding_operation_literal(fact: &SemanticFact) -> Option<String> {
+    if !is_tsjs_structural_anchor_fact(fact) || !tsjs_provider_required_anchor_fact(fact) {
+        return None;
+    }
+    let import_specifier = fact_assumption_value(fact, "binding_import_specifier=")?;
+    let export_name = fact_assumption_value(fact, "binding_export_name=")?;
+    Some(format!("{import_specifier}#{export_name}"))
 }
 
 fn zero_content_hash() -> String {
@@ -4608,6 +4717,22 @@ mod tests {
         fact
     }
 
+    fn tsjs_provider_required_prisma_anchor_fact(
+        unit: &IndexedCodeUnitRecord,
+        target: &str,
+    ) -> SemanticFact {
+        let mut fact = tsjs_structural_anchor_fact(unit, target);
+        fact.assumptions.extend([
+            "provider_required=typescript".to_string(),
+            "binding_kind=prisma_client".to_string(),
+            "binding_local_name=prisma".to_string(),
+            "binding_import_specifier=./db".to_string(),
+            "binding_export_name=prisma".to_string(),
+            "required_mechanism=typescript_export_graph".to_string(),
+        ]);
+        fact
+    }
+
     fn tsjs_provider_export_fact(unit: &IndexedCodeUnitRecord, export_name: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::Symbol,
@@ -4645,6 +4770,53 @@ mod tests {
                 "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     .to_string(),
                 format!("tsjs_export_name={export_name}"),
+            ],
+        }
+    }
+
+    fn tsjs_provider_binding_fact(
+        unit: &IndexedCodeUnitRecord,
+        import_specifier: &str,
+        export_name: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Symbol,
+            subject: format!("{}#resolve_reexport:{import_specifier}#{export_name}", unit.path),
+            target: Some(
+                SymbolId::new(format!("symbol:src/db.ts#export:{export_name}"))
+                    .expect("valid target"),
+            ),
+            origin: FactOrigin {
+                engine: "typescript".to_string(),
+                engine_version: "6.0.0".to_string(),
+                method: "compiler_api_module_resolver_v1".to_string(),
+            },
+            certainty: FactCertainty::Semantic,
+            evidence: Evidence::new(
+                CodeUnitId::new(unit.id.clone()).expect("valid unit id"),
+                SourceRange::new(unit.start_byte, unit.end_byte).expect("valid range"),
+                Provenance::new(
+                    &unit.path,
+                    unit.content_hash.clone(),
+                    RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "TypeScript compiler resolved TS/JS re-export symbol",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "provider=typescript".to_string(),
+                "provider_resolved=true".to_string(),
+                "environment_fingerprint=node_typescript_compiler_api_v1".to_string(),
+                format!("operation_id=op-{export_name}"),
+                "query_operation=resolve_reexport".to_string(),
+                "tsconfig_hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+                format!("tsjs_export_name={export_name}"),
+                format!("tsjs_import_specifier={import_specifier}"),
+                "tsjs_import_resolution=compiler_api".to_string(),
             ],
         }
     }
@@ -4993,6 +5165,123 @@ mod tests {
     }
 
     #[test]
+    fn provider_required_tsjs_anchors_do_not_derive_structural_support() {
+        let unit = indexed_tsjs_unit("src/repository.ts", "prisma_query", 0);
+        let parser_fact = tsjs_provider_required_prisma_anchor_fact(&unit, "prisma.query.findMany");
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:prisma.query");
+
+        let derived = derive_tsjs_framework_support_facts(
+            std::slice::from_ref(&unit),
+            std::slice::from_ref(&parser_fact),
+            std::slice::from_ref(&role_fact),
+        )
+        .expect("derive structural tsjs support");
+
+        assert!(derived.is_empty());
+    }
+
+    #[test]
+    fn provider_resolved_tsjs_binding_facts_derive_prisma_support() {
+        let first = indexed_tsjs_unit("src/users.ts", "prisma_query", 0);
+        let second = indexed_tsjs_unit("src/accounts.ts", "prisma_query", 1);
+        let third = indexed_tsjs_unit("src/orders.ts", "prisma_query", 2);
+        let units = vec![first.clone(), second.clone(), third.clone()];
+        let parser_facts = vec![
+            tsjs_provider_required_prisma_anchor_fact(&first, "prisma.query.findMany"),
+            tsjs_provider_required_prisma_anchor_fact(&second, "prisma.query.findMany"),
+            tsjs_provider_required_prisma_anchor_fact(&third, "prisma.query.findMany"),
+        ];
+        let role_facts = units
+            .iter()
+            .map(|unit| framework_role_fact_for_unit(unit, "framework:prisma.query"))
+            .collect::<Vec<_>>();
+        let worker_facts = units
+            .iter()
+            .map(|unit| tsjs_provider_binding_fact(unit, "./db", "prisma"))
+            .collect::<Vec<_>>();
+
+        let derived = derive_tsjs_provider_resolved_framework_support_facts(
+            &units,
+            &parser_facts,
+            &role_facts,
+            &worker_facts,
+        )
+        .expect("derive provider-resolved prisma support");
+
+        assert_eq!(derived.len(), 3);
+        assert!(derived.iter().all(|fact| {
+            fact.certainty == FactCertainty::DataflowDerived
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider=typescript")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_resolved=true")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "query_operation=resolve_reexport")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding_kind=prisma_client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "derived_from=tsjs_prisma_structural_anchors")
+        }));
+        let mut family_facts = role_facts;
+        family_facts.extend(derived);
+        let report = build_family_claims(&units, &family_facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].framework_role, "framework:prisma.query");
+    }
+
+    #[test]
+    fn provider_resolved_tsjs_binding_support_rejects_fallback_or_mismatched_worker_facts() {
+        let unit = indexed_tsjs_unit("src/repository.ts", "prisma_query", 0);
+        let parser_fact = tsjs_provider_required_prisma_anchor_fact(&unit, "prisma.query.findMany");
+        let role_fact = framework_role_fact_for_unit(&unit, "framework:prisma.query");
+
+        let mut fallback_fact = tsjs_provider_binding_fact(&unit, "./db", "prisma");
+        fallback_fact.certainty = FactCertainty::Structural;
+        fallback_fact.origin.engine = "repogrammar-tsjs-static-worker".to_string();
+        fallback_fact.origin.method = "bounded_project_model_resolver_v1".to_string();
+        fallback_fact
+            .assumptions
+            .retain(|assumption| assumption != "provider=typescript");
+        fallback_fact
+            .assumptions
+            .retain(|assumption| assumption != "provider_resolved=true");
+        fallback_fact
+            .assumptions
+            .push("provider=repogrammar_static_tsjs".to_string());
+        fallback_fact
+            .assumptions
+            .push("provider_resolved=false".to_string());
+        let fallback = derive_tsjs_provider_resolved_framework_support_facts(
+            std::slice::from_ref(&unit),
+            std::slice::from_ref(&parser_fact),
+            std::slice::from_ref(&role_fact),
+            std::slice::from_ref(&fallback_fact),
+        )
+        .expect("fallback worker fact is valid input");
+        assert!(fallback.is_empty());
+
+        let mismatched = tsjs_provider_binding_fact(&unit, "./other", "prisma");
+        let mismatch = derive_tsjs_provider_resolved_framework_support_facts(
+            &[unit],
+            &[parser_fact],
+            &[role_fact],
+            &[mismatched],
+        )
+        .expect("mismatched worker fact is valid input");
+        assert!(mismatch.is_empty());
+    }
+
+    #[test]
     fn tsjs_package_config_facts_do_not_derive_framework_support() {
         let unit = indexed_tsjs_unit("src/a.ts", "next_app_page", 0);
         let package_fact = SemanticFact {
@@ -5207,6 +5496,55 @@ mod tests {
         )
     }
 
+    fn provider_binding_facts_for_prisma_queries(
+        workspace: &TempWorkspace,
+    ) -> (Vec<String>, Vec<SemanticFact>) {
+        let request = IndexingRequest::new(workspace.path().display().to_string());
+        let report = discover_repository_files(request.clone(), &FilesystemFileDiscovery)
+            .expect("discover files for prisma provider support");
+        let parser = SyntaxCodeUnitParser;
+        let parser_context =
+            parser_project_context(&request, &report, &FilesystemSourceStore, &parser)
+                .expect("build parser context");
+        let mut facts = Vec::new();
+        for file in &report.files {
+            let source = FilesystemSourceStore
+                .read_source(SourceReadRequest {
+                    repository_root: request.repository_root.clone(),
+                    path: file.path.clone(),
+                    expected_content_hash: file.content_hash.clone(),
+                    max_file_bytes: request.max_file_bytes,
+                })
+                .expect("read source for prisma provider support");
+            let parse_report = parser
+                .parse_with_context(
+                    SourceDocument {
+                        path: &source.path,
+                        language: language_from_discovered(file.language),
+                        content_hash: source.content_hash.clone(),
+                        repository_revision: RepositoryRevision::new("UNKNOWN")
+                            .expect("valid revision"),
+                        text: &source.text,
+                    },
+                    &parser_context,
+                )
+                .expect("parse source for prisma provider support");
+            for unit in parse_report
+                .units
+                .into_iter()
+                .filter(|unit| unit.kind == CodeUnitKind::PrismaQuery)
+            {
+                facts.push(tsjs_provider_binding_fact_for_code_unit(
+                    &unit, "./db", "prisma",
+                ));
+            }
+        }
+        (
+            report.files.iter().map(|file| file.path.clone()).collect(),
+            facts,
+        )
+    }
+
     fn tsjs_provider_export_fact_for_code_unit(unit: &CodeUnit, export_name: &str) -> SemanticFact {
         SemanticFact {
             kind: SemanticFactKind::Symbol,
@@ -5249,6 +5587,51 @@ mod tests {
         }
     }
 
+    fn tsjs_provider_binding_fact_for_code_unit(
+        unit: &CodeUnit,
+        import_specifier: &str,
+        export_name: &str,
+    ) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::Symbol,
+            subject: format!(
+                "{}#resolve_reexport:{}-{}",
+                unit.provenance.path, unit.range.start_byte, unit.range.end_byte
+            ),
+            target: Some(
+                SymbolId::new(format!("symbol:src/db.ts#export:{export_name}"))
+                    .expect("valid target"),
+            ),
+            origin: FactOrigin {
+                engine: "typescript".to_string(),
+                engine_version: "6.0.0".to_string(),
+                method: "compiler_api_module_resolver_v1".to_string(),
+            },
+            certainty: FactCertainty::Semantic,
+            evidence: Evidence::new(
+                unit.id.clone(),
+                unit.range.clone(),
+                unit.provenance.clone(),
+                "TypeScript compiler resolved TS/JS re-export symbol",
+            )
+            .expect("valid evidence"),
+            assumptions: vec![
+                "provider=typescript".to_string(),
+                "provider_resolved=true".to_string(),
+                "environment_fingerprint=node_typescript_compiler_api_v1".to_string(),
+                format!("operation_id=op-{export_name}"),
+                "query_operation=resolve_reexport".to_string(),
+                "tsconfig_hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                "package_json_hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+                format!("tsjs_export_name={export_name}"),
+                format!("tsjs_import_specifier={import_specifier}"),
+                "tsjs_import_resolution=compiler_api".to_string(),
+            ],
+        }
+    }
+
     fn semantic_fact_count(state: &Path, generation_id: &str) -> u32 {
         let connection =
             Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
@@ -5271,8 +5654,7 @@ mod tests {
                  AND origin_engine = ?2 \
                  AND origin_method = ?3 \
                  AND certainty = 'DATAFLOW_DERIVED' \
-                 AND assumptions_json LIKE '%provider_resolved=true%' \
-                 AND assumptions_json LIKE '%query_operation=resolve_export%'",
+                 AND assumptions_json LIKE '%provider_resolved=true%'",
                 params![
                     generation_id,
                     TSJS_DERIVED_SUPPORT_ENGINE,
@@ -7587,6 +7969,71 @@ mod tests {
     }
 
     #[test]
+    fn provider_resolved_prisma_binding_support_is_recorded_after_worker() {
+        let workspace = TempWorkspace::new("indexing-provider-prisma-binding-support");
+        fs::write(
+            workspace.path().join("db.ts"),
+            "export const prisma = {};\n",
+        )
+        .expect("write shared client");
+        for name in ["users", "accounts", "orders"] {
+            let path = workspace.path().join(format!("{name}.ts"));
+            fs::write(
+                path,
+                "import { prisma } from './db';\n\
+                 export function list() { return prisma.user.findMany(); }\n",
+            )
+            .expect("write repository");
+        }
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let detector = SyntaxFrameworkRoleDetector;
+        let (expected_files, facts) = provider_binding_facts_for_prisma_queries(&workspace);
+        assert_eq!(facts.len(), 3);
+        let worker = StaticSemanticWorker {
+            expected_files,
+            result: Ok(facts),
+        };
+
+        let outcome =
+            index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store(
+                IndexingRequest::new(workspace.path().display().to_string()),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &SyntaxCodeUnitParser,
+                &detector,
+                &worker,
+                &store,
+            )
+            .expect("index provider-resolved prisma support");
+
+        assert_eq!(outcome.semantic_worker, SemanticWorkerRunStatus::Complete);
+        assert_eq!(
+            provider_resolved_tsjs_support_fact_count(&state, "gen-000001"),
+            3
+        );
+        assert_eq!(
+            outcome.semantic_facts as u32,
+            semantic_fact_count(&state, "gen-000001")
+        );
+        let families = store.list_active_families().expect("list families");
+        assert_eq!(families.families.len(), 1);
+        let family = store
+            .show_family(&families.families[0].family_id)
+            .expect("show family")
+            .expect("family exists");
+        assert_eq!(family.members.len(), 3);
+        assert!(family
+            .members
+            .iter()
+            .all(|member| member.role == "framework:prisma.query"));
+        let debug = format!("{family:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("prisma.user.findMany"));
+    }
+
+    #[test]
     fn reported_semantic_facts_count_includes_derived_tsjs_support_facts() {
         // A resolved Express server produces exact TS/JS anchors that are promoted
         // to bounded TS/JS-derived support facts and recorded in the generation.
@@ -7673,14 +8120,20 @@ mod tests {
         fs::create_dir_all(workspace.path().join("src/app")).expect("create source dirs");
         fs::create_dir_all(workspace.path().join("app/users")).expect("create next dirs");
         let source = "import service from '@app/service';\nexport * from './barrel';\n";
+        let repository = "import { prisma } from './db';\nprisma.user.findMany();\n";
         let target = "export const service = true;\n";
         let barrel = "export const value = true;\n";
+        let db = "export const prisma = {};\n";
         let next_route = "export async function GET() { return Response.json([]); }\n";
         let config = r#"{"compilerOptions":{"baseUrl":"src","paths":{"@app/*":["app/*"]}}}"#;
-        let package_json = r#"{"dependencies":{"express":"latest","next":"latest"}}"#;
+        let package_json =
+            r#"{"dependencies":{"express":"latest","next":"latest","@prisma/client":"latest"}}"#;
         fs::write(workspace.path().join("src/route.ts"), source).expect("write route");
+        fs::write(workspace.path().join("src/repository.ts"), repository)
+            .expect("write repository");
         fs::write(workspace.path().join("src/app/service.ts"), target).expect("write target");
         fs::write(workspace.path().join("src/barrel.ts"), barrel).expect("write barrel");
+        fs::write(workspace.path().join("src/db.ts"), db).expect("write db");
         fs::write(workspace.path().join("app/users/route.ts"), next_route)
             .expect("write next route");
         fs::write(workspace.path().join("tsconfig.json"), config).expect("write tsconfig");
@@ -7718,8 +8171,23 @@ mod tests {
         let requests = worker.requests.lock().expect("recorded requests");
         assert_eq!(requests.len(), 1);
         let operations = &requests[0].operations;
-        assert_eq!(operations.len(), 3);
-        let operation = &operations[0];
+        assert_eq!(operations.len(), 5);
+        let find_operation =
+            |kind: SemanticWorkerOperationKind, path: &str, literal_specifier: &str| {
+                operations
+                    .iter()
+                    .find(|operation| {
+                        operation.operation == kind
+                            && operation.path == path
+                            && operation.literal_specifier == literal_specifier
+                    })
+                    .expect("semantic worker operation")
+            };
+        let operation = find_operation(
+            SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            "src/route.ts",
+            "@app/service",
+        );
         assert_eq!(
             operation.operation,
             SemanticWorkerOperationKind::ResolveModuleSpecifier
@@ -7735,7 +8203,20 @@ mod tests {
         assert!(operation
             .code_unit_id
             .starts_with("unit:src/route.ts#module:"));
-        let reexport_operation = &operations[1];
+        let import_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveModuleSpecifier,
+            "src/repository.ts",
+            "./db",
+        );
+        assert_eq!(import_operation.content_hash, hash_for("src/repository.ts"));
+        assert!(import_operation
+            .code_unit_id
+            .starts_with("unit:src/repository.ts#module:"));
+        let reexport_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveReexport,
+            "src/route.ts",
+            "./barrel#*",
+        );
         assert_eq!(
             reexport_operation.operation,
             SemanticWorkerOperationKind::ResolveReexport
@@ -7754,7 +8235,11 @@ mod tests {
         assert!(reexport_operation
             .code_unit_id
             .starts_with("unit:src/route.ts#module:"));
-        let export_operation = &operations[2];
+        let export_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveExport,
+            "app/users/route.ts",
+            "GET",
+        );
         assert_eq!(
             export_operation.operation,
             SemanticWorkerOperationKind::ResolveExport
@@ -7773,6 +8258,26 @@ mod tests {
         assert!(export_operation
             .code_unit_id
             .starts_with("unit:app/users/route.ts#next_route_handler:"));
+        let binding_operation = find_operation(
+            SemanticWorkerOperationKind::ResolveReexport,
+            "src/repository.ts",
+            "./db#prisma",
+        );
+        assert_eq!(
+            binding_operation.content_hash,
+            hash_for("src/repository.ts")
+        );
+        assert_eq!(
+            binding_operation.project_config_hash,
+            hash_for("tsconfig.json")
+        );
+        assert_eq!(
+            binding_operation.package_json_hash,
+            hash_for("package.json")
+        );
+        assert!(binding_operation
+            .code_unit_id
+            .starts_with("unit:src/repository.ts#prisma_query:"));
     }
 
     #[test]

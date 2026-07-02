@@ -164,8 +164,9 @@ hash/range evidence, and supports these operations:
 `resolve_module_specifier`, `resolve_export`, `resolve_reexport`, and
 `resolve_package_entry`. When an official TypeScript module is available from
 the worker environment, the worker may use the compiler API's module resolver
-and source-file parser for exact export identity, then emit `SEMANTIC` facts
-with `provider=typescript`,
+and source-file parser for exact export identity, including `resolve_reexport`
+operations that prove both a repo-local module target and named export for a
+bounded source anchor, then emit `SEMANTIC` facts with `provider=typescript`,
 `provider_resolved=true`, `query_operation=<operation>`, config/package hashes,
 and a safe environment fingerprint. When no TypeScript API is available, the
 checked-in worker falls back to a dependency-free bounded project-model
@@ -275,14 +276,19 @@ launcher must not parse shell strings, inherit PATH to satisfy shebang lookup,
 or accept worker arguments without an executable. The operation plan includes
 literal module specifier requests from parser import/export/require facts,
 bounded re-export requests for `export * from "<specifier>"` UNKNOWNs encoded
-as `<specifier>#*`, and `resolve_export` requests for exact Next.js
-file-convention route/page/layout/API anchors. Returned facts are sorted
+as `<specifier>#*`, `resolve_export` requests for exact Next.js
+file-convention route/page/layout/API anchors, and provider-required Prisma
+shared-client binding requests encoded as `<specifier>#<export>` for relative
+repo-local named imports such as `./db#prisma`. Returned facts are sorted
 deterministically, translated into RepoGrammar-owned storage records, and
 written only through the storage gate that matches evidence against the
 building generation manifest, content hashes, code-unit ranges, and requested
 operation provenance. A TypeScript-provider `resolve_export` fact can feed a
 post-worker TS/JS derived-support fact only when it matches the parser Next.js
-anchor's same path, hash, code unit, range, framework role, and export name.
+anchor's same path, hash, code unit, range, framework role, and export name. A
+TypeScript-provider `resolve_reexport` fact can feed Prisma derived support
+only when it matches a provider-required parser anchor's same path, hash, code
+unit, range, framework role, relative import specifier, and export name.
 Dependency-free fallback facts with `provider_resolved=false` remain context
 only.
 Unavailable workers, unsupported TypeScript versions, timeouts, crashes, and

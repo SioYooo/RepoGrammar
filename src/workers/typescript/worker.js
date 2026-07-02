@@ -1069,7 +1069,15 @@ function runOperation(requestId, payload, model, operation) {
       return;
     }
     const text = readBoundedText(payload.project_root, resolution.path, operation.max_bytes);
-    const factKind = text ? exportedFactKind(text, exportName) : null;
+    const providerFactKind = resolution.provider === "compiler" && text
+      ? exportedFactKindWithTypeScript(
+          model.typescript,
+          text,
+          exportName,
+          resolution.path
+        )
+      : null;
+    const factKind = providerFactKind || (text ? exportedFactKind(text, exportName) : null);
     if (factKind) {
       emitFact(
         requestId,
@@ -1077,8 +1085,15 @@ function runOperation(requestId, payload, model, operation) {
         operation,
         factKind,
         `symbol:${resolution.path}#export:${exportName}`,
-        "bounded project model resolved TS/JS re-export symbol",
-        [`tsjs_export_name=${exportName}`]
+        providerFactKind
+          ? "TypeScript compiler resolved TS/JS re-export symbol"
+          : "bounded project model resolved TS/JS re-export symbol",
+        [
+          `tsjs_export_name=${exportName}`,
+          `tsjs_import_specifier=${specifier}`,
+          `tsjs_import_resolution=${resolution.resolutionKind}`,
+        ],
+        { providerResolved: Boolean(providerFactKind) }
       );
     } else {
       emitUnknown(

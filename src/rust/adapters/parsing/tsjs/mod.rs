@@ -1044,6 +1044,66 @@ prisma.user.createMany({ data: [] });
     }
 
     #[test]
+    fn prisma_imported_shared_client_is_provider_required_candidate() {
+        let text = r#"import { prisma } from "./db";
+export async function listUsers() {
+  return prisma.user.findMany({ where: { active: true } });
+}
+export async function saveUser() {
+  return prisma.$transaction([prisma.user.create({ data: { name: "Ada" } })]);
+}
+"#;
+        let facts = parse_facts("src/repository.ts", text);
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            vec![
+                "prisma.query.create".to_string(),
+                "prisma.query.findMany".to_string(),
+                "prisma.transaction".to_string()
+            ]
+        );
+        let provider_required = facts
+            .iter()
+            .filter(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == "provider_required=typescript")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(provider_required.len(), 3);
+        assert!(provider_required.iter().all(|fact| {
+            fact.certainty == FactCertainty::Structural
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding_kind=prisma_client")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding_import_specifier=./db")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "binding_export_name=prisma")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "required_mechanism=typescript_export_graph")
+        }));
+
+        let external = r#"import { prisma } from "@acme/db";
+export async function listUsers() {
+  return prisma.user.findMany();
+}
+"#;
+        assert!(targets("src/external-prisma.ts", external).is_empty());
+        assert_eq!(
+            unknown_kinds("src/external-prisma.ts", external),
+            vec!["prisma_injected_client".to_string()]
+        );
+    }
+
+    #[test]
     fn drizzle_exact_schema_queries_and_transactions_anchor() {
         let text = r#"import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable } from "drizzle-orm/pg-core";

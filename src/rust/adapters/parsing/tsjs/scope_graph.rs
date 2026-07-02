@@ -171,6 +171,17 @@ impl ScopeGraphLite {
         }
     }
 
+    pub(super) fn repo_local_named_import(&self, name: &str) -> Option<(&str, &str)> {
+        let binding = self.imports.get(name)?;
+        if !binding.module.starts_with("./") && !binding.module.starts_with("../") {
+            return None;
+        }
+        match &binding.kind {
+            ImportKind::Named(original) => Some((binding.module.as_str(), original.as_str())),
+            ImportKind::Default | ImportKind::Namespace => None,
+        }
+    }
+
     pub(super) fn name_is_unsafe_at(&self, name: &str, byte: usize) -> bool {
         if self.unsafe_names.contains(name) {
             return true;

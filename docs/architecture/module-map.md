@@ -25,7 +25,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/npm/` | Thin npm/npx launcher and tests that download release binaries and exec the product binary without reimplementing RepoGrammar | `README.md`, `docs/specifications/installation.md`, `docs/development/testing.md` |
 | `src/rust/test_support/` | Shared deterministic Rust test helpers | `docs/development/testing.md` |
 | `src/rust/integration_tests/` | Crate-level Rust integration-style tests | `docs/development/testing.md` |
-| `src/workers/typescript/` | Transitional TypeScript semantic worker executable with bounded module/export/package operations, optional compiler-API module resolution, compiler-cross-checked export identity, and dependency-free structural fallback | `docs/specifications/semantic-workers.md` |
+| `src/workers/typescript/` | Transitional TypeScript semantic worker executable with bounded module/export/package operations, optional compiler-API module resolution, compiler-cross-checked export identity and shared-client binding, and dependency-free structural fallback | `docs/specifications/semantic-workers.md` |
 | `src/workers/python/` | CPython `ast`/`symtable`-backed Python worker for private parse-document extraction, private `tomllib` project-config summaries, and conservative framework-role NDJSON smoke coverage | `docs/specifications/semantic-workers.md`, `docs/specifications/python-analysis.md` |
 | `src/protocol/` | Semantic worker protocol notes and schema | `docs/specifications/semantic-workers.md` |
 | `src/fixtures/typescript/` | TypeScript/JavaScript source fixtures for Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle, and negative TS/JS adapter cases | `docs/development/testing.md` |

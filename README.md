@@ -68,9 +68,11 @@ aliases, and star re-exports remain typed `UNKNOWN`. When explicitly configured
 through the semantic-worker environment variables, the checked-in TypeScript
 worker can accept bounded module/export/package operations, use the TypeScript
 compiler API for module resolution, and cross-check exact Next.js
-file-convention export identity when a TypeScript module is available to that
-worker. Only matching TypeScript-provider `resolve_export` facts for exact
-Next.js anchors may become provider-resolved TS/JS-derived support; fallback
+file-convention export identity or relative repo-local Prisma shared-client
+bindings when a TypeScript module is available to that worker. Only matching
+TypeScript-provider `resolve_export` facts for exact Next.js anchors and
+`resolve_reexport` facts for provider-required Prisma `import { prisma } from
+"./db"` bindings may become provider-resolved TS/JS-derived support; fallback
 facts remain context only. Without that API it emits only structural fallback
 facts or typed `UNKNOWN`s. This is not full TypeScript/JavaScript semantic
 analysis.
@@ -100,7 +102,7 @@ analysis.
 | JS/TS Jest/Vitest | v0.2 conservative preview | Imported runner, imported alias runner, or ambient test-file runner with safe project context only; custom wrappers and foreign runner imports stay `UNKNOWN`. |
 | JS/TS Next.js | v0.2 compiler-cross-checked preview | `next` package context plus exact local App Router pages/layouts/routes and Pages Router pages/API routes; configured TypeScript workers can provider-cross-check exact route/page/layout/API export identity, while dynamic segments, route groups, parallel routes, middleware, server/client semantics, server actions, and re-exported routes remain context or `UNKNOWN`. |
 | JS/TS Fastify | v0.2 structural preview | Exact local Fastify factory receiver plus shorthand or literal `app.route` declarations; dynamic methods/options, plugin registration, and prefix semantics remain `UNKNOWN`. |
-| JS/TS Prisma | v0.2 structural preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; bulk operations, injected clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
+| JS/TS Prisma | v0.2 compiler-cross-checked preview | Exact local `new PrismaClient()` bindings plus whitelisted model read/write operations and array `$transaction`; configured TypeScript workers can provider-cross-check relative repo-local named shared-client imports, while bulk operations, injected clients, external shared clients, extensions, callback transactions, dynamic model/op access, and raw SQL remain `UNKNOWN`. |
 | JS/TS Drizzle | v0.2 structural preview | Exact Drizzle table factories, local `drizzle(...)` db bindings, whitelisted `select`/`insert`/`update`/`delete`, and `db.query.<table>.findMany/findFirst`; unresolved tables/dbs, dynamic builders, and raw SQL remain `UNKNOWN`. |
 | JS/TS React | Not supported | Components/hooks may be detected as roles but cannot form public family claims. |
 | Full JS/TS semantic analysis | Not supported | Only bounded optional TypeScript worker operations exist; no full Program/TypeChecker family support, dynamic wrapper support, package-script execution, or general JS/TS semantic claim. |

@@ -74,10 +74,12 @@ compiler API module is available to the worker, module-resolution facts can be
 reported as `SEMANTIC` with `provider=typescript`,
 `provider_resolved=true`, strict operation provenance, and config/package
 hashes. The worker can also use the TypeScript compiler API to cross-check
-exact export identity for Next.js file-convention anchors; matching
-`resolve_export` facts may become provider-resolved TS/JS-derived support only
-after the application layer verifies path/hash/code-unit/range, export name,
-framework role, and structural-anchor provenance. Without that API, the worker
+exact export identity for Next.js file-convention anchors and relative
+repo-local Prisma shared-client imports; matching `resolve_export` or
+`resolve_reexport` facts may become provider-resolved TS/JS-derived support
+only after the application layer verifies path/hash/code-unit/range, export
+name, framework role, import specifier where relevant, and structural-anchor
+provenance. Without that API, the worker
 uses only a dependency-free static project-model fallback and emits
 `STRUCTURAL` facts or typed `UNKNOWN`s with `provider_resolved=false`. The
 current slice does not bundle TypeScript, does not run package scripts, does
@@ -271,9 +273,10 @@ Provider output should translate to owned facts such as:
 1. Project discovery for tsconfig/jsconfig references plus package metadata.
 2. Bounded TypeScript worker operation slice for module/import/export/package
    facts with strict path/hash/range provenance. This is implemented for
-   operation-scoped requests, optional compiler module resolution, and
-   provider-cross-checked Next.js exact export identity; broader Program
-   construction remains future work.
+   operation-scoped requests, optional compiler module resolution,
+   provider-cross-checked Next.js exact export identity, and relative
+   repo-local Prisma shared-client binding; broader Program construction
+   remains future work.
 3. TypeScript worker that builds a `Program`, uses the compiler's module
    resolver and `TypeChecker`, and emits owned module/import/export/symbol
    facts.

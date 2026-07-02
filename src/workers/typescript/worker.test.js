@@ -130,6 +130,22 @@ function assertCompilerResolvedExport(fact, factKind, target, exportName) {
   assert(!JSON.stringify(fact).includes("export async function"));
 }
 
+function assertCompilerResolvedReexport(fact, factKind, target, exportName, specifier) {
+  assert.strictEqual(fact.fact_kind, factKind);
+  assert.strictEqual(fact.target, target);
+  assert.strictEqual(fact.origin.engine, "typescript");
+  assert.strictEqual(fact.origin.engine_version, "6.0.0");
+  assert.strictEqual(fact.origin.method, "compiler_api_module_resolver_v1");
+  assert.strictEqual(fact.certainty, "SEMANTIC");
+  assert(fact.assumptions.includes("provider=typescript"));
+  assert(fact.assumptions.includes("provider_resolved=true"));
+  assert(fact.assumptions.includes("query_operation=resolve_reexport"));
+  assert(fact.assumptions.includes(`tsjs_export_name=${exportName}`));
+  assert(fact.assumptions.includes(`tsjs_import_specifier=${specifier}`));
+  assert(fact.assumptions.includes("tsjs_import_resolution=compiler_api"));
+  assert(!JSON.stringify(fact).includes("new PrismaClient"));
+}
+
 function assertUnknown(fact, reason, kind) {
   assert.strictEqual(fact.fact_kind, "UNKNOWN");
   assert.strictEqual(fact.target, reason);
@@ -353,6 +369,56 @@ exports.isNamedExports = () => false;
 
   assert.strictEqual(fact.fact_kind, "SYMBOL");
   assert.strictEqual(fact.target, "symbol:src/exported.ts#export:named");
+}
+
+{
+  const root = workspace("compiler-api-reexport");
+  const source = writeFile(root, "src/repository.ts", "import { prisma } from './db';\n");
+  const target = writeFile(root, "src/db.ts", "export const prisma = new PrismaClient();\n");
+  writeFile(
+    root,
+    "node_modules/typescript/index.js",
+    `
+const path = require("path");
+exports.version = "6.0.0";
+exports.resolveModuleName = (specifier, containingFile) => ({
+  resolvedModule: {
+    resolvedFileName: path.join(path.dirname(containingFile), specifier + ".ts")
+  }
+});
+exports.ScriptTarget = { Latest: 99 };
+exports.SyntaxKind = { ExportKeyword: 1 };
+exports.getModifiers = (node) => node.modifiers || [];
+exports.createSourceFile = (_fileName, text) => ({
+  statements: text.includes("const prisma") ? [{
+    kind: "variable",
+    modifiers: [{ kind: 1 }],
+    declarationList: { declarations: [{ name: { text: "prisma" } }] },
+  }] : [],
+});
+exports.isFunctionDeclaration = () => false;
+exports.isClassDeclaration = () => false;
+exports.isEnumDeclaration = () => false;
+exports.isInterfaceDeclaration = () => false;
+exports.isTypeAliasDeclaration = () => false;
+exports.isVariableStatement = (node) => node.kind === "variable";
+exports.isExportAssignment = () => false;
+exports.isExportDeclaration = () => false;
+exports.isNamedExports = () => false;
+`
+  );
+
+  const fact = singleFact(runWorker(request(root, [source, target], [
+    operation(source, "./db#prisma", { operation: "resolve_reexport" }),
+  ])));
+
+  assertCompilerResolvedReexport(
+    fact,
+    "SYMBOL",
+    "symbol:src/db.ts#export:prisma",
+    "prisma",
+    "./db"
+  );
 }
 
 {

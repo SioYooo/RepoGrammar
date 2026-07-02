@@ -38,7 +38,7 @@ pub(super) fn query_anchor(
             note: "Prisma query model or operation is dynamic",
         });
     };
-    if bindings.name_is_unsafe_at(client, start_byte) || !bindings.prisma_clients.contains(client) {
+    if bindings.name_is_unsafe_at(client, start_byte) {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::UnresolvedImport,
             affected_claim: "prisma_client_binding",
@@ -54,18 +54,35 @@ pub(super) fn query_anchor(
             note: "Prisma operation is not in the exact allowlist",
         });
     }
+    let imported_client = bindings.repo_local_named_import(client);
+    if !bindings.prisma_clients.contains(client) && imported_client.is_none() {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "prisma_client_binding",
+            kind: "prisma_injected_client",
+            note: "Prisma client is not an exact local PrismaClient binding",
+        });
+    }
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=prisma_query".to_string(),
+        format!("model_name={model}"),
+        format!("operation={operation}"),
+        format!("where_shape={}", object_clause_shape(slice, "where")),
+        format!("select_include_shape={}", select_include_shape(slice)),
+        "transaction_shape=none".to_string(),
+        format!("raw_sql_present={}", raw_sql_present(slice)),
+    ];
+    if let Some((specifier, export_name)) = imported_client {
+        assumptions.extend(provider_required_prisma_client_assumptions(
+            client,
+            specifier,
+            export_name,
+        ));
+    }
     AnchorOutcome::Anchor(Anchor {
         target: format!("prisma.query.{operation}"),
         fact_kind: SemanticFactKind::ResolvedCall,
-        assumptions: vec![
-            "tsjs_anchor_kind=prisma_query".to_string(),
-            format!("model_name={model}"),
-            format!("operation={operation}"),
-            format!("where_shape={}", object_clause_shape(slice, "where")),
-            format!("select_include_shape={}", select_include_shape(slice)),
-            "transaction_shape=none".to_string(),
-            format!("raw_sql_present={}", raw_sql_present(slice)),
-        ],
+        assumptions,
     })
 }
 
@@ -90,7 +107,7 @@ pub(super) fn transaction_anchor(
             note: "Prisma transaction shape is not exact",
         });
     };
-    if bindings.name_is_unsafe_at(client, start_byte) || !bindings.prisma_clients.contains(client) {
+    if bindings.name_is_unsafe_at(client, start_byte) {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::UnresolvedImport,
             affected_claim: "prisma_client_binding",
@@ -106,16 +123,48 @@ pub(super) fn transaction_anchor(
             note: "Prisma callback transaction is not a safe exact anchor",
         });
     }
+    let imported_client = bindings.repo_local_named_import(client);
+    if !bindings.prisma_clients.contains(client) && imported_client.is_none() {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::UnresolvedImport,
+            affected_claim: "prisma_client_binding",
+            kind: "prisma_injected_client",
+            note: "Prisma transaction client is not an exact local PrismaClient binding",
+        });
+    }
+    let mut assumptions = vec![
+        "tsjs_anchor_kind=prisma_transaction".to_string(),
+        "operation=transaction".to_string(),
+        "transaction_shape=array".to_string(),
+        format!("raw_sql_present={}", raw_sql_present(slice)),
+    ];
+    if let Some((specifier, export_name)) = imported_client {
+        assumptions.extend(provider_required_prisma_client_assumptions(
+            client,
+            specifier,
+            export_name,
+        ));
+    }
     AnchorOutcome::Anchor(Anchor {
         target: "prisma.transaction".to_string(),
         fact_kind: SemanticFactKind::ResolvedCall,
-        assumptions: vec![
-            "tsjs_anchor_kind=prisma_transaction".to_string(),
-            "operation=transaction".to_string(),
-            "transaction_shape=array".to_string(),
-            format!("raw_sql_present={}", raw_sql_present(slice)),
-        ],
+        assumptions,
     })
+}
+
+fn provider_required_prisma_client_assumptions(
+    local_name: &str,
+    specifier: &str,
+    export_name: &str,
+) -> Vec<String> {
+    vec![
+        "provider_required=typescript".to_string(),
+        "binding_kind=prisma_client".to_string(),
+        format!("binding_local_name={local_name}"),
+        format!("binding_import_specifier={specifier}"),
+        format!("binding_export_name={export_name}"),
+        "required_mechanism=typescript_export_graph".to_string(),
+    ]
 }
 
 fn select_include_shape(slice: &str) -> &'static str {

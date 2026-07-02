@@ -90,6 +90,14 @@
   provider-resolved TS/JS-derived support fact with `provider=typescript` and
   `query_operation=resolve_export`. Dependency-free fallback export facts still
   carry `provider_resolved=false` and remain context only.
+- Prisma TS/JS anchors can now represent relative repo-local named shared-client
+  imports such as `import { prisma } from "./db"` as provider-required
+  candidates. Configured TypeScript workers receive a bounded
+  `resolve_reexport` operation like `./db#prisma`; only matching
+  TypeScript-provider facts with `provider_resolved=true` can produce
+  provider-resolved Prisma support. External shared clients, fallback worker
+  facts, callback transactions, dynamic operations, and raw SQL remain
+  non-supporting context or typed `UNKNOWN`.
 - Rust cfg/cfg_attr build-variant UNKNOWNs now carry bounded Cargo feature
   context, including the nearest discovered `Cargo.toml`, feature predicate
   names, and whether each feature is declared there. These assumptions improve
