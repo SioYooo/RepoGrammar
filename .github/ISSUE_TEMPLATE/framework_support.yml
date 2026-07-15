@@ -1,0 +1,50 @@
+name: Framework support
+description: Propose or refine a framework-family support boundary.
+title: "framework: "
+labels:
+  - framework
+  - needs-triage
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Support goal
+      description: What family should RepoGrammar recognize?
+    validations:
+      required: true
+  - type: textarea
+    id: positive
+    attributes:
+      label: Positive fixture cases
+      description: List the exact source-backed cases that should form a family. Include at least three compatible support members when a family claim is expected.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: negative
+    attributes:
+      label: Negative fixture cases
+      description: List lookalikes, wrappers, dynamic behavior, low-support examples, and ambiguous cases that must remain UNKNOWN or unsupported.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: UNKNOWN preservation
+      description: Which cases must remain typed UNKNOWN, and which stronger evidence would safely reduce them?
+    validations:
+      required: true
+  - type: textarea
+    id: non_claims
+    attributes:
+      label: Non-claims
+      description: What must this support not claim?
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: Tests, fixtures, and docs that would prove the boundary.
+      render: text

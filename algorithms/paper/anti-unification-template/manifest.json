@@ -1,0 +1,20 @@
+{
+  "domain": "anti-unification-template",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "Anti-unification overview",
+      "authors": ["Wikipedia contributors"],
+      "url": "https://en.wikipedia.org/wiki/Anti-unification",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_non_primary_overview",
+      "used_by_milestone": ["M9"],
+      "implementation_notes": [
+        "Use only as orientation; select primary Plotkin and unranked-term sources before implementing.",
+        "Adapt theory to support-aware multi-member columns with provenance."
+      ]
+    }
+  ]
+}

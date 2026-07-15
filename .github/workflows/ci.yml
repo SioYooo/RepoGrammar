@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: node src/workers/typescript/worker.test.js
+      - run: node src/npm/repogrammar.test.js
+      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
+      - run: python3 src/workers/python/worker.test.py
+      - run: bash src/install/repogrammar-install.test.sh
+      - run: cargo run --quiet --bin repo-guard -- check
+      - if: github.event_name == 'pull_request'
+        run: cargo run --quiet --bin repo-guard -- check-diff --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
+
+  macos-product-smoke:
+    name: macOS Rust and onboarding smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Rust tests on macOS
+        run: cargo test --workspace --all-features
+      - name: Build and exercise isolated product setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --bin repogrammar
+          smoke_root="${RUNNER_TEMP}/repogrammar-macos-smoke"
+          mkdir -p "${smoke_root}/home" "${smoke_root}/project" "${smoke_root}/tools"
+          ln -s "$(command -v git)" "${smoke_root}/tools/git"
+          ln -s "$(command -v python3)" "${smoke_root}/tools/python3"
+          tool_path="${smoke_root}/tools"
+          binary="${PWD}/target/release/repogrammar"
+          "${binary}" version
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
+            --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
+            --json --progress never > "${smoke_root}/dry-run.json"
+          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "dry_run" and not v["repository_index_ready"]' "${smoke_root}/dry-run.json"
+          printf 'def macos_smoke():\n    return True\n' > "${smoke_root}/project/app.py"
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
+            --project "${smoke_root}/project" --target auto --yes --no-autosync \
+            --json --progress never > "${smoke_root}/live.json"
+          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["product_self_test_state"] == "passed" and v["repository_index_ready"] and not v["agent_query_ready"] and v["suggested_question"] is None' "${smoke_root}/live.json"
+
+  windows-installer-smoke:
+    name: Windows installer smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and install repogrammar.exe from source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Isolated command/data dirs keep the smoke off the runner's real
+          # profile; -InstallCliOnly never runs agent wiring, so no real
+          # Codex/Claude config is written.
+          $env:REPOGRAMMAR_COMMAND_DIR = Join-Path $env:RUNNER_TEMP "rg-bin"
+          $env:REPOGRAMMAR_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "rg-data"
+          powershell -ExecutionPolicy Bypass -File src/install/install.ps1 -InstallCliOnly -FromSource -Yes
+          $exe = Join-Path $env:REPOGRAMMAR_COMMAND_DIR "repogrammar.exe"
+          if (!(Test-Path -LiteralPath $exe)) {
+            throw "installed repogrammar.exe not found at $exe"
+          }
+          & $exe version
+          if ($LASTEXITCODE -ne 0) {
+            throw "repogrammar.exe version failed with exit code $LASTEXITCODE"
+          }
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "repogrammar-windows-smoke"
+          $home = Join-Path $smokeRoot "home"
+          $project = Join-Path $smokeRoot "project"
+          New-Item -ItemType Directory -Force -Path $home,$project | Out-Null
+          $oldHome = $env:HOME
+          $oldProfile = $env:USERPROFILE
+          $oldPath = $env:PATH
+          $gitDirectory = Split-Path -Parent (Get-Command git).Source
+          $pythonDirectory = Split-Path -Parent (Get-Command python).Source
+          $env:HOME = $home
+          $env:USERPROFILE = $home
+          $env:PATH = "$gitDirectory;$pythonDirectory;$env:SystemRoot\System32;$env:SystemRoot"
+          try {
+            $dryRun = & $exe setup --project $project --target auto --dry-run --no-autosync --json --progress never | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $dryRun.status -ne "dry_run" -or $dryRun.repository_index_ready) {
+              throw "repogrammar.exe setup dry-run failed"
+            }
+            "def windows_smoke():`n    return True`n" | Set-Content -Encoding utf8 (Join-Path $project "app.py")
+            $live = & $exe setup --project $project --target auto --yes --no-autosync --json --progress never | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $live.product_self_test_state -ne "passed" -or !$live.repository_index_ready) {
+              throw "repogrammar.exe product MCP self-test failed"
+            }
+            if ($live.agent_query_ready -or $null -ne $live.suggested_question) {
+              throw "Windows repository-only smoke overclaimed agent readiness"
+            }
+          } finally {
+            $env:HOME = $oldHome
+            $env:USERPROFILE = $oldProfile
+            $env:PATH = $oldPath
+          }

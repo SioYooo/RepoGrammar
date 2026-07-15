@@ -1,0 +1,21 @@
+{
+  "domain": "syntax-parsing",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "Tree-sitter documentation: introduction and research background",
+      "authors": ["Tree-sitter maintainers"],
+      "url": "https://tree-sitter.github.io/tree-sitter/",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_license_not_verified",
+      "used_by_milestone": ["M3", "M4"],
+      "implementation_notes": [
+        "Use Tree-sitter for tolerant concrete syntax and candidate extraction.",
+        "Do not expose Tree-sitter node types beyond parsing adapters.",
+        "Treat syntax fingerprints as structural evidence, not semantic proof."
+      ]
+    }
+  ]
+}

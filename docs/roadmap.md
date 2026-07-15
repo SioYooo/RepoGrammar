@@ -1,0 +1,555 @@
+# Roadmap
+
+## Bootstrap complete
+
+- Repository governance and mirrored agent contract.
+- Rust package skeleton.
+- Semantic worker boundary plus v1 protocol tokens, schemas, NDJSON fixtures,
+  and a Rust-side TypeScript process adapter that validates worker stdout into
+  owned semantic facts without treating those facts as family evidence.
+- Operation-scoped TypeScript worker executable that validates bounded
+  module/export/package resolution requests, uses a TypeScript compiler API for
+  provider-resolved module facts when one is available, and falls back to
+  dependency-free structural `UNKNOWN`/diagnostic facts without enabling family
+  claims by itself.
+- Metadata-only algorithm paper archive under `algorithms/paper/`.
+- Pattern-family-first CLI command surface and safe command-contract parsing.
+- Repo-local lifecycle for `.repogrammar/`, including init/uninit,
+  status/doctor, conservative unlock, redacted log metadata, and Git ignore
+  hygiene.
+- Git-aware TypeScript and JavaScript file discovery substrate with strict
+  hashes, default exclusions, size-limit handling, symlink safety, skip reasons,
+  and deterministic ordering.
+- Python `.py` discovery and CPython AST-backed structural code-unit extraction
+  for modules, functions, async functions, classes, methods, FastAPI
+  route-shaped functions, pytest tests/fixtures, Pydantic model-shaped classes,
+  SQLAlchemy model-shaped classes, and SQLAlchemy repository method-shaped
+  functions, with Python virtualenv/cache/dependency directories skipped.
+- CPython `symtable` structural scope anchors, path-derived Python module-name
+  anchors, and private project-config parsing for sanitized root
+  `pyproject.toml` (`tomllib`), `setup.cfg` (`configparser`), and `setup.py`
+  (CPython `ast`, never executed, strict complete static call/mapping shapes);
+  their deduplicated root union is structural candidate context, not packaging
+  precedence, and does not prove family claims.
+- SQLite storage substrate with generation-scoped migrations, WAL settings,
+  foreign-key enforcement, semantic-fact/evidence and family-evidence write
+  validation for building generations, validation before activation, and
+  rollback preservation for failed generations.
+- Syntax-only `index`/`sync` wiring that stores TS/JS discovery metadata and
+  structural code units in active SQLite generations without source snippets,
+  absolute paths, or family evidence.
+- Lightweight TS/JS framework-role fact storage for syntax-origin Express,
+  React, Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle code-unit shapes,
+  using `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions
+  without enabling family claims by themselves.
+- Lightweight Python framework-role fact storage for CPython AST-origin
+  FastAPI, pytest, Pydantic, and SQLAlchemy code-unit shapes, using
+  `FRAMEWORK_HEURISTIC` certainty and unresolved-binding assumptions without
+  enabling family claims by themselves.
+- v0.2 agent-adoption read displacement: MCP initialize/tool guidance now
+  steers agents to `repogrammar_context` before broad grep/read loops for
+  pattern-family questions, and CLI/MCP expose explicit bounded source-span
+  opt-in over hash-checked read-plan spans while keeping metadata-only output as
+  the default.
+- v0.2 conservative TS/JS exact-anchor family support for Express route
+  handlers, Jest/Vitest suites/tests (with Mocha and `node:test` exact-import
+  aliasing under a required-equal `runner_kind`), Zod schema builders, NestJS
+  `@nestjs/common` controller/route/injectable/module decorators, Hono
+  `new Hono()` routes, and structural-preview Next.js, Fastify,
+  Prisma, and Drizzle adapters. Support is derived only from exact structural
+  anchors, requires at least three complete-link-compatible members, and blocks
+  dynamic, unsafe, unresolved, stale, raw, or insufficient evidence with typed
+  `UNKNOWN`.
+- Bounded exact-anchor Python support derivation that creates separate
+  `DATAFLOW_DERIVED` facts only when validated CPython anchors exact-match the
+  Python framework compatibility table for a unit with one framework role.
+- Bounded same-function FastAPI route service-call context anchors for import-resolved static
+  local forms such as `service = UserService(); service.list_users()` and
+  `runner = run_query; runner()`. These remain structural handler/service
+  context and are not family-support targets.
+- Static FastAPI request body/path/query/header/cookie marker anchors for
+  route-shape context. These remain structural metadata and are not
+  family-support targets.
+- SQLAlchemy repository-method exact anchors now include direct
+  `Session.commit`, `Session.rollback`, `Session.scalar`, `Session.scalars`, and
+  async session equivalents, while relationship and `Session.add` anchors remain
+  context/effect metadata.
+- Narrow Python exact-anchor variation metadata when an already-ready family has
+  multiple exact-compatible framework-anchor support targets.
+- Internal Pyrefly framework-identity request planning for plausible Python
+  candidate groups. The planner builds validated future-provider request scopes
+  from in-memory facts or active-generation snapshots only; it does not execute
+  Pyrefly, persist provider facts, or upgrade family claims.
+- Optional command-level semantic-worker ingestion for `index`/`sync` when
+  `REPOGRAMMAR_TYPESCRIPT_WORKER` names an explicit executable, with optional
+  argv supplied by `REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON`. Accepted facts must
+  match the building generation's indexed code-unit path, hash, and range;
+  worker fallback keeps syntax-only indexing, and mismatched evidence aborts the
+  new generation.
+- Active `files`/`units` inventory reads for repo-relative indexed-file metadata
+  and file-manifest-only or syntax-only code units from the validated active
+  generation.
+- Internal active-generation claim-input snapshot plus semantic-fact freshness
+  and readiness gate that compares active fact evidence with current source
+  hashes and blocks stale facts, weak certainty, conflicting certainty, and
+  `UNKNOWN` fact kinds with typed `UNKNOWN` before any future family claim
+  builder can consume them.
+- FamilyStore substrate for generation-scoped family records, members,
+  variation slots, and family-bound evidence, plus a conservative EC-MVFI-lite
+  builder that only populates family rows from repeated compatible candidates
+  with strong semantic/dataflow support.
+- FamilyStore-backed `families`, `family`, `member`, `find`, `explain`, and
+  `check` CLI read paths that return stored family detail or typed
+  `UNKNOWN`; missing active indexes still use fallback guidance.
+- v0.1 TS/JS release fixture smoke gate that exercises product CLI JSON paths
+  across committed Express, React, Jest/Vitest, mixed JS/TS, low-support, and
+  mixed-language fixture shapes while preserving syntax-only `UNKNOWN` query
+  behavior by default.
+- Python v0.1 release fixture smoke gate that exercises committed direct
+  FastAPI, FastAPI alias, pytest, Pydantic model/settings, SQLAlchemy, mixed,
+  dynamic-unknown, and low-support fixture shapes through product CLI JSON
+  paths while preserving low-support/dynamic `UNKNOWN` query behavior.
+- Source-checkout release-readiness smoke coverage for fresh-checkout product
+  tests, npm package dry-run and `REPOGRAMMAR_BINARY` launcher dogfood,
+  repository lifecycle JSON paths, MCP `tools/list`, installer/uninstaller
+  dry-run plans, and optional source-tree secret scans. Preview tag creation
+  and published artifact verification remain separate release operations.
+- No-worker exact-anchor direct FastAPI, FastAPI alias, pytest, Pydantic
+  model/settings, SQLAlchemy model-field, and SQLAlchemy session/repository
+  family smoke that proves derived support can reach the
+  EC-MVFI-lite family read path without claiming provider-backed Python
+  semantics, including transaction-boundary `Session.commit`/`Session.rollback`
+  smoke coverage, plus a FastAPI exact-anchor target variation smoke path.
+- Test-only strong FastAPI fixture support that injects compatible `SEMANTIC`
+  facts through the existing worker boundary to prove family reads, stale
+  evidence fallback, and leakage guards without claiming production Python
+  semantic-provider support.
+- Storage-aware `status`/`doctor` reporting for active generation health,
+  schema version, journal mode, integrity checks, and invalid active-generation
+  pointers.
+- Core domain type placeholders.
+- Parser, storage, telemetry, CLI, and MCP boundaries.
+- Repository guard and CI quality gates.
+
+## Next implementation plan
+
+RepoGrammar v0.1 now follows a product-first Python analysis phase plan.
+The detailed coordination artifacts are
+`docs/plans/v0.1-parallel-development-plan.md`, the Python implementation plan
+in `docs/plans/python-v0.1-implementation-plan.md`, and the immediate
+hardening checkpoint in `docs/plans/v0.1-substrate-hardening-checkpoint.md`.
+
+The substrate hardening checkpoint now covers generation immutability,
+lifecycle doctor hygiene, repo-guard coverage, bounded reads, parent Git ignore
+behavior, manifest/status/doctor schema clarity, semantic-worker request
+limits, index-lock cleanup/unlock gates, conservative family query reads, and
+read-only MCP serving over `repogrammar_context`. With ADR-0011 and ADR-0012
+accepted, the next analysis implementation slice should pivot to Python v0.1
+through a claim-driven selective cascade while preserving the family claim input
+contract and EC-MVFI-lite readiness gates rather than exposing substrate records
+as overclaimed user-visible family claims.
+
+A separate open P2 security workstream is defined by ADR-0023. Before any
+runtime change, it requires evidence-only qualification of the exact
+`cap-std`/`cap-fs-ext` candidate across five compile targets and native Linux,
+macOS, and Windows no-follow/reparse fixtures. Only then may one private
+handle-relative adapter authority and the simultaneous discovery/source-store/
+fingerprint migration proceed. The ADR is accepted design, not a dependency
+approval or completed confinement fix; see the incomplete filesystem
+confinement completion review.
+
+1. Phase 1: repo-local lifecycle.
+2. Phase 1.5: language and provider abstraction.
+3. Phase 1.6: Python v0.1 analysis boundary.
+4. Phase 1.7: optional CodeGraph provider boundary.
+5. Phase 1.8: UNKNOWN governance.
+6. Phase 2: file discovery for Python v0.1 plus transitional TS/JS substrate.
+7. Phase 3: storage and generation.
+8. Phase 4: parsers.
+9. Phase 5: semantic and framework facts.
+10. Phase 6: pattern-family compression / EC-MVFI-lite.
+11. Phase 7: query CLI and MCP.
+12. Phase 8: install and uninstall.
+13. Phase 9: release fixtures and smoke gate.
+
+The current codebase has completed the repo-local lifecycle substrate,
+TS/JS and Python `.py` discovery, generation-scoped SQLite storage, syntax-only
+TS/JS and CPython AST-backed Python code-unit indexing, syntax-origin
+framework-role fact storage, CodeUnit-derived IR node/containment-edge storage,
+active
+file-manifest-only or syntax-only files/units inventory reads, FamilyStore-backed
+pattern-family query read paths with typed `UNKNOWN`, internal active
+claim-input snapshot reads,
+semantic-fact/evidence storage substrate, the Rust-side semantic-worker
+process/NDJSON validation boundary, and opt-in command-level semantic-fact
+ingestion through the storage gate, bounded exact-anchor Python support
+derivation, bounded same-function FastAPI service-call context anchors, plus an
+internal semantic-fact file-hash freshness and claim-input
+readiness gate, and read-only MCP serving through the
+same query layer, narrow global Codex/Claude MCP installer writes, and the
+v0.1 TS/JS and Python release fixture smoke gates. A v0.2 internal Rust
+self-dogfood slice now discovers `.rs`/`Cargo.toml`, uses Tree-sitter Rust for
+structural code units and typed UNKNOWNs, and can form conservative
+RepoGrammar-owned implementation families without running Cargo, rustc, build
+scripts, or macros. Root `Cargo.toml` build-variant ambiguity can block
+repository-wide Rust self-dogfood families; nested fixture/package manifests
+remain scoped and must not globally block unrelated root Rust family support.
+The Rust ports layer now also has future Python, Rust, and TS/JS
+semantic-provider contracts for candidate-scoped requests, provider provenance
+assumptions, cache-key dimensions, and recoverable provider-unavailable
+`UNKNOWN`s, plus an internal planner for future Pyrefly framework-identity
+request scopes over active-generation snapshots, but no provider adapter
+execution is wired except the default-safe Rust Cargo metadata project-model
+stage. That adapter can parse `cargo metadata --format-version=1 --no-deps`
+output into owned `PROJECT_CONFIG` facts during `index`/`sync`/`resync` when
+same-generation `Cargo.toml` code units exist; it does not execute build
+scripts or proc macros and does not prove Rust symbol/type/call semantics. The broader Rust/TSJS
+semantic-provider roadmap is tracked in
+`docs/plans/rust-tsjs-semantic-analysis-plan.md`.
+Parser-origin Rust cfg UNKNOWNs can now use nearest discovered Cargo manifests
+to record simple feature predicates and declared/undeclared feature state as
+bounded `cargo_feature_cfg_model` context without evaluating cfgs.
+The v0.2 preview also includes a conservative Java/Spring structural slice:
+`.java` discovery, Tree-sitter Java code-unit extraction, exact imported/FQN
+Spring MVC/stereotype/Spring Boot/Spring Data anchors, application-layer
+`repogrammar-java-derived` support promotion, support>=3 family gates, and
+typed `UNKNOWN` boundaries for lookalike annotations, nonliteral route paths,
+DI/proxy/component-scan/runtime/classpath behavior. It does not execute Maven,
+Gradle, javac, annotation processors, or Spring runtime code. Wave J1 has landed
+on top of this: JUnit 5/4 and TestNG test methods, JPA/Jakarta Persistence
+entities under dual `jakarta`/`javax` roots (jakarta and javax never cluster
+together), JAX-RS/Jakarta REST resource classes and methods under dual roots,
+Mockito test-context metadata, Lombok-as-`UNKNOWN`, and Spring Data derived-query
+metadata, all under the same exact-import/FQN gate and support>=3 family gate.
+The v0.2 preview also includes a conservative C# structural slice (Wave CS1):
+`.cs` discovery skipping MSBuild `obj/`, Tree-sitter C# code-unit extraction,
+exact using/FQN-gated ASP.NET Core controller/action, minimal-API route, EF Core
+`DbContext`/`DbSet`, and xUnit/NUnit/MSTest anchors, application-layer
+`repogrammar-csharp-derived` support promotion, support>=3 family gates, and
+typed `UNKNOWN` boundaries for lookalike attributes, actions outside a
+controller, unresolvable minimal-API receivers, MSTest methods without a
+`[TestClass]`, `#if` build variants, and DI/filter-pipeline/convention-routing/
+source-generator/dynamic behavior. It does not execute MSBuild, Roslyn, source
+generators, the ASP.NET Core runtime, or evaluate preprocessor conditions.
+The v0.2 preview also includes a conservative C/C++ structural slice (Wave C1):
+`.c`/`.h` (C grammar) and `.cc`/`.cpp`/`.cxx`/`.hh`/`.hpp`/`.hxx` (C++ grammar)
+discovery skipping CLion `cmake-build-*` directories, include-evidence-gated
+GoogleTest/Catch2/doctest/Boost.Test registration-macro anchors (both
+function-definition and call-expression parse shapes), application-layer
+`repogrammar-cpp-derived` support promotion, support>=3 family gates, structural
+`compile_commands.json`/`vcpkg.json`/`conanfile.txt` inventory, and typed
+`UNKNOWN` boundaries for macro lookalikes without includes, Catch2-vs-doctest
+ambiguity, `#if` build variants (with an include-guard exception), ERROR-node
+macro regions, Qt `Q_OBJECT`/moc, string SIGNAL/SLOT, and function-pointer
+dispatch. It does not run a build, compiler, preprocessor, or moc/protoc, and
+never expands macros.
+The v0.2 preview also widens Rust beyond self-dogfood with general framework
+anchors (Wave E1): use-path/FQN-gated serde `#[derive(Serialize/Deserialize)]`
+models, thiserror `#[derive(Error)]` enums, `#[tokio::main]`/`#[tokio::test]`
+entrypoints, clap `#[derive(Parser/Subcommand/Args)]` parsers, and axum literal
+`Router::new().route(...)` segments, promoted through the existing
+`repogrammar-rust-derived` support path under support>=3 family gates. Derive/
+attribute macro expansion, trait/extractor resolution, tower middleware
+ordering, and points-to remain typed `UNKNOWN`; derive-without-use and
+non-literal/untraceable axum routes are blocking `UNKNOWN`s. The Rust readiness
+scope is now `bounded_v0_2_preview` (self-dogfood families still form).
+
+The v0.2 preview also widens Python beyond FastAPI/pytest/SQLAlchemy/Pydantic
+with bounded preview anchors (Wave E1): Django models/urls/tests, Flask routes,
+stdlib `unittest`, click/typer commands, and Celery tasks, each gated by the
+same exact-import discipline and support>=3 family threshold. Settings, URL
+reversing, string dispatch, patch targets, and task-queue routing remain typed
+`UNKNOWN`, and these previews do not change the ADR-0011 v0.1 focus statement.
+Continue one boundary at a time:
+Python repo-local module/import graph, safe project configuration, provider
+adapter execution, bounded framework-role propagation, or richer
+family-claim gates. Keep
+syntax-only code units, structural IR, syntax-origin framework-role facts, and
+weak stored semantic facts out of family claims unless the conservative builder
+has stronger compatible support.
+
+Do not advance full mining or broad installer writes until parser output,
+family-evidence read paths, full public freshness checks, MCP self-tests, and
+evidence contracts remain validated together.
+
+## Command implementation path
+
+- Add full repository/worktree freshness metadata for stored family evidence.
+- Persist safe Python/pytest configuration facts before provider-backed claim
+  upgrades; default indexing already passes discovered `.py` inventory and
+  sanitized root `pyproject.toml`, `setup.cfg`, and static-literal `setup.py`
+  source-root candidates to the parser for source-tied repo-local import facts;
+  this union does not model packaging precedence.
+- Add typed IR attributes only after CodeUnit-derived IR nodes and containment
+  edges remain stable.
+- Extend `find`, `family`, `explain`, and `check` beyond the current
+  EC-MVFI-lite/typed-UNKNOWN slice as stronger semantic evidence becomes
+  available.
+- Harden read-only MCP self-tests for the default `repogrammar_context` tool and
+  missing/stale-index fallback semantics.
+- Broaden safe installer writes beyond explicit global Codex/Claude MCP
+  registration only after native agent detection, backups, receipts, and MCP
+  self-tests are validated for the expanded scope.
+
+## v0.1 language scope
+
+- Official target: Python.
+- Framework focus: FastAPI, pytest, SQLAlchemy, and Pydantic.
+- v0.2 structural previews: TS/JS exact anchors, Rust self-dogfood, and
+  Java/Spring exact imported/FQN anchors remain bounded, non-official-v0.1
+  support.
+- ADR-0019 authorizes additional bounded v0.2 structural previews: C# and
+  C/C++ language slices, Java framework deepening (JUnit/TestNG/Mockito,
+  JPA, JAX-RS, Lombok-as-UNKNOWN — Wave J1 landed), and framework widening for
+  Rust, Python, and TS/JS, executed per
+  `docs/plans/multi-language-expansion-plan.md` without changing the
+  official Python-first v0.1 scope.
+- Goal: validate pattern-family representation with high evidence density in
+  Python backend and test repositories.
+
+## Top-20 language expansion gate
+
+ADR-0020 accepts the official TIOBE July 2026 ranking as a frozen planning
+snapshot, not a current-support claim. The ranked set is Python, C, C++, Java,
+C#, JavaScript, Visual Basic, SQL, R, Rust, Delphi/Object Pascal, Scratch, Go,
+PHP, Swift, Ada, Assembly, MATLAB, Fortran, and Ruby. TypeScript remains a
+current extra and is excluded from the 20-language denominator.
+
+The active execution authority is
+`docs/plans/top-20-language-expansion-plan.md`. It keeps the work disjoint:
+
+- current convergence (7): Python, C, C++, Java, C#, JavaScript, Rust;
+- extra convergence (not counted): TypeScript;
+- N1 (4): Go, PHP, Swift, Ruby;
+- N2 (4): Visual Basic, Delphi/Object Pascal, Ada, Fortran;
+- N3 (3): SQL, R, MATLAB; and
+- N4 (2): Assembly, Scratch.
+
+Go's N1 preflight is accepted in
+`docs/decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`, and
+its discovery/config module now inventories bounded `.go`, root/nested
+`go.mod`, and root/nested `go.work` under distinct `go`/`go-config` tokens.
+Default indexing treats both tokens as parser-source-read-free inventory, aggregates
+one path-free unsupported warning per token, persists no Go units/facts/IR/
+families, reports Go-only generations as `file_manifest_only`, and keeps
+inventory-only source/config deltas incremental with zero Go reparses. Warning
+derivation uses the whole manifest, and copy-forward purges claim-bearing
+records for Go paths. Frontend/IR must restore token-based project-context
+invalidation before adding Go semantics. A
+pure path classifier records normalized Go-tool exclusion, `_test.go`, and the
+dated Go 1.26.5 known GOOS/GOARCH suffix shape without selecting a build
+environment; source marker scanning remains deferred. Go is therefore
+`discovered_only` and unsupported. Its future syntax fallback may use a
+version-pinned Tree-sitter Go grammar; authoritative facts require an explicit,
+opt-in, sandboxed standard-library worker over supplied inputs using
+`go/parser`, `go/token`, candidate-scoped `go/types`, and
+`go/build/constraint`. Default analysis must not run `go/packages`, `go list`,
+gopls, repository build/test/
+generate commands, cgo, or an ambient importer. The current generic process
+adapter is not the required Go OS sandbox. Build/config/workspace selection
+remains structural or typed `UNKNOWN` until an exact environment and precedence
+model exists. The unchecked gate and post-decision risk record are in
+`docs/reports/language-support/go-completion-review.md`.
+
+PHP's N1 preflight and bounded discovery/configuration module are recorded in
+`docs/decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`; PHP is
+`discovered_only` and unsupported. Stable `php`/`php-config` tokens inventory
+exact `.php` and the four accepted Composer/PHPUnit config basenames. One pure
+classifier gives config precedence, applies PHP-only `.composer`/
+`.phpunit.cache` exclusions without globally hiding other languages, and leaves
+exact `vendor` under the existing global exclusion. Indexing stores only path/
+raw-byte hash/size/token metadata, bypasses source-store/parser work, emits one
+path-free warning per token, reports honest file-manifest/mixed modes, keeps
+inventory deltas incremental, and purges legacy PHP claim records. No config is
+decoded or parsed; custom `vendor-dir`, project profile, dependency, worker,
+parser, unit, IR, fact, `UNKNOWN`, family, and readiness remain unimplemented.
+The candidate production frontend remains `mago-syntax` 1.43.0 only in a
+separately reviewed OS-sandboxed worker. Official PHP 8.5.8 `php -n -l` is the
+isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/
+location differential and separately qualification-gated fallback. Tree-sitter
+PHP 0.24.2 is syntax fallback only. The first target remains exact
+`php.phpunit.test_method`; the incomplete semantic gate and four-part record are
+in `docs/reports/language-support/php-completion-review.md`.
+
+Swift's N1 preflight and bounded discovery/configuration module are recorded in
+`docs/decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`. Swift
+is `discovered_only` and unsupported. Stable `swift`/`swift-config` tokens
+persist bounded path/hash/size/token metadata for exact `.swift` and the exact
+Swift config basename grammar through one pure classifier. Exact `.build` and
+`.swiftpm` are Swift-only exclusions; other languages below them remain
+visible. Source/config bytes bypass the source store and parser, Swift-only
+generations are `file_manifest_only`, warnings are one per token, deltas remain
+incremental, and legacy claim records are purged. No dependency, toolchain,
+worker, parser, project model, unit, IR, fact, typed `UNKNOWN`, family, or
+readiness behavior exists. The production syntax candidate is exact
+SwiftSyntax 603.0.2 in a separately reviewed worker, qualified against the
+exact Swift 6.3.3 compiler. Exact 6.3.3 SourceKit/sourcekitd is only an isolated
+semantic identity candidate and must not open or build the target repository.
+The next module is documentation/evidence-only frontend, differential,
+supply-chain, and sandbox qualification. Default analysis must not evaluate
+SwiftPM manifests or run Swift, SwiftPM, Xcode, macros, plugins, dependencies,
+generators, tests, child processes, or network access. The first future family
+is the narrow direct `swift.xctest.test_method`. Swift Testing is
+deferred because `@Test` is a compiler macro. The incomplete evidence matrix
+and four-part risk review are in
+`docs/reports/language-support/swift-completion-review.md`. The accepted
+preflight and discovery commits are
+`d293238723c0b943d9665f05a4db948fba0f0e35` and
+`9bc1960db21e62216f2c9b85e88e32e9733390b0`. Development is paused at this
+boundary; `docs/plans/swift-n1-qualification-handoff.md` defines the next
+source-backed `QUALIFIED`/`NO_GO`/`BLOCKED`/`INCONCLUSIVE` stage and forbids
+combining it with production artifact admission.
+
+Ruby's N1 preflight and bounded discovery/config module are recorded in
+`docs/decisions/ADR-0022-ruby-prism-minitest-preflight.md`; Ruby is now
+`discovered_only` and unsupported. Stable `ruby`/`ruby-config` tokens persist
+bounded source-free file metadata through one pure path classifier, Ruby-only
+`.bundle`/`.ruby-lsp` exclusion, parser/source-store bypass, deterministic
+one-per-token warnings, honest file-manifest/mixed modes, incremental metadata
+deltas, and legacy-claim purge. Autosync retains its generic Git-independent
+fingerprint policy. No unit, IR, fact, `UNKNOWN`, family, readiness promotion,
+dependency, or Ruby/Bundler execution is added. The `ruby-prism` 1.9.0 candidate
+remains native C99/FFI and unauthorized until the separate checksum/vendor,
+platform, corpus/fuzz, range/diagnostic, resource, and OS-sandbox gates pass.
+The first target remains the exact direct `ruby.minitest.test_method` slice;
+alternate engines, dynamic loading, inheritance, metaprogramming, generated
+sources, and runtime test behavior remain non-claims or future typed
+obligations. The incomplete semantic gate and four-part record are in
+`docs/reports/language-support/ruby-completion-review.md`.
+
+Existing structural paths are starting evidence, not grandfathered completion.
+Per language, completion requires discovery/configuration, an authoritative
+frontend or format parser, RepoGrammar code units/IR, typed recoverable and
+irreducible `UNKNOWN`, at least one family-first exact-anchor slice (or an
+explicit language-internal substitute when a framework family is not
+applicable), positive/negative/low-support/parse-degraded fixtures, source-free
+readiness, a correctness/security/completeness/performance review record,
+atomic commits for each completed submodule with its tests/docs, and a final
+completion audit linking every prerequisite SHA. Extension-only recognition is
+not support. This accepted documentation gate changes no runtime behavior or
+current public-preview label by itself.
+
+## Python path
+
+- Python is the v0.1 implementation target.
+- Use the method stack in `docs/specifications/python-analysis.md` and
+  `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
+- The first CPython structural slice is implemented, including
+  worker-local structural anchors for imports, decorators, class bases, simple
+  calls, `pytest.test` test-function anchors, alias-aware pytest fixture
+  decorators, same-file pytest fixture edges, direct
+  `pytest.mark.parametrize` argument precedence over same-name fixtures, and
+  static FastAPI request body/path/query/header/cookie marker anchors, typed
+  dynamic import, `sys.path` mutation, dynamic call, dynamic decorator,
+  monkey-patch, and unresolved import `UNKNOWN`, plus path-derived module names,
+  CPython `symtable` scope anchors, and private project-config summaries for
+  root `pyproject.toml`, `setup.cfg`, and static `setup.py`. The semantic-worker-
+  compatible project mode now builds a bounded module graph for requested
+  `.py` files and
+  emits structural repo-local import facts only for unique module-level matches,
+  resolves requested-project `conftest.py` fixture names through pytest's
+  directory hierarchy, and emits typed `UNKNOWN` for ambiguous/missing
+  repo-local imports and `sys.path` mutation. Default indexing now passes
+  discovered `.py` inventory and sanitized root source roots from
+  `pyproject.toml`/`tomllib`, `setup.cfg`/`configparser`, and static
+  `setup.py`/CPython-AST project-config facts whose calls are import-bound to
+  `setuptools` and pass the strict complete static shape gate, plus bounded
+  discovered
+  `conftest.py` contents to the private parser request so source-tied repo-local
+  import facts and parent-directory pytest fixture-edge facts can be persisted
+  through the Rust storage/readiness gate. The deduplicated roots are structural
+  candidate context rather than packaging precedence; project-config summaries
+  are not claim evidence. The current
+  application layer can derive `DATAFLOW_DERIVED` support from exact canonical
+  anchors under the Python support >= 3 gate, including bare canonical pytest
+  fixture decorators while keeping fixture-edge and parametrize-argument context
+  anchors out of support. It also applies bounded complete-link clustering over
+  Python support-family features so bridge members cannot single-link
+  incompatible support families. Next Python slices should escalate only
+  plausible family candidates to Pyrefly and use Pyright only for claim-upgrading
+  cross-checks.
+- First target subset: FastAPI, pytest, SQLAlchemy, and Pydantic.
+- Django, Flask, stdlib `unittest`, click/typer, and Celery now have bounded
+  ADR-0019 v0.2 preview anchors (Wave E1); they are preview scope only and do
+  not change the official v0.1 FastAPI/pytest/SQLAlchemy/Pydantic focus.
+- Whole-program call graphs, sound full Python semantics, default runtime
+  tracing, and LLM-derived family evidence are rejected for v0.1.
+
+## TypeScript/JavaScript path
+
+- Existing TS/JS discovery, syntax extraction, framework-role facts, worker
+  operation protocol, and fixtures remain transitional substrate.
+- A conservative v0.2 token-saving path exists for Express, Jest/Vitest,
+  Next.js, Fastify, Prisma, and Drizzle under exact-anchor evidence only. It is
+  not full TypeScript Program/TypeChecker analysis, does not support React
+  family claims, and does not perform broad binding/export propagation beyond
+  the bounded structural project-context resolver and optional worker
+  operations.
+- Production-quality broad TS/JS family evidence remains deferred until after
+  the Python-first path validates the product surface, unless a later ADR
+  changes scope again.
+
+## CodeGraph provider path
+
+- CodeGraph is a possible optional lower-layer graph/navigation provider.
+- RepoGrammar must work without CodeGraph and must not become a CodeGraph
+  wrapper.
+- CodeGraph-derived facts, if accepted later, can support candidate retrieval,
+  dependency context, and graph-neighborhood evidence. They cannot independently
+  prove pattern-family membership.
+- RepoGrammar must not create, initialize, modify, or delete `.codegraph/`.
+
+## UNKNOWN governance path
+
+- `UNKNOWN` is a first-class typed analysis result.
+- Dynamic behavior, missing project configuration, missing dependencies,
+  conflicting facts, stale evidence, and insufficient support must not be
+  guessed away.
+- Some unknowns block only specific claims, not necessarily every family
+  classification.
+- See `docs/specifications/unknowns.md` for the current taxonomy and recovery
+  guidance.
+
+## Later phases
+
+- Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
+  dependency policy are reviewed.
+- Implement Python structural-anchor persistence, repo-local import resolution,
+  safe project configuration, pytest fixture graph recovery, broader usage
+  propagation, provider-backed canonical target evidence, and cross-function
+  target-centered call recovery in scoped phases.
+- Validate TypeScript package-manager policy and committed dependency shape
+  before bundling a TypeScript compiler dependency or widening compiler-backed
+  worker behavior beyond bounded operation scopes.
+- Implement the Rust provider-backed Cargo project model and rust-analyzer or
+  rustc-backed resolved-fact worker described in
+  `docs/plans/rust-tsjs-semantic-analysis-plan.md` before widening public Rust
+  family claims beyond RepoGrammar self-dogfood.
+- Implement the TS/JS provider-backed project model and Program/TypeChecker
+  worker described in `docs/plans/rust-tsjs-semantic-analysis-plan.md` before
+  widening public TS/JS family claims.
+- Expand TypeScript and JavaScript code-unit extraction beyond the bootstrap
+  syntax-only extractor where the extra precision is justified.
+- Extend the TypeScript semantic worker version policy, generation matching, and
+  storage tests before consuming worker facts beyond operation-scoped indexing
+  requests and provider-resolved UNKNOWN reduction.
+- Verify archive metadata, licenses, and SHA-256 values before committing any
+  downloaded paper or HTML artifact.
+- Convert parser AST into RepoGrammar-owned unified IR.
+- Add deterministic fixture coverage under `src/fixtures/`.
+- Structural normalization and fingerprinting.
+- Candidate discovery and representative selection.
+- Structural alignment, anti-unification, and clustering.
+- Optional watcher/daemon support that marks affected families stale and lazily
+  recomputes instead of eagerly rebuilding the whole repository.
+- MCP transport implementation for planned tools.
+- Framework adapters for FastAPI, pytest, SQLAlchemy, and Pydantic first; broad
+  TS/JS semantics, NestJS, React family support, and richer TS/JS providers move
+  to the TS/JS follow-up path.
+
+## Open design areas
+
+- Unified IR shape and loss model.
+- Family support thresholds.
+- Counterexample and companion-family representation.
+- Benchmark methodology and validation datasets.

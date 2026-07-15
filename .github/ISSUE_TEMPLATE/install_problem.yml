@@ -1,0 +1,57 @@
+name: Install problem
+description: Report a source, release, npm, Codex, or Claude Code install problem.
+title: "install: "
+labels:
+  - install
+  - needs-triage
+body:
+  - type: dropdown
+    id: path
+    attributes:
+      label: Install path
+      options:
+        - source checkout
+        - GitHub release artifact
+        - npm/npx
+        - Codex integration
+        - Claude Code integration
+        - uninstall
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands
+      description: Paste the exact commands you ran.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitized output
+      description: Remove paths, credentials, repository names, prompts, and private source before posting.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, architecture, shell, Node/npm version if relevant.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, npm version, or source checkout commit.
+    validations:
+      required: true
+  - type: textarea
+    id: dry_run
+    attributes:
+      label: Dry-run result
+      description: Output from `repogrammar install --target all --scope global --dry-run --no-telemetry`, if relevant.
+      render: text

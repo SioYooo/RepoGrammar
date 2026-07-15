@@ -1,0 +1,10 @@
+/target/
+/.codegraph/
+.DS_Store
+*.log
+*.tmp
+v0_2_spec.md
+NEXT_STEP.md
+
+# Transient coding-agent worktrees and session state
+.claude/

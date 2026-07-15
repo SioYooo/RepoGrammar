@@ -1,0 +1,21 @@
+{
+  "domain": "clustering-claims-abstention",
+  "archive_status": "metadata_only",
+  "sources": [
+    {
+      "title": "Constrained agglomerative clustering and abstention references",
+      "authors": ["UNKNOWN - select and verify primary sources before implementation"],
+      "url": "https://en.wikipedia.org/wiki/Hierarchical_clustering",
+      "accessed_on": "2026-06-24",
+      "local_artifact": null,
+      "sha256": null,
+      "download_status": "not_downloaded_non_primary_placeholder",
+      "used_by_milestone": ["M8", "M9", "M10"],
+      "implementation_notes": [
+        "Use connected components only as seeds before constrained refinement.",
+        "Track lower-quantile cohesion, unknown ratio, bridge removal, and outlier removal.",
+        "Do not infer dominant claims from weak or single-example support."
+      ]
+    }
+  ]
+}

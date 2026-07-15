@@ -1,0 +1,270 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Build and smoke-test release artifacts without publishing
+        required: true
+        default: build-only
+        type: choice
+        options:
+          - build-only
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Verify tag and version agreement
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          cargo_version="$(awk -F' *= *' '
+            /^\[/ { section = $0 }
+            section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
+          ' Cargo.toml)"
+          echo "package.json version: ${package_version}"
+          echo "Cargo.toml version:   ${cargo_version}"
+          if [ -z "${package_version}" ] || [ -z "${cargo_version}" ]; then
+            echo "could not resolve package.json and Cargo.toml versions" >&2
+            exit 1
+          fi
+          if [ "${package_version}" != "${cargo_version}" ]; then
+            echo "version mismatch: package.json=${package_version} Cargo.toml=${cargo_version}" >&2
+            exit 1
+          fi
+          # A tag build must publish exactly the version it claims. workflow_dispatch
+          # (ref_type=branch) only verifies and builds; it never reaches publish/npm.
+          if [ "${REF_TYPE}" = "tag" ]; then
+            if [ "${REF_NAME}" != "v${package_version}" ]; then
+              echo "tag ${REF_NAME} does not match v${package_version}" >&2
+              exit 1
+            fi
+            echo "tag ${REF_NAME} matches v${package_version}"
+          else
+            echo "ref_type=${REF_TYPE} is not a tag; skipping tag/version equality (verify/build only)"
+          fi
+      - name: Require npm credentials before tag publication
+        if: github.ref_type == 'tag'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is required before publishing any tag assets" >&2
+            exit 1
+          fi
+          echo "tag publication credentials are present"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: node src/workers/typescript/worker.test.js
+      - run: node src/npm/repogrammar.test.js
+      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
+      - run: python3 src/workers/python/worker.test.py
+      - run: bash src/install/repogrammar-install.test.sh
+      - run: cargo run --quiet --bin repo-guard -- check
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: repogrammar-x86_64-unknown-linux-gnu.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: repogrammar-aarch64-unknown-linux-gnu.tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: repogrammar-x86_64-apple-darwin.tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: repogrammar-aarch64-apple-darwin.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: repogrammar-x86_64-pc-windows-msvc.zip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/repogrammar" dist/repogrammar
+          mkdir -p dist/workers/python
+          cp src/workers/python/worker.py dist/workers/python/worker.py
+          chmod 755 dist/repogrammar
+          tar -czf "${{ matrix.archive }}" -C dist repogrammar workers
+          shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+        shell: bash
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/repogrammar.exe" "dist/repogrammar.exe"
+          New-Item -ItemType Directory -Force -Path "dist/workers/python" | Out-Null
+          Copy-Item "src/workers/python/worker.py" "dist/workers/python/worker.py"
+          Compress-Archive -Path "dist/repogrammar.exe","dist/workers" -DestinationPath "${{ matrix.archive }}" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
+        shell: pwsh
+      - name: Smoke packaged Unix artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="${RUNNER_TEMP}/repogrammar-package-smoke"
+          rm -rf "${smoke_root}"
+          mkdir -p "${smoke_root}/unpacked" "${smoke_root}/home" "${smoke_root}/project" "${smoke_root}/tools"
+          ln -s "$(command -v git)" "${smoke_root}/tools/git"
+          ln -s "$(command -v python3)" "${smoke_root}/tools/python3"
+          tool_path="${smoke_root}/tools"
+          tar -xzf "${{ matrix.archive }}" -C "${smoke_root}/unpacked"
+          binary="${smoke_root}/unpacked/repogrammar"
+          test -x "${binary}"
+          test -f "${smoke_root}/unpacked/workers/python/worker.py"
+          "${binary}" version
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
+            --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
+            --json --progress never > "${smoke_root}/dry-run.json"
+          node -e '
+            const fs = require("fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (value.status !== "dry_run" || value.repository_index_ready !== false) process.exit(1);
+          ' "${smoke_root}/dry-run.json"
+          printf 'def packaged_smoke():\n    return True\n' > "${smoke_root}/project/app.py"
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
+            --project "${smoke_root}/project" --target auto --yes --no-autosync \
+            --json --progress never > "${smoke_root}/live.json"
+          node -e '
+            const fs = require("fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (value.product_self_test_state !== "passed" || value.repository_index_ready !== true) process.exit(1);
+            if (value.agent_query_ready !== false || value.suggested_question !== null) process.exit(1);
+          ' "${smoke_root}/live.json"
+      - name: Smoke packaged Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "repogrammar-package-smoke"
+          $unpacked = Join-Path $smokeRoot "unpacked"
+          $home = Join-Path $smokeRoot "home"
+          $project = Join-Path $smokeRoot "project"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $smokeRoot
+          New-Item -ItemType Directory -Force -Path $unpacked,$home,$project | Out-Null
+          Expand-Archive -LiteralPath "${{ matrix.archive }}" -DestinationPath $unpacked
+          $binary = Join-Path $unpacked "repogrammar.exe"
+          if (!(Test-Path -LiteralPath (Join-Path $unpacked "workers/python/worker.py"))) {
+            throw "packaged Python worker is missing"
+          }
+          & $binary version
+          if ($LASTEXITCODE -ne 0) { throw "packaged version smoke failed" }
+          $oldHome = $env:HOME
+          $oldProfile = $env:USERPROFILE
+          $oldPath = $env:PATH
+          $gitDirectory = Split-Path -Parent (Get-Command git).Source
+          $pythonDirectory = Split-Path -Parent (Get-Command python).Source
+          $env:HOME = $home
+          $env:USERPROFILE = $home
+          $env:PATH = "$gitDirectory;$pythonDirectory;$env:SystemRoot\System32;$env:SystemRoot"
+          try {
+            $dryRun = & $binary setup --project $project --target auto --dry-run --no-autosync --json --progress never | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $dryRun.status -ne "dry_run" -or $dryRun.repository_index_ready) {
+              throw "packaged setup dry-run smoke failed"
+            }
+            "def packaged_smoke():`n    return True`n" | Set-Content -Encoding utf8 (Join-Path $project "app.py")
+            $live = & $binary setup --project $project --target auto --yes --no-autosync --json --progress never | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $live.product_self_test_state -ne "passed" -or !$live.repository_index_ready) {
+              throw "packaged product MCP self-test smoke failed"
+            }
+            if ($live.agent_query_ready -or $null -ne $live.suggested_question) {
+              throw "repository-only package smoke overclaimed agent readiness"
+            }
+          } finally {
+            $env:HOME = $oldHome
+            $env:USERPROFILE = $oldProfile
+            $env:PATH = $oldPath
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+          if-no-files-found: error
+
+  publish_release:
+    name: Publish staged GitHub release assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Add installer scripts
+        run: |
+          cp src/install/repogrammar-install.sh release-assets/install.sh
+          cp src/install/install.ps1 release-assets/install.ps1
+          cd release-assets
+          sha256sum install.sh > install.sh.sha256
+          sha256sum install.ps1 > install.ps1.sha256
+      - uses: softprops/action-gh-release@v3
+        with:
+          prerelease: true
+          files: release-assets/*
+
+  publish_npm:
+    name: Publish npm launcher after GitHub assets
+    needs: publish_release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: node src/npm/repogrammar.test.js
+      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
+      - name: Publish npm package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN disappeared after the publication preflight" >&2
+            exit 1
+          fi
+          npm publish --access public

@@ -1,0 +1,38 @@
+[package]
+name = "repogrammar"
+version = "0.2.0-preview.0"
+edition = "2021"
+description = "Repository pattern-family analysis engine bootstrap"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "repogrammar"
+path = "src/rust/bin/repogrammar.rs"
+
+[[bin]]
+name = "repo-guard"
+path = "src/rust/bin/repo_guard.rs"
+
+[lib]
+path = "src/rust/lib.rs"
+
+[dependencies]
+# Production: the repository-local storage adapter owns SQLite migrations and
+# generation validation. `bundled` keeps behavior independent of host SQLite.
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+# Production: semantic-worker adapters validate NDJSON v1 from isolated worker
+# processes before translating messages into RepoGrammar-owned facts.
+serde_json = "1"
+# Production: filesystem adapters compute strict SHA-256 content hashes for
+# repository evidence using the standard RustCrypto implementation.
+sha2 = "0.11"
+# Production: Rust self-dogfood indexing uses Tree-sitter Rust for tolerant
+# structural code-unit extraction without executing Cargo, rustc, build scripts,
+# or procedural macros.
+tree-sitter = "0.26"
+tree-sitter-c = "0.24"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-rust = "0.24"
