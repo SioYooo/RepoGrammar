@@ -11,7 +11,7 @@ cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
-cargo run --quiet --bin repo-guard -- preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty>
+cargo run --quiet --bin repo-guard -- preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>
 ```
 
 ## check
@@ -96,11 +96,16 @@ modify the developer's real HOME, agent configuration, or repository state.
 The preview dist-tag classifier is the single release-policy decision point
 used by both tag publication and the manual npm tag-reconciliation workflow.
 It requires the manifest version to be a bounded prerelease and the `preview`
-tag to match it exactly. It returns `no_latest`,
-`remove_prerelease_latest`, or `preserve_stable_latest`. Missing/mismatched
-preview state and malformed versions fail closed. The command does not access
-the network or modify npm; declarative workflows perform the bounded registry
-query/removal and must classify the final state again.
+tag to match it exactly, requires that version in the bounded complete list of
+published versions, and verifies that `latest` references a published version
+when present. It returns `no_latest`, `preserve_stable_latest`, or the narrowly
+bounded `allow_prerelease_latest_without_stable` only when every published
+version is a prerelease. A prerelease-valued `latest` fails closed as soon as
+any stable version exists. Missing/mismatched preview state, incomplete or
+malformed version inventory, and unpublished tag targets also fail closed. The
+command and declarative workflow are read-only: they do not access authenticated
+package state, modify npm tags, publish a package, or synthesize a stable
+version.
 
 ## Exit codes
 
@@ -124,6 +129,7 @@ CI runs `repo-guard check` on every push and pull request. Pull requests also
 run `check-diff` when base and head revisions are available. Native Linux and
 macOS jobs, plus every supported release-matrix build, invoke
 `smoke-packaged-artifact` against an unpacked candidate binary and worker.
-The release and manual repair workflows use `preview-dist-tag-action` before
-and after any removal so a prerelease-valued `latest` cannot be silently
-accepted.
+The release and manual verification workflows use `preview-dist-tag-action`
+against public dist-tags and the complete published-version inventory. A
+prerelease-valued `latest` is accepted only for a package with no stable
+version; all other inconsistent states fail visibly without registry writes.

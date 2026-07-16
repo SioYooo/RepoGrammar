@@ -239,5 +239,3 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/npm-tag-reconcile.yml
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
