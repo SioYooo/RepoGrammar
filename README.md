@@ -104,13 +104,13 @@ The Rust implementation follows a dependency-inverted
 
 ## Support and limitations
 
-| Language | Current evidence boundary |
-|---|---|
-| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Bounded framework-family context, not full Python semantics |
-| **TypeScript / JavaScript** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Conservative exact-anchor preview |
-| **Java/Spring, C#, C/C++** | Structural preview; no runtime/build-system equivalence claim |
-| **Rust** | Internal self-dogfood; no general Rust semantic-analysis claim |
-| **Go, PHP, Ruby, Swift** | File discovery only; not analyzed or supported yet |
+| Language                                                                                     | Current evidence boundary                                      |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy                                    | Bounded framework-family context, not full Python semantics    |
+| **TypeScript / JavaScript** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Conservative exact-anchor preview                              |
+| **Java/Spring, C#, C/C++**                                                             | Structural preview; no runtime/build-system equivalence claim  |
+| **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
+| **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
 
 RepoGrammar is pre-alpha. It is not a sound static analyzer and does not replace
 source inspection. `estimated_potential_token_savings` is an **estimated** local
@@ -122,13 +122,12 @@ macOS and Linux are the current supported platforms. Windows is not fully
 supported because its local index lifecycle still needs platform proof; no
 Windows release support is claimed.
 
-## Project story: Build Week and AI-assisted development
+## Codex and GPT 5.6 Usage
 
-RepoGrammar began as an [OpenAI Build Week](https://openai.devpost.com/)
-project asking whether coding agents could read less repository source without
-becoming more confident than the evidence permits. The event is a launch
-milestone, not the product boundary: the project is being built as an ongoing
-local developer tool for coding-agent workflows.
+RepoGrammar asks whether coding agents can read less repository source without
+becoming more confident than the evidence permits. [OpenAI Build Week](https://openai.devpost.com/)
+is a launch milestone, not the product boundary: RepoGrammar is being built as
+an ongoing local developer tool for coding-agent workflows.
 
 The implementation used a human-directed GPT-5.6 workflow:
 
@@ -147,16 +146,6 @@ instead of unsupported claims. The reusable
 [launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md) contain the Build Week submission
 copy without turning the README into a competition-only landing page.
 
-## Community
-
-- Start with the [general quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md),
-  [Codex guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md), or
-  [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md).
-- Read the [documentation map](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md) and
-  [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
-- Report bugs or propose improvements with the repository's
-  [issue templates](https://github.com/SioYooo/RepoGrammar/issues/new/choose).
-- Review [CONTRIBUTING.md](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md), [SECURITY.md](https://github.com/SioYooo/RepoGrammar/blob/main/SECURITY.md), and
-  [CODE_OF_CONDUCT.md](https://github.com/SioYooo/RepoGrammar/blob/main/CODE_OF_CONDUCT.md) before contributing.
+## License
 
 RepoGrammar is licensed under the [MIT License](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).
