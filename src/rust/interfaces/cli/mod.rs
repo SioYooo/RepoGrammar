@@ -916,19 +916,20 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  purge [--json] --yes [--project <path>]",
             "",
             "Research trace subcommands:",
-            "  research-status|research-on|research-off|research-export|research-purge [--json] [--yes]",
+            "  research-status|research-on|research-off|research-export|research-purge [--json] [--yes] [--project <path>]",
             "",
             "Experiment subcommands:",
             "  experiment-start --name <name> --experiment-mode record_existing|controlled_pair --session baseline|treatment --measurement-source host_reported|user_entered|documented_tokenizer [--yes] [--json]",
             "  experiment-record --name <name> (--usage-json <path>|--input-tokens <n> --output-tokens <n>) [--tool-tokens <n>] [--success true|false] [--json]",
             "  experiment-stop|experiment-report|experiment-export|experiment-purge --name <name> [--yes] [--json]",
             "",
-            "Common options:",
-            "  --project <path>                    Repository root used for local diagnostics.",
-            "  --json                             Emit machine-readable output.",
-            "  --yes                              Confirm upload, purge, or experiment recording where required.",
-            "  --dry-run                          Validate upload payload without network activity.",
+            "Option scope:",
+            "  --project <path>                    Repository root for anonymous telemetry or research diagnostics only.",
+            "  --json                             Emit machine-readable output where listed above.",
+            "  --yes                              Confirm the listed upload, purge, or experiment operation.",
+            "  --dry-run                          Validate an upload payload without network activity.",
             "  --endpoint <url>                    HTTPS or localhost telemetry upload endpoint.",
+            "Experiment subcommands accept only the options listed in their section; they do not accept --project.",
         ])),
         "version" => Some(help_text(&[
             "Usage: repogrammar version",
@@ -11037,6 +11038,48 @@ mod tests {
             assert!(output.stdout.contains("not `repogrammar autosync --start`"));
             assert!(output.stdout.contains("--poll-ms <n>"));
             assert!(output.stdout.contains("--debounce-ms <n>"));
+        }
+    }
+
+    #[test]
+    fn telemetry_help_scopes_project_away_from_experiment_subcommands() {
+        let output = run(["help", "telemetry"]);
+
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        assert!(output
+            .stdout
+            .contains("Repository root for anonymous telemetry or research diagnostics only"));
+        assert!(output
+            .stdout
+            .contains("Experiment subcommands accept only the options listed in their section"));
+        assert!(output.stdout.contains("they do not accept --project"));
+        assert!(output
+            .stdout
+            .contains("research-purge [--json] [--yes] [--project <path>]"));
+    }
+
+    #[test]
+    fn telemetry_experiment_subcommands_reject_project_option() {
+        for (subcommand, expected_error) in [
+            (
+                "experiment-start",
+                "unknown experiment-start option: --project\n",
+            ),
+            (
+                "experiment-record",
+                "unknown experiment-record option: --project\n",
+            ),
+            (
+                "experiment-report",
+                "unknown experiment option: --project\n",
+            ),
+        ] {
+            let output = run(["telemetry", subcommand, "--project", "."]);
+
+            assert_eq!(output.status, 2, "{subcommand}");
+            assert!(output.stdout.is_empty(), "{subcommand}");
+            assert_eq!(output.stderr, expected_error, "{subcommand}");
         }
     }
 

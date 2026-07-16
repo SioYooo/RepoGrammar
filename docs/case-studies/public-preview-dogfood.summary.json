@@ -166,7 +166,7 @@
     "self_dogfood_not_rerun_after_remediation",
     "selected_public_target_has_partial_context_only",
     "no_paired_agent_token_measurement",
-    "experiment_project_option_help_parser_mismatch",
+    "dogfood_not_rerun_after_experiment_help_fix",
     "external_publication_not_verified"
   ]
 }

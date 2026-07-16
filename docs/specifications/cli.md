@@ -835,14 +835,19 @@ Telemetry is disabled by default. `REPOGRAMMAR_TELEMETRY=0`,
 `DO_NOT_TRACK=1`, and CI force effective telemetry off and prevent upload
 network activity. Supported subcommands are:
 
-- `telemetry status [--json]`
-- `telemetry on [--json]`
-- `telemetry off [--json]`
-- `telemetry export [--json]`
-- `telemetry upload [--json] [--dry-run] [--yes] [--endpoint <url>]`
-- `telemetry purge [--json] --yes`
-- `telemetry research-status|research-on|research-off|research-export|research-purge`
+- `telemetry status [--json] [--project <path>]`
+- `telemetry on [--json] [--project <path>]`
+- `telemetry off [--json] [--project <path>]`
+- `telemetry export [--json] [--project <path>]`
+- `telemetry upload [--json] [--dry-run] [--yes] [--endpoint <url>] [--project <path>]`
+- `telemetry purge [--json] --yes [--project <path>]`
+- `telemetry research-status|research-on|research-off|research-export|research-purge [--json] [--yes] [--project <path>]`
 - `telemetry experiment-start|experiment-record|experiment-stop|experiment-report|experiment-export|experiment-purge`
+
+`--project <path>` selects the repository root for anonymous telemetry and
+research diagnostics only. Experiment subcommands use machine-local experiment
+state and accept only their dedicated options shown by `repogrammar help
+telemetry`; they reject `--project` instead of silently ignoring it.
 
 Upload uses `REPOGRAMMAR_TELEMETRY_ENDPOINT` when `--endpoint` is not supplied.
 Endpoints must be HTTPS except localhost test endpoints. No endpoint configured

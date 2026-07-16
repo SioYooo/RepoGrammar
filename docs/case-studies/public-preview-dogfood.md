@@ -146,13 +146,15 @@ from this commit.
   this single macOS rerun does not establish multi-platform release readiness.
 - The selected public target returned useful source-free routing context, not a
   family match or proven conformance result.
-- The experiment help/parser disagreement for `--project` is a usability defect
-  discovered while checking paired measurement support.
+- The run exposed a help/parser disagreement for experiment `--project`. The
+  post-run CLI help contract now scopes `--project` to anonymous telemetry and
+  research diagnostics and states that experiments reject it; the recorded
+  dogfood commands and token verdict were not rerun or changed.
 - No live coding-agent session, source-read baseline, treatment run, or host
   token export was available, so there is no measured or causal token result.
 - No GitHub release or npm publication claim follows from local dogfood.
 
-The next highest-value action is to fix the experiment `--project` CLI mismatch
-and run a correctness-gated baseline/treatment pair before making any measured
-token-saving claim. Multi-platform dogfood and a fresh self-dogfood rerun remain
-separate release-candidate evidence gaps.
+The next highest-value measurement action is to run a correctness-gated
+baseline/treatment pair before making any measured token-saving claim.
+Multi-platform dogfood and a fresh self-dogfood rerun remain separate
+release-candidate evidence gaps.

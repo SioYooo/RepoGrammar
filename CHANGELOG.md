@@ -11,6 +11,11 @@ source-checkout dogfood path.
 
 ### Added
 
+- Corrected telemetry help option scope after public-repository dogfood exposed
+  a help/parser mismatch. `--project` is now documented only for anonymous
+  telemetry and research diagnostics; experiment subcommands explicitly keep
+  their dedicated options and reject `--project`. The historical dogfood
+  evidence remains unchanged and still reports no paired token measurement.
 - Fixed two real-repository Python indexing blockers found during public-preview
   dogfood. Module-scope alias/assignment snapshots and cached AST byte ranges
   remove repeated large-module rescans; the bounded Rust response envelope now
