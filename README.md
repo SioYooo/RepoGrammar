@@ -108,6 +108,10 @@ AI/agent attribution.
 RepoGrammar is pre-alpha. It is not a sound static analyzer, does not replace
 direct source inspection, and does not claim measured token savings by default.
 
+**Platforms:** macOS and Linux are supported. Windows is not fully supported yet
+— file-locking behavior on Windows currently makes the local index lifecycle
+unreliable — so it is temporarily out of scope.
+
 ## License
 
 MIT
