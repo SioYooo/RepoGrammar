@@ -4690,6 +4690,44 @@ def _api_client():
     }
 
     #[test]
+    fn current_host_classifies_new_worker_rejection_of_legacy_request() {
+        let source = "SECRET_LEGACY_SOURCE = True\n";
+        let path = "private/legacy-request.py";
+        let legacy_request = json!({
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "mode": "parse_document",
+            "path": path,
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "repository_revision": "UNKNOWN",
+            "text": source,
+        })
+        .to_string();
+        let response = PythonAstParser::default()
+            .run_worker_request(&legacy_request, true)
+            .expect("current worker returns bounded mismatch envelope");
+        let envelope: Value = serde_json::from_str(response.trim()).expect("mismatch envelope");
+        assert_eq!(
+            envelope,
+            json!({
+                "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+                "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
+                "mode": "parse_document",
+                "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+            })
+        );
+        assert!(!response.contains(path));
+        assert!(!response.contains(source.trim()));
+        assert!(!response.contains("text"));
+
+        let result = parse_worker_response(&document_at(path, source), &response);
+        assert_eq!(result, Err(ParseError::PythonFrontendContractMismatch));
+        let debug = format!("{result:?}");
+        assert!(!debug.contains(path));
+        assert!(!debug.contains(source.trim()));
+        assert!(!debug.contains(&legacy_request));
+    }
+
+    #[test]
     fn new_host_maps_old_worker_rejection_to_typed_contract_mismatch() {
         let root = std::env::temp_dir().join(format!(
             "repogrammar-python-old-worker-{}-{}",

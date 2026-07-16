@@ -82,12 +82,16 @@ The current implementation covers a bounded static CPython `ast` slice only:
 - CPython `ast` parse-document worker output for code-unit extraction;
 - an exact private parse-document host/worker tuple of
   `protocol_version=1` and `contract_revision=1` on requests and responses.
-  Missing or different revisions fail closed as typed
-  `PythonFrontendContractMismatch`; the user-facing recovery is to rebuild or
-  reinstall the binary and bundled worker from the same release, and it does
-  not include source, paths, environment values, or raw worker payloads. This
-  tuple does not version the separate project-config mode or public
-  semantic-worker-compatible mode;
+  The current Rust host maps the new worker's low-cardinality rejection, a
+  missing or different normal-response revision, or an old worker's bounded
+  rejection to typed `PythonFrontendContractMismatch`. A previously published
+  host cannot return a variant it never defined: its revision-free request is
+  rejected safely by the new worker, but that old host can expose only a
+  sanitized generic frontend/protocol failure and must be upgraded. Current-
+  host recovery is to rebuild or reinstall the binary and bundled worker from
+  the same release, without source, paths, environment values, or raw worker
+  payloads. This tuple does not version the separate project-config mode or
+  public semantic-worker-compatible mode;
 - source-ordered per-name module-scope event histories and immutable AST range
   caching for bounded large-module analysis. Point-in-source framework alias
   and assignment-role queries use read-only history views instead of rescanning

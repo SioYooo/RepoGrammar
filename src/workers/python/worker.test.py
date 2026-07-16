@@ -266,10 +266,13 @@ def test_users(client, status, missing_fixture):
 assert parse_messages[0]["protocol_version"] == 1
 assert parse_messages[0]["contract_revision"] == PARSE_DOCUMENT_CONTRACT_REVISION
 
-# An old host omits the private parse-document revision. The new worker returns
-# one bounded, path-free mismatch envelope rather than accepting or guessing the
-# payload contract.
-old_host_messages = run_worker_exact(
+# A legacy request shape omits the private parse-document revision. The new
+# worker returns one bounded, path-free rejection rather than accepting or
+# guessing the payload contract. A published host that predates the Rust typed
+# mismatch variant can only surface this as a sanitized generic failure and
+# must be upgraded; the current-host classification is covered by the Rust
+# subprocess composition test.
+legacy_request_messages = run_worker_exact(
     {
         "protocol_version": 1,
         "mode": "parse_document",
@@ -279,7 +282,7 @@ old_host_messages = run_worker_exact(
         "text": "SECRET_SOURCE = True\n",
     }
 )
-assert old_host_messages == [
+assert legacy_request_messages == [
     {
         "protocol_version": 1,
         "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
@@ -287,8 +290,8 @@ assert old_host_messages == [
         "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
     }
 ]
-assert "private.py" not in json.dumps(old_host_messages)
-assert "SECRET_SOURCE" not in json.dumps(old_host_messages)
+assert "private.py" not in json.dumps(legacy_request_messages)
+assert "SECRET_SOURCE" not in json.dumps(legacy_request_messages)
 
 # Wrong future revisions receive the same low-cardinality response.
 future_host_request = {
@@ -300,7 +303,7 @@ future_host_request = {
     "repository_revision": "UNKNOWN",
     "text": "SECRET_SOURCE = True\n",
 }
-assert run_worker_exact(future_host_request) == old_host_messages
+assert run_worker_exact(future_host_request) == legacy_request_messages
 
 # The exact checked-in Pydantic release fixture exercises the same private
 # contract directly: the validator remains a structural member anchor and its

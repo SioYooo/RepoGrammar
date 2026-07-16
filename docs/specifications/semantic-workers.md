@@ -520,12 +520,17 @@ exact host/worker contract tuple, currently `protocol_version=1` and
 and normal response. A worker that receives a missing or different tuple emits
 only the low-cardinality `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope, without
 source, repository paths, environment values, or raw payloads. The Rust host
-also treats a missing or different response revision, and an old worker's
-bounded exit-2 rejection of the new request field, as typed
-`PythonFrontendContractMismatch`. Indexing then stops with source-free recovery
-to rebuild or reinstall the product binary and bundled Python worker from the
-same release. This revision gate is private to parse-document; it does not
-silently change the public semantic-worker NDJSON contract or the separate
+in the current release treats that envelope, a missing or different normal-
+response revision, and an old worker's bounded exit-2 rejection of the new
+request field as typed `PythonFrontendContractMismatch`. A previously published
+Rust host predates that variant: when paired with the new worker, its legacy
+request receives the same sanitized low-cardinality rejection but can surface
+only a generic frontend/protocol failure. It must be upgraded rather than being
+claimed as typed-compatible. With the current host, indexing stops with
+source-free recovery to rebuild or reinstall the product binary and bundled
+Python worker from the same release. This revision gate is private to
+parse-document; it does not silently change the public semantic-worker NDJSON
+contract or the separate
 private project-config mode. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field

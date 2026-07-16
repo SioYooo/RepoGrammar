@@ -812,10 +812,15 @@ parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. The
 private parse-document boundary requires the exact request/response tuple
 `protocol_version=1, contract_revision=1`. Full rebuilds and incremental
-reparses use the same gate. Missing or different revisions, including mixed
-installations where an older worker rejects the revision-bearing request, abort
-the candidate generation as typed `PythonFrontendContractMismatch` with only a
-rebuild/reinstall recovery; they do not activate partial facts, reveal paths or
+reparses use the same gate. The current host maps missing or different response
+revisions and mixed installations where an older worker rejects the revision-
+bearing request to typed `PythonFrontendContractMismatch`. It also classifies
+the new worker's low-cardinality response to a legacy request as that typed
+error in the subprocess composition test. A previously published host predates
+the type and can report only a sanitized generic frontend/protocol failure when
+the new worker rejects its legacy request; upgrading the host is required.
+Current-host mismatches abort the candidate generation with only a rebuild/
+reinstall recovery; they do not activate partial facts, reveal paths or
 payloads, or turn the mismatch into an empty Python result. Default
 indexing now passes the discovered repo-relative `.py` inventory, bounded
 module file texts, sanitized root source roots from the matching
