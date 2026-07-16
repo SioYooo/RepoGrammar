@@ -30,12 +30,7 @@ pub(crate) fn autosync_daemon_process_liveness(
 
     #[cfg(unix)]
     {
-        match process_command_line(pid) {
-            Some(command_line) if command_line_is_autosync_daemon(&command_line) => {
-                ProcessLiveness::Live
-            }
-            Some(_) | None => ProcessLiveness::Dead,
-        }
+        classify_autosync_daemon_command_line(process_command_line(pid).as_deref())
     }
     #[cfg(windows)]
     {
@@ -46,6 +41,17 @@ pub(crate) fn autosync_daemon_process_liveness(
     #[cfg(not(any(unix, windows)))]
     {
         ProcessLiveness::Unknown
+    }
+}
+
+#[cfg(unix)]
+fn classify_autosync_daemon_command_line(command_line: Option<&str>) -> ProcessLiveness {
+    match command_line {
+        Some(command_line) if command_line_is_autosync_daemon(command_line) => {
+            ProcessLiveness::Live
+        }
+        Some(_) => ProcessLiveness::Dead,
+        None => ProcessLiveness::Unknown,
     }
 }
 
@@ -96,8 +102,17 @@ fn classify_live_process_for_lock(
     process_started_unix_seconds: Option<u64>,
     lock_started_unix_seconds: Option<u64>,
 ) -> ProcessLiveness {
+    // `ps etimes` exposes only whole elapsed seconds. Around a wall-clock
+    // second boundary it can therefore make a process that created the lock
+    // appear to have started one second after that lock. Preserve ownership
+    // for that single probe-granularity interval; a larger gap still proves
+    // that the PID was reused after the recorded owner disappeared.
+    const PROCESS_START_PROBE_GRANULARITY_SECONDS: u64 = 1;
     match (process_started_unix_seconds, lock_started_unix_seconds) {
-        (Some(process_started), Some(lock_started)) if process_started > lock_started => {
+        (Some(process_started), Some(lock_started))
+            if process_started
+                > lock_started.saturating_add(PROCESS_START_PROBE_GRANULARITY_SECONDS) =>
+        {
             ProcessLiveness::Dead
         }
         _ => ProcessLiveness::Live,
@@ -240,10 +255,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn live_process_started_after_lock_is_treated_as_reused_pid() {
+    fn live_process_start_probe_tolerates_one_second_rounding_only() {
         assert_eq!(
             classify_live_process_for_lock(Some(20), Some(10)),
             ProcessLiveness::Dead
+        );
+        assert_eq!(
+            classify_live_process_for_lock(Some(12), Some(10)),
+            ProcessLiveness::Dead
+        );
+        assert_eq!(
+            classify_live_process_for_lock(Some(11), Some(10)),
+            ProcessLiveness::Live
         );
         assert_eq!(
             classify_live_process_for_lock(Some(10), Some(10)),
@@ -266,5 +289,24 @@ mod tests {
         assert!(!command_line_is_autosync_daemon("/usr/bin/vim /etc/hosts"));
         assert!(!command_line_is_autosync_daemon("autosync"));
         assert!(!command_line_is_autosync_daemon(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_daemon_command_probe_is_unknown_not_dead() {
+        assert_eq!(
+            classify_autosync_daemon_command_line(None),
+            ProcessLiveness::Unknown
+        );
+        assert_eq!(
+            classify_autosync_daemon_command_line(Some(
+                "/opt/bin/repogrammar autosync run --quiet"
+            )),
+            ProcessLiveness::Live
+        );
+        assert_eq!(
+            classify_autosync_daemon_command_line(Some("/usr/bin/vim /etc/hosts")),
+            ProcessLiveness::Dead
+        );
     }
 }

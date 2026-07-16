@@ -2,8 +2,8 @@
 
 This flow uses the zero-friction setup orchestrator to wire Codex, initialize
 the current repository, build its index, start auto-sync, and run a product MCP
-self-test behind one reviewed plan. Public release assets and the npm package
-are not verified yet, so command acquisition still uses a source checkout.
+self-test behind one reviewed plan. Use the general quickstart's exact-version
+availability gate; when either registry check fails, acquire from source.
 
 ## Acquire RepoGrammar From Source
 
@@ -90,13 +90,13 @@ References:
 - [Codex slash commands](https://learn.chatgpt.com/docs/reference/slash-commands#available-slash-commands)
 - [GPT-5.6 family in Codex surfaces](https://learn.chatgpt.com/docs/whats-new#choose-the-right-gpt-56-model)
 
-## Future No-Build Path — Not Available Yet
+## Exact No-Build Path
 
-After real GitHub preview assets and npm publication are verified:
+After the exact npm version and matching GitHub asset pass the availability
+gate in `quickstart.md`:
 
 ```text
-npx @sioyooo/repogrammar setup --project /path/to/your/repo --target codex
+npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target codex
 ```
 
-That will be the no-source-build path. It must not be advertised as live while
-the package still returns not-found or the pinned release assets are absent.
+If either check fails, use the source acquisition path above.

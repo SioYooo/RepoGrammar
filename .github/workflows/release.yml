@@ -31,8 +31,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
       - name: Verify tag and version agreement
         env:
+          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -52,9 +54,9 @@ jobs:
             echo "version mismatch: package.json=${package_version} Cargo.toml=${cargo_version}" >&2
             exit 1
           fi
-          # A tag build must publish exactly the version it claims. workflow_dispatch
-          # (ref_type=branch) only verifies and builds; it never reaches publish/npm.
-          if [ "${REF_TYPE}" = "tag" ]; then
+          # Only a pushed tag is a publication event. A manual dispatch remains
+          # build-only even when its selected ref happens to be a tag.
+          if [ "${EVENT_NAME}" = "push" ] && [ "${REF_TYPE}" = "tag" ]; then
             if [ "${REF_NAME}" != "v${package_version}" ]; then
               echo "tag ${REF_NAME} does not match v${package_version}" >&2
               exit 1
@@ -63,8 +65,18 @@ jobs:
           else
             echo "ref_type=${REF_TYPE} is not a tag; skipping tag/version equality (verify/build only)"
           fi
+      - name: Verify publication tag authority
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "publication tag commit is not contained in origin/main" >&2
+            exit 1
+          fi
+          echo "publication tag commit is contained in origin/main"
       - name: Require npm credentials before tag publication
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -73,7 +85,8 @@ jobs:
             echo "NPM_TOKEN is required before publishing any tag assets" >&2
             exit 1
           fi
-          echo "tag publication credentials are present"
+          npm whoami --registry https://registry.npmjs.org >/dev/null
+          echo "tag publication credentials are present and accepted by npm"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
@@ -92,7 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: repogrammar-x86_64-unknown-linux-gnu.tar.gz
           - os: ubuntu-24.04-arm
@@ -104,18 +117,39 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             archive: repogrammar-aarch64-apple-darwin.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: repogrammar-x86_64-pc-windows-msvc.zip
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - name: Build release binary
         run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
-      - name: Package Unix binary
-        if: runner.os != 'Windows'
+      - name: Inspect Linux glibc ABI floor
+        if: contains(matrix.target, 'unknown-linux-gnu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/repogrammar"
+          required="$(objdump -T "${binary}" | sed -n 's/.*(GLIBC_\([0-9][0-9.]*\)).*/\1/p' | sort -V | tail -n 1)"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) floor="2.35" ;;
+            aarch64-unknown-linux-gnu) floor="2.39" ;;
+            *) echo "unexpected Linux target" >&2; exit 1 ;;
+          esac
+          if [ -z "${required}" ]; then
+            echo "could not inspect the packaged binary's glibc symbol requirements" >&2
+            exit 1
+          fi
+          highest="$(printf '%s\n%s\n' "${required}" "${floor}" | sort -V | tail -n 1)"
+          if [ "${highest}" != "${floor}" ]; then
+            echo "binary requires glibc ${required}, above declared floor ${floor}" >&2
+            exit 1
+          fi
+          echo "binary glibc requirement ${required} is within declared floor ${floor}"
+      - name: Package release archive
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/repogrammar" dist/repogrammar
@@ -125,95 +159,24 @@ jobs:
           tar -czf "${{ matrix.archive }}" -C dist repogrammar workers
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
         shell: bash
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/repogrammar.exe" "dist/repogrammar.exe"
-          New-Item -ItemType Directory -Force -Path "dist/workers/python" | Out-Null
-          Copy-Item "src/workers/python/worker.py" "dist/workers/python/worker.py"
-          Compress-Archive -Path "dist/repogrammar.exe","dist/workers" -DestinationPath "${{ matrix.archive }}" -Force
-          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLowerInvariant()
-          "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
-        shell: pwsh
-      - name: Smoke packaged Unix artifact
-        if: runner.os != 'Windows'
+      - name: Smoke packaged artifact
         shell: bash
         run: |
           set -euo pipefail
           smoke_root="${RUNNER_TEMP}/repogrammar-package-smoke"
-          rm -rf "${smoke_root}"
-          mkdir -p "${smoke_root}/unpacked" "${smoke_root}/home" "${smoke_root}/project" "${smoke_root}/tools"
-          ln -s "$(command -v git)" "${smoke_root}/tools/git"
-          ln -s "$(command -v python3)" "${smoke_root}/tools/python3"
-          tool_path="${smoke_root}/tools"
+          mkdir -p "${smoke_root}/unpacked"
           tar -xzf "${{ matrix.archive }}" -C "${smoke_root}/unpacked"
           binary="${smoke_root}/unpacked/repogrammar"
+          worker="${smoke_root}/unpacked/workers/python/worker.py"
           test -x "${binary}"
-          test -f "${smoke_root}/unpacked/workers/python/worker.py"
-          "${binary}" version
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
-            --json --progress never > "${smoke_root}/dry-run.json"
-          node -e '
-            const fs = require("fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (value.status !== "dry_run" || value.repository_index_ready !== false) process.exit(1);
-          ' "${smoke_root}/dry-run.json"
-          printf 'def packaged_smoke():\n    return True\n' > "${smoke_root}/project/app.py"
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --yes --no-autosync \
-            --json --progress never > "${smoke_root}/live.json"
-          node -e '
-            const fs = require("fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (value.product_self_test_state !== "passed" || value.repository_index_ready !== true) process.exit(1);
-            if (value.agent_query_ready !== false || value.suggested_question !== null) process.exit(1);
-          ' "${smoke_root}/live.json"
-      - name: Smoke packaged Windows artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "repogrammar-package-smoke"
-          $unpacked = Join-Path $smokeRoot "unpacked"
-          $home = Join-Path $smokeRoot "home"
-          $project = Join-Path $smokeRoot "project"
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $smokeRoot
-          New-Item -ItemType Directory -Force -Path $unpacked,$home,$project | Out-Null
-          Expand-Archive -LiteralPath "${{ matrix.archive }}" -DestinationPath $unpacked
-          $binary = Join-Path $unpacked "repogrammar.exe"
-          if (!(Test-Path -LiteralPath (Join-Path $unpacked "workers/python/worker.py"))) {
-            throw "packaged Python worker is missing"
-          }
-          & $binary version
-          if ($LASTEXITCODE -ne 0) { throw "packaged version smoke failed" }
-          $oldHome = $env:HOME
-          $oldProfile = $env:USERPROFILE
-          $oldPath = $env:PATH
-          $gitDirectory = Split-Path -Parent (Get-Command git).Source
-          $pythonDirectory = Split-Path -Parent (Get-Command python).Source
-          $env:HOME = $home
-          $env:USERPROFILE = $home
-          $env:PATH = "$gitDirectory;$pythonDirectory;$env:SystemRoot\System32;$env:SystemRoot"
-          try {
-            $dryRun = & $binary setup --project $project --target auto --dry-run --no-autosync --json --progress never | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $dryRun.status -ne "dry_run" -or $dryRun.repository_index_ready) {
-              throw "packaged setup dry-run smoke failed"
-            }
-            "def packaged_smoke():`n    return True`n" | Set-Content -Encoding utf8 (Join-Path $project "app.py")
-            $live = & $binary setup --project $project --target auto --yes --no-autosync --json --progress never | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $live.product_self_test_state -ne "passed" -or !$live.repository_index_ready) {
-              throw "packaged product MCP self-test smoke failed"
-            }
-            if ($live.agent_query_ready -or $null -ne $live.suggested_question) {
-              throw "repository-only package smoke overclaimed agent readiness"
-            }
-          } finally {
-            $env:HOME = $oldHome
-            $env:USERPROFILE = $oldProfile
-            $env:PATH = $oldPath
-          }
+          test -f "${worker}"
+          python3 -c 'import sys; assert sys.version_info >= (3, 10), "RepoGrammar requires Python 3.10+"'
+          expected_version="$(node -p "require('./package.json').version")"
+          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+            --binary "${binary}" \
+            --worker "${worker}" \
+            --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            --expected-version "${expected_version}"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
@@ -225,7 +188,7 @@ jobs:
   publish_release:
     name: Publish staged GitHub release assets
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -236,10 +199,8 @@ jobs:
       - name: Add installer scripts
         run: |
           cp src/install/repogrammar-install.sh release-assets/install.sh
-          cp src/install/install.ps1 release-assets/install.ps1
           cd release-assets
           sha256sum install.sh > install.sh.sha256
-          sha256sum install.ps1 > install.ps1.sha256
       - uses: softprops/action-gh-release@v3
         with:
           prerelease: true
@@ -248,7 +209,7 @@ jobs:
   publish_npm:
     name: Publish npm launcher after GitHub assets
     needs: publish_release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -267,4 +228,4 @@ jobs:
             echo "NPM_TOKEN disappeared after the publication preflight" >&2
             exit 1
           fi
-          npm publish --access public
+          npm publish --access public --tag preview

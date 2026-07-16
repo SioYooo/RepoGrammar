@@ -15,27 +15,38 @@ use crate::ports::parser::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Origin engine stamped on facts produced by the CPython `ast` frontend. Used
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
+const PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION: u64 = 1;
+const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 1;
 
-const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 1024 * 1024;
+// A source file can legitimately produce substantially more metadata than its
+// input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
+// bounded, but leave enough room for the bundled worker to analyze itself.
+const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PYTHON_FRONTEND_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_PYTHON_FRONTEND_FACTS: usize = 2_000;
 const MAX_PYTHON_FACT_TEXT_BYTES: usize = 2_048;
 const MAX_PYTHON_FACT_TARGET_BYTES: usize = 256;
 const MAX_PYTHON_FACT_NOTE_BYTES: usize = 160;
-const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 4;
+const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 7;
 const MAX_PYTHON_FACT_ASSUMPTION_BYTES: usize = 128;
+const DEFAULT_PYTHON_FRONTEND_TIMEOUT: Duration = Duration::from_secs(30);
+const PYTHON_FRONTEND_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonAstParser {
     executable: String,
     worker_script: PathBuf,
+    timeout: Duration,
 }
 
 impl Default for PythonAstParser {
@@ -43,6 +54,7 @@ impl Default for PythonAstParser {
         Self {
             executable: default_python_executable(|key| std::env::var(key).ok()),
             worker_script: default_python_worker_script(),
+            timeout: DEFAULT_PYTHON_FRONTEND_TIMEOUT,
         }
     }
 }
@@ -53,6 +65,20 @@ impl PythonAstParser {
         Self {
             executable: executable.into(),
             worker_script,
+            timeout: DEFAULT_PYTHON_FRONTEND_TIMEOUT,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_worker_timeout(
+        executable: impl Into<String>,
+        worker_script: PathBuf,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            executable: executable.into(),
+            worker_script,
+            timeout,
         }
     }
 }
@@ -194,7 +220,7 @@ impl PythonAstParser {
                 "python ast frontend request exceeded size limit".to_string(),
             ));
         }
-        self.run_worker_request(&payload)
+        self.run_worker_request(&payload, false)
     }
 
     fn parse_document(
@@ -203,14 +229,19 @@ impl PythonAstParser {
         context: Option<&ParserProjectContext>,
     ) -> Result<PythonParseOutput, ParseError> {
         let (serialized, context_omitted) = serialize_parse_request(document, context)?;
-        let response = self.run_worker_request(&serialized)?;
+        let response = self.run_worker_request(&serialized, true)?;
         Ok(PythonParseOutput {
             response,
             context_omitted,
         })
     }
 
-    fn run_worker_request(&self, serialized: &str) -> Result<String, ParseError> {
+    fn run_worker_request(
+        &self,
+        serialized: &str,
+        parse_document_contract: bool,
+    ) -> Result<String, ParseError> {
+        let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
             .arg(&self.worker_script)
             .stdin(Stdio::piped())
@@ -222,29 +253,110 @@ impl PythonAstParser {
             .stdin
             .take()
             .ok_or_else(|| ParseError::Internal("python ast frontend stdin unavailable".into()))?;
-        stdin
-            .write_all(serialized.as_bytes())
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ParseError::Internal("python ast frontend stdout unavailable".into()))?;
+        let request = serialized.as_bytes().to_vec();
+        let (write_sender, write_receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-stdin".to_string())
+            .spawn(move || {
+                let result = stdin
+                    .write_all(&request)
+                    .and_then(|()| stdin.write_all(b"\n"));
+                drop(stdin);
+                let _ = write_sender.send(result);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return Err(ParseError::Internal(
+                "python ast frontend request failed".into(),
+            ));
+        }
+        let (read_sender, read_receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-stdout".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let mut buffer = [0_u8; 8 * 1024];
+                let result = loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => break Ok(output),
+                        Ok(count) => {
+                            let remaining =
+                                (MAX_PYTHON_FRONTEND_OUTPUT_BYTES + 1).saturating_sub(output.len());
+                            output.extend_from_slice(&buffer[..count.min(remaining)]);
+                        }
+                        Err(error) => break Err(error),
+                    }
+                };
+                let _ = read_sender.send(result);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return Err(ParseError::Internal("python ast frontend failed".into()));
+        }
+
+        let status = wait_for_python_frontend(&mut child, deadline)?;
+        let write_result = write_receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| ParseError::Timeout)?;
+        write_result
             .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
-        drop(stdin);
-        let output = child
-            .wait_with_output()
+        let output = read_receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| ParseError::Timeout)?
             .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
-        if !output.status.success() {
+        if !status.success() {
+            if parse_document_contract
+                && status.code() == Some(2)
+                && output.is_empty()
+                && self.worker_script.is_file()
+            {
+                return Err(ParseError::PythonFrontendContractMismatch);
+            }
             return Err(ParseError::Internal(
                 "python ast frontend rejected parse request".to_string(),
             ));
         }
-        if output.stdout.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
+        if output.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
             return Err(ParseError::Internal(
                 "python ast frontend output exceeded size limit".to_string(),
             ));
         }
-        String::from_utf8(output.stdout)
+        String::from_utf8(output)
             .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))
     }
+}
+
+fn wait_for_python_frontend(
+    child: &mut Child,
+    deadline: Instant,
+) -> Result<std::process::ExitStatus, ParseError> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(_) => {
+                terminate_python_frontend(child);
+                return Err(ParseError::Internal("python ast frontend failed".into()));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            terminate_python_frontend(child);
+            return Err(ParseError::Timeout);
+        }
+        thread::sleep(PYTHON_FRONTEND_POLL_INTERVAL.min(remaining));
+    }
+}
+
+fn terminate_python_frontend(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 struct PythonParseOutput {
@@ -277,7 +389,8 @@ fn parse_document_payload(
     context: Option<&ParserProjectContext>,
 ) -> Value {
     let mut payload = json!({
-        "protocol_version": 1,
+        "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+        "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
         "mode": "parse_document",
         "path": document.path,
         "content_hash": document.content_hash.as_str(),
@@ -332,6 +445,7 @@ fn parse_worker_response(
         "parse_document",
         &[
             "protocol_version",
+            "contract_revision",
             "mode",
             "path",
             "units",
@@ -417,9 +531,29 @@ fn parse_report_response(
     let object = value.as_object().ok_or_else(|| {
         ParseError::Internal("python ast frontend response was not an object".into())
     })?;
+    if object.get("error_code").and_then(Value::as_str) == Some("PYTHON_FRONTEND_CONTRACT_MISMATCH")
+    {
+        validate_allowed_keys(
+            object,
+            &[
+                "protocol_version",
+                "contract_revision",
+                "mode",
+                "error_code",
+            ],
+            "python ast frontend contract mismatch response",
+        )?;
+        return Err(ParseError::PythonFrontendContractMismatch);
+    }
+    if object.get("protocol_version").and_then(Value::as_u64)
+        != Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+        || object.get("contract_revision").and_then(Value::as_u64)
+            != Some(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION)
+    {
+        return Err(ParseError::PythonFrontendContractMismatch);
+    }
     validate_allowed_keys(object, allowed_keys, "python ast frontend response")?;
-    if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
-        || object.get("mode").and_then(Value::as_str) != Some(expected_mode)
+    if object.get("mode").and_then(Value::as_str) != Some(expected_mode)
         || object.get("path").and_then(Value::as_str) != Some(document.path)
     {
         return Err(ParseError::Internal(
@@ -1266,7 +1400,28 @@ fn validate_python_fact_assumptions(
                 && assumptions
                     .iter()
                     .any(|value| value == "relationship_target_binding=local_literal");
-            if default_structural_assumptions || relationship_context_assumptions {
+            let include_router_context_assumptions = assumptions.len() == 7
+                && anchor == Some("fastapi_include_router")
+                && matches!(
+                    target,
+                    Some("fastapi.FastAPI.include_router" | "fastapi.APIRouter.include_router")
+                )
+                && has_boundary
+                && assumptions
+                    .iter()
+                    .any(|value| value == "fact_scope=context_only")
+                && assumptions
+                    .iter()
+                    .any(|value| value == "prefix_unknown=false")
+                && assumptions
+                    .iter()
+                    .find_map(|value| value.strip_prefix("route_prefix_shape="))
+                    .is_some_and(python_route_prefix_shape_is_supported)
+                && python_router_binding_assumptions_are_supported(assumptions);
+            if default_structural_assumptions
+                || relationship_context_assumptions
+                || include_router_context_assumptions
+            {
                 Ok(())
             } else {
                 Err(ParseError::Internal(
@@ -1303,6 +1458,35 @@ fn validate_python_fact_assumptions(
         _ => Err(ParseError::Internal(
             "python ast frontend assumptions were unsupported".to_string(),
         )),
+    }
+}
+
+fn python_route_prefix_shape_is_supported(value: &str) -> bool {
+    if matches!(value, "none" | "/") {
+        return true;
+    }
+    value.strip_prefix('/').is_some_and(|segments| {
+        !segments.is_empty()
+            && segments
+                .split('/')
+                .all(|segment| matches!(segment, ":literal" | ":param" | ":pattern" | ":number"))
+    })
+}
+
+fn python_router_binding_assumptions_are_supported(assumptions: &[String]) -> bool {
+    let binding = assumptions
+        .iter()
+        .find_map(|value| value.strip_prefix("router_binding="));
+    match binding {
+        Some("local") => assumptions
+            .iter()
+            .find_map(|value| value.strip_prefix("router_local_name="))
+            .is_some_and(python_structural_target_is_supported),
+        Some("repo_local_import") => assumptions
+            .iter()
+            .find_map(|value| value.strip_prefix("router_target="))
+            .is_some_and(python_structural_target_is_supported),
+        _ => false,
     }
 }
 
@@ -1387,6 +1571,8 @@ fn python_affected_claim_is_supported(value: &str) -> bool {
             | "python_call_target"
             | "python_framework_identity"
             | "fastapi_dependency_target"
+            | "fastapi_router_binding"
+            | "fastapi_router_prefix"
             | "pydantic_validator_side_effects"
             | "sqlalchemy_query_shape"
             | "sqlalchemy_relationship_target"
@@ -1421,6 +1607,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_request_body_model"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
+            | "fastapi_include_router"
             | "fastapi_service_call"
             | "class_base"
             | "call_target"
@@ -2184,6 +2371,101 @@ def test_users(client, status, missing_fixture):
     }
 
     #[test]
+    fn cpython_frontend_accepts_source_free_repo_local_include_router_context() {
+        let source = r#"from fastapi import APIRouter
+from app.api.routes import login
+
+api_router = APIRouter()
+api_router.include_router(login.router, prefix="/private/api")
+"#;
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "backend/app/__init__.py".to_string(),
+                "backend/app/api/__init__.py".to_string(),
+                "backend/app/api/main.py".to_string(),
+                "backend/app/api/routes/__init__.py".to_string(),
+                "backend/app/api/routes/login.py".to_string(),
+            ],
+            python_source_roots: vec!["backend".to_string()],
+            ..ParserProjectContext::default()
+        };
+
+        let report = PythonAstParser::default()
+            .parse_with_context(document_at("backend/app/api/main.py", source), &context)
+            .expect("repo-local include_router context should cross the parser boundary");
+        let fact = report
+            .semantic_facts
+            .iter()
+            .find(|fact| {
+                fact.kind == SemanticFactKind::ResolvedCall
+                    && fact.target.as_ref().map(SymbolId::as_str)
+                        == Some("fastapi.APIRouter.include_router")
+            })
+            .expect("include_router context fact");
+
+        assert_eq!(fact.assumptions.len(), 7);
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "python_anchor_kind=fastapi_include_router"));
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "route_prefix_shape=/:literal/:literal"));
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "router_binding=repo_local_import"));
+        assert!(!format!("{fact:?}").contains("private/api"));
+
+        let mut raw_prefix_assumptions = fact.assumptions.clone();
+        let prefix = raw_prefix_assumptions
+            .iter_mut()
+            .find(|value| value.starts_with("route_prefix_shape="))
+            .expect("prefix assumption");
+        *prefix = "route_prefix_shape=/private/api".to_string();
+        assert!(validate_python_fact_assumptions(
+            SemanticFactKind::ResolvedCall,
+            FactCertainty::Structural,
+            Some("fastapi.APIRouter.include_router"),
+            &raw_prefix_assumptions,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cpython_frontend_accepts_typed_dynamic_include_router_boundaries() {
+        let source = r#"from fastapi import APIRouter, FastAPI
+from vendor.routes import external_router
+
+app = FastAPI()
+local_router = APIRouter()
+app.include_router(external_router)
+app.include_router(local_router, prefix=build_prefix())
+"#;
+
+        let report = PythonAstParser::default()
+            .parse(document_at("backend/app/main.py", source))
+            .expect("dynamic router context should remain typed UNKNOWN");
+        let affected_claims = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::Unknown)
+            .filter_map(|fact| {
+                fact.assumptions
+                    .iter()
+                    .find_map(|value| value.strip_prefix("affected_claim="))
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert!(affected_claims.contains("fastapi_router_binding"));
+        assert!(affected_claims.contains("fastapi_router_prefix"));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("app.include_router"));
+        assert!(!debug.contains("prefix=build_prefix"));
+    }
+
+    #[test]
     fn cpython_frontend_marks_dynamic_decorators_and_monkey_patches_unknown() {
         let source = r#"
 def decorator_factory(name):
@@ -2393,6 +2675,33 @@ class User(BaseModel):
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("audit.write(value)"));
         assert!(!debug.contains("sink(self)"));
+    }
+
+    #[test]
+    fn committed_pydantic_fixture_preserves_field_validator_fact_and_typed_unknown() {
+        let source =
+            include_str!("../../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
+        let report = PythonAstParser::default()
+            .parse(document_at("schemas.py", source))
+            .expect("parse committed Pydantic fixture");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_validator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "affected_claim=pydantic_validator_side_effects"
+                })
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("return value.lower()"));
     }
 
     #[test]
@@ -4268,6 +4577,44 @@ def _api_client():
         let mut valid = valid_response(source, vec![valid_structural_fact(source)]);
         assert!(parse_worker_response(&document(source), &valid).is_ok());
 
+        for (field, value) in [
+            ("protocol_version", json!(2)),
+            ("contract_revision", json!(2)),
+        ] {
+            let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+            let mut envelope: Value = serde_json::from_str(&response).expect("response JSON");
+            envelope[field] = value;
+            response = envelope.to_string();
+            assert_eq!(
+                parse_worker_response(&document(source), &response),
+                Err(ParseError::PythonFrontendContractMismatch)
+            );
+        }
+
+        let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+        let mut envelope: Value = serde_json::from_str(&response).expect("response JSON");
+        envelope
+            .as_object_mut()
+            .expect("response object")
+            .remove("contract_revision");
+        response = envelope.to_string();
+        assert_eq!(
+            parse_worker_response(&document(source), &response),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+
+        let mismatch = json!({
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "parse_document",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+        })
+        .to_string();
+        assert_eq!(
+            parse_worker_response(&document(source), &mismatch),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+
         valid.push_str("\n{}");
         assert!(matches!(
             parse_worker_response(&document(source), &valid),
@@ -4321,6 +4668,94 @@ def _api_client():
     }
 
     #[test]
+    fn parse_document_request_carries_exact_private_contract_tuple() {
+        let source = "def ok():\n    pass\n";
+        let (serialized, context_omitted) =
+            serialize_parse_request(&document(source), None).expect("serialize parse request");
+        let request: Value = serde_json::from_str(&serialized).expect("request JSON");
+
+        assert!(!context_omitted);
+        assert_eq!(
+            request.get("protocol_version").and_then(Value::as_u64),
+            Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+        );
+        assert_eq!(
+            request.get("contract_revision").and_then(Value::as_u64),
+            Some(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION)
+        );
+        assert_eq!(
+            request.get("mode").and_then(Value::as_str),
+            Some("parse_document")
+        );
+    }
+
+    #[test]
+    fn current_host_classifies_new_worker_rejection_of_legacy_request() {
+        let source = "SECRET_LEGACY_SOURCE = True\n";
+        let path = "private/legacy-request.py";
+        let legacy_request = json!({
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "mode": "parse_document",
+            "path": path,
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "repository_revision": "UNKNOWN",
+            "text": source,
+        })
+        .to_string();
+        let response = PythonAstParser::default()
+            .run_worker_request(&legacy_request, true)
+            .expect("current worker returns bounded mismatch envelope");
+        let envelope: Value = serde_json::from_str(response.trim()).expect("mismatch envelope");
+        assert_eq!(
+            envelope,
+            json!({
+                "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+                "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
+                "mode": "parse_document",
+                "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+            })
+        );
+        assert!(!response.contains(path));
+        assert!(!response.contains(source.trim()));
+        assert!(!response.contains("text"));
+
+        let result = parse_worker_response(&document_at(path, source), &response);
+        assert_eq!(result, Err(ParseError::PythonFrontendContractMismatch));
+        let debug = format!("{result:?}");
+        assert!(!debug.contains(path));
+        assert!(!debug.contains(source.trim()));
+        assert!(!debug.contains(&legacy_request));
+    }
+
+    #[test]
+    fn new_host_maps_old_worker_rejection_to_typed_contract_mismatch() {
+        let root = std::env::temp_dir().join(format!(
+            "repogrammar-python-old-worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("old worker fixture directory");
+        let worker = root.join("old-worker.py");
+        fs::write(
+            &worker,
+            "import json\nimport sys\npayload = json.loads(sys.stdin.readline())\nraise SystemExit(2 if 'contract_revision' in payload else 0)\n",
+        )
+        .expect("old worker fixture");
+        let parser = PythonAstParser::with_worker(platform_python_executable(), worker);
+
+        let result = parser.parse(document("def ok():\n    pass\n"));
+
+        assert_eq!(result, Err(ParseError::PythonFrontendContractMismatch));
+        let debug = format!("{result:?}");
+        assert!(!debug.contains(root.to_string_lossy().as_ref()));
+        assert!(!debug.contains("contract_revision"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn cpython_frontend_reports_syntax_errors_without_units() {
         let report = PythonAstParser::default()
             .parse(document("def broken(:\n"))
@@ -4332,6 +4767,62 @@ def _api_client():
             report.diagnostics[0].severity,
             ParseDiagnosticSeverity::Error
         );
+    }
+
+    #[test]
+    fn cpython_frontend_parses_bundled_worker_with_bounded_large_output() {
+        let worker_path = source_checkout_python_worker_script();
+        let source = fs::read_to_string(&worker_path).expect("checked-in Python worker");
+        assert!(
+            source.len() > 200_000,
+            "fixture must exercise a large module"
+        );
+
+        let report = PythonAstParser::default()
+            .parse(document_at("src/workers/python/worker.py", &source))
+            .expect("bundled worker should analyze its own source");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind == CodeUnitKind::Module));
+        assert!(report.units.len() > 100);
+        assert!(report.semantic_facts.len() > 1_000);
+        assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn cpython_frontend_timeout_is_typed_bounded_and_sanitized() {
+        let root = std::env::temp_dir().join(format!(
+            "repogrammar-python-timeout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("timeout fixture directory");
+        let worker = root.join("sleeping-worker.py");
+        fs::write(
+            &worker,
+            "import sys\nimport time\nsys.stdout.write('x' * 131072)\nsys.stdout.flush()\ntime.sleep(5)\n",
+        )
+        .expect("sleeping worker fixture");
+        let parser = PythonAstParser::with_worker_timeout(
+            platform_python_executable(),
+            worker,
+            Duration::from_millis(100),
+        );
+
+        let started = Instant::now();
+        let result = parser.parse(document("def ok():\n    pass\n"));
+
+        assert_eq!(result, Err(ParseError::Timeout));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "frontend timeout must remain bounded"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -4357,7 +4848,8 @@ def _api_client():
 
     fn valid_response(source: &str, facts: Vec<Value>) -> String {
         json!({
-            "protocol_version": 1,
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": "app.py",
             "units": [{

@@ -1,59 +1,41 @@
 # RepoGrammar
 
-**Metadata-first context reduction for coding agents.**
+**Local-first, source-backed repository context for coding agents.**
 
-Coding agents waste tokens re-discovering conventions a repository already
-contains — reading dozens of files just to learn *"how does this repo write a
-FastAPI route / a pytest fixture / a SQLAlchemy repository?"* RepoGrammar gives
-the agent a compact, source-backed map of those implementation patterns **before**
-it edits code — and, crucially, returns a typed `UNKNOWN` instead of confidently
-guessing when evidence is weak.
+Coding agents repeatedly read the same files to rediscover how a repository
+implements routes, fixtures, models, and data access. RepoGrammar builds a
+compact map of those implementation-pattern families before an agent reads
+source broadly. It returns metadata and a hash-checked read plan when evidence
+is strong, and a typed `UNKNOWN` instead of guessing when it is not.
 
----
+[![RepoGrammar terminal demo: setup, find, check, and typed UNKNOWN](https://raw.githubusercontent.com/SioYooo/RepoGrammar/main/docs/assets/repogrammar-demo.svg)](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md)
 
-## 🏆 Hackathon
+This is an audited excerpt from a real `0.2.0-preview.0` CLI run against
+committed Python fixtures. Paths were normalized for display; the
+[commands and transcript](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md) are
+reproducible from this checkout.
 
-RepoGrammar was built to answer one question: *can we make coding agents spend
-fewer tokens and make fewer confident-but-wrong guesses about a codebase?*
+## Install
 
-- **The problem** — agents re-read broad swaths of a repo to relearn its
-  conventions, and RAG/LLM approaches happily hallucinate.
-- **Our take** — a small, auditable "repo grammar" of implementation families,
-  delivered before the agent reads source, that **abstains honestly** when unsure.
-- **Design values** — metadata by default, source opt-in, never execute
-  target-repo code, and never overclaim.
+### Public-preview path — verify the exact version
 
----
+Availability is decided by the exact `0.2.0-preview.0` publication, not by the
+contents of this README. Verify both registries before using the no-build path:
 
-## What it does
+```bash
+npm view @sioyooo/repogrammar@0.2.0-preview.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh.sha256
+```
 
-Before an agent reads source broadly, RepoGrammar returns a small, auditable map:
+Only when both commands succeed, run the pinned preview:
 
-- **`family`** — an implementation family with enough repeated, compatible support.
-- **`variation` / `exception`** — accepted differences and intentionally
-  unsupported cases.
-- **`evidence`** — repo-relative paths, hashes, byte ranges, support counts
-  (no source snippets by default).
-- **`read_plan`** — hash-checked spans to read before editing.
-- **`UNKNOWN`** — a *typed abstention* for stale, ambiguous, dynamic, or
-  out-of-scope cases.
+```bash
+npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
+```
 
-It ships as a **pattern-family-first CLI** and a **read-only MCP tool
-(`repogrammar_context`)** that wires into Claude Code and Codex.
-
-## How it's built
-
-A **Rust core** with a layered, dependency-inverted architecture
-(`core → ports → application → adapters → interfaces`). Key choices:
-
-- **Tree-sitter as candidate generation, not a semantic oracle** — a family
-  needs several compatible exact-anchor facts before it is claimed.
-- **Never execute target-repo code** — the Python worker parses `setup.py` but
-  never runs it; the TS worker won't load the repo's own `typescript` by default.
-- **Local-first** — the index is a SQLite database under the project's
-  `.repogrammar/`, with explicit `init` / `sync` / `autosync`.
-
-## Quick start
+If either check fails, use the contributor/dogfood path, which builds once from
+source. The complete publication gate is in the
+[release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/public-preview-release-checklist.md).
 
 ```bash
 git clone https://github.com/SioYooo/RepoGrammar.git
@@ -61,57 +43,109 @@ cd RepoGrammar
 cargo build --release
 bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
-
-# then, inside a repo you want to analyze:
-repogrammar init
-repogrammar find --project . --token-budget 8000 <path-or-symbol>
-repogrammar check --project . --token-budget 8000 <path-or-symbol>
 ```
 
-Wire it into a coding agent (Codex / Claude Code):
+The installed command needs Python 3.10 or newer (`python3`) for the current Python preview. It does
+not need Node.js, npm, Docker, a local model, an OpenAI API key, or a cloud API.
+
+## From setup to trustworthy context
+
+Run setup inside the repository you want to analyze. It reviews one plan,
+initializes and indexes the repository, wires a detected Codex or Claude Code
+integration when ownership is safe, starts auto-sync by default, and runs a
+read-only product MCP self-test:
 
 ```bash
-bash src/install/repogrammar-install.sh --install-and-configure --from-source --yes --target all
+cd /path/to/your/repo
+repogrammar setup --target auto
+
+# Ask for a source-backed family and a bounded read plan.
+repogrammar find --project . --token-budget 8000 app/routes.py
+
+# Conformance remains advisory when runtime equivalence is unproven.
+repogrammar check --project . --token-budget 8000 app/routes.py
 ```
 
-## 🤖 Built with AI (GPT-5.6)
+The captured demo also asks for a target that static evidence cannot resolve:
 
-RepoGrammar was developed with an AI-assisted, human-directed workflow. Both
-roles ran on GPT-5.6:
+```bash
+repogrammar find --project . --token-budget 8000 registered_router
+```
 
-- **Planning, review, and direction — ChatGPT (GPT-5.6).** It shaped the
-  maintainer's ideas into an overall plan, reviewed the code produced at each
-  step, and set the direction for the next piece of work — the architectural
-  brain that decided *what* to build next and checked that each step held up.
-- **Coding — Codex (GPT-5.6).** It did the bulk of the actual coding: turning
-  each planned step into Rust modules, language adapters, and tests, then
-  iterating against `cargo fmt`, `clippy -D warnings`, `cargo test`, and the
-  repo's `repo-guard` checks.
+It returns `UNKNOWN`, identifies `InsufficientSupport`, and recommends source
+fallback. That is a successful safety decision, not a failed query. Use the
+[fixture-backed walkthrough](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md) to reproduce
+the exact `find → check → UNKNOWN` path.
 
-Guardrails kept the loop honest: the repo encodes a strict agent contract
-(`AGENTS.md` / `CLAUDE.md`) — smallest coherent change, tests + docs in the same
-commit, no target-repo code execution, and typed `UNKNOWN` instead of
-overclaiming. The human maintainer owns every architecture decision, scope
-boundary, and merge; commits carry only the maintainer's identity, never
-AI/agent attribution.
+## How it works
 
-## What it can do
+RepoGrammar ships a pattern-family-first CLI and one read-only MCP tool,
+`repogrammar_context`.
 
-| Language | What RepoGrammar can do |
-|---|---|
-| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Bounded framework-family context (not full semantics) |
-| **TS/JS** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Exact-anchor family context |
-| **Java/Spring, C#, C/C++** | Structural family context |
-| **Rust** | Self-dogfood plus general framework context |
-| **Go, PHP, Ruby, Swift** | File discovery only (not yet analyzed) |
+1. **Discover candidates locally.** Language adapters and bounded semantic
+   workers extract source-backed structural facts without executing the target
+   repository.
+2. **Require compatible support.** Tree-sitter proposes candidates; it is not
+   treated as a semantic oracle. Family claims require compatible exact-anchor
+   evidence.
+3. **Return metadata first.** Results include repo-relative evidence, hashes,
+   byte and line ranges, variation/exception coverage, and a minimal read plan.
+   Source snippets are opt-in.
+4. **Abstain by type.** Stale, ambiguous, dynamic, unsupported, or insufficient
+   evidence becomes `UNKNOWN` or `PARTIAL_CONTEXT`, with a recovery action.
+5. **Stay local and fresh.** The active SQLite index lives under
+   `.repogrammar/`; explicit sync and auto-sync keep repository evidence
+   current.
 
-RepoGrammar is pre-alpha. It is not a sound static analyzer, does not replace
-direct source inspection, and does not claim measured token savings by default.
+The Rust implementation follows a dependency-inverted
+`core → ports → application → adapters → interfaces` architecture. See the
+[architecture overview](https://github.com/SioYooo/RepoGrammar/blob/main/docs/architecture/overview.md) and
+[MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md).
 
-**Platforms:** macOS and Linux are supported. Windows is not fully supported yet
-— file-locking behavior on Windows currently makes the local index lifecycle
-unreliable — so it is temporarily out of scope.
+## Support and limitations
+
+| Language                                                                                     | Current evidence boundary                                      |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy                                    | Bounded framework-family context, not full Python semantics    |
+| **TypeScript / JavaScript** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Conservative exact-anchor preview                              |
+| **Java/Spring, C#, C/C++**                                                             | Structural preview; no runtime/build-system equivalence claim  |
+| **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
+| **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
+
+RepoGrammar is pre-alpha. It is not a sound static analyzer and does not replace
+source inspection. `estimated_potential_token_savings` is an **estimated** local
+read-displacement diagnostic—not measured savings or a causal claim. Measured
+savings require a controlled before/after study; the current
+[limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) keep that boundary explicit.
+
+macOS and Linux are the current supported platforms. Windows is not fully
+supported because its local index lifecycle still needs platform proof; no
+Windows release support is claimed.
+
+## Codex and GPT 5.6 Usage
+
+RepoGrammar asks whether coding agents can read less repository source without
+becoming more confident than the evidence permits. [OpenAI Build Week](https://openai.devpost.com/)
+is a launch milestone, not the product boundary: RepoGrammar is being built as
+an ongoing local developer tool for coding-agent workflows.
+
+The implementation used a human-directed GPT-5.6 workflow:
+
+- **ChatGPT (GPT-5.6)** helped turn the maintainer's product direction into
+  plans and reviewed each completed slice.
+- **Codex (GPT-5.6)** implemented and tested Rust modules, language adapters,
+  CLI behavior, release tooling, and documentation against repository gates.
+- **The human maintainer** owns architecture, scope, evidence policy, review,
+  and every merge. Commits use only the maintainer's identity.
+
+Repository guardrails keep that collaboration auditable: the mirrored
+`AGENTS.md` / `CLAUDE.md` contract requires scoped changes, tests and docs in
+the same commit, no target-repository code execution, and typed `UNKNOWN`
+instead of unsupported claims. The reusable
+[demo script](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md) and
+[launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md) contain the Build Week submission
+copy without turning the README into a competition-only landing page.
 
 ## License
 
-MIT
+RepoGrammar is licensed under the [MIT License](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).

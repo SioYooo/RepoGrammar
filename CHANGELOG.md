@@ -2,15 +2,32 @@
 
 ## 0.2.0-preview.0 — unreleased preview candidate
 
-This is the target version for the first public-preview prerelease. It is not
-tagged, released, or published to npm yet: `Cargo.toml` and `package.json` carry
-`0.2.0-preview.0` so a `v0.2.0-preview.0` tag produces matching artifacts, but
-release availability depends on the maintainer running the release workflow and
-verifying artifacts, checksums, and npm publication. Until then, use the
-source-checkout dogfood path.
+This is the target version for the first public-preview prerelease.
+`Cargo.toml` and `package.json` carry `0.2.0-preview.0` so a
+`v0.2.0-preview.0` tag produces matching artifacts. This changelog does not
+establish registry availability: verify the exact npm version and matching
+GitHub assets, and use the source-checkout path when either check fails.
 
 ### Added
 
+- Corrected telemetry help option scope after public-repository dogfood exposed
+  a help/parser mismatch. `--project` is now documented only for anonymous
+  telemetry and research diagnostics; experiment subcommands explicitly keep
+  their dedicated options and reject `--project`. The historical dogfood
+  evidence remains unchanged and still reports no paired token measurement.
+- Fixed two real-repository Python indexing blockers found during public-preview
+  dogfood. Per-name module-scope alias/assignment event histories and cached AST
+  byte ranges remove repeated large-module rescans without quadratic full-map
+  snapshots; the bounded Rust response envelope now admits valid metadata up to
+  2 MiB. The Rust Python frontend concurrently writes stdin and drains bounded
+  stdout under a 30-second wall-clock deadline, kills and waits for a timed-out
+  child, and returns a typed payload-free timeout. The Rust parser also accepts
+  the exact seven-assumption `fastapi_include_router` context contract while
+  rejecting malformed fields and raw route literals; prefix metadata is
+  reduced to low-cardinality segment shapes, and dynamic prefix/binding
+  outcomes retain their typed affected-claim tokens. The bundled worker can now
+  parse its own source across the process boundary without weakening fact-count,
+  path, hash, typed `UNKNOWN`, or source-free validation.
 - Added the zero-friction `repogrammar setup` onboarding path. One reviewed
   application-layer plan can detect Codex or Claude Code, reuse the existing
   reversible machine integration service, initialize and index the current
@@ -40,25 +57,67 @@ source-checkout dogfood path.
   repository or MCP failure rolls back only integrations created by that setup
   run and never deletes a pre-existing owned integration. Auto-sync startup now
   requires a bounded PID-plus-startup-nonce daemon-lock handshake while the
-  spawned child remains alive; child exit, lock refusal, and timeout are typed
-  failures, and daemon lifecycle mutations are serialized before exact-record
-  lock cleanup so stop cannot delete a successor lock. Family inventory is
-  now `Available(0)`, `Available(N)`, or `Unknown` instead of turning query
-  errors into zero families. Setup human and JSON output separately report
-  product self-test state, ready/blocked agent targets, agent-query readiness,
+  spawned child remains alive. The child first publishes `starting` ownership
+  and advances to `ready` only after repository-state validation, worker
+  environment preflight, initial fingerprinting, log initialization, and a
+  successful first heartbeat. Worker-environment, fingerprint, repository-
+  state, lock-refusal, early-child-exit, timeout, and first-heartbeat failures
+  persist as low-cardinality startup codes without raw paths or environment
+  values. Status output separates current daemon/startup/repository readiness
+  from `previous_autosync_attempt`; a previous sync error is not rendered as
+  the current daemon state. Daemon lifecycle mutations are serialized before
+  exact-record lock cleanup so stop cannot delete a successor lock. Family
+  inventory is now `Available(0)`, `Available(N)`, or `Unknown` instead of
+  turning query errors into zero families. Setup human and JSON output
+  separately report product self-test state, ready/blocked agent targets,
+  agent-query readiness,
   repository-index readiness, auto-sync readiness, family-evidence state, and
   all limitations; repository-only success has no suggested coding-agent
   question and initialization/indexing retain distinct stage labels.
+- Corrected two native release-gate false failures. Unix lock-owner liveness
+  now tolerates only the one-second rounding window of the `ps etimes` probe,
+  preventing a healthy autosync daemon from becoming `running=false` at a
+  wall-clock boundary while still rejecting later PID reuse. The Windows
+  source-only installer contract now returns explicit success after verifying
+  its intentionally failing delegated-install case, so that expected child
+  status cannot leak into the CI job result.
+- Versioned the private CPython parse-document boundary independently of the
+  public semantic-worker protocol. Requests and normal responses now require
+  the exact `protocol_version=1, contract_revision=1` tuple. A newer worker
+  rejects an older host with one path- and source-free mismatch envelope; a
+  newer Rust host maps an older worker's bounded rejection, or a missing/wrong
+  response revision, to typed `PythonFrontendContractMismatch` recovery that
+  tells the user to rebuild or reinstall the binary and bundled worker from the
+  same release. Regression coverage uses the exact committed
+  `pydantic-basic` fixture through the direct worker, Rust parser adapter, full
+  indexing, and unchanged incremental copy-forward. Its `field_validator`
+  remains a structural member fact while the validator body call remains a
+  non-blocking typed `FrameworkMagic` UNKNOWN; neither is promoted to
+  unsupported semantic certainty.
 - Hardened release truth gates without claiming publication. Manual workflow
-  dispatch is explicitly build-only. Tag verification requires npm credentials
-  before any publication stage; exact packaged archives are unpacked and
-  exercised through `version`, `setup --dry-run --json`, and a live product MCP
-  self-test; GitHub prerelease assets are staged before npm publication; and a
-  missing/disappearing npm token fails visibly instead of producing a green
-  skipped-publish result. CI now adds a macOS Rust/onboarding smoke and expands
-  Windows beyond installer/version into isolated setup and MCP self-test
-  coverage. No GitHub release asset or npm publication has been verified by
-  these local workflow changes.
+  dispatch is explicitly build-only even from a tag ref. Only a pushed tag may
+  enter credential or publication jobs; tag verification requires containment
+  in `origin/main` plus accepted npm credentials before publication. Exact packaged archives are unpacked and
+  exercised through `version`, `setup --dry-run --json`, a live product MCP
+  self-test, `find`, and advisory `check`; GitHub prerelease assets are staged
+  before npm publication; and a missing/disappearing npm token fails visibly
+  instead of producing a green skipped-publish result. The preview matrix and
+  npm launcher now admit exactly macOS/Linux x64/arm64, reject Windows, and no
+  longer publish a Windows archive or `install.ps1`. The source-tree PowerShell
+  wrapper removes its release-download branch and refuses all install actions
+  unless `-FromSource` is explicit. The canonical release
+  checklist separates build-only candidate evidence, tag publication, fresh
+  HOME verification, and external publication proof. Linux downloads now fail
+  closed before write for musl, unknown libc, glibc below 2.35 on x86_64, or
+  glibc below 2.39 on arm64; pinned builders and imported-symbol inspection
+  hold those ABI floors. The npm launcher also preserves a concurrent first-
+  install winner after rename collision. A real temporary npm tarball is
+  inspected, installed offline, and executed in tests, while packed README
+  links remain valid outside the repository. Python 3.10+ is the explicit
+  packaged runtime minimum. Native CI runs the PowerShell source-only contract
+  on Windows without publishing a Windows artifact. Preview npm publication
+  uses dist-tag `preview`, and local workflow changes alone remain no proof of
+  external publication.
 - ADR-0025 now records the Swift N1 architecture/security preflight plus bounded
   discovery/configuration inventory without adding a dependency, toolchain,
   worker, parser, project model, code unit, IR, fact, typed `UNKNOWN`, family,
@@ -798,8 +857,9 @@ source-checkout dogfood path.
     candidate classification is tightened (arrow-vs-callback, Next.js
     `src/pages/`, Rust method-by-receiver, `#[path]` attribute, escape-aware
     import specifiers).
-  - Installer/npm/telemetry: `install.ps1` detects Windows ARM64 and forces TLS
-    1.2+; the npm launcher bounds redirects; telemetry state files are written
+  - Installer/npm/telemetry: the source-only `install.ps1` retains its local
+    contributor guards; the npm launcher bounds redirects and rejects Windows
+    before artifact or override use; telemetry state files are written
     owner-only (`0600`) and a negative token-savings ratio uses a distinct
     `negative` bucket.
 - The TypeScript worker now performs path-alias wildcard substitution with
@@ -877,11 +937,11 @@ source-checkout dogfood path.
   React/broad TS/JS semantics, source-span opt-in, token-saving claim limits, and
   installer platform boundaries. A readiness report and real-repo dogfood
   protocol were added under `docs/reports/` and `docs/experiments/`.
-- Release/install readiness tests now verify npm platform-to-artifact mappings
-  for macOS, Linux, and Windows preview targets, unsupported npm platform/arch
-  rejection, required bundled Python worker assets, Bash installer state-boundary
-  behavior, release workflow artifact names, and installer script checksum
-  publication.
+- Release/install readiness tests now verify the exact four macOS/Linux npm and
+  release targets, explicit Windows/unsupported-architecture rejection,
+  required bundled Python worker assets, Bash installer state-boundary
+  behavior, exact packaged `setup`/`find`/`check` smoke, and `install.sh`
+  checksum publication.
 - Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support,
   exact Next/Fastify/Prisma/Drizzle positives, and React/package-only/dynamic/raw
   lookalikes that must not form public family rows.
@@ -974,10 +1034,11 @@ source-checkout dogfood path.
   binary, installing or repairing the command, configuring or uninstalling
   Codex/Claude Code integrations, removing the local command path after
   confirmation, or explicitly choosing a contributor source build.
-- Release automation now builds prebuilt `repogrammar` artifacts with checksum
-  assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
-  preview, bundles the current Python worker asset, and publishes `install.sh`
-  / `install.ps1` installer assets for tagged preview releases. Real
+- Release automation now builds exactly four prebuilt `repogrammar` artifacts
+  with checksum assets for macOS arm64/x86_64 and Linux arm64/x86_64, bundles
+  the current Python worker asset, and publishes `install.sh` plus its checksum
+  for tagged preview releases. Windows and `install.ps1` are outside this
+  preview publication set. Real
   downloadable prerelease artifacts are available only after a preview tag is
   published.
 - Added the `@sioyooo/repogrammar` npm package manifest and thin `npx`

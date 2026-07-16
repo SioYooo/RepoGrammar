@@ -809,7 +809,19 @@ The checked-in Python worker currently has three bounded modes relevant to
 indexing: private parse-document, private project-config, and semantic-worker-
 compatible project analysis. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
-`ast`-derived code-unit metadata without hand-written Python parsing. Default
+`ast`-derived code-unit metadata without hand-written Python parsing. The
+private parse-document boundary requires the exact request/response tuple
+`protocol_version=1, contract_revision=1`. Full rebuilds and incremental
+reparses use the same gate. The current host maps missing or different response
+revisions and mixed installations where an older worker rejects the revision-
+bearing request to typed `PythonFrontendContractMismatch`. It also classifies
+the new worker's low-cardinality response to a legacy request as that typed
+error in the subprocess composition test. A previously published host predates
+the type and can report only a sanitized generic frontend/protocol failure when
+the new worker rejects its legacy request; upgrading the host is required.
+Current-host mismatches abort the candidate generation with only a rebuild/
+reinstall recovery; they do not activate partial facts, reveal paths or
+payloads, or turn the mismatch into an empty Python result. Default
 indexing now passes the discovered repo-relative `.py` inventory, bounded
 module file texts, sanitized root source roots from the matching
 `pyproject.toml`/`tomllib`, `setup.cfg`/`configparser`, or static
@@ -845,7 +857,8 @@ FastAPI static
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
 `Cookie` request-shape anchors, literal FastAPI/APIRouter
-`include_router(..., prefix="...")` router-prefix context anchors,
+`include_router(..., prefix="...")` router-prefix context anchors whose stored
+shape buckets do not retain the literal prefix text,
 path-derived module names, CPython `symtable` scope anchors, and typed
 dynamic/unresolved decorator, dynamic call, monkey-patch,
 dynamic/unresolved/ambiguous import, dynamic include-router prefix or router

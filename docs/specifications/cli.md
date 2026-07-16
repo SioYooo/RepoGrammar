@@ -542,9 +542,33 @@ enables auto-sync for the current repository if needed and launches a
 background `repogrammar autosync run` worker. Before enabling or launching a
 new background worker, `start` validates the inherited semantic-worker
 environment and reports invalid worker argv configuration synchronously rather
-than claiming the daemon started. The worker polls a lightweight
+than claiming the daemon started. The child first publishes a `starting`
+daemon-lock phase, then validates repository/config state, validates its own
+semantic-worker environment, computes the initial repository fingerprint,
+initializes daemon log/startup state, and completes one immediate service
+heartbeat. That heartbeat revalidates the exact `starting` lock owner,
+repository readiness, and a second repository fingerprint; the second
+fingerprint becomes the polling baseline. Only after those fallible steps
+succeed may the same lock owner atomically transition its exact
+PID-plus-startup-nonce record to `ready` and enter the polling loop. The
+transition quarantines the owned `starting` record and installs `ready` with a
+no-overwrite link, so a non-cooperating replacement is preserved and readiness
+fails closed rather than overwriting another owner. The parent reports
+`running: true` only while its child
+handle remains alive and the exact expected PID, nonce, current lock owner, and
+`ready` phase all match. A `starting` record is never running. Failed startup
+persists only one sanitized low-cardinality code:
+`worker_environment_invalid`, `repository_fingerprint_failed`,
+`repository_state_unavailable`, `daemon_lock_refused`,
+`child_exited_before_ready`, `startup_timeout`, or
+`first_heartbeat_failed`; raw worker errors, paths, source, environment values,
+credentials, nonces, and daemon internals are excluded. The worker polls a lightweight
 supported-file metadata fingerprint, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
+daemon records a sanitized `repository fingerprint failed` previous-attempt
+error and remains alive when a later polling fingerprint transiently fails;
+such a post-ready runtime failure is not retroactively presented as an
+unverified startup success.
 lightweight detector must skip RepoGrammar state directories, default excluded
 directories, unsupported extensions, oversized files, symlinks, and paths
 outside the repository; the following `sync` remains the authoritative
@@ -581,14 +605,34 @@ unclean daemon exit the operating system can reuse that PID for an unrelated
 process; treating it as live would let `stop` signal a stranger and permanently
 block `start`. A lock's PID is therefore reported as `running` only when the PID
 both exists and is confirmed to be a RepoGrammar `autosync run` daemon.
+When the platform can prove process existence but cannot inspect its command,
+daemon liveness is `unknown`, not stopped: status renders
+`daemon_state: unknown`, and stale cleanup, replacement, disable, and stop
+preserve the lock instead of starting another daemon or signaling an
+unverified process.
 
 After each sync attempt the daemon records a best-effort run state in
 `.repogrammar/autosync-run.json` (last sync time, result, synced generation,
-and any error). `autosync status` surfaces it as `last_sync_unix_seconds`,
-`last_sync_result`, optional `last_sync_generation`, and optional
-`last_sync_error`, so `running: true` can be distinguished from "actually synced
-recently". A missing or unreadable run-state file is reported as absent rather
-than failing the status read.
+and any error). This historical record is not the outcome of the current
+`start` or `status` command. Human output therefore labels it as the
+`previous_autosync_attempt` time/result plus optional generation/error. JSON
+retains the preview-compatible `last_run` object and adds the explicit
+`previous_autosync_attempt` alias. Run-state writes and both renderers accept
+only the fixed errors `repository fingerprint failed`, `repository state is
+unavailable`, and `repository sync failed`; any other legacy or malformed
+error is preserved on disk but rendered as `previous autosync attempt failed`.
+Synced generations are rendered only when they are canonical positive `gen-N`
+ids with exactly six ASCII digits; invalid legacy values are omitted. Both
+output modes separately report current
+`startup_state`, current `daemon_state`, current `repository_ready`, and an
+optional `startup_failure_code`; `running: true` can therefore be distinguished
+from both startup readiness and a previously completed sync. A failed startup
+belongs to the current state only while the same live lock nonce owns it. Once
+that owner exits, or when a concurrent different nonce failed, current
+`startup_state` is not rewritten as failed; the sanitized code is exposed only
+as `previous_startup_failure_code`. A missing or
+unreadable run-state file is reported as absent rather than failing the status
+read, and historical errors remain preserved.
 
 `autosync` supports `--project <path>`, `--path <path>`, `--json`, `--quiet`,
 `--progress auto|always|never` for long-running command compatibility,
@@ -835,14 +879,19 @@ Telemetry is disabled by default. `REPOGRAMMAR_TELEMETRY=0`,
 `DO_NOT_TRACK=1`, and CI force effective telemetry off and prevent upload
 network activity. Supported subcommands are:
 
-- `telemetry status [--json]`
-- `telemetry on [--json]`
-- `telemetry off [--json]`
-- `telemetry export [--json]`
-- `telemetry upload [--json] [--dry-run] [--yes] [--endpoint <url>]`
-- `telemetry purge [--json] --yes`
-- `telemetry research-status|research-on|research-off|research-export|research-purge`
+- `telemetry status [--json] [--project <path>]`
+- `telemetry on [--json] [--project <path>]`
+- `telemetry off [--json] [--project <path>]`
+- `telemetry export [--json] [--project <path>]`
+- `telemetry upload [--json] [--dry-run] [--yes] [--endpoint <url>] [--project <path>]`
+- `telemetry purge [--json] --yes [--project <path>]`
+- `telemetry research-status|research-on|research-off|research-export|research-purge [--json] [--yes] [--project <path>]`
 - `telemetry experiment-start|experiment-record|experiment-stop|experiment-report|experiment-export|experiment-purge`
+
+`--project <path>` selects the repository root for anonymous telemetry and
+research diagnostics only. Experiment subcommands use machine-local experiment
+state and accept only their dedicated options shown by `repogrammar help
+telemetry`; they reject `--project` instead of silently ignoring it.
 
 Upload uses `REPOGRAMMAR_TELEMETRY_ENDPOINT` when `--endpoint` is not supplied.
 Endpoints must be HTTPS except localhost test endpoints. No endpoint configured

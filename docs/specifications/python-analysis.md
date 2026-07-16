@@ -1,7 +1,7 @@
 # Python Analysis Specification
 
 - Status: Active v0.1 target specification
-- Last updated: 2026-06-25
+- Last updated: 2026-07-17
 - Scope: Python-first v0.1 analysis algorithms and claim discipline
 - Supersedes: `docs/plans/python-dogfooding-plan.md` for v0.1 scope
 
@@ -80,6 +80,26 @@ The current implementation covers a bounded static CPython `ast` slice only:
 
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
+- an exact private parse-document host/worker tuple of
+  `protocol_version=1` and `contract_revision=1` on requests and responses.
+  The current Rust host maps the new worker's low-cardinality rejection, a
+  missing or different normal-response revision, or an old worker's bounded
+  rejection to typed `PythonFrontendContractMismatch`. A previously published
+  host cannot return a variant it never defined: its revision-free request is
+  rejected safely by the new worker, but that old host can expose only a
+  sanitized generic frontend/protocol failure and must be upgraded. Current-
+  host recovery is to rebuild or reinstall the binary and bundled worker from
+  the same release, without source, paths, environment values, or raw worker
+  payloads. This tuple does not version the separate project-config mode or
+  public semantic-worker-compatible mode;
+- source-ordered per-name module-scope event histories and immutable AST range
+  caching for bounded large-module analysis. Point-in-source framework alias
+  and assignment-role queries use read-only history views instead of rescanning
+  preceding statements or copying the complete binding map for every top-level
+  statement. The private Rust process boundary accepts at most a 2 MiB response
+  while preserving the 1 MiB request and 2,000-fact limits, drains stdout while
+  the request is running, and returns a typed, source-free timeout after a
+  bounded 30-second wall-clock deadline;
 - CPython `ast` structural fact output for ordinary import bindings, decorator
   anchors, class bases, simple call targets, bounded same-function application
   call targets, pytest test-function anchors, alias-aware pytest fixture
@@ -150,12 +170,19 @@ The current implementation covers a bounded static CPython `ast` slice only:
   receiver is an exact local FastAPI/APIRouter binding, the router argument is
   a local `APIRouter()` binding or repo-local imported router symbol, and the
   optional `prefix` is absent or a literal string. These anchors carry
-  `route_prefix_shape=...` as context only and do not prove route-family
-  membership;
+  only low-cardinality `route_prefix_shape` segment classes such as
+  `/:literal/:param`; the literal route text does not cross the worker boundary.
+  The Rust host accepts the exact seven-assumption context envelope for this
+  anchor and rejects extra or malformed fields. These anchors remain context
+  only and do not prove route-family membership;
 - typed
   `RuntimeDependencyInjection` `UNKNOWN` facts for dynamic dependency target
   expressions such as `Depends(make_dependency())`, and typed `UNKNOWN` facts
-  for dynamic include-router prefixes or unresolved/external router bindings;
+  for dynamic include-router prefixes or unresolved/external router bindings.
+  The Rust host allowlist recognizes the exact `fastapi_router_prefix` and
+  `fastapi_router_binding` affected-claim tokens so these conservative worker
+  outcomes remain valid typed `UNKNOWN`s instead of aborting repository
+  indexing;
 - FastAPI `HTTPException(...)`, literal `HTTPException(status_code=...)`
   status-code effect slots, static FastAPI request body and request-parameter
   marker slots for `Body`, `Path`,
@@ -272,6 +299,12 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `options`, `patch`, `post`, and `put` for both `FastAPI` and `APIRouter`.
   The dynamic-unknown fixture covers dynamic import, `sys.path` mutation,
   dynamic call target, dynamic decorator, and monkey-patch boundaries;
+- direct-worker, Rust parser-adapter, full-index, and incremental-sync
+  regression coverage for the exact committed `pydantic-basic` fixture. Its
+  `field_validator` declaration remains a structural Pydantic member fact while
+  `value.lower()` in the validator body remains a typed, non-blocking
+  `FrameworkMagic` UNKNOWN for `pydantic_validator_side_effects`; neither is
+  upgraded into unsupported semantic certainty;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,

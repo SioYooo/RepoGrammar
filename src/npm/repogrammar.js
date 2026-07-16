@@ -10,7 +10,52 @@ const path = require("node:path");
 
 const packageJson = require("../../package.json");
 
-function platformTarget(platform = process.platform, arch = process.arch) {
+function detectLinuxLibc(report = process.report?.getReport?.()) {
+  if (report?.header?.glibcVersionRuntime) {
+    return "glibc";
+  }
+  const sharedObjects = Array.isArray(report?.sharedObjects) ? report.sharedObjects : [];
+  if (sharedObjects.some((entry) => /(?:^|\/)ld-musl-[^/]+\.so(?:\.\d+)*$/i.test(entry))) {
+    return "musl";
+  }
+  return "unknown";
+}
+
+function detectLinuxGlibcVersion(report = process.report?.getReport?.()) {
+  const version = report?.header?.glibcVersionRuntime;
+  return typeof version === "string" && /^\d+\.\d+(?:\.\d+)?$/.test(version)
+    ? version
+    : null;
+}
+
+function versionAtLeast(actual, minimum) {
+  if (!/^\d+(?:\.\d+)*$/.test(actual || "") || !/^\d+(?:\.\d+)*$/.test(minimum || "")) {
+    return false;
+  }
+  const actualParts = actual.split(".").map(Number);
+  const minimumParts = minimum.split(".").map(Number);
+  const width = Math.max(actualParts.length, minimumParts.length);
+  for (let index = 0; index < width; index += 1) {
+    const actualPart = actualParts[index] || 0;
+    const minimumPart = minimumParts[index] || 0;
+    if (actualPart !== minimumPart) {
+      return actualPart > minimumPart;
+    }
+  }
+  return true;
+}
+
+function platformTarget(
+  platform = process.platform,
+  arch = process.arch,
+  linuxLibc = platform === "linux" ? detectLinuxLibc() : null,
+  glibcVersion = platform === "linux" ? detectLinuxGlibcVersion() : null
+) {
+  if (platform === "win32") {
+    throw new Error(
+      "unsupported platform: win32; the public preview supports macOS and Linux only"
+    );
+  }
   const archMap = new Map([
     ["x64", "x86_64"],
     ["arm64", "aarch64"],
@@ -23,15 +68,20 @@ function platformTarget(platform = process.platform, arch = process.arch) {
     return `${normalizedArch}-apple-darwin`;
   }
   if (platform === "linux") {
-    return `${normalizedArch}-unknown-linux-gnu`;
-  }
-  if (platform === "win32") {
-    if (normalizedArch !== "x86_64") {
+    if (linuxLibc !== "glibc") {
+      const classification = linuxLibc === "musl" ? "musl" : "unknown libc";
       throw new Error(
-        "Windows preview supports x86_64 only; package.json permits arm64 for macOS/Linux release artifacts, but no Windows ARM64 artifact is published"
+        `unsupported Linux runtime: ${classification}; the public preview requires glibc`
       );
     }
-    return "x86_64-pc-windows-msvc";
+    const minimum = arch === "x64" ? "2.35" : "2.39";
+    if (!versionAtLeast(glibcVersion, minimum)) {
+      const detected = glibcVersion || "unknown";
+      throw new Error(
+        `unsupported Linux glibc ${detected}; ${arch} public-preview binaries require glibc ${minimum}+`
+      );
+    }
+    return `${normalizedArch}-unknown-linux-gnu`;
   }
   throw new Error(`unsupported platform: ${platform}`);
 }
@@ -40,10 +90,7 @@ function defaultReleaseTag() {
   return validateReleaseTag(process.env.REPOGRAMMAR_VERSION || `v${packageJson.version}`);
 }
 
-function artifactName(target, platform = process.platform) {
-  if (platform === "win32") {
-    return `repogrammar-${target}.zip`;
-  }
+function artifactName(target) {
   return `repogrammar-${target}.tar.gz`;
 }
 
@@ -62,8 +109,8 @@ function cacheRoot() {
   );
 }
 
-function binaryName(platform = process.platform) {
-  return platform === "win32" ? "repogrammar.exe" : "repogrammar";
+function binaryName() {
+  return "repogrammar";
 }
 
 function binaryPath(target, tag = defaultReleaseTag()) {
@@ -187,40 +234,14 @@ function verifyChecksum(archivePath, checksumPath) {
   }
 }
 
-function extractArchive(archivePath, destination, platform = process.platform) {
+function extractArchive(archivePath, destination) {
   ensureDirectory(destination);
-  if (platform === "win32") {
-    const command = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `Expand-Archive -LiteralPath ${JSON.stringify(
-        archivePath
-      )} -DestinationPath ${JSON.stringify(destination)} -Force`,
-    ];
-    childProcess.execFileSync("powershell", command, { stdio: "ignore" });
-    return;
-  }
   childProcess.execFileSync("tar", ["-xzf", archivePath, "-C", destination], {
     stdio: "ignore",
   });
 }
 
-function listArchiveEntries(archivePath, platform = process.platform) {
-  if (platform === "win32") {
-    const script = [
-      "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
-      `$archive = ${JSON.stringify(archivePath)};`,
-      "$zip = [System.IO.Compression.ZipFile]::OpenRead($archive);",
-      "try { $zip.Entries | ForEach-Object { $_.FullName } } finally { $zip.Dispose() }",
-    ].join(" ");
-    const output = childProcess.execFileSync(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8" }
-    );
-    return output.split(/\r?\n/).filter(Boolean);
-  }
+function listArchiveEntries(archivePath) {
   const output = childProcess.execFileSync("tar", ["-tzf", archivePath], {
     encoding: "utf8",
   });
@@ -231,36 +252,7 @@ function listArchiveEntries(archivePath, platform = process.platform) {
 // hostile archive whose checksum matches cannot redirect extraction outside the
 // temp directory on older `tar` implementations. This mirrors the shell
 // installer's `validate_release_archive_entries` type gate.
-function assertArchiveMemberTypesAreRegular(archivePath, platform = process.platform) {
-  if (platform === "win32") {
-    // In a zip, a symlink member is encoded through the Unix file mode in the
-    // high 16 bits of the entry's external attributes (S_IFLNK = 0xA000).
-    // Directories carry no such mode. Emit the offending names and reject in JS.
-    const script = [
-      "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
-      `$archive = ${JSON.stringify(archivePath)};`,
-      "$zip = [System.IO.Compression.ZipFile]::OpenRead($archive);",
-      "try {",
-      "  foreach ($entry in $zip.Entries) {",
-      "    $mode = ($entry.ExternalAttributes -shr 16) -band 0xF000;",
-      "    if ($mode -eq 0xA000) { Write-Output $entry.FullName }",
-      "  }",
-      "} finally { $zip.Dispose() }",
-    ].join(" ");
-    const output = childProcess.execFileSync(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8" }
-    );
-    const offending = output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (offending.length > 0) {
-      throw new Error(`release artifact contains a non-regular-file member: ${offending[0]}`);
-    }
-    return;
-  }
+function assertArchiveMemberTypesAreRegular(archivePath) {
   // The first character of each `tar -tvzf` line is the member type: '-'
   // regular file and 'd' directory are the only safe types across GNU and BSD
   // tar; 'l' (symlink), 'h' (hardlink), and device/pipe/socket types are not.
@@ -300,16 +292,16 @@ function normalizeArchiveEntry(entry) {
   return normalized;
 }
 
-function validateArchiveEntries(archivePath, platform = process.platform) {
-  assertArchiveMemberTypesAreRegular(archivePath, platform);
+function validateArchiveEntries(archivePath) {
+  assertArchiveMemberTypesAreRegular(archivePath);
   const allowed = new Set([
-    binaryName(platform),
+    binaryName(),
     "workers",
     "workers/python",
     "workers/python/worker.py",
   ]);
   const entries = new Set();
-  for (const entry of listArchiveEntries(archivePath, platform)) {
+  for (const entry of listArchiveEntries(archivePath)) {
     const normalized = normalizeArchiveEntry(entry);
     if (!normalized) {
       continue;
@@ -319,8 +311,8 @@ function validateArchiveEntries(archivePath, platform = process.platform) {
     }
     entries.add(normalized);
   }
-  if (!entries.has(binaryName(platform))) {
-    throw new Error(`release artifact did not contain ${binaryName(platform)}`);
+  if (!entries.has(binaryName())) {
+    throw new Error(`release artifact did not contain ${binaryName()}`);
   }
   if (!entries.has("workers/python/worker.py")) {
     throw new Error("release artifact did not contain bundled Python worker at workers/python/worker.py");
@@ -345,7 +337,34 @@ function isInstalled(binary) {
   return fs.existsSync(worker);
 }
 
+// Activate a fully staged install without ever deleting an install directory
+// that may have been won by another launcher process. A rename collision with
+// another complete install is success; an incomplete/foreign collision is
+// preserved and reported. Only this invocation's own backup may be restored
+// or removed.
+function activateStagedInstall(stagingDir, installDir, backupDir = null) {
+  try {
+    fs.renameSync(stagingDir, installDir);
+  } catch (error) {
+    if (isInstalled(path.join(installDir, binaryName()))) {
+      if (backupDir) {
+        fs.rmSync(backupDir, { recursive: true, force: true });
+      }
+      return false;
+    }
+    if (backupDir && !fs.existsSync(installDir) && fs.existsSync(backupDir)) {
+      fs.renameSync(backupDir, installDir);
+    }
+    throw error;
+  }
+  if (backupDir) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+  return true;
+}
+
 async function ensureBinary() {
+  const target = platformTarget();
   const binaryOverride = process.env.REPOGRAMMAR_BINARY;
   if (binaryOverride && binaryOverride.trim()) {
     if (!path.isAbsolute(binaryOverride)) {
@@ -357,7 +376,6 @@ async function ensureBinary() {
     }
     return binaryOverride;
   }
-  const target = platformTarget();
   const tag = defaultReleaseTag();
   const installed = binaryPath(target, tag);
   if (isInstalled(installed)) {
@@ -386,29 +404,29 @@ async function ensureBinary() {
     const stagingDir = fs.mkdtempSync(path.join(installParent, ".repogrammar-install-"));
     const stagedBinary = path.join(stagingDir, binaryName());
     fs.copyFileSync(extractedBinary, stagedBinary);
-    if (process.platform !== "win32") {
-      fs.chmodSync(stagedBinary, 0o755);
-    }
+    fs.chmodSync(stagedBinary, 0o755);
     const workerDestination = path.join(stagingDir, "workers", "python");
     ensureDirectory(workerDestination);
     fs.copyFileSync(workerSource, path.join(workerDestination, "worker.py"));
-    const backupDir = fs.existsSync(installDir)
+    let backupDir = fs.existsSync(installDir)
       ? path.join(installParent, `.repogrammar-backup-${process.pid}-${Date.now()}`)
       : null;
     try {
+      if (isInstalled(installed)) {
+        return installed;
+      }
       if (backupDir) {
-        fs.renameSync(installDir, backupDir);
+        try {
+          fs.renameSync(installDir, backupDir);
+        } catch (error) {
+          if (error.code === "ENOENT") {
+            backupDir = null;
+          } else {
+            throw error;
+          }
+        }
       }
-      fs.renameSync(stagingDir, installDir);
-      if (backupDir) {
-        fs.rmSync(backupDir, { recursive: true, force: true });
-      }
-    } catch (error) {
-      fs.rmSync(installDir, { recursive: true, force: true });
-      if (backupDir && fs.existsSync(backupDir)) {
-        fs.renameSync(backupDir, installDir);
-      }
-      throw error;
+      activateStagedInstall(stagingDir, installDir, backupDir);
     } finally {
       fs.rmSync(stagingDir, { recursive: true, force: true });
     }
@@ -439,13 +457,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+  activateStagedInstall,
   artifactName,
   binaryPath,
   defaultReleaseTag,
+  detectLinuxLibc,
+  detectLinuxGlibcVersion,
   ensureBinary,
   platformTarget,
   resolveRedirect,
   validateArchiveEntries,
   validateReleaseTag,
+  versionAtLeast,
   verifyChecksum,
 };

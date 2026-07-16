@@ -3,6 +3,14 @@
   "version": "0.2.0-preview.0",
   "description": "Local implementation-pattern context for coding agents",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SioYooo/RepoGrammar.git"
+  },
+  "homepage": "https://github.com/SioYooo/RepoGrammar#readme",
+  "bugs": {
+    "url": "https://github.com/SioYooo/RepoGrammar/issues"
+  },
   "bin": {
     "repogrammar": "src/npm/repogrammar.js"
   },
@@ -19,8 +27,7 @@
   },
   "os": [
     "darwin",
-    "linux",
-    "win32"
+    "linux"
   ],
   "cpu": [
     "x64",

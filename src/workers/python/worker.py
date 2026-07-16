@@ -9,6 +9,8 @@ syntax adapter to reuse CPython ast/symtable without hand-written parsing.
 from __future__ import annotations
 
 import ast
+from bisect import bisect_left
+from collections.abc import Iterator, Mapping
 import configparser
 import hashlib
 import json
@@ -24,6 +26,7 @@ except ModuleNotFoundError:  # Python < 3.11.
     tomllib = None
 
 PROTOCOL_VERSION = 1
+PARSE_DOCUMENT_CONTRACT_REVISION = 1
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
 MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
@@ -271,6 +274,17 @@ def emit_worker_error(request_id: str, error_code: str, text: str) -> None:
     )
 
 
+def emit_parse_document_contract_mismatch() -> None:
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "parse_document",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+        }
+    )
+
+
 def byte_line_starts(source: str) -> list[int]:
     starts = [0]
     total = 0
@@ -290,6 +304,9 @@ def byte_offset(starts: list[int], line_number: int | None, column: int | None) 
 
 
 def node_range(starts: list[int], node: ast.AST) -> tuple[int, int]:
+    cached = getattr(node, "_repogrammar_byte_range", None)
+    if cached is not None:
+        return cached
     start_line = getattr(node, "lineno", 1)
     start_col = getattr(node, "col_offset", 0)
     decorators = getattr(node, "decorator_list", [])
@@ -299,7 +316,16 @@ def node_range(starts: list[int], node: ast.AST) -> tuple[int, int]:
         start_col = getattr(first_decorator, "col_offset", start_col)
     end_line = getattr(node, "end_lineno", start_line)
     end_col = getattr(node, "end_col_offset", start_col)
-    return byte_offset(starts, start_line, start_col), byte_offset(starts, end_line, end_col)
+    result = (
+        byte_offset(starts, start_line, start_col),
+        byte_offset(starts, end_line, end_col),
+    )
+    # A worker invocation parses one immutable source string into one AST. Range
+    # lookup is extremely hot for large modules, so cache it on the node rather
+    # than repeatedly re-walking decorators and line offsets. `ast.walk` follows
+    # `_fields` only, so this private attribute cannot change traversal or output.
+    setattr(node, "_repogrammar_byte_range", result)
+    return result
 
 
 def unit_id(path: str, unit_data: dict[str, Any]) -> str:
@@ -1640,23 +1666,115 @@ def drop_shadowed_import_aliases(
     return {name: target for name, target in aliases.items() if name not in shadowed}
 
 
+class ScopeHistoryView(Mapping[str, str]):
+    """Read-only binding view backed by per-name source-ordered events."""
+
+    def __init__(
+        self,
+        histories: dict[str, tuple[list[int], list[str | None]]],
+        offset: int,
+    ) -> None:
+        self._histories = histories
+        self._offset = offset
+
+    def __getitem__(self, name: str) -> str:
+        history = self._histories.get(name)
+        if history is None:
+            raise KeyError(name)
+        positions, values = history
+        index = bisect_left(positions, self._offset) - 1
+        if index < 0 or values[index] is None:
+            raise KeyError(name)
+        return values[index]
+
+    def __iter__(self) -> Iterator[str]:
+        return (name for name in self._histories if self.get(name) is not None)
+
+    def __len__(self) -> int:
+        return sum(1 for _name in self)
+
+
+class ModuleScopeTimeline:
+    """Persistent module bindings without copying full state per statement."""
+
+    def __init__(
+        self,
+        aliases: dict[str, str],
+        alias_histories: dict[str, tuple[list[int], list[str | None]]],
+        assignment_histories: dict[str, tuple[list[int], list[str | None]]],
+    ) -> None:
+        # Retaining the exact source mapping makes the cache identity-safe and
+        # avoids re-sorting every imported name on each point query.
+        self.aliases = aliases
+        self.alias_histories = alias_histories
+        self.assignment_histories = assignment_histories
+
+    def aliases_at(self, offset: int) -> ScopeHistoryView:
+        return ScopeHistoryView(self.alias_histories, offset)
+
+    def assignments_at(self, offset: int) -> ScopeHistoryView:
+        return ScopeHistoryView(self.assignment_histories, offset)
+
+
+def record_scope_event(
+    histories: dict[str, tuple[list[int], list[str | None]]],
+    name: str,
+    position: int,
+    value: str | None,
+) -> None:
+    positions, values = histories.setdefault(name, ([], []))
+    if values and values[-1] == value:
+        return
+    positions.append(position)
+    values.append(value)
+
+
 def aliases_at_offset(
     tree: ast.Module,
     starts: list[int],
     aliases: dict[str, str],
     offset: int,
-) -> dict[str, str]:
+) -> Mapping[str, str]:
+    return module_scope_timeline(tree, starts, aliases).aliases_at(offset)
+
+
+def module_scope_timeline(
+    tree: ast.Module,
+    starts: list[int],
+    aliases: dict[str, str],
+) -> ModuleScopeTimeline:
+    cached = getattr(tree, "_repogrammar_scope_timeline", None)
+    if cached is not None and cached.aliases is aliases:
+        return cached
+
+    alias_histories: dict[str, tuple[list[int], list[str | None]]] = {}
+    assignment_histories: dict[str, tuple[list[int], list[str | None]]] = {}
     visible: dict[str, str] = {}
+    assignments: dict[str, str] = {}
     for node in sorted(tree.body, key=lambda item: node_range(starts, item)):
         start, _end = node_range(starts, node)
-        if start >= offset:
-            break
+        if isinstance(node, ast.Assign):
+            role = assignment_role(node.value, visible, assignments)
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if role is None:
+                    assignments.pop(target.id, None)
+                else:
+                    assignments[target.id] = role
+                record_scope_event(assignment_histories, target.id, start, role)
         for name in import_local_names(node):
             if name in aliases:
                 visible[name] = aliases[name]
+                record_scope_event(alias_histories, name, start, aliases[name])
         for name in top_level_rebound_names(node):
-            visible.pop(name, None)
-    return visible
+            if name in visible:
+                visible.pop(name)
+                record_scope_event(alias_histories, name, start, None)
+
+    result = ModuleScopeTimeline(aliases, alias_histories, assignment_histories)
+    setattr(tree, "_repogrammar_scope_timeline", result)
+    return result
 
 
 def collect_assignment_roles_until(
@@ -1664,24 +1782,8 @@ def collect_assignment_roles_until(
     starts: list[int],
     aliases: dict[str, str],
     offset: int,
-) -> dict[str, str]:
-    assignments: dict[str, str] = {}
-    for node in sorted(tree.body, key=lambda item: node_range(starts, item)):
-        start, _end = node_range(starts, node)
-        if start >= offset:
-            break
-        if not isinstance(node, ast.Assign):
-            continue
-        node_aliases = aliases_at_offset(tree, starts, aliases, start)
-        role = assignment_role(node.value, node_aliases, assignments)
-        for target in node.targets:
-            if not isinstance(target, ast.Name):
-                continue
-            if role is None:
-                assignments.pop(target.id, None)
-                continue
-            assignments[target.id] = role
-    return assignments
+) -> Mapping[str, str]:
+    return module_scope_timeline(tree, starts, aliases).assignments_at(offset)
 
 
 def collect_parameter_roles(
@@ -2069,7 +2171,9 @@ def normalize_route_prefix(value: str) -> str:
         elif segment.isdigit():
             segments.append(":number")
         else:
-            segments.append(segment.lower())
+            # Preserve only the route shape. A literal prefix is source text
+            # and must not cross the parser boundary through assumptions.
+            segments.append(":literal")
     return "/" + "/".join(segments) if segments else "/"
 
 
@@ -5103,8 +5207,16 @@ def analyze_source(
 
 
 def parse_document(payload: dict[str, Any]) -> int:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+        or payload.get("contract_revision") != PARSE_DOCUMENT_CONTRACT_REVISION
+    ):
+        emit_parse_document_contract_mismatch()
+        return 0
     required_fields = {
         "protocol_version",
+        "contract_revision",
         "mode",
         "path",
         "content_hash",
@@ -5114,7 +5226,7 @@ def parse_document(payload: dict[str, Any]) -> int:
     allowed_fields = {*required_fields, "module_paths", "source_roots", "conftest_files", "module_files"}
     if not isinstance(payload, dict) or not required_fields.issubset(payload) or set(payload) - allowed_fields:
         return 2
-    if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_document":
+    if payload.get("mode") != "parse_document":
         return 2
     if not is_safe_repo_relative_path(payload.get("path")) or not is_strict_content_hash(payload.get("content_hash")):
         return 2
@@ -5145,6 +5257,7 @@ def parse_document(payload: dict[str, Any]) -> int:
     message(
         {
             "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": payload["path"],
             "units": units,

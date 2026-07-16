@@ -17,6 +17,18 @@ allowed.
 - Tests must be deterministic and independent of execution order.
 - Tests must not access the network by default.
 - Temporary directories must be unique and cleaned up.
+- Release-wrapper tests must classify glibc family and architecture-specific
+  minimum versions before download, cover musl/old/unknown rejection offline,
+  and prove a concurrent npm cache activation loser never deletes the winning
+  install. Npm package tests must create the real tarball under a temporary
+  directory, inspect its files/metadata, install it into an isolated prefix
+  offline, execute its wrapper against local fake release assets, and remove
+  the tarball with the temporary directory.
+- Native CI must run the PowerShell source-only installer contract on Windows.
+  That job is platform evidence for the contributor path only and must not
+  upload or imply a Windows release artifact. The wrapper must explicitly
+  return success after asserting an intentionally failing child invocation so
+  the expected child status cannot become the native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
 - Process-boundary tests that rely on inherited child pipes must make child
@@ -74,7 +86,8 @@ allowed.
   `uninit --yes`, unlock inspection without `--force --yes`, confirmed stale
   `index.lock` removal with `--force --yes`, active/unknown/invalid lock
   refusal, PID-reuse-aware stale lock classification when the platform exposes
-  live process start time, shared process-liveness policy coverage,
+  live process start time, including the one-second precision boundary of the
+  Unix elapsed-time probe, shared process-liveness policy coverage,
   daemon/SQLite lock preservation, repo-local autosync
   enable/status/disable config behavior, autosync daemon-lock inspection,
   repository readiness rejecting daemon locks whose PID is live but whose Unix
@@ -240,11 +253,23 @@ allowed.
   propagation, semantic worker environment inheritance, `start` rejecting
   invalid semantic worker argv environment before launching a background worker,
   bounded startup readiness from matching child PID plus startup nonce and
-  child liveness, deterministic immediate-child-exit, lock-refusal, timeout,
-  and successful-readiness paths, serialized lifecycle ownership plus exact-
-  record stop/guard cleanup under a concurrently replaced lock, human and JSON output, and no nonce, environment,
-  credential, source, or absolute-path leakage. Tests must assert typed startup
-  semantic classes rather than incidental lower-level error strings. Default
+  child liveness, a persisted `starting` phase before initialization, and
+  `ready` only after repository validation, worker preflight, initial
+  fingerprinting, log initialization, and the first successful heartbeat.
+  Deterministic coverage must include immediate child exit, lock refusal,
+  bounded timeout, first-heartbeat failure, and successful readiness, plus the
+  exact low-cardinality startup codes `worker_environment_invalid`,
+  `repository_fingerprint_failed`, `repository_state_unavailable`,
+  `daemon_lock_refused`, `child_exited_before_ready`, `startup_timeout`, and
+  `first_heartbeat_failed`. Human and JSON assertions must distinguish current
+  `daemon_state`, `startup_state`, `startup_failure_code`, and
+  `repository_ready` from the prior sync result exposed as
+  `previous_autosync_attempt`; historical failure must not redefine current
+  process readiness. Tests must also cover serialized lifecycle ownership plus
+  exact-record stop/guard cleanup under a concurrently replaced lock and no
+  nonce, environment, credential, source, or absolute-path leakage. Tests must
+  assert typed startup semantic classes rather than incidental lower-level
+  error strings. Default
   tests must not start or kill real user background services;
   product-runtime background behavior may be covered through
   temporary-repository smoke tests or ignored/manual tests.
@@ -498,24 +523,34 @@ allowed.
   rejection, release-workflow tag/version-guard and artifact and
   installer-script checksum contract checks, tag publication credential
   preflight, explicit build-only workflow dispatch, staged GitHub-assets-before-
-  npm publication, exact packaged-artifact `version`/setup-dry-run/product-MCP
-  smoke, plus macOS and expanded `windows-installer-smoke` CI contracts,
+  npm publication, and the exact packaged-artifact lifecycle gate. That gate
+  must unpack the candidate binary with its worker, use the committed Pydantic
+  release fixture in an isolated HOME, and cover exact `version`, setup
+  dry-run/live product-MCP self-test, explicit `resync`, unchanged incremental
+  copy-forward, `find`/advisory-`check`, autosync readiness across at least three
+  poll intervals, changed-file generation activation, stop, and daemon-lock
+  removal on native Linux and macOS. Lifecycle failures must report only
+  low-cardinality readiness fields and must not claim that a process exited
+  when liveness was merely unverifiable. Windows remains a source-only boundary,
   target/scope pass-through for comma-separated, `none`, and
   local-scope install requests, stale PATH prune failure propagation, and
   command removal.
   Default tests must not use wrapper scripts to call real `codex` or `claude`
   binaries.
   Windows PowerShell wrapper coverage must include `src/install/install.ps1`
-  source-checkout `-FromSource` installation with an already built local binary,
-  bundled worker asset installation, unmanaged command refusal without
-  `-ReplaceUnmanagedCommand` plus opt-in backup with it, no `.repogrammar/`
-  mutation, locked stale PATH prune failure propagation, and nonzero propagation
-  when delegated `repogrammar install` fails.
+  refusing a default/non-`-FromSource` install before network or filesystem
+  writes even when a fake release directory is supplied; absence of a release
+  download implementation; source-checkout `-FromSource` installation with an
+  already built local binary; bundled worker asset installation; unmanaged
+  command refusal without `-ReplaceUnmanagedCommand` plus opt-in backup with
+  it; no `.repogrammar/` mutation; locked stale PATH prune failure propagation;
+  and nonzero propagation when delegated `repogrammar install` fails.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
-  cover the full public-preview platform/artifact matrix, unsupported
-  platform/arch rejection, checksum rejection, binary/worker cache
-  installation, missing-worker artifact rejection, unexpected-entry rejection,
+  cover the full supported public-preview platform/artifact matrix,
+  unsupported platform/arch rejection, explicit Windows rejection, checksum
+  rejection, binary/worker cache installation, missing-worker artifact
+  rejection, unexpected-entry rejection,
   non-regular-file (symlink/hardlink) release-member rejection with no partial
   cached binary left behind, `REPOGRAMMAR_BINARY` local dogfood bypass, argument
   forwarding including target lists, local scope, `--print-config`, and the full
@@ -578,7 +613,11 @@ allowed.
   requests, and prove request paths and source snippets are not echoed in
   errors.
 - Python worker executable tests must run the checked-in CPython AST worker
-  through `python3`, validate private parse-document JSON output, syntax-error
+  through `python3`, validate private parse-document JSON output with the exact
+  request/response tuple `protocol_version=1, contract_revision=1`, and prove
+  that a missing or different revision returns only the low-cardinality
+  `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope without paths, source, or raw
+  payload. They must also cover syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
   code-unit output, parse-document structural facts for imports/decorators/class
   bases/calls/pytest test anchors/test and fixture dependency edges, bounded
@@ -599,6 +638,11 @@ allowed.
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
+  repo-local `include_router` context crossing the Rust boundary with its exact
+  seven-assumption envelope and a low-cardinality, source-free prefix shape,
+  malformed/raw prefix assumptions remaining rejected, and dynamic prefix or
+  unresolved binding outcomes crossing as typed `fastapi_router_prefix` /
+  `fastapi_router_binding` `UNKNOWN`s rather than parser failures,
   same-function FastAPI service-call context anchors with reassignment
   invalidation, typed `UNKNOWN` output for dynamic decorators, unresolved bare
   decorators, monkey patches, dynamic calls, unsafe or nonliteral
@@ -606,10 +650,15 @@ allowed.
   `sys.path.append`/`sys.path.insert` import-environment mutation, and
   unresolved cases, plus safe literal dynamic-import anchors and plain
   `getattr(...)` assignments that do not become dynamic call-target UNKNOWNs,
-  oversized request
+  oversized request, a 40,000-import module completing within an isolated
+  subprocess bound without quadratic binding-map snapshots, a sleeping fake
+  frontend producing a typed timeout within a deterministic upper bound while
+  stdout is concurrently drained,
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
-  source reads, and absence of source snippets, absolute paths, or unsafe
-  dynamic-import literal targets.
+  source reads, checked-in-worker self-analysis within a bounded subprocess
+  timeout and through the Rust parser boundary, responses above the former 1
+  MiB ceiling but below the explicit 2 MiB response limit, and absence of
+  source snippets, absolute paths, or unsafe dynamic-import literal targets.
 - Release fixture smoke tests currently copy committed TS/JS source fixtures
   from both the legacy transitional `src/fixtures/typescript/release/v0_1/`
   corpus and the conservative exact-anchor `src/fixtures/typescript/release/v0_2/`
@@ -699,9 +748,21 @@ allowed.
   three-format structural root union without claiming packaging precedence;
   RecordingParser coverage alone is insufficient for the product route. Tests
   must also preserve the source-store and
-  Python frontend size/error boundaries and assert `setup.cfg` provenance uses
-  `configparser`, not `tomllib`. Semantic-worker-compatible project-mode repo-local
-  import resolution for unique module-level matches, ambiguous or missing
+  Python frontend size/error boundaries. The Rust adapter must serialize the
+  exact private parse-document contract tuple, reject missing or different
+  response revisions as typed `PythonFrontendContractMismatch`, and map an old
+  worker's bounded rejection of the revision-bearing request to the same typed,
+  path-free result while retaining ordinary missing-worker classification.
+  Application coverage must assert the sanitized rebuild/reinstall recovery
+  and prove no candidate generation is activated after a mismatch. The exact
+  committed `src/fixtures/python/release/v0_1/pydantic-basic/schemas.py` must
+  run through direct-worker and Rust-adapter tests plus full indexing and an
+  unchanged incremental copy-forward; its `pydantic.field_validator` structural
+  fact and non-blocking `pydantic_validator_side_effects` UNKNOWN must remain
+  fresh and source-free in both active generations. Tests must also assert
+  `setup.cfg` provenance uses `configparser`, not `tomllib`.
+  Semantic-worker-compatible project-mode repo-local import resolution for
+  unique module-level matches, ambiguous or missing
   repo-local import `UNKNOWN`, `sys.path` mutation
   `RuntimeDependencyInjection` `UNKNOWN`, dynamic FastAPI dependency-target
   `RuntimeDependencyInjection` `UNKNOWN`, dynamic import, dynamic call-target,

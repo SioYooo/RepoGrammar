@@ -113,6 +113,10 @@ text, prompts, raw MCP/tool input or output, evidence text, content hashes,
 byte ranges, code-unit ids, fact ids, family ids, member ids, raw errors,
 diffs, or patches.
 Local experiment recording remains separate from anonymous telemetry consent.
+The telemetry help surface scopes `--project <path>` to anonymous telemetry
+and research diagnostics. Local `experiment-*` subcommands use machine-local
+state, accept only their dedicated options, and reject `--project`
+rather than suggesting a repository-specific experiment store.
 `experiment-start --yes` is the non-interactive confirmation path; interactive
 product runs without `--yes` prompt with default-no `[y/N]`, and the
 controlled-pair prompt warns about additional token usage, time, and provider

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">RepoGrammar real CLI demo</title>
+  <desc id="desc">Audited output from setup, find, check, and typed UNKNOWN commands against committed Python fixtures.</desc>
+  <rect width="1200" height="760" rx="20" fill="#0d1117"/>
+  <rect x="1" y="1" width="1198" height="758" rx="19" fill="none" stroke="#30363d" stroke-width="2"/>
+  <rect width="1200" height="54" rx="20" fill="#161b22"/>
+  <rect y="34" width="1200" height="20" fill="#161b22"/>
+  <circle cx="28" cy="27" r="7" fill="#ff7b72"/>
+  <circle cx="52" cy="27" r="7" fill="#d29922"/>
+  <circle cx="76" cy="27" r="7" fill="#3fb950"/>
+  <text x="600" y="34" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" text-anchor="middle">RepoGrammar 0.2.0-preview.0 · actual fixture run · paths normalized</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">
+    <text x="34" y="88" fill="#7ee787">$ repogrammar setup --project "$DEMO_REPO" --target auto</text>
+    <text x="34" y="116" fill="#c9d1d9">setup: completed with limitations</text>
+    <text x="34" y="142" fill="#c9d1d9">repository: 2 files indexed, 1 pattern groups verified</text>
+    <text x="34" y="168" fill="#c9d1d9">product MCP: repogrammar_context self-test passed</text>
+    <text x="34" y="194" fill="#d29922">agent MCP: not active; use the repository index through the RepoGrammar CLI</text>
+
+    <line x1="34" y1="218" x2="1166" y2="218" stroke="#30363d"/>
+    <text x="34" y="252" fill="#7ee787">$ repogrammar find --project "$DEMO_REPO" --token-budget 8000 app/routes.py</text>
+    <text x="34" y="280" fill="#58a6ff">find: evidence-backed family</text>
+    <text x="34" y="306" fill="#c9d1d9">family: family:python:fastapi_route:framework_fastapi_route</text>
+    <text x="34" y="332" fill="#c9d1d9">classification: DOMINANT_PATTERN    support: 4</text>
+    <text x="34" y="358" fill="#c9d1d9">read_plan: items: 2    estimated_tokens: 140    source_snippets: not_included</text>
+    <text x="34" y="384" fill="#d29922">estimated_potential_token_savings_kind: ESTIMATED</text>
+    <text x="34" y="410" fill="#8b949e">estimated potential only; not measured token savings</text>
+
+    <line x1="34" y1="434" x2="1166" y2="434" stroke="#30363d"/>
+    <text x="34" y="468" fill="#7ee787">$ repogrammar check --project "$DEMO_REPO" --token-budget 8000 app/routes.py</text>
+    <text x="34" y="496" fill="#58a6ff">check: CONTEXT_ONLY</text>
+    <text x="34" y="522" fill="#d29922">advisory_status: UNKNOWN</text>
+    <text x="34" y="548" fill="#c9d1d9">reason: runtime equivalence remains unproven</text>
+
+    <line x1="34" y1="572" x2="1166" y2="572" stroke="#30363d"/>
+    <text x="34" y="606" fill="#7ee787">$ repogrammar find --project "$DEMO_REPO" --token-budget 8000 registered_router</text>
+    <text x="34" y="634" fill="#ff7b72">find: UNKNOWN</text>
+    <text x="34" y="660" fill="#c9d1d9">unknown: blocking_unknown:InsufficientSupport affected_claim: query target</text>
+    <text x="34" y="686" fill="#d29922">recovery: use source fallback</text>
+  </g>
+
+  <text x="34" y="728" fill="#8b949e" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Source: committed fixtures · Full commands and unabridged output: docs/demo/verified-cli-transcript.md</text>
+</svg>

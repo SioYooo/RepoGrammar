@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import runpy
@@ -13,9 +14,19 @@ import tempfile
 from pathlib import Path
 
 WORKER = Path(__file__).with_name("worker.py")
+PYDANTIC_FIXTURE = (
+    WORKER.parents[2]
+    / "fixtures"
+    / "python"
+    / "release"
+    / "v0_1"
+    / "pydantic-basic"
+    / "schemas.py"
+)
+PARSE_DOCUMENT_CONTRACT_REVISION = 1
 
 
-def run_worker(payload):
+def run_worker_exact(payload):
     data = payload if isinstance(payload, str) else json.dumps(payload) + "\n"
     result = subprocess.run(
         [sys.executable, str(WORKER)],
@@ -23,10 +34,21 @@ def run_worker(payload):
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+
+def run_worker(payload):
+    if (
+        isinstance(payload, dict)
+        and payload.get("mode") == "parse_document"
+        and "contract_revision" not in payload
+    ):
+        payload = {**payload, "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION}
+    return run_worker_exact(payload)
 
 
 def valid_request(root: str):
@@ -240,6 +262,81 @@ def test_users(client, status, missing_fixture):
 """,
     }
 )
+
+assert parse_messages[0]["protocol_version"] == 1
+assert parse_messages[0]["contract_revision"] == PARSE_DOCUMENT_CONTRACT_REVISION
+
+# A legacy request shape omits the private parse-document revision. The new
+# worker returns one bounded, path-free rejection rather than accepting or
+# guessing the payload contract. A published host that predates the Rust typed
+# mismatch variant can only surface this as a sanitized generic failure and
+# must be upgraded; the current-host classification is covered by the Rust
+# subprocess composition test.
+legacy_request_messages = run_worker_exact(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "private.py",
+        "content_hash": "sha256:" + "0" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "SECRET_SOURCE = True\n",
+    }
+)
+assert legacy_request_messages == [
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+        "mode": "parse_document",
+        "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+    }
+]
+assert "private.py" not in json.dumps(legacy_request_messages)
+assert "SECRET_SOURCE" not in json.dumps(legacy_request_messages)
+
+# Wrong future revisions receive the same low-cardinality response.
+future_host_request = {
+    "protocol_version": 1,
+    "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION + 1,
+    "mode": "parse_document",
+    "path": "private.py",
+    "content_hash": "sha256:" + "0" * 64,
+    "repository_revision": "UNKNOWN",
+    "text": "SECRET_SOURCE = True\n",
+}
+assert run_worker_exact(future_host_request) == legacy_request_messages
+
+# The exact checked-in Pydantic release fixture exercises the same private
+# contract directly: the validator remains a structural member anchor and its
+# body call stays a typed, claim-scoped UNKNOWN.
+pydantic_fixture_source = PYDANTIC_FIXTURE.read_text(encoding="utf-8")
+pydantic_fixture_messages = run_worker_exact(
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+        "mode": "parse_document",
+        "path": "schemas.py",
+        "content_hash": "sha256:"
+        + hashlib.sha256(pydantic_fixture_source.encode()).hexdigest(),
+        "repository_revision": "UNKNOWN",
+        "text": pydantic_fixture_source,
+    }
+)
+assert len(pydantic_fixture_messages) == 1
+pydantic_fixture_facts = pydantic_fixture_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field_validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in pydantic_fixture_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=pydantic_validator_side_effects" in fact["assumptions"]
+    for fact in pydantic_fixture_facts
+)
+assert "return value.lower()" not in json.dumps(pydantic_fixture_messages)
+
 assert len(parse_messages) == 1
 unit_kinds = [unit["kind"] for unit in parse_messages[0]["units"]]
 assert "module" in unit_kinds
@@ -3387,6 +3484,7 @@ assert any(
 
 bad_parse_context_payload = {
         "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
         "mode": "parse_document",
         "path": "app.py",
         "content_hash": "sha256:" + "7" * 64,
@@ -3407,6 +3505,7 @@ assert "secret" not in bad_parse_context.stderr
 
 bad_conftest_context_payload = {
     "protocol_version": 1,
+    "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
     "mode": "parse_document",
     "path": "app.py",
     "content_hash": "sha256:" + "a" * 64,
@@ -3624,7 +3723,7 @@ app.include_router(router, prefix="/api/v1")
     assert "fact_scope=context_only" in include_fact.get("assumptions", [])
     assert "router_binding=local" in include_fact.get("assumptions", [])
     assert "router_local_name=router" in include_fact.get("assumptions", [])
-    assert "route_prefix_shape=/api/v1" in include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/:literal/:literal" in include_fact.get("assumptions", [])
     assert "prefix_unknown=false" in include_fact.get("assumptions", [])
     assert_no_fact_source_payloads(facts)
 
@@ -3659,7 +3758,7 @@ app.include_router(router, prefix="/api")
     )
     assert "router_binding=repo_local_import" in imported_include_fact.get("assumptions", [])
     assert "router_target=routes.router" in imported_include_fact.get("assumptions", [])
-    assert "route_prefix_shape=/api" in imported_include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/:literal" in imported_include_fact.get("assumptions", [])
     assert_no_fact_source_payloads(facts)
 
 with tempfile.TemporaryDirectory() as root:
@@ -4131,3 +4230,60 @@ celery_app_kinds, celery_app_facts = _preview_parse(
 )
 assert "celery_task" in celery_app_kinds
 assert "celery.task" in _anchor_targets(celery_app_facts, "celery_task_decorator")
+
+# Forty thousand legal top-level imports must build one event per binding, not
+# forty thousand progressively larger alias snapshots. Run the pure timeline
+# in an isolated interpreter so the timeout deterministically catches the old
+# quadratic memory/time behavior without depending on wall-clock assertions in
+# the main smoke process.
+large_import_timeline = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        """
+import ast
+import runpy
+import sys
+
+namespace = runpy.run_path(sys.argv[1])
+source = ''.join(f'import m{index}\\n' for index in range(40_000))
+tree = ast.parse(source)
+starts = namespace['byte_line_starts'](source)
+aliases = {f'm{index}': f'm{index}' for index in range(40_000)}
+timeline = namespace['module_scope_timeline'](tree, starts, aliases)
+view = timeline.aliases_at(len(source.encode('utf-8')) + 1)
+assert len(timeline.alias_histories) == 40_000
+assert len(view) == 40_000
+assert view['m0'] == 'm0'
+assert view['m39999'] == 'm39999'
+""",
+        str(WORKER),
+    ],
+    text=True,
+    capture_output=True,
+    check=False,
+    timeout=15,
+)
+assert large_import_timeline.returncode == 0, large_import_timeline.stderr
+assert large_import_timeline.stderr == ""
+
+# The checked-in worker is a real large-module regression fixture. It must
+# analyze itself within the bounded subprocess timeout without truncating its
+# source-free metadata response or exceeding the fact-count contract.
+self_source = WORKER.read_text()
+self_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "src/workers/python/worker.py",
+        "content_hash": "sha256:" + hashlib.sha256(self_source.encode()).hexdigest(),
+        "repository_revision": "UNKNOWN",
+        "text": self_source,
+    }
+)
+assert len(self_messages) == 1
+self_response = self_messages[0]
+assert self_response["diagnostics"] == []
+assert len(self_response["units"]) > 100
+assert 1_000 < len(self_response["facts"]) <= 2_000
+assert_no_fact_source_payloads(self_response["facts"])

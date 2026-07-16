@@ -10,6 +10,7 @@ RELEASE_BINARY_EXISTED=0
 ORIGINAL_PATH="${PATH:-}"
 SYSTEM_PATH="$(command -p getconf PATH 2>/dev/null || printf '/usr/bin:/bin')"
 CARGO_BIN="$(command -v cargo || true)"
+NODE_BIN="$(command -v node || true)"
 PATH="$SYSTEM_PATH"
 
 restore_release_binary() {
@@ -103,7 +104,89 @@ require_workflow_count_at_least() {
   fi
 }
 
+require_workflow_count_exactly() {
+  local body="$1"
+  local pattern="$2"
+  local expected="$3"
+  local failure="$4"
+  local count
+  count="$(grep -Ec -- "$pattern" <<<"$body" || true)"
+  if [[ "$count" -ne "$expected" ]]; then
+    echo "$failure (expected $expected, found $count)" >&2
+    exit 1
+  fi
+}
+
 TARGET="$("$INSTALLER" --print-target)"
+
+# Linux release targets are glibc-specific. Prove the installer classifies the
+# runtime before any network request or managed-path write, using only fake
+# offline platform commands.
+FAKE_LINUX_BIN="${TMP_ROOT}/fake-linux-bin"
+mkdir -p "$FAKE_LINUX_BIN"
+cat > "${FAKE_LINUX_BIN}/uname" <<'FAKE_UNAME'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) printf 'Linux\n' ;;
+  -m) printf 'x86_64\n' ;;
+  *) exit 2 ;;
+esac
+FAKE_UNAME
+cat > "${FAKE_LINUX_BIN}/getconf" <<'FAKE_GETCONF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "GNU_LIBC_VERSION" ]]; then
+  case "${REPOGRAMMAR_TEST_LIBC:-}" in
+    glibc) printf 'glibc 2.39\n'; exit 0 ;;
+    glibc-low) printf 'glibc 2.34\n'; exit 0 ;;
+  esac
+fi
+exit 1
+FAKE_GETCONF
+cat > "${FAKE_LINUX_BIN}/ldd" <<'FAKE_LDD'
+#!/usr/bin/env bash
+case "${REPOGRAMMAR_TEST_LIBC:-}" in
+  musl) printf 'musl libc (x86_64)\n' ;;
+  unknown) printf 'unclassified libc runtime\n' ;;
+  *) printf 'ldd (GNU libc) 2.39\n' ;;
+esac
+FAKE_LDD
+cat > "${FAKE_LINUX_BIN}/curl" <<'FAKE_CURL'
+#!/usr/bin/env bash
+printf 'called\n' > "${REPOGRAMMAR_TEST_CURL_MARKER:?}"
+exit 1
+FAKE_CURL
+chmod +x "${FAKE_LINUX_BIN}/uname" "${FAKE_LINUX_BIN}/getconf" "${FAKE_LINUX_BIN}/ldd" "${FAKE_LINUX_BIN}/curl"
+
+GLIBC_TARGET="$(PATH="${FAKE_LINUX_BIN}:${SYSTEM_PATH}" REPOGRAMMAR_TEST_LIBC=glibc "$INSTALLER" --print-target)"
+if [[ "$GLIBC_TARGET" != "x86_64-unknown-linux-gnu" ]]; then
+  echo "glibc Linux target detection returned ${GLIBC_TARGET}" >&2
+  exit 1
+fi
+
+for LIBC_CASE in musl unknown glibc-low; do
+  LIBC_ROOT="${TMP_ROOT}/linux-${LIBC_CASE}"
+  LIBC_CURL_MARKER="${LIBC_ROOT}/curl-called"
+  mkdir -p "$LIBC_ROOT"
+  set +e
+  PATH="${FAKE_LINUX_BIN}:${SYSTEM_PATH}" \
+  REPOGRAMMAR_TEST_LIBC="$LIBC_CASE" \
+  REPOGRAMMAR_TEST_CURL_MARKER="$LIBC_CURL_MARKER" \
+  REPOGRAMMAR_COMMAND_DIR="${LIBC_ROOT}/bin" \
+  REPOGRAMMAR_INSTALL_DIR="${LIBC_ROOT}/data" \
+  "$INSTALLER" --install-cli-only --yes >"${LIBC_ROOT}/out" 2>"${LIBC_ROOT}/err"
+  LIBC_STATUS=$?
+  set -e
+  if [[ "$LIBC_STATUS" -eq 0 ]]; then
+    echo "${LIBC_CASE} Linux release install unexpectedly succeeded" >&2
+    exit 1
+  fi
+  grep -q "public preview requires glibc\|unable to confirm glibc\|require glibc 2.35+" "${LIBC_ROOT}/err"
+  if [[ -e "$LIBC_CURL_MARKER" || -e "${LIBC_ROOT}/bin/repogrammar" || -e "${LIBC_ROOT}/data/bin/repogrammar" ]]; then
+    echo "${LIBC_CASE} rejection must occur before download or managed-path writes" >&2
+    exit 1
+  fi
+done
+
 RELEASE_DIR="${TMP_ROOT}/release"
 PACKAGE_DIR="${TMP_ROOT}/package"
 COMMAND_DIR="${TMP_ROOT}/bin"
@@ -571,6 +654,31 @@ if [[ -e "${TMP_ROOT}/missing-worker-bin/repogrammar" || -e "${TMP_ROOT}/missing
 fi
 
 RELEASE_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/release.yml"
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node is required for release manifest validation" >&2
+  exit 1
+fi
+PACKAGE_VERSION="$("$NODE_BIN" -p "require('${SCRIPT_DIR}/../../package.json').version")"
+CARGO_VERSION="$(awk -F' *= *' '
+  /^\[/ { section = $0 }
+  section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
+' "${SCRIPT_DIR}/../../Cargo.toml")"
+if [[ "$PACKAGE_VERSION" != "0.2.0-preview.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "public-preview manifests must agree on 0.2.0-preview.0" >&2
+  exit 1
+fi
+PACKAGE_MANIFEST="${SCRIPT_DIR}/../../package.json"
+README_FILE="${SCRIPT_DIR}/../../README.md"
+grep -q '"repository"' "$PACKAGE_MANIFEST"
+grep -q '"homepage"' "$PACKAGE_MANIFEST"
+grep -q '"bugs"' "$PACKAGE_MANIFEST"
+grep -q 'npm view @sioyooo/repogrammar@0.2.0-preview.0 version' "$README_FILE"
+grep -q 'releases/download/v0.2.0-preview.0/install.sh.sha256' "$README_FILE"
+grep -q 'npx @sioyooo/repogrammar@0.2.0-preview.0 setup' "$README_FILE"
+if grep -Eq '\]\((docs/|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|LICENSE\))' "$README_FILE"; then
+  echo "packed README must not contain relative links to unpackaged repository files" >&2
+  exit 1
+fi
 WORKFLOW_DISPATCH_TRIGGER="$(awk '
   /^  workflow_dispatch:[[:space:]]*$/ { in_dispatch = 1 }
   in_dispatch && /^[A-Za-z0-9_-]+:[[:space:]]*$/ { exit }
@@ -580,6 +688,7 @@ VERIFY_JOB="$(workflow_job "$RELEASE_WORKFLOW" verify)"
 BUILD_JOB="$(workflow_job "$RELEASE_WORKFLOW" build)"
 PUBLISH_RELEASE_JOB="$(workflow_job "$RELEASE_WORKFLOW" publish_release)"
 PUBLISH_NPM_JOB="$(workflow_job "$RELEASE_WORKFLOW" publish_npm)"
+TAG_VERSION_STEP="$(workflow_named_step "$VERIFY_JOB" "Verify tag and version agreement")"
 
 if [[ -z "$VERIFY_JOB" || -z "$BUILD_JOB" || -z "$PUBLISH_RELEASE_JOB" || -z "$PUBLISH_NPM_JOB" ]]; then
   echo "release workflow is missing the verify/build/publish_release/publish_npm staged jobs" >&2
@@ -592,6 +701,10 @@ require_workflow_match "$WORKFLOW_DISPATCH_TRIGGER" 'default:[[:space:]]+build-o
   "workflow_dispatch must default to build-only"
 require_workflow_match "$WORKFLOW_DISPATCH_TRIGGER" '^([[:space:]]*)-[[:space:]]+build-only' \
   "workflow_dispatch must not offer an ambiguous publication mode"
+require_workflow_match "$TAG_VERSION_STEP" 'EVENT_NAME:[[:space:]]+\$\{\{[[:space:]]*github\.event_name' \
+  "tag/version validation must receive the triggering event type"
+require_workflow_match "$TAG_VERSION_STEP" 'EVENT_NAME.*=[[:space:]]*"push".*REF_TYPE.*=[[:space:]]*"tag"' \
+  "manual dispatch from a tag ref must remain build-only during version validation"
 
 require_workflow_match "$BUILD_JOB" 'needs:[[:space:]]+verify' \
   "release builds must depend on the release verification gate"
@@ -603,8 +716,10 @@ require_workflow_match "$BUILD_JOB" 'repogrammar-x86_64-apple-darwin\.tar\.gz' \
   "release build matrix is missing macOS x86_64"
 require_workflow_match "$BUILD_JOB" 'repogrammar-aarch64-apple-darwin\.tar\.gz' \
   "release build matrix is missing macOS arm64"
-require_workflow_match "$BUILD_JOB" 'repogrammar-x86_64-pc-windows-msvc\.zip' \
-  "release build matrix is missing Windows x86_64"
+require_workflow_count_exactly "$BUILD_JOB" '^[[:space:]]+target:[[:space:]]+' 4 \
+  "public-preview release matrix must contain exactly four supported targets"
+require_workflow_absence "$BUILD_JOB" 'windows|Windows|pc-windows|\.zip|pwsh|PowerShell|Compress-Archive' \
+  "public-preview release builds must not claim or package Windows support"
 require_workflow_match "$BUILD_JOB" 'src/workers/python/worker\.py' \
   "release artifacts must package the Python worker"
 require_workflow_match "$BUILD_JOB" '\.sha256' \
@@ -615,6 +730,7 @@ require_workflow_match "$BUILD_JOB" '\.sha256' \
 # external state. workflow_dispatch remains build-only because only tag refs
 # can reach the two staged publication jobs.
 CREDENTIAL_PREFLIGHT="$(workflow_named_step "$VERIFY_JOB" "Require npm credentials before tag publication")"
+TAG_AUTHORITY="$(workflow_named_step "$VERIFY_JOB" "Verify publication tag authority")"
 if [[ -z "$CREDENTIAL_PREFLIGHT" ]]; then
   echo "release verification must include a named tag publication credential preflight" >&2
   exit 1
@@ -623,33 +739,52 @@ require_workflow_match "$CREDENTIAL_PREFLIGHT" 'NODE_AUTH_TOKEN:[[:space:]]+\$\{
   "the pre-publication verify job must receive NPM_TOKEN"
 require_workflow_match "$CREDENTIAL_PREFLIGHT" 'github\.ref_type.*tag' \
   "the npm credential preflight must be scoped to tag publication"
+require_workflow_match "$CREDENTIAL_PREFLIGHT" 'github\.event_name.*push' \
+  "manual dispatch must never run the npm credential preflight, even from a tag ref"
 require_workflow_match "$CREDENTIAL_PREFLIGHT" 'NODE_AUTH_TOKEN' \
   "the tag publication credential preflight must inspect NODE_AUTH_TOKEN"
 require_workflow_match "$CREDENTIAL_PREFLIGHT" 'if[[:space:]].*-z.*NODE_AUTH_TOKEN' \
   "the tag publication credential preflight must classify an absent token"
 require_workflow_match "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+1' \
   "missing npm publication credentials must fail the tag release gate"
+require_workflow_match "$CREDENTIAL_PREFLIGHT" 'npm[[:space:]]+whoami' \
+  "tag publication preflight must verify that npm accepts the configured token"
 require_workflow_absence "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+0|NPM_TOKEN.*skipp|skipp.*NPM_TOKEN' \
   "the tag release gate must not describe missing npm credentials as skippable"
 
+if [[ -z "$TAG_AUTHORITY" ]]; then
+  echo "release verification must prove the pushed tag commit belongs to origin/main" >&2
+  exit 1
+fi
+require_workflow_match "$TAG_AUTHORITY" 'github\.event_name.*push' \
+  "tag authority verification must run only for pushed publication tags"
+require_workflow_match "$TAG_AUTHORITY" 'github\.ref_type.*tag' \
+  "tag authority verification must require a tag ref"
+require_workflow_match "$TAG_AUTHORITY" 'git[[:space:]]+fetch.*origin[[:space:]]+main:refs/remotes/origin/main' \
+  "tag authority verification must fetch origin/main"
+require_workflow_match "$TAG_AUTHORITY" 'git[[:space:]]+merge-base[[:space:]]+--is-ancestor[[:space:]]+HEAD[[:space:]]+origin/main' \
+  "tag authority verification must require the tag commit to be contained in origin/main"
+require_workflow_match "$VERIFY_JOB" 'fetch-depth:[[:space:]]+0' \
+  "release verification must check out complete history for the tag ancestry gate"
+
 require_workflow_match "$PUBLISH_RELEASE_JOB" 'needs:[[:space:]]+build' \
   "GitHub prerelease assets must be staged after verified artifact builds"
-require_workflow_match "$PUBLISH_RELEASE_JOB" "if:[[:space:]]+startsWith\(github\.ref,[[:space:]]*'refs/tags/'\)" \
-  "GitHub prerelease publication must remain tag-only"
+require_workflow_match "$PUBLISH_RELEASE_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
+  "GitHub prerelease publication must require a pushed tag, never manual dispatch"
 require_workflow_match "$PUBLISH_RELEASE_JOB" 'softprops/action-gh-release' \
   "publish_release must create the GitHub prerelease"
 require_workflow_match "$PUBLISH_RELEASE_JOB" 'install\.sh' \
   "GitHub prerelease assets must include install.sh"
-require_workflow_match "$PUBLISH_RELEASE_JOB" 'install\.ps1' \
-  "GitHub prerelease assets must include install.ps1"
+require_workflow_absence "$PUBLISH_RELEASE_JOB" 'install\.ps1|windows|Windows' \
+  "GitHub prerelease assets must not publish the unsupported Windows installer"
 require_workflow_match "$PUBLISH_RELEASE_JOB" '\.sha256' \
   "GitHub prerelease assets must include installer checksums"
 
 require_workflow_match "$PUBLISH_NPM_JOB" 'needs:[[:space:]]+publish_release' \
   "npm publication must explicitly follow GitHub prerelease asset publication"
-require_workflow_match "$PUBLISH_NPM_JOB" "if:[[:space:]]+startsWith\(github\.ref,[[:space:]]*'refs/tags/'\)" \
-  "npm publication must remain tag-only so workflow_dispatch is build-only"
-require_workflow_match "$PUBLISH_NPM_JOB" 'npm publish --access public' \
+require_workflow_match "$PUBLISH_NPM_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
+  "npm publication must require a pushed tag so workflow_dispatch is always build-only"
+require_workflow_match "$PUBLISH_NPM_JOB" 'npm publish --access public --tag preview' \
   "publish_npm must publish the launcher instead of reporting a skipped success"
 require_workflow_absence "$PUBLISH_NPM_JOB" 'exit[[:space:]]+0|skipping npm publish' \
   "publish_npm must not turn absent credentials into a green skipped publication"
@@ -658,78 +793,51 @@ require_workflow_absence "$PUBLISH_NPM_JOB" 'exit[[:space:]]+0|skipping npm publ
 # binaries do not prove that an archive is executable or contains the runtime
 # worker. The live no-agent setup also exercises the product tools/list
 # self-test; its JSON evidence must say that the product self-test passed.
-UNIX_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged Unix artifact")"
-WINDOWS_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged Windows artifact")"
-if [[ -z "$UNIX_ARTIFACT_SMOKE" || -z "$WINDOWS_ARTIFACT_SMOKE" ]]; then
-  echo "release build must have named Unix and Windows packaged-artifact smoke steps" >&2
+PACKAGED_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged artifact")"
+if [[ -z "$PACKAGED_ARTIFACT_SMOKE" ]]; then
+  echo "release build must have a named packaged-artifact smoke step" >&2
   exit 1
 fi
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'tar[[:space:]].*-x' \
-  "Unix packaged smoke must extract the archive it will upload"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'binary=.*unpacked/repogrammar' \
-  "Unix packaged smoke must bind the executable from the extracted archive"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'unpacked/workers/python/worker\.py' \
-  "Unix packaged smoke must verify the worker inside the extracted archive"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*version' \
-  "Unix packaged smoke must run version from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*setup' \
-  "Unix packaged smoke must invoke setup through the extracted binary"
-require_workflow_count_at_least "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*setup' 2 \
-  "Unix packaged smoke must run both dry-run and live setup from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '--dry-run' \
-  "Unix packaged smoke must run setup --dry-run --json from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '--json' \
-  "Unix packaged smoke must validate setup JSON"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'command -v git' \
-  "Unix packaged smoke must preserve git in its isolated tool PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'command -v python3' \
-  "Unix packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'ln -s.*git|ln -sf.*git' \
-  "Unix packaged smoke must expose only the resolved git executable to setup"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'ln -s.*python3|ln -sf.*python3' \
-  "Unix packaged smoke must expose only the resolved Python runtime to setup"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'tool_path=.*tools' \
-  "Unix packaged smoke must build a dedicated tool-only PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'PATH=.*tool_path' \
-  "Unix packaged smoke must isolate live setup from real agent configuration"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'product_self_test_state' \
-  "Unix packaged smoke must inspect product MCP self-test evidence"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'passed' \
-  "Unix packaged smoke must require a passed product MCP self-test"
-
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Expand-Archive' \
-  "Windows packaged smoke must extract the archive it will upload"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'repogrammar\.exe' \
-  "Windows packaged smoke must select the extracted executable"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '\$binary.*\$unpacked.*repogrammar\.exe' \
-  "Windows packaged smoke must bind the executable from the extracted archive"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'workers/python/worker\.py' \
-  "Windows packaged smoke must verify the worker inside the extracted archive"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+version' \
-  "Windows packaged smoke must run version from the extracted binary"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+setup' \
-  "Windows packaged smoke must run setup from the extracted binary"
-require_workflow_count_at_least "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+setup' 2 \
-  "Windows packaged smoke must run both dry-run and live setup from the extracted binary"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '--dry-run' \
-  "Windows packaged smoke must include a dry-run setup"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '--json' \
-  "Windows packaged smoke must validate setup JSON"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Get-Command[[:space:]]+git' \
-  "Windows packaged smoke must preserve git in its isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Get-Command[[:space:]]+python' \
-  "Windows packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'System32' \
-  "Windows packaged smoke must preserve required system commands while isolating agents"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '\$env:PATH[[:space:]]*=' \
-  "Windows packaged smoke must install an isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'product_self_test_state' \
-  "Windows packaged smoke must inspect product MCP self-test evidence"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'passed' \
-  "Windows packaged smoke must require a passed product MCP self-test"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'tar[[:space:]].*-x' \
+  "packaged smoke must extract the exact archive it will upload"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'binary=.*unpacked/repogrammar' \
+  "packaged smoke must bind the executable from the extracted archive"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'unpacked/workers/python/worker\.py' \
+  "packaged smoke must verify the worker inside the extracted archive"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'sys\.version_info[[:space:]]*>=[[:space:]]*\(3,[[:space:]]*10\)' \
+  "packaged smoke must enforce the Python 3.10+ runtime contract"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'expected_version=.*package\.json' \
+  "packaged smoke must derive the expected version from the release manifest"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'cargo run --quiet --bin repo-guard -- smoke-packaged-artifact' \
+  "packaged smoke must delegate product lifecycle assertions to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--binary.*binary' \
+  "packaged smoke must pass the extracted binary to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--worker.*worker' \
+  "packaged smoke must pass the extracted worker to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "packaged smoke must use the exact committed Pydantic release fixture"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--expected-version.*expected_version' \
+  "packaged smoke must require exact binary/manifest version agreement"
+require_workflow_match "$BUILD_JOB" 'os:[[:space:]]+ubuntu-22\.04' \
+  "Linux x86_64 release builds must pin the declared glibc 2.35 floor runner"
+require_workflow_match "$BUILD_JOB" 'os:[[:space:]]+ubuntu-24\.04-arm' \
+  "Linux arm64 release builds must pin the declared glibc 2.39 floor runner"
+LINUX_ABI_STEP="$(workflow_named_step "$BUILD_JOB" "Inspect Linux glibc ABI floor")"
+if [[ -z "$LINUX_ABI_STEP" ]]; then
+  echo "release builds must inspect Linux glibc symbol requirements" >&2
+  exit 1
+fi
+require_workflow_match "$LINUX_ABI_STEP" 'objdump[[:space:]]+-T' \
+  "Linux release ABI inspection must read dynamic symbol versions"
+require_workflow_match "$LINUX_ABI_STEP" '2\.35' \
+  "Linux ABI inspection must enforce the x86_64 glibc floor"
+require_workflow_match "$LINUX_ABI_STEP" '2\.39' \
+  "Linux ABI inspection must enforce the arm64 glibc floor"
 
 CI_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/ci.yml"
 MACOS_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" macos-product-smoke)"
+LINUX_PACKAGED_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" linux-packaged-product-smoke)"
+WINDOWS_SOURCE_JOB="$(workflow_job "$CI_WORKFLOW" windows-source-installer-contract)"
 if [[ -z "$MACOS_SMOKE_JOB" ]]; then
   echo "CI must include the macos-product-smoke job" >&2
   exit 1
@@ -738,31 +846,53 @@ require_workflow_match "$MACOS_SMOKE_JOB" 'runs-on:[[:space:]]+macos-' \
   "macOS product smoke must run on a macOS runner"
 require_workflow_match "$MACOS_SMOKE_JOB" 'cargo test --workspace --all-features' \
   "macOS coverage must exercise the Rust workspace rather than compilation only"
-require_workflow_match "$MACOS_SMOKE_JOB" '\$\{binary\}.*version' \
-  "macOS coverage must run the product version path"
-require_workflow_match "$MACOS_SMOKE_JOB" '\$\{binary\}.*setup' \
-  "macOS coverage must invoke isolated product setup"
-require_workflow_match "$MACOS_SMOKE_JOB" '--dry-run' \
-  "macOS coverage must run isolated setup JSON smoke"
-require_workflow_match "$MACOS_SMOKE_JOB" '--json' \
-  "macOS coverage must validate setup JSON"
-require_workflow_match "$MACOS_SMOKE_JOB" 'command -v git' \
-  "macOS coverage must preserve git in its isolated tool PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'command -v python3' \
-  "macOS coverage must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'tool_path=.*tools' \
-  "macOS coverage must build a dedicated tool-only PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'PATH=.*tool_path' \
-  "macOS coverage must isolate setup from real agent CLIs"
-require_workflow_match "$MACOS_SMOKE_JOB" 'product_self_test_state' \
-  "macOS coverage must validate product MCP self-test evidence"
+require_workflow_match "$MACOS_SMOKE_JOB" 'tar[[:space:]].*-x' \
+  "macOS coverage must extract its candidate package"
+require_workflow_match "$MACOS_SMOKE_JOB" 'smoke-packaged-artifact' \
+  "macOS coverage must exercise the packaged product lifecycle"
+require_workflow_match "$MACOS_SMOKE_JOB" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "macOS packaged coverage must use the committed Pydantic fixture"
+
+if [[ -z "$LINUX_PACKAGED_SMOKE_JOB" ]]; then
+  echo "CI must include the linux-packaged-product-smoke job" >&2
+  exit 1
+fi
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'runs-on:[[:space:]]+ubuntu-22\.04' \
+  "Linux packaged smoke must run on the declared x86_64 release floor"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'tar[[:space:]].*-x' \
+  "Linux packaged smoke must extract its candidate package"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'smoke-packaged-artifact' \
+  "Linux coverage must exercise the packaged product lifecycle"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "Linux packaged coverage must use the committed Pydantic fixture"
+
+if [[ -z "$WINDOWS_SOURCE_JOB" ]]; then
+  echo "CI must include the Windows source-only installer contract job" >&2
+  exit 1
+fi
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'name:[[:space:]]+Windows source-only installer contract' \
+  "Windows CI must remain explicitly source-only"
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'runs-on:[[:space:]]+windows-' \
+  "Windows source-only installer tests must run on a native Windows runner"
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'dtolnay/rust-toolchain@stable' \
+  "Windows source-only installer tests must provision Rust"
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'install\.ps1\.test\.ps1' \
+  "Windows source-only installer tests must execute the native PowerShell contract"
+require_workflow_absence "$WINDOWS_SOURCE_JOB" 'upload-artifact|release|repogrammar-.*windows|npm publish' \
+  "Windows source-only CI must not imply a release artifact or publication claim"
 
 WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
-grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
-grep -q "Get-FileHash -Algorithm SHA256" "$WINDOWS_INSTALLER"
-grep -q "Assert-SafeArchiveEntries" "$WINDOWS_INSTALLER"
-grep -q "release artifact was not found" "$WINDOWS_INSTALLER"
-grep -q "v0.2.0-preview.0" "$WINDOWS_INSTALLER"
+# Windows remains a source-checkout contributor path, not a public-preview
+# release artifact or npm platform claim.
 grep -q "FromSource" "$WINDOWS_INSTALLER"
 grep -q "REPOGRAMMAR_SOURCE_BINARY" "$WINDOWS_INSTALLER"
 grep -q "cargo build --release" "$WINDOWS_INSTALLER"
+grep -q "Windows is not supported by the public preview" "$WINDOWS_INSTALLER"
+grep -q "installation requires explicit -FromSource" "$WINDOWS_INSTALLER"
+if grep -Eq 'repogrammar-x86_64-pc-windows-msvc|Install-CliFromRelease|Get-WindowsArtifactName|Invoke-WebRequest' "$WINDOWS_INSTALLER"; then
+  echo "Windows contributor installer still contains a release-download path" >&2
+  exit 1
+fi
+WINDOWS_INSTALLER_TEST="${SCRIPT_DIR}/install.ps1.test.ps1"
+grep -q "Windows default release install unexpectedly succeeded" "$WINDOWS_INSTALLER_TEST"
+grep -q "refused Windows release install created command or install state" "$WINDOWS_INSTALLER_TEST"

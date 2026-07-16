@@ -732,6 +732,14 @@ where
                 );
                 continue;
             }
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while analyzing a source file".to_string(),
+                ));
+            }
+            Err(ParseError::PythonFrontendContractMismatch) => {
+                return Err(python_frontend_contract_mismatch_error());
+            }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
                     "parser failed for {}: internal parser error",
@@ -1431,6 +1439,14 @@ where
                     known_work_units(index + 1, changed_files.len()),
                 );
                 continue;
+            }
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while analyzing a source file".to_string(),
+                ));
+            }
+            Err(ParseError::PythonFrontendContractMismatch) => {
+                return Err(python_frontend_contract_mismatch_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -2201,6 +2217,14 @@ fn python_source_roots_from_project_config(
         }) {
             Ok(report) => report,
             Err(ParseError::UnsupportedLanguage) => continue,
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while reading Python project context".to_string(),
+                ));
+            }
+            Err(ParseError::PythonFrontendContractMismatch) => {
+                return Err(python_frontend_contract_mismatch_error());
+            }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
                     "parser failed for {} source-root context: internal parser error",
@@ -4652,6 +4676,13 @@ fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
     RepoGrammarError::InvalidInput(message.to_string())
 }
 
+fn python_frontend_contract_mismatch_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "PythonFrontendContractMismatch: rebuild or reinstall RepoGrammar so the product binary and bundled Python worker come from the same release"
+            .to_string(),
+    )
+}
+
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
         IndexStoreError::Unavailable(message)
@@ -4785,8 +4816,121 @@ mod tests {
         }
     }
 
+    struct PythonContractMismatchParser;
+
+    impl SourceParser for PythonContractMismatchParser {
+        fn parse(&self, _document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            Err(ParseError::PythonFrontendContractMismatch)
+        }
+    }
+
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
+    }
+
+    fn assert_active_pydantic_validator_evidence(store: &impl IndexStore) {
+        let files = store
+            .list_active_indexed_files()
+            .expect("read active Pydantic fixture files");
+        assert_eq!(files.files.len(), 1);
+        let active_hash = files.files[0].content_hash.clone();
+        let facts = store
+            .list_active_semantic_facts()
+            .expect("read active Pydantic fixture facts")
+            .facts;
+        assert!(facts.iter().any(|fact| {
+            fact.kind == "SYMBOL"
+                && fact.target.as_deref() == Some("pydantic.field_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_validator")
+        }));
+        assert!(facts.iter().any(|fact| {
+            fact.kind == "UNKNOWN"
+                && fact.target.as_deref() == Some("FrameworkMagic")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "affected_claim=pydantic_validator_side_effects"
+                })
+        }));
+        assert!(facts.iter().all(|fact| {
+            fact.path == "schemas.py"
+                && fact.content_hash == active_hash
+                && !fact.note.contains("return value.lower()")
+        }));
+    }
+
+    #[test]
+    fn python_frontend_contract_mismatch_has_sanitized_reinstall_recovery() {
+        let workspace = TempWorkspace::new("indexing-python-contract-mismatch");
+        let source = "def secret_value():\n    return 'must-not-leak'\n";
+        fs::write(workspace.path().join("app.py"), source).expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let error = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonContractMismatchParser,
+            &store,
+        )
+        .expect_err("mixed host/worker contract must abort indexing");
+
+        assert_eq!(
+            error.to_string(),
+            "PythonFrontendContractMismatch: rebuild or reinstall RepoGrammar so the product binary and bundled Python worker come from the same release"
+        );
+        let rendered = error.to_string();
+        assert!(!rendered.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("must-not-leak"));
+        assert!(!rendered.contains("worker.py"));
+        assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn committed_pydantic_fixture_survives_full_index_and_incremental_copy_forward() {
+        let workspace = TempWorkspace::new("indexing-pydantic-contract-lifecycle");
+        let source = include_str!("../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
+        fs::write(workspace.path().join("schemas.py"), source)
+            .expect("write committed Pydantic fixture");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let full = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index committed Pydantic fixture");
+        assert_eq!(full.discovered_files, 1);
+        assert_eq!(full.parser_attempted_files, 1);
+        assert_active_pydantic_validator_evidence(&store);
+
+        let incremental = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("incrementally copy forward committed Pydantic fixture");
+        let report = incremental.sync_report.expect("incremental sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.modified_files, 0);
+        assert_eq!(report.unchanged_files, 1);
+        assert_eq!(report.reparsed_files, 0);
+        assert_eq!(report.copied_forward_files, 1);
+        assert_active_pydantic_validator_evidence(&store);
     }
 
     #[test]

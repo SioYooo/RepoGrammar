@@ -167,9 +167,67 @@ detect_target() {
   esac
   case "$os" in
     Darwin) printf "%s-apple-darwin" "$arch" ;;
-    Linux) printf "%s-unknown-linux-gnu" "$arch" ;;
+    Linux)
+      detect_linux_glibc "$arch"
+      printf "%s-unknown-linux-gnu" "$arch"
+      ;;
     *) die "unsupported OS for this installer: $os; use install.ps1 on Windows" ;;
   esac
+}
+
+version_at_least() {
+  local actual="$1"
+  local minimum="$2"
+  local actual_major actual_minor minimum_major minimum_minor
+  IFS=. read -r actual_major actual_minor _ <<<"$actual"
+  IFS=. read -r minimum_major minimum_minor _ <<<"$minimum"
+  [[ "$actual_major" =~ ^[0-9]+$ && "$actual_minor" =~ ^[0-9]+$ ]] || return 1
+  [[ "$minimum_major" =~ ^[0-9]+$ && "$minimum_minor" =~ ^[0-9]+$ ]] || return 1
+  (( 10#$actual_major > 10#$minimum_major )) ||
+    (( 10#$actual_major == 10#$minimum_major && 10#$actual_minor >= 10#$minimum_minor ))
+}
+
+require_linux_glibc_floor() {
+  local arch="$1"
+  local version="$2"
+  local minimum
+  case "$arch" in
+    x86_64) minimum="2.35" ;;
+    aarch64) minimum="2.39" ;;
+    *) die "unsupported Linux architecture for glibc floor" ;;
+  esac
+  if ! version_at_least "$version" "$minimum"; then
+    die "unsupported Linux glibc ${version}; ${arch} public-preview binaries require glibc ${minimum}+"
+  fi
+}
+
+detect_linux_glibc() {
+  local arch="$1"
+  local libc_report=""
+  local libc_version=""
+  if command -v getconf >/dev/null 2>&1; then
+    libc_report="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+    case "$libc_report" in
+      glibc\ *)
+        libc_version="${libc_report#glibc }"
+        require_linux_glibc_floor "$arch" "$libc_version"
+        return 0
+        ;;
+    esac
+  fi
+  if command -v ldd >/dev/null 2>&1; then
+    libc_report="$(ldd --version 2>&1 || true)"
+    case "$libc_report" in
+      *musl*) die "unsupported Linux runtime: musl; the public preview requires glibc" ;;
+      *GLIBC*|*glibc*|*GNU\ C\ Library*)
+        if [[ "$libc_report" =~ ([0-9]+\.[0-9]+) ]]; then
+          require_linux_glibc_floor "$arch" "${BASH_REMATCH[1]}"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  die "unsupported Linux runtime: unable to confirm glibc; the public preview fails closed"
 }
 
 artifact_name() {

@@ -34,6 +34,40 @@ function Invoke-InstallerWithPath([string]$PathValue, [scriptblock]$Body) {
 
 try {
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+
+    # Windows public-preview acquisition is intentionally source-only. A
+    # default install must fail before reading a local fake release directory,
+    # downloading anything, or creating command/install state.
+    $UnsupportedCommandDir = Join-Path $TempRoot "unsupported-bin"
+    $UnsupportedInstallDir = Join-Path $TempRoot "unsupported-data"
+    $UnsupportedReleaseDir = Join-Path $TempRoot "unsupported-release"
+    $UnsupportedOut = Join-Path $TempRoot "unsupported.out"
+    New-Item -ItemType Directory -Force -Path $UnsupportedReleaseDir | Out-Null
+    Set-Content -Path (Join-Path $UnsupportedReleaseDir "must-not-be-read") -Value "sentinel"
+    $SavedReleaseDir = $env:REPOGRAMMAR_RELEASE_DIR
+    $SavedErrorActionPreference = $ErrorActionPreference
+    try {
+        $env:REPOGRAMMAR_RELEASE_DIR = $UnsupportedReleaseDir
+        $ErrorActionPreference = "Continue"
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -CommandDir $UnsupportedCommandDir `
+            -InstallDir $UnsupportedInstallDir `
+            -Yes *> $UnsupportedOut
+        $UnsupportedStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $SavedErrorActionPreference
+        if ($null -ne $SavedReleaseDir) { $env:REPOGRAMMAR_RELEASE_DIR = $SavedReleaseDir } else { Remove-Item Env:REPOGRAMMAR_RELEASE_DIR -ErrorAction SilentlyContinue }
+    }
+    if ($UnsupportedStatus -eq 0) {
+        throw "Windows default release install unexpectedly succeeded"
+    }
+    Assert-Contains $UnsupportedOut "Windows is not supported by the public preview"
+    Assert-Contains $UnsupportedOut "installation requires explicit -FromSource"
+    if ((Test-Path $UnsupportedCommandDir) -or (Test-Path $UnsupportedInstallDir)) {
+        throw "refused Windows release install created command or install state"
+    }
+
     Push-Location $RepoRoot
     try {
         & $CargoExe build --quiet --bin repogrammar
@@ -208,6 +242,33 @@ exit /B 1
     $ForeignInstallDir = Join-Path $TempRoot "foreign-data"
     New-Item -ItemType Directory -Force -Path $ForeignCommandDir | Out-Null
     Set-Content -Path (Join-Path $ForeignCommandDir "repogrammar.exe") -Value "foreign"
+    $ForeignRefusalOut = Join-Path $TempRoot "foreign-refusal.out"
+    $SavedForeignErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        Invoke-InstallerWithPath $ForeignCommandDir {
+            & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+                -InstallCliOnly `
+                -FromSource `
+                -SourceBinary $SourceBinary `
+                -CommandDir $ForeignCommandDir `
+                -InstallDir $ForeignInstallDir `
+                -Yes *> $ForeignRefusalOut
+        }
+        $ForeignRefusalStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $SavedForeignErrorActionPreference
+    }
+    if ($ForeignRefusalStatus -eq 0) {
+        throw "source install replaced an unmanaged command without explicit opt-in"
+    }
+    Assert-Contains $ForeignRefusalOut "pass -ReplaceUnmanagedCommand"
+    Assert-Contains (Join-Path $ForeignCommandDir "repogrammar.exe") "foreign"
+    $RefusedBackups = @(Get-ChildItem -Path $ForeignCommandDir -Filter "repogrammar.exe.unmanaged-backup*" -ErrorAction SilentlyContinue)
+    if ($RefusedBackups.Count -ne 0 -or (Test-Path (Join-Path $ForeignInstallDir "bin\repogrammar.exe"))) {
+        throw "refused unmanaged command replacement created backup or install state"
+    }
+
     Invoke-InstallerWithPath $ForeignCommandDir {
         & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
             -InstallCliOnly `
@@ -215,6 +276,7 @@ exit /B 1
             -SourceBinary $SourceBinary `
             -CommandDir $ForeignCommandDir `
             -InstallDir $ForeignInstallDir `
+            -ReplaceUnmanagedCommand `
             -Yes
     }
     if ($LASTEXITCODE -ne 0) {
@@ -457,3 +519,9 @@ exit /B 1
     if ($null -ne $SavedGlobalHome) { $env:HOME = $SavedGlobalHome } else { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $TempRoot -ErrorAction SilentlyContinue
 }
+
+# The final contract case intentionally invokes a failing delegated install.
+# Do not leak that expected child status as the test process result after all
+# assertions and cleanup have completed successfully.
+Write-Host "PowerShell source-only installer contract passed"
+exit 0

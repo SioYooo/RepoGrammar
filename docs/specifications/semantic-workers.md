@@ -514,7 +514,24 @@ certainty for recognized framework-shaped code units; these records are not
 worker facts and remain blocked from family claims as insufficient support.
 The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
-CPython `ast` code-unit metadata for `.py` files. That private mode now also
+CPython `ast` code-unit metadata for `.py` files. This private mode has its own
+exact host/worker contract tuple, currently `protocol_version=1` and
+`contract_revision=1`; both fields are required in every parse-document request
+and normal response. A worker that receives a missing or different tuple emits
+only the low-cardinality `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope, without
+source, repository paths, environment values, or raw payloads. The Rust host
+in the current release treats that envelope, a missing or different normal-
+response revision, and an old worker's bounded exit-2 rejection of the new
+request field as typed `PythonFrontendContractMismatch`. A previously published
+Rust host predates that variant: when paired with the new worker, its legacy
+request receives the same sanitized low-cardinality rejection but can surface
+only a generic frontend/protocol failure. It must be upgraded rather than being
+claimed as typed-compatible. With the current host, indexing stops with
+source-free recovery to rebuild or reinstall the product binary and bundled
+Python worker from the same release. This revision gate is private to
+parse-document; it does not silently change the public semantic-worker NDJSON
+contract or the separate
+private project-config mode. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field
 annotation targets, imported `Field(...)` metadata calls, `model_config`,
@@ -534,7 +551,8 @@ static `response_model=...` schema slots, static `Depends(get_db)` dependency
 target slots, `Depends`/`HTTPException` calls, literal
 `HTTPException(status_code=...)` status-code effect slots, literal
 FastAPI/APIRouter `include_router(..., prefix="...")` router-prefix context
-anchors, `pytest.test` test-function anchors, same-file pytest test and fixture
+anchors using low-cardinality segment shapes rather than literal route text,
+`pytest.test` test-function anchors, same-file pytest test and fixture
 dependency edges with literal `name=` aliases, known pytest built-in fixture
 context, literal pytest parametrize argument anchors, path-derived module names,
 and CPython `symtable` scope anchors, plus typed `UNKNOWN` facts for dynamic
@@ -611,7 +629,19 @@ Python worker tests run under `python3` and assert parseable JSON/NDJSON,
 repo-relative paths, strict content hashes, no source snippets, invalid path
 rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,
 bounded semantic-mode file reads, project-config summary sanitization, and
-framework-role heuristic output.
+framework-role heuristic output. Private parse-document analysis precomputes a
+source-ordered per-name module-scope event history and caches immutable AST byte
+ranges. Read-only point-in-source views preserve alias shadowing and assignment
+roles without repeatedly scanning earlier statements or copying the complete
+binding map at every statement. The Rust adapter keeps both directions bounded:
+requests remain limited to 1 MiB, while responses are limited to 2 MiB because
+a valid source can emit more metadata than its input while still remaining
+below the 2,000-fact cap. It writes stdin and drains bounded stdout concurrently
+with process supervision. A 30-second wall-clock deadline covers worker
+execution and pipe completion; expiry kills and waits for the direct child and
+returns the typed, payload-free `ParseError::Timeout`. The checked-in worker
+must parse its own source within the executable-test timeout and across the Rust
+process boundary without weakening fact, path, hash, or source-free validation.
 
 It still does not bundle a TypeScript compiler dependency, run package scripts,
 run Pyrefly/Pyright, expose raw semantic facts through query/MCP commands, or

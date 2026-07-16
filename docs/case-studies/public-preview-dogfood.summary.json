@@ -1,0 +1,263 @@
+{
+  "schema_version": "public-preview-dogfood.v2",
+  "evidence_date": "2026-07-16",
+  "verdict": "INTEGRATED_CANDIDATE_INDEX_READY_WITH_PARTIAL_CONTEXT",
+  "product": {
+    "version": "0.2.0-preview.0",
+    "host_os": "darwin",
+    "host_arch": "arm64",
+    "checkpoints": [
+      {
+        "id": "baseline",
+        "commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+        "binary_sha256": "e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1"
+      },
+      {
+        "id": "bounded_large_module_remediation",
+        "commit": "dd689a4634d0dac4e4cce19d948d046441f99a5d",
+        "integrated_commit": "9d8648c9d24443fc2f4812f6974c4fffa69c33a4",
+        "binary_sha256": "54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72"
+      },
+      {
+        "id": "router_context_contract_remediation",
+        "commit": "e12e45e5a9d8e6627a0a5f8811d910b5de0cafe6",
+        "integrated_commit": "e13f84343bb0053daab8dfd66851a2f72eedeffd",
+        "binary_sha256": "3f1f1c135fc8b6a17aa62b3f2a46fafeda8f140c19585170d8a293221205cd4a"
+      },
+      {
+        "id": "router_unknown_claim_remediation",
+        "commit": "736187f0de3f62b2383bfd7666c9c805420e76da",
+        "integrated_commit": "2a09e9a18dd1ce10194d75e80a3066430edb1f59",
+        "binary_sha256": "dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b"
+      },
+      {
+        "id": "integrated_candidate",
+        "commit": "d64f861799d0fa77bcceb66f2c3d9428fbebf1e1",
+        "binary_sha256": "8f7ac7c05ffc5287e5e0e74909b5b750ecef675dabc29aa50660aa89a0b93529",
+        "archive_sha256": "fde8de2613ce9ef122a13b635b67bc8a14b89ca76e403ffb03b01db78aef3bbc",
+        "archive_size_bytes": 3892030
+      }
+    ]
+  },
+  "privacy": {
+    "source_included": false,
+    "absolute_paths_included": false,
+    "raw_logs_included": false,
+    "credentials_included": false,
+    "telemetry_export_included": false
+  },
+  "token_measurement": {
+    "status": "NOT_MEASURED",
+    "measurement_status": "no_paired_experiment",
+    "baseline_total_tokens": null,
+    "treatment_total_tokens": null,
+    "token_savings": null,
+    "token_savings_ratio": null,
+    "claim_validity": "unknown"
+  },
+  "cases": [
+    {
+      "id": "repogrammar_self",
+      "kind": "self_dogfood",
+      "provenance_commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+      "query_target": "src/rust/application/setup.rs",
+      "tracked_files": 510,
+      "init": "parser_failure",
+      "sync": "parser_failure_reproduced",
+      "active_generation": false,
+      "find": "fallback_to_code_search",
+      "check": "fallback_to_code_search",
+      "stats": "no_active_generation",
+      "failure_class": "parser_internal_error",
+      "integrated_candidate_rerun": {
+        "init": "complete",
+        "sync": "incremental_complete",
+        "active_generation": true,
+        "indexed_files": 344,
+        "indexed_code_units": 17300,
+        "semantic_facts": 26139,
+        "parser_diagnostic_warnings": 7,
+        "families": 373,
+        "family_members": 106,
+        "find": "partial_context",
+        "check": "partial_context_advisory_unknown",
+        "source_snippets_included": false,
+        "read_plan_items": 1,
+        "unknowns": {
+          "total": 10397,
+          "blocking": 186,
+          "recoverable": 10168,
+          "irreducible": 3,
+          "non_blocking": 40
+        },
+        "estimated_potential_token_savings": 0,
+        "estimated_metric_kind": "ESTIMATED",
+        "token_savings": null,
+        "measurement_status": "no_paired_measurement"
+      }
+    },
+    {
+      "id": "public_fastapi_pytest",
+      "kind": "public_real_repository",
+      "provenance_url": "https://github.com/fastapi/full-stack-fastapi-template.git",
+      "provenance_commit": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "query_target": "backend/app/api/main.py",
+      "tracked_files": 240,
+      "init": "parser_failure",
+      "sync": "parser_failure_reproduced",
+      "active_generation": false,
+      "find": "fallback_to_code_search",
+      "check": "fallback_to_code_search",
+      "stats": "no_active_generation",
+      "failure_class": "parser_internal_error",
+      "remediation_reruns": [
+        {
+          "checkpoint": "bounded_large_module_remediation",
+          "init": "parser_failure",
+          "sync": "parser_failure_reproduced",
+          "active_generation": false,
+          "find": "fallback_to_code_search",
+          "check": "fallback_to_code_search",
+          "stats": "no_active_generation",
+          "failure_class": "fact_assumption_count_exceeds_host_limit",
+          "worker_context_file_count": 46,
+          "emitted_assumption_count": 7,
+          "host_assumption_limit": 4
+        },
+        {
+          "checkpoint": "router_context_contract_remediation",
+          "init": "parser_failure",
+          "active_generation": false,
+          "failure_class": "unsupported_unknown_affected_claim",
+          "unknown_reason": "FrameworkMagic",
+          "affected_claim": "fastapi_router_prefix"
+        },
+        {
+          "checkpoint": "router_unknown_claim_remediation",
+          "init": "complete",
+          "sync": "incremental_complete",
+          "active_generation": true,
+          "indexed_files": 144,
+          "skipped_paths": 96,
+          "indexed_code_units": 677,
+          "semantic_facts": 2632,
+          "parser_diagnostic_warnings": 1,
+          "families": 9,
+          "family_members": 81,
+          "find": "partial_context",
+          "check": "partial_context_advisory_unknown",
+          "query_reason": "InsufficientSupport",
+          "source_snippets_included": false,
+          "read_plan_items": 1,
+          "python_official_scope": {
+            "eligible_code_units": 99,
+            "families": 8,
+            "family_members": 81,
+            "family_support_coverage": 0.8181818181818182,
+            "support_risk": "low"
+          },
+          "unknowns": {
+            "total": 124,
+            "blocking": 96,
+            "recoverable": 22,
+            "irreducible": 0,
+            "non_blocking": 6
+          },
+          "estimated_potential_token_savings": 0,
+          "estimated_metric_kind": "ESTIMATED",
+          "token_savings": null,
+          "measurement_status": "no_paired_measurement"
+        },
+        {
+          "checkpoint": "integrated_candidate",
+          "init": "complete",
+          "sync": "incremental_complete",
+          "active_generation": true,
+          "indexed_files": 144,
+          "skipped_paths": 96,
+          "indexed_code_units": 677,
+          "semantic_facts": 2632,
+          "parser_diagnostic_warnings": 1,
+          "families": 9,
+          "family_members": 81,
+          "find": "partial_context",
+          "check": "partial_context_advisory_unknown",
+          "query_reason": "InsufficientSupport",
+          "source_snippets_included": false,
+          "read_plan_items": 1,
+          "unknowns": {
+            "total": 124,
+            "blocking": 96,
+            "recoverable": 22,
+            "irreducible": 0,
+            "non_blocking": 6
+          },
+          "estimated_potential_token_savings": 0,
+          "estimated_metric_kind": "ESTIMATED",
+          "token_savings": null,
+          "measurement_status": "no_paired_measurement"
+        }
+      ]
+    },
+    {
+      "id": "bundled_dynamic_unknown",
+      "kind": "controlled_fixture",
+      "provenance_commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+      "query_target": "dynamic.py",
+      "tracked_files": 3,
+      "init": "complete",
+      "sync": "incremental_complete",
+      "active_generation": true,
+      "indexed_files": 3,
+      "indexed_code_units": 12,
+      "semantic_facts": 66,
+      "families": 0,
+      "family_members": 0,
+      "find": "partial_context",
+      "check": "partial_context_advisory_unknown",
+      "query_reason": "InsufficientSupport",
+      "unknowns": {
+        "total": 16,
+        "blocking": 2,
+        "recoverable": 12,
+        "irreducible": 1,
+        "non_blocking": 1
+      },
+      "estimated_potential_token_savings": 0,
+      "estimated_metric_kind": "ESTIMATED",
+      "token_savings": null,
+      "measurement_status": "no_paired_measurement",
+      "integrated_candidate_one_file_rerun": {
+        "scope": "dynamic.py only",
+        "init": "complete",
+        "sync": "incremental_complete",
+        "active_generation": true,
+        "indexed_files": 1,
+        "indexed_code_units": 7,
+        "semantic_facts": 46,
+        "families": 0,
+        "find": "partial_context",
+        "check": "partial_context_advisory_unknown",
+        "source_snippets_included": false,
+        "read_plan_items": 1,
+        "unknowns": {
+          "total": 14,
+          "blocking": 0,
+          "recoverable": 12,
+          "irreducible": 1,
+          "non_blocking": 1
+        },
+        "estimated_potential_token_savings": 0,
+        "estimated_metric_kind": "ESTIMATED",
+        "token_savings": null,
+        "measurement_status": "no_paired_measurement"
+      }
+    }
+  ],
+  "limitations": [
+    "single_host_checkpoint",
+    "selected_public_target_has_partial_context_only",
+    "no_paired_agent_token_measurement",
+    "external_publication_not_verified"
+  ]
+}

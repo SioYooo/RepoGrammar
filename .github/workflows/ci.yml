@@ -33,31 +33,67 @@ jobs:
         run: cargo run --quiet --bin repo-guard -- check-diff --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
 
   macos-product-smoke:
-    name: macOS Rust and onboarding smoke
+    name: macOS Rust and packaged product smoke
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - name: Run Rust tests on macOS
         run: cargo test --workspace --all-features
-      - name: Build and exercise isolated product setup
+      - name: Build and exercise packaged product lifecycle
         shell: bash
         run: |
           set -euo pipefail
           cargo build --release --bin repogrammar
           smoke_root="${RUNNER_TEMP}/repogrammar-macos-smoke"
-          mkdir -p "${smoke_root}/home" "${smoke_root}/project" "${smoke_root}/tools"
-          ln -s "$(command -v git)" "${smoke_root}/tools/git"
-          ln -s "$(command -v python3)" "${smoke_root}/tools/python3"
-          tool_path="${smoke_root}/tools"
-          binary="${PWD}/target/release/repogrammar"
-          "${binary}" version
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
-            --json --progress never > "${smoke_root}/dry-run.json"
-          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "dry_run" and not v["repository_index_ready"]' "${smoke_root}/dry-run.json"
-          printf 'def macos_smoke():\n    return True\n' > "${smoke_root}/project/app.py"
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --yes --no-autosync \
-            --json --progress never > "${smoke_root}/live.json"
-          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["product_self_test_state"] == "passed" and v["repository_index_ready"] and not v["agent_query_ready"] and v["suggested_question"] is None' "${smoke_root}/live.json"
+          mkdir -p "${smoke_root}/package/workers/python" "${smoke_root}/unpacked"
+          cp target/release/repogrammar "${smoke_root}/package/repogrammar"
+          cp src/workers/python/worker.py "${smoke_root}/package/workers/python/worker.py"
+          tar -czf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/package" repogrammar workers
+          tar -xzf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/unpacked"
+          expected_version="$(node -p "require('./package.json').version")"
+          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+            --binary "${smoke_root}/unpacked/repogrammar" \
+            --worker "${smoke_root}/unpacked/workers/python/worker.py" \
+            --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            --expected-version "${expected_version}"
+
+  linux-packaged-product-smoke:
+    name: Linux packaged product lifecycle smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build and exercise packaged product lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --bin repogrammar
+          smoke_root="${RUNNER_TEMP}/repogrammar-linux-smoke"
+          mkdir -p "${smoke_root}/package/workers/python" "${smoke_root}/unpacked"
+          cp target/release/repogrammar "${smoke_root}/package/repogrammar"
+          cp src/workers/python/worker.py "${smoke_root}/package/workers/python/worker.py"
+          tar -czf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/package" repogrammar workers
+          tar -xzf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/unpacked"
+          expected_version="$(node -p "require('./package.json').version")"
+          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+            --binary "${smoke_root}/unpacked/repogrammar" \
+            --worker "${smoke_root}/unpacked/workers/python/worker.py" \
+            --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            --expected-version "${expected_version}"
+
+  windows-source-installer-contract:
+    name: Windows source-only installer contract
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test source-only PowerShell installer
+        shell: pwsh
+        run: ./src/install/install.ps1.test.ps1
