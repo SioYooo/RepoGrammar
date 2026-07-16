@@ -1,12 +1,13 @@
 # Changelog
 
-## 0.2.0-preview.0 — unreleased preview candidate
+## 0.2.0-preview.0 — 2026-07-17 public preview
 
-This is the target version for the first public-preview prerelease.
+This is the first public-preview prerelease.
 `Cargo.toml` and `package.json` carry `0.2.0-preview.0` so a
-`v0.2.0-preview.0` tag produces matching artifacts. This changelog does not
-establish registry availability: verify the exact npm version and matching
-GitHub assets, and use the source-checkout path when either check fails.
+`v0.2.0-preview.0` tag produces matching artifacts. This source release record
+does not by itself establish registry availability: verify the exact npm
+version and matching GitHub assets, and use the source-checkout path when
+either check fails.
 
 ### Added
 
