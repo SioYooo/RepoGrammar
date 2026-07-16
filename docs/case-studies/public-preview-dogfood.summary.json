@@ -1,0 +1,92 @@
+{
+  "schema_version": "public-preview-dogfood.v1",
+  "evidence_date": "2026-07-16",
+  "verdict": "BLOCKED_BY_PARSER_FAILURE",
+  "product": {
+    "commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+    "version": "0.2.0-preview.0",
+    "binary_sha256": "e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1",
+    "host_os": "darwin",
+    "host_arch": "arm64"
+  },
+  "privacy": {
+    "source_included": false,
+    "absolute_paths_included": false,
+    "raw_logs_included": false,
+    "credentials_included": false,
+    "telemetry_export_included": false
+  },
+  "token_measurement": {
+    "status": "NOT_MEASURED",
+    "measurement_status": "no_paired_experiment",
+    "baseline_total_tokens": null,
+    "treatment_total_tokens": null,
+    "token_savings": null,
+    "token_savings_ratio": null,
+    "claim_validity": "unknown"
+  },
+  "cases": [
+    {
+      "id": "repogrammar_self",
+      "kind": "self_dogfood",
+      "provenance_commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+      "tracked_files": 510,
+      "init": "parser_failure",
+      "sync": "parser_failure_reproduced",
+      "active_generation": false,
+      "find": "fallback_to_code_search",
+      "check": "fallback_to_code_search",
+      "stats": "no_active_generation",
+      "failure_class": "parser_internal_error"
+    },
+    {
+      "id": "public_fastapi_pytest",
+      "kind": "public_real_repository",
+      "provenance_url": "https://github.com/fastapi/full-stack-fastapi-template.git",
+      "provenance_commit": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "tracked_files": 240,
+      "init": "parser_failure",
+      "sync": "parser_failure_reproduced",
+      "active_generation": false,
+      "find": "fallback_to_code_search",
+      "check": "fallback_to_code_search",
+      "stats": "no_active_generation",
+      "failure_class": "parser_internal_error"
+    },
+    {
+      "id": "bundled_dynamic_unknown",
+      "kind": "controlled_fixture",
+      "provenance_commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+      "tracked_files": 3,
+      "init": "complete",
+      "sync": "incremental_complete",
+      "active_generation": true,
+      "indexed_files": 3,
+      "indexed_code_units": 12,
+      "semantic_facts": 66,
+      "families": 0,
+      "family_members": 0,
+      "find": "partial_context",
+      "check": "partial_context_advisory_unknown",
+      "query_reason": "InsufficientSupport",
+      "unknowns": {
+        "total": 16,
+        "blocking": 2,
+        "recoverable": 12,
+        "irreducible": 1,
+        "non_blocking": 1
+      },
+      "estimated_potential_token_savings": 0,
+      "estimated_metric_kind": "ESTIMATED",
+      "token_savings": null,
+      "measurement_status": "no_paired_measurement"
+    }
+  ],
+  "limitations": [
+    "parser_failure_blocks_positive_real_repository_evidence",
+    "single_host_checkpoint",
+    "no_paired_agent_token_measurement",
+    "experiment_project_option_help_parser_mismatch",
+    "external_publication_not_verified"
+  ]
+}
