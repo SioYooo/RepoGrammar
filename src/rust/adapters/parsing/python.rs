@@ -32,7 +32,7 @@ const MAX_PYTHON_FRONTEND_FACTS: usize = 2_000;
 const MAX_PYTHON_FACT_TEXT_BYTES: usize = 2_048;
 const MAX_PYTHON_FACT_TARGET_BYTES: usize = 256;
 const MAX_PYTHON_FACT_NOTE_BYTES: usize = 160;
-const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 4;
+const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 7;
 const MAX_PYTHON_FACT_ASSUMPTION_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1269,7 +1269,28 @@ fn validate_python_fact_assumptions(
                 && assumptions
                     .iter()
                     .any(|value| value == "relationship_target_binding=local_literal");
-            if default_structural_assumptions || relationship_context_assumptions {
+            let include_router_context_assumptions = assumptions.len() == 7
+                && anchor == Some("fastapi_include_router")
+                && matches!(
+                    target,
+                    Some("fastapi.FastAPI.include_router" | "fastapi.APIRouter.include_router")
+                )
+                && has_boundary
+                && assumptions
+                    .iter()
+                    .any(|value| value == "fact_scope=context_only")
+                && assumptions
+                    .iter()
+                    .any(|value| value == "prefix_unknown=false")
+                && assumptions
+                    .iter()
+                    .find_map(|value| value.strip_prefix("route_prefix_shape="))
+                    .is_some_and(python_route_prefix_shape_is_supported)
+                && python_router_binding_assumptions_are_supported(assumptions);
+            if default_structural_assumptions
+                || relationship_context_assumptions
+                || include_router_context_assumptions
+            {
                 Ok(())
             } else {
                 Err(ParseError::Internal(
@@ -1306,6 +1327,35 @@ fn validate_python_fact_assumptions(
         _ => Err(ParseError::Internal(
             "python ast frontend assumptions were unsupported".to_string(),
         )),
+    }
+}
+
+fn python_route_prefix_shape_is_supported(value: &str) -> bool {
+    if matches!(value, "none" | "/") {
+        return true;
+    }
+    value.strip_prefix('/').is_some_and(|segments| {
+        !segments.is_empty()
+            && segments
+                .split('/')
+                .all(|segment| matches!(segment, ":literal" | ":param" | ":pattern" | ":number"))
+    })
+}
+
+fn python_router_binding_assumptions_are_supported(assumptions: &[String]) -> bool {
+    let binding = assumptions
+        .iter()
+        .find_map(|value| value.strip_prefix("router_binding="));
+    match binding {
+        Some("local") => assumptions
+            .iter()
+            .find_map(|value| value.strip_prefix("router_local_name="))
+            .is_some_and(python_structural_target_is_supported),
+        Some("repo_local_import") => assumptions
+            .iter()
+            .find_map(|value| value.strip_prefix("router_target="))
+            .is_some_and(python_structural_target_is_supported),
+        _ => false,
     }
 }
 
@@ -1424,6 +1474,7 @@ fn python_anchor_kind_is_supported(value: &str) -> bool {
             | "fastapi_request_body_model"
             | "fastapi_response_model"
             | "fastapi_route_decorator"
+            | "fastapi_include_router"
             | "fastapi_service_call"
             | "class_base"
             | "call_target"
@@ -2184,6 +2235,69 @@ def test_users(client, status, missing_fixture):
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("@router."));
         assert!(!debug.contains("@app."));
+    }
+
+    #[test]
+    fn cpython_frontend_accepts_source_free_repo_local_include_router_context() {
+        let source = r#"from fastapi import APIRouter
+from app.api.routes import login
+
+api_router = APIRouter()
+api_router.include_router(login.router, prefix="/private/api")
+"#;
+        let context = ParserProjectContext {
+            python_module_paths: vec![
+                "backend/app/__init__.py".to_string(),
+                "backend/app/api/__init__.py".to_string(),
+                "backend/app/api/main.py".to_string(),
+                "backend/app/api/routes/__init__.py".to_string(),
+                "backend/app/api/routes/login.py".to_string(),
+            ],
+            python_source_roots: vec!["backend".to_string()],
+            ..ParserProjectContext::default()
+        };
+
+        let report = PythonAstParser::default()
+            .parse_with_context(document_at("backend/app/api/main.py", source), &context)
+            .expect("repo-local include_router context should cross the parser boundary");
+        let fact = report
+            .semantic_facts
+            .iter()
+            .find(|fact| {
+                fact.kind == SemanticFactKind::ResolvedCall
+                    && fact.target.as_ref().map(SymbolId::as_str)
+                        == Some("fastapi.APIRouter.include_router")
+            })
+            .expect("include_router context fact");
+
+        assert_eq!(fact.assumptions.len(), 7);
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "python_anchor_kind=fastapi_include_router"));
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "route_prefix_shape=/:literal/:literal"));
+        assert!(fact
+            .assumptions
+            .iter()
+            .any(|value| value == "router_binding=repo_local_import"));
+        assert!(!format!("{fact:?}").contains("private/api"));
+
+        let mut raw_prefix_assumptions = fact.assumptions.clone();
+        let prefix = raw_prefix_assumptions
+            .iter_mut()
+            .find(|value| value.starts_with("route_prefix_shape="))
+            .expect("prefix assumption");
+        *prefix = "route_prefix_shape=/private/api".to_string();
+        assert!(validate_python_fact_assumptions(
+            SemanticFactKind::ResolvedCall,
+            FactCertainty::Structural,
+            Some("fastapi.APIRouter.include_router"),
+            &raw_prefix_assumptions,
+        )
+        .is_err());
     }
 
     #[test]

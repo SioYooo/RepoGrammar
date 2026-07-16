@@ -77,7 +77,8 @@ family; this does not imply provider-backed semantics or runtime equivalence.
 The current Python worker can also emit bounded same-function
 FastAPI route service-call anchors as structural handler/service context and
 literal `include_router(..., prefix="...")` router-prefix anchors as module
-context; those anchors are not membership support. It can also emit static
+context. Stored prefix metadata contains only low-cardinality segment shapes,
+not the route literal; those anchors are not membership support. It can also emit static
 FastAPI request body and request-parameter anchors for `Body`, `Path`, `Query`,
 `Header`, and `Cookie` marker shapes; those are route-shape context only and
 are not membership support. Dynamic decorator factories and `setattr(...)`

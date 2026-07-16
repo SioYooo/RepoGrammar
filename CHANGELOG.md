@@ -11,6 +11,15 @@ source-checkout dogfood path.
 
 ### Added
 
+- Fixed two real-repository Python indexing blockers found during public-preview
+  dogfood. Module-scope alias/assignment snapshots and cached AST byte ranges
+  remove repeated large-module rescans; the bounded Rust response envelope now
+  admits valid metadata up to 2 MiB. The Rust parser also accepts the exact
+  seven-assumption `fastapi_include_router` context contract while rejecting
+  malformed fields and raw route literals; prefix metadata is reduced to
+  low-cardinality segment shapes. The bundled worker can now parse its own
+  source across the process boundary without weakening fact-count, path, hash,
+  typed `UNKNOWN`, or source-free validation.
 - Added the zero-friction `repogrammar setup` onboarding path. One reviewed
   application-layer plan can detect Codex or Claude Code, reuse the existing
   reversible machine integration service, initialize and index the current

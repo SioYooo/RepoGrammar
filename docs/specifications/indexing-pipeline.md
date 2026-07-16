@@ -845,7 +845,8 @@ FastAPI static
 dependency-target anchors, literal `HTTPException(status_code=...)`
 status-code effect anchors, static FastAPI `Body`/`Path`/`Query`/`Header`/
 `Cookie` request-shape anchors, literal FastAPI/APIRouter
-`include_router(..., prefix="...")` router-prefix context anchors,
+`include_router(..., prefix="...")` router-prefix context anchors whose stored
+shape buckets do not retain the literal prefix text,
 path-derived module names, CPython `symtable` scope anchors, and typed
 dynamic/unresolved decorator, dynamic call, monkey-patch,
 dynamic/unresolved/ambiguous import, dynamic include-router prefix or router

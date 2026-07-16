@@ -599,6 +599,9 @@ allowed.
   semantic-worker-compatible NDJSON structural facts plus framework-role output,
   requested-project `conftest.py` fixture hierarchy edges, file-local FastAPI
   router/app alias propagation with same-name reassignment invalidation, typed
+  repo-local `include_router` context crossing the Rust boundary with its exact
+  seven-assumption envelope and a low-cardinality, source-free prefix shape,
+  malformed/raw prefix assumptions remaining rejected,
   same-function FastAPI service-call context anchors with reassignment
   invalidation, typed `UNKNOWN` output for dynamic decorators, unresolved bare
   decorators, monkey patches, dynamic calls, unsafe or nonliteral

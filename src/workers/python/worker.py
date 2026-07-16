@@ -2100,7 +2100,9 @@ def normalize_route_prefix(value: str) -> str:
         elif segment.isdigit():
             segments.append(":number")
         else:
-            segments.append(segment.lower())
+            # Preserve only the route shape. A literal prefix is source text
+            # and must not cross the parser boundary through assumptions.
+            segments.append(":literal")
     return "/" + "/".join(segments) if segments else "/"
 
 

@@ -3626,7 +3626,7 @@ app.include_router(router, prefix="/api/v1")
     assert "fact_scope=context_only" in include_fact.get("assumptions", [])
     assert "router_binding=local" in include_fact.get("assumptions", [])
     assert "router_local_name=router" in include_fact.get("assumptions", [])
-    assert "route_prefix_shape=/api/v1" in include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/:literal/:literal" in include_fact.get("assumptions", [])
     assert "prefix_unknown=false" in include_fact.get("assumptions", [])
     assert_no_fact_source_payloads(facts)
 
@@ -3661,7 +3661,7 @@ app.include_router(router, prefix="/api")
     )
     assert "router_binding=repo_local_import" in imported_include_fact.get("assumptions", [])
     assert "router_target=routes.router" in imported_include_fact.get("assumptions", [])
-    assert "route_prefix_shape=/api" in imported_include_fact.get("assumptions", [])
+    assert "route_prefix_shape=/:literal" in imported_include_fact.get("assumptions", [])
     assert_no_fact_source_payloads(facts)
 
 with tempfile.TemporaryDirectory() as root:

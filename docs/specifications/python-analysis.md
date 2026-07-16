@@ -155,8 +155,11 @@ The current implementation covers a bounded static CPython `ast` slice only:
   receiver is an exact local FastAPI/APIRouter binding, the router argument is
   a local `APIRouter()` binding or repo-local imported router symbol, and the
   optional `prefix` is absent or a literal string. These anchors carry
-  `route_prefix_shape=...` as context only and do not prove route-family
-  membership;
+  only low-cardinality `route_prefix_shape` segment classes such as
+  `/:literal/:param`; the literal route text does not cross the worker boundary.
+  The Rust host accepts the exact seven-assumption context envelope for this
+  anchor and rejects extra or malformed fields. These anchors remain context
+  only and do not prove route-family membership;
 - typed
   `RuntimeDependencyInjection` `UNKNOWN` facts for dynamic dependency target
   expressions such as `Depends(make_dependency())`, and typed `UNKNOWN` facts
