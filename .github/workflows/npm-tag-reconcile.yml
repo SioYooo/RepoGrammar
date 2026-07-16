@@ -1,18 +1,15 @@
-name: Reconcile npm preview tags
+name: Verify npm preview tags
 
 on:
   workflow_call:
-    secrets:
-      NPM_TOKEN:
-        required: true
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  reconcile:
-    name: Reconcile npm preview dist-tags
+  verify:
+    name: Verify npm preview dist-tags
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,58 +18,44 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - name: Reconcile and verify preview dist-tags
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify preview dist-tags against published versions
         run: |
           set -euo pipefail
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
 
-          read_tags() {
-            local attempt tags
+          classify_registry() {
+            local attempt tags versions preview latest versions_json action
             for attempt in 1 2 3 4 5; do
-              if tags="$(npm view "${package_name}" dist-tags --json --registry https://registry.npmjs.org 2>/dev/null)"; then
-                printf '%s' "${tags}"
+              if tags="$(npm view "${package_name}" dist-tags --json --registry https://registry.npmjs.org 2>/dev/null)" \
+                && versions="$(npm view "${package_name}" versions --json --registry https://registry.npmjs.org 2>/dev/null)" \
+                && preview="$(node -e 'const tags=JSON.parse(process.argv[1]); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(typeof tags.preview === "string" ? tags.preview : "")' "${tags}")" \
+                && latest="$(node -e 'const tags=JSON.parse(process.argv[1]); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(typeof tags.latest === "string" ? tags.latest : "")' "${tags}")" \
+                && versions_json="$(node -e 'const value=JSON.parse(process.argv[1]); const versions=Array.isArray(value) ? value : [value]; process.stdout.write(JSON.stringify(versions))' "${versions}")" \
+                && action="$(cargo run --quiet --bin repo-guard -- \
+                  preview-dist-tag-action \
+                  --version "${package_version}" \
+                  --preview "${preview}" \
+                  --latest "${latest}" \
+                  --versions-json "${versions_json}")"; then
+                printf '%s' "${action}"
                 return 0
               fi
               if [ "${attempt}" -lt 5 ]; then
                 sleep 2
               fi
             done
-            echo "npm dist-tags remained unavailable after bounded retries" >&2
+            echo "npm preview registry state did not satisfy the release gate after bounded retries" >&2
             return 1
           }
 
-          classify_tags() {
-            local tags="$1" preview latest
-            preview="$(node -e 'const tags=JSON.parse(process.argv[1]); process.stdout.write(tags.preview || "")' "${tags}")"
-            latest="$(node -e 'const tags=JSON.parse(process.argv[1]); process.stdout.write(tags.latest || "")' "${tags}")"
-            cargo run --quiet --bin repo-guard -- \
-              preview-dist-tag-action \
-              --version "${package_version}" \
-              --preview "${preview}" \
-              --latest "${latest}"
-          }
-
-          tags_before="$(read_tags)"
-          action="$(classify_tags "${tags_before}")"
-          case "${action}" in
-            remove_prerelease_latest)
-              npm dist-tag rm "${package_name}" latest --registry https://registry.npmjs.org
-              ;;
-            no_latest|preserve_stable_latest)
+          final_action="$(classify_registry)"
+          case "${final_action}" in
+            no_latest|allow_prerelease_latest_without_stable|preserve_stable_latest)
+              echo "npm preview dist-tags satisfy the bounded release policy: ${final_action}"
               ;;
             *)
               echo "repo-guard returned an unknown npm dist-tag action" >&2
               exit 1
               ;;
           esac
-
-          tags_after="$(read_tags)"
-          final_action="$(classify_tags "${tags_after}")"
-          if [ "${final_action}" = "remove_prerelease_latest" ]; then
-            echo "npm latest still points to a prerelease after reconciliation" >&2
-            exit 1
-          fi
-          echo "npm preview dist-tags are reconciled"

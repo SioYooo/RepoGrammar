@@ -4,14 +4,14 @@
 
 ### Fixed
 
-- Added a post-publication npm dist-tag reconciliation gate after the first
-  public preview showed that the registry could initialize `latest` even when
-  `npm publish --tag preview` was used. Tag publication now remains red until
-  `preview` matches the manifest prerelease and `latest` is absent or stable;
-  an idempotent manual repair workflow attempts correction without republishing
-  the immutable version. npm currently rejects removal for this first-package
-  state with registry `E400`, so pinned `@preview`/exact-version installation is
-  documented and the unresolved gate remains visible.
+- Corrected the npm dist-tag release gate for a package whose only published
+  version is a prerelease. npm requires `latest` and may map it to that sole
+  version even when publication used `--tag preview`; the gate now verifies the
+  exact `preview` target and accepts a published prerelease `latest` only while
+  no stable version exists, keeping exact-version or `@preview` installation
+  mandatory. This does not
+  establish a stable release, and mismatched or malformed registry state still
+  fails closed.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 

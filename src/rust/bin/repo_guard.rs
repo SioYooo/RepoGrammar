@@ -183,13 +183,14 @@ where
                 }
             }
         }
-        [command, version_flag, version, preview_flag, preview, latest_flag, latest]
+        [command, version_flag, version, preview_flag, preview, latest_flag, latest, versions_flag, versions_json]
             if command == "preview-dist-tag-action"
                 && version_flag == "--version"
                 && preview_flag == "--preview"
-                && latest_flag == "--latest" =>
+                && latest_flag == "--latest"
+                && versions_flag == "--versions-json" =>
         {
-            match preview_dist_tag_action(version, preview, latest) {
+            match preview_dist_tag_action(version, preview, latest, versions_json) {
                 Ok(action) => CommandResult::ok(format!("{}\n", action.as_str())),
                 Err(error) => {
                     CommandResult::err(format!("preview dist-tag classification failed: {error}\n"))
@@ -202,13 +203,16 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
+
+const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
+const MAX_PUBLISHED_VERSIONS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewDistTagAction {
     NoTag,
-    RemovePrerelease,
+    AllowPrereleaseWithoutStable,
     PreserveStable,
 }
 
@@ -216,7 +220,7 @@ impl PreviewDistTagAction {
     fn as_str(self) -> &'static str {
         match self {
             Self::NoTag => "no_latest",
-            Self::RemovePrerelease => "remove_prerelease_latest",
+            Self::AllowPrereleaseWithoutStable => "allow_prerelease_latest_without_stable",
             Self::PreserveStable => "preserve_stable_latest",
         }
     }
@@ -226,6 +230,7 @@ fn preview_dist_tag_action(
     version: &str,
     preview: &str,
     latest: &str,
+    versions_json: &str,
 ) -> Result<PreviewDistTagAction, &'static str> {
     if !is_bounded_version(version) || !has_prerelease(version) {
         return Err("manifest version is not a bounded prerelease");
@@ -233,17 +238,52 @@ fn preview_dist_tag_action(
     if preview != version {
         return Err("preview does not match the manifest version");
     }
+    let published_versions = parse_published_versions(versions_json)?;
+    if !published_versions
+        .iter()
+        .any(|published| published == version)
+    {
+        return Err("manifest version is not published");
+    }
     if latest.is_empty() {
         return Ok(PreviewDistTagAction::NoTag);
     }
     if !is_bounded_version(latest) {
         return Err("latest is malformed");
     }
+    if !published_versions
+        .iter()
+        .any(|published| published == latest)
+    {
+        return Err("latest does not reference a published version");
+    }
     if has_prerelease(latest) {
-        Ok(PreviewDistTagAction::RemovePrerelease)
+        if published_versions
+            .iter()
+            .any(|published| !has_prerelease(published))
+        {
+            Err("latest is a prerelease while stable versions exist")
+        } else {
+            Ok(PreviewDistTagAction::AllowPrereleaseWithoutStable)
+        }
     } else {
         Ok(PreviewDistTagAction::PreserveStable)
     }
+}
+
+fn parse_published_versions(versions_json: &str) -> Result<Vec<String>, &'static str> {
+    if versions_json.is_empty() || versions_json.len() > MAX_PUBLISHED_VERSIONS_JSON_BYTES {
+        return Err("published versions are unavailable or too large");
+    }
+    let versions: Vec<String> =
+        serde_json::from_str(versions_json).map_err(|_| "published versions are malformed")?;
+    if versions.is_empty() || versions.len() > MAX_PUBLISHED_VERSIONS {
+        return Err("published version count is outside the supported bound");
+    }
+    if versions.iter().any(|version| !is_bounded_version(version)) {
+        return Err("published versions contain a malformed version");
+    }
+    Ok(versions)
 }
 
 fn has_prerelease(version: &str) -> bool {
@@ -937,11 +977,13 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
     let reconciliation_markers = [
         "workflow_dispatch:",
         "preview-dist-tag-action",
-        "npm dist-tag rm",
-        "tags_after=",
+        "versions --json",
+        "--versions-json",
         "final_action=",
     ];
     if reconcile.contains("npm publish")
+        || reconcile.contains("npm dist-tag add")
+        || reconcile.contains("npm dist-tag rm")
         || reconciliation_markers
             .iter()
             .any(|marker| !reconcile.contains(marker))
@@ -949,7 +991,7 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         violations.push(GuardViolation::new(
             ".github/workflows/npm-tag-reconcile.yml",
             "NpmTagReconciliationContract",
-            "manual repair must be non-publishing and verify registry state after bounded reconciliation",
+            "manual verification must be non-publishing, non-mutating, and classify complete published-version state",
         ));
     }
 }
@@ -1195,26 +1237,57 @@ mod tests {
     #[test]
     fn preview_dist_tags_without_latest_need_no_write() {
         assert_eq!(
-            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", ""),
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "",
+                r#"["0.2.0-preview.0"]"#,
+            ),
             Ok(PreviewDistTagAction::NoTag)
         );
     }
 
     #[test]
-    fn prerelease_latest_is_removed_even_when_it_is_an_older_preview() {
-        for latest in ["0.2.0-preview.0", "0.1.0-preview.9"] {
-            assert_eq!(
-                preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", latest),
-                Ok(PreviewDistTagAction::RemovePrerelease)
-            );
-        }
+    fn prerelease_latest_is_allowed_only_without_published_stable_versions() {
+        assert_eq!(
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                r#"["0.2.0-preview.0"]"#,
+            ),
+            Ok(PreviewDistTagAction::AllowPrereleaseWithoutStable)
+        );
+        assert_eq!(
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "0.1.0-preview.9",
+                r#"["0.1.0-preview.9","0.2.0-preview.0"]"#,
+            ),
+            Ok(PreviewDistTagAction::AllowPrereleaseWithoutStable)
+        );
+        assert_eq!(
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                r#"["0.1.0","0.2.0-preview.0"]"#,
+            ),
+            Err("latest is a prerelease while stable versions exist")
+        );
     }
 
     #[test]
     fn stable_latest_is_preserved() {
         for latest in ["0.1.0", "0.1.0+build-x"] {
             assert_eq!(
-                preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", latest),
+                preview_dist_tag_action(
+                    "0.2.0-preview.0",
+                    "0.2.0-preview.0",
+                    latest,
+                    &format!(r#"["{latest}","0.2.0-preview.0"]"#),
+                ),
                 Ok(PreviewDistTagAction::PreserveStable)
             );
         }
@@ -1223,17 +1296,87 @@ mod tests {
     #[test]
     fn preview_dist_tag_classification_fails_closed() {
         assert_eq!(
-            preview_dist_tag_action("0.2.0-preview.0", "", ""),
+            preview_dist_tag_action("0.2.0-preview.0", "", "", r#"["0.2.0-preview.0"]"#,),
             Err("preview does not match the manifest version")
         );
         assert_eq!(
-            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "banana"),
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "banana",
+                r#"["0.2.0-preview.0"]"#,
+            ),
             Err("latest is malformed")
         );
         assert_eq!(
-            preview_dist_tag_action("0.2.0", "0.2.0", ""),
+            preview_dist_tag_action("0.2.0", "0.2.0", "", r#"["0.2.0"]"#),
             Err("manifest version is not a bounded prerelease")
         );
+        assert_eq!(
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "0.1.0-preview.9",
+                r#"["0.2.0-preview.0"]"#,
+            ),
+            Err("latest does not reference a published version")
+        );
+        assert_eq!(
+            preview_dist_tag_action(
+                "0.2.0-preview.0",
+                "0.2.0-preview.0",
+                "",
+                r#"["0.1.0-preview.9"]"#,
+            ),
+            Err("manifest version is not published")
+        );
+        assert_eq!(
+            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "", "{}"),
+            Err("published versions are malformed")
+        );
+        let too_many = serde_json::to_string(&vec!["0.2.0-preview.0"; 257])
+            .expect("serialize published versions");
+        assert_eq!(
+            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "", &too_many),
+            Err("published version count is outside the supported bound")
+        );
+    }
+
+    #[test]
+    fn preview_dist_tag_command_requires_the_published_version_inventory() {
+        let result = run(
+            [
+                "preview-dist-tag-action",
+                "--version",
+                "0.2.0-preview.0",
+                "--preview",
+                "0.2.0-preview.0",
+                "--latest",
+                "0.2.0-preview.0",
+                "--versions-json",
+                r#"["0.2.0-preview.0"]"#,
+            ],
+            Path::new("."),
+        );
+        assert_eq!(result.status, 0);
+        assert_eq!(result.stdout, "allow_prerelease_latest_without_stable\n");
+
+        let missing_inventory = run(
+            [
+                "preview-dist-tag-action",
+                "--version",
+                "0.2.0-preview.0",
+                "--preview",
+                "0.2.0-preview.0",
+                "--latest",
+                "0.2.0-preview.0",
+            ],
+            Path::new("."),
+        );
+        assert_eq!(missing_inventory.status, 1);
+        assert!(missing_inventory
+            .stderr
+            .contains("unknown or invalid arguments"));
     }
 
     #[test]
@@ -1245,7 +1388,7 @@ mod tests {
         );
         write_file(
             root.path().join(".github/workflows/npm-tag-reconcile.yml"),
-            b"workflow_dispatch:\npreview-dist-tag-action\nnpm dist-tag rm\ntags_after=\nfinal_action=\n",
+            b"workflow_dispatch:\npreview-dist-tag-action\nversions --json\n--versions-json\nfinal_action=\n",
         );
 
         let mut violations = Vec::new();
@@ -1263,22 +1406,27 @@ mod tests {
     }
 
     #[test]
-    fn manual_tag_repair_workflow_cannot_publish() {
-        let root = TempRoot::new("manual-tag-repair-publish");
+    fn manual_tag_verification_workflow_cannot_publish_or_mutate_tags() {
+        let root = TempRoot::new("manual-tag-verification-mutation");
         write_file(
             root.path().join(".github/workflows/release.yml"),
             b"run: npm publish --access public --tag preview\nuses: ./.github/workflows/npm-tag-reconcile.yml\n",
         );
-        write_file(
-            root.path().join(".github/workflows/npm-tag-reconcile.yml"),
-            b"workflow_dispatch:\npreview-dist-tag-action\nnpm dist-tag rm\ntags_after=\nfinal_action=\nnpm publish\n",
-        );
+        for mutation in ["npm publish", "npm dist-tag rm", "npm dist-tag add"] {
+            write_file(
+                root.path().join(".github/workflows/npm-tag-reconcile.yml"),
+                format!(
+                    "workflow_dispatch:\npreview-dist-tag-action\nversions --json\n--versions-json\nfinal_action=\n{mutation}\n"
+                )
+                .as_bytes(),
+            );
 
-        let mut violations = Vec::new();
-        check_release_workflow_contract(root.path(), &mut violations);
-        assert!(violations
-            .iter()
-            .any(|violation| violation.rule == "NpmTagReconciliationContract"));
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(violations
+                .iter()
+                .any(|violation| violation.rule == "NpmTagReconciliationContract"));
+        }
     }
 
     #[test]

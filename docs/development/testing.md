@@ -937,11 +937,16 @@ contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.
 
 Release-policy tests must also cover npm preview-tag classification: exact
-`preview` with no `latest` is read-only success, any prerelease-valued `latest`
-is removed, a stable `latest` is preserved, and mismatched or malformed
-registry state fails closed. The dedicated manual reconciliation workflow must
-never publish a package; the tag release may finish only after the shared
-reconciliation workflow verifies the post-publication registry state.
+`preview` with no `latest` is read-only success; when no stable version exists,
+the registry-required `latest` may map to a published prerelease as bounded
+public-preview success; a stable `latest` is preserved; and mismatched,
+malformed, unpublished, or prerelease-valued `latest` state outside that
+preview-only exception fails closed. The
+dedicated manual reconciliation workflow must never publish a package; the tag
+release may finish only after the shared reconciliation workflow verifies the
+post-publication registry state. Tests and release smoke must still use an
+exact version or `@preview`; bounded acceptance of the registry state is not a
+stable-release claim.
 
 - Fresh checkout smoke: clone the current checkout into `/tmp` and run a small
   Cargo product smoke such as `cargo test --workspace --all-features

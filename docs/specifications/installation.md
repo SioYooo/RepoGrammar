@@ -282,7 +282,13 @@ The deterministic package gate must create the real `.tgz` in a temporary
 directory, inspect its exact file set and metadata, install it into an isolated
 prefix offline, and execute the installed `repogrammar` wrapper against local
 fake release assets. Temporary tarballs must never remain in the repository.
-Preview publication must use npm dist-tag `preview`, never the default `latest`.
+Preview publication must use npm dist-tag `preview`, never publish by relying
+on the default `latest`. npm requires a `latest` dist-tag; while the package has
+no stable published version, the registry may map `latest` to a published
+prerelease. That bounded preview-only state does not promote the package to
+stable or authorize unversioned installation. Public-preview instructions must
+pin the exact prerelease or `@preview`. Once a stable version exists, a
+prerelease-valued `latest` is not this bounded exception and must fail closed.
 
 Contributor release-readiness smoke may run `repogrammar install --target all
 --scope global --dry-run` and `repogrammar uninstall --target all --scope

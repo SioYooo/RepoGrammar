@@ -90,27 +90,32 @@ proof that a GitHub Release or npm package already exists.
 5. Observe the explicit staged order:
    `verify -> build -> publish_release -> publish_npm -> reconcile_npm_tags`.
    GitHub prerelease assets are created before npm publication, and the tag run
-   is not green until the registry reports the exact `preview` tag with no
-   prerelease-valued `latest`. A stable `latest` is preserved. These services
-   cannot publish atomically; if npm publication or reconciliation fails after
-   the GitHub stage, the workflow must stay red and the release is a visible
-   partial publication, not a successful release.
+   is not green until the registry reports the exact `preview` tag and a valid
+   `latest` state. npm requires `latest`; when no stable version exists,
+   `latest` may map to a published prerelease as a bounded public-preview
+   state. A stable `latest` is
+   preserved. These services cannot publish atomically; if npm publication or
+   reconciliation fails after the GitHub stage, the workflow must stay red and
+   the release is a visible partial publication, not a successful release.
 6. `npm publish --tag preview` is necessary but not sufficient for a first
-   package publication: the registry can still initialize `latest` to that
-   prerelease. The reusable reconciliation workflow queries the final registry
-   state, removes only a prerelease-valued `latest`, and verifies the state
-   again. Missing/mismatched `preview`, malformed versions, registry failures,
-   or a failed removal fail closed.
+   package publication: the registry still maintains its required `latest`
+   tag. The reusable reconciliation workflow queries versions and dist-tags,
+   accepts `latest` pointing to a published prerelease only when no stable
+   version exists, and verifies the state again. Missing/mismatched `preview`,
+   malformed versions, unpublished tag targets, registry failures,
+   or any prerelease-valued `latest` outside that bounded condition fail
+   closed. Acceptance here establishes public-preview publication only; it is
+   not stable readiness.
 
-If a previously completed publication needs only this bounded repair, manually
+If a previously completed publication needs this bounded verification, manually
 run `.github/workflows/npm-tag-reconcile.yml` from merged `main`. That workflow
 derives the fixed package name and version from `package.json`, accepts no
 package/version input, never runs `npm publish`, and reuses the same classifier
 as the tag release. This does not change the `release.yml` rule that manual
-dispatch is build-only. If the registry rejects the standard removal, keep the
-workflow red, require exact-version/`@preview` installation, and treat the
-dist-tag as an external release blocker. Do not republish the immutable version,
-move the tag, or manufacture a placeholder stable release.
+dispatch is build-only. A sole-preview `latest` does not require deletion and
+must not be described as stable. Any state outside the bounded classifier must
+keep the workflow red. Do not republish the immutable version, move the tag, or
+manufacture a placeholder stable release.
 
 ## Phase 3: public verification
 
@@ -122,7 +127,8 @@ After the tag workflow succeeds, independently verify:
   uses the published `install.sh` plus explicit preview tag;
 - `npm view @sioyooo/repogrammar@0.2.0-preview.0` resolves the intended package;
 - `npm view @sioyooo/repogrammar dist-tags --json` maps `preview` to
-  `0.2.0-preview.0` and does not show that prerelease as an accidental `latest`;
+  `0.2.0-preview.0`; if `latest` maps to a prerelease, that target is published
+  and the complete published-version inventory contains no stable version;
 - `npx @sioyooo/repogrammar@0.2.0-preview.0 version` and the documented setup
   smoke execute without Cargo on supported macOS/Linux hosts;
 - npm metadata admits only `darwin`/`linux` and `x64`/`arm64`; because npm's
@@ -149,9 +155,12 @@ Reconciliation run `29528491034` used the same publishing token and npm 10.9.8;
 diagnostic run `29528818754` repeated the deletion with npm 12.0.1. Both
 received registry `E400` for the standard `dist-tag rm ... latest` operation.
 This rules out token absence and a missing `--tag preview` during publication;
-it does not prove why npm rejects the deletion. The current public
-preview is therefore usable only through the documented pinned install path;
-the no-prerelease-`latest` release gate remains unmet.
+the version inventory also confirms that the prerelease is the package's only
+published version. npm requires `latest` in this state, so successful deletion
+is not a public-preview gate. The current release satisfies the bounded
+public-preview registry condition through the documented exact-version or
+`@preview` path. It is not a stable release, and unversioned installation
+remains outside the supported contract.
 
 ## Current external boundary
 
