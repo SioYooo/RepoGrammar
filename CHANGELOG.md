@@ -57,15 +57,36 @@ GitHub assets, and use the source-checkout path when either check fails.
   repository or MCP failure rolls back only integrations created by that setup
   run and never deletes a pre-existing owned integration. Auto-sync startup now
   requires a bounded PID-plus-startup-nonce daemon-lock handshake while the
-  spawned child remains alive; child exit, lock refusal, and timeout are typed
-  failures, and daemon lifecycle mutations are serialized before exact-record
-  lock cleanup so stop cannot delete a successor lock. Family inventory is
-  now `Available(0)`, `Available(N)`, or `Unknown` instead of turning query
-  errors into zero families. Setup human and JSON output separately report
-  product self-test state, ready/blocked agent targets, agent-query readiness,
+  spawned child remains alive. The child first publishes `starting` ownership
+  and advances to `ready` only after repository-state validation, worker
+  environment preflight, initial fingerprinting, log initialization, and a
+  successful first heartbeat. Worker-environment, fingerprint, repository-
+  state, lock-refusal, early-child-exit, timeout, and first-heartbeat failures
+  persist as low-cardinality startup codes without raw paths or environment
+  values. Status output separates current daemon/startup/repository readiness
+  from `previous_autosync_attempt`; a previous sync error is not rendered as
+  the current daemon state. Daemon lifecycle mutations are serialized before
+  exact-record lock cleanup so stop cannot delete a successor lock. Family
+  inventory is now `Available(0)`, `Available(N)`, or `Unknown` instead of
+  turning query errors into zero families. Setup human and JSON output
+  separately report product self-test state, ready/blocked agent targets,
+  agent-query readiness,
   repository-index readiness, auto-sync readiness, family-evidence state, and
   all limitations; repository-only success has no suggested coding-agent
   question and initialization/indexing retain distinct stage labels.
+- Versioned the private CPython parse-document boundary independently of the
+  public semantic-worker protocol. Requests and normal responses now require
+  the exact `protocol_version=1, contract_revision=1` tuple. A newer worker
+  rejects an older host with one path- and source-free mismatch envelope; a
+  newer Rust host maps an older worker's bounded rejection, or a missing/wrong
+  response revision, to typed `PythonFrontendContractMismatch` recovery that
+  tells the user to rebuild or reinstall the binary and bundled worker from the
+  same release. Regression coverage uses the exact committed
+  `pydantic-basic` fixture through the direct worker, Rust parser adapter, full
+  indexing, and unchanged incremental copy-forward. Its `field_validator`
+  remains a structural member fact while the validator body call remains a
+  non-blocking typed `FrameworkMagic` UNKNOWN; neither is promoted to
+  unsupported semantic certainty.
 - Hardened release truth gates without claiming publication. Manual workflow
   dispatch is explicitly build-only even from a tag ref. Only a pushed tag may
   enter credential or publication jobs; tag verification requires containment
