@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repogrammar.local/schemas/semantic-worker.schema.json",
+  "title": "RepoGrammar semantic worker fact payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "fact_kind",
+    "subject",
+    "origin",
+    "certainty",
+    "evidence",
+    "assumptions"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "fact_kind": {
+      "type": "string",
+      "enum": [
+        "RESOLVED_CALL",
+        "RESOLVED_IMPORT",
+        "SYMBOL",
+        "TYPE",
+        "FRAMEWORK_ROLE",
+        "UNKNOWN"
+      ]
+    },
+    "subject": { "type": "string", "minLength": 1 },
+    "target": {
+      "anyOf": [
+        { "type": "string", "minLength": 1, "pattern": "\\S" },
+        { "type": "null" }
+      ]
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "engine_version", "method"],
+      "properties": {
+        "engine": { "type": "string", "minLength": 1 },
+        "engine_version": { "type": "string", "minLength": 1 },
+        "method": { "type": "string", "minLength": 1 }
+      }
+    },
+    "certainty": {
+      "type": "string",
+      "enum": [
+        "SEMANTIC",
+        "DATAFLOW_DERIVED",
+        "STRUCTURAL",
+        "FRAMEWORK_HEURISTIC",
+        "CONFLICTING",
+        "UNKNOWN"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_unit_id",
+        "path",
+        "content_hash",
+        "repository_revision",
+        "start_byte",
+        "end_byte",
+        "note"
+      ],
+      "properties": {
+        "code_unit_id": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*[\\u0000-\\u001F])(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*\\\\)(?!.*://).+$"
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "repository_revision": { "type": "string", "minLength": 1 },
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
