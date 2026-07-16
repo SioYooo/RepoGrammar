@@ -625,7 +625,10 @@ allowed.
   `sys.path.append`/`sys.path.insert` import-environment mutation, and
   unresolved cases, plus safe literal dynamic-import anchors and plain
   `getattr(...)` assignments that do not become dynamic call-target UNKNOWNs,
-  oversized request
+  oversized request, a 40,000-import module completing within an isolated
+  subprocess bound without quadratic binding-map snapshots, a sleeping fake
+  frontend producing a typed timeout within a deterministic upper bound while
+  stdout is concurrently drained,
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
   source reads, checked-in-worker self-analysis within a bounded subprocess
   timeout and through the Rust parser boundary, responses above the former 1

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 from bisect import bisect_left
+from collections.abc import Iterator, Mapping
 import configparser
 import hashlib
 import json
@@ -1653,30 +1654,89 @@ def drop_shadowed_import_aliases(
     return {name: target for name, target in aliases.items() if name not in shadowed}
 
 
+class ScopeHistoryView(Mapping[str, str]):
+    """Read-only binding view backed by per-name source-ordered events."""
+
+    def __init__(
+        self,
+        histories: dict[str, tuple[list[int], list[str | None]]],
+        offset: int,
+    ) -> None:
+        self._histories = histories
+        self._offset = offset
+
+    def __getitem__(self, name: str) -> str:
+        history = self._histories.get(name)
+        if history is None:
+            raise KeyError(name)
+        positions, values = history
+        index = bisect_left(positions, self._offset) - 1
+        if index < 0 or values[index] is None:
+            raise KeyError(name)
+        return values[index]
+
+    def __iter__(self) -> Iterator[str]:
+        return (name for name in self._histories if self.get(name) is not None)
+
+    def __len__(self) -> int:
+        return sum(1 for _name in self)
+
+
+class ModuleScopeTimeline:
+    """Persistent module bindings without copying full state per statement."""
+
+    def __init__(
+        self,
+        aliases: dict[str, str],
+        alias_histories: dict[str, tuple[list[int], list[str | None]]],
+        assignment_histories: dict[str, tuple[list[int], list[str | None]]],
+    ) -> None:
+        # Retaining the exact source mapping makes the cache identity-safe and
+        # avoids re-sorting every imported name on each point query.
+        self.aliases = aliases
+        self.alias_histories = alias_histories
+        self.assignment_histories = assignment_histories
+
+    def aliases_at(self, offset: int) -> ScopeHistoryView:
+        return ScopeHistoryView(self.alias_histories, offset)
+
+    def assignments_at(self, offset: int) -> ScopeHistoryView:
+        return ScopeHistoryView(self.assignment_histories, offset)
+
+
+def record_scope_event(
+    histories: dict[str, tuple[list[int], list[str | None]]],
+    name: str,
+    position: int,
+    value: str | None,
+) -> None:
+    positions, values = histories.setdefault(name, ([], []))
+    if values and values[-1] == value:
+        return
+    positions.append(position)
+    values.append(value)
+
+
 def aliases_at_offset(
     tree: ast.Module,
     starts: list[int],
     aliases: dict[str, str],
     offset: int,
-) -> dict[str, str]:
-    positions, alias_states, _assignment_states = module_scope_timeline(tree, starts, aliases)
-    index = bisect_left(positions, offset) - 1
-    return {} if index < 0 else dict(alias_states[index])
+) -> Mapping[str, str]:
+    return module_scope_timeline(tree, starts, aliases).aliases_at(offset)
 
 
 def module_scope_timeline(
     tree: ast.Module,
     starts: list[int],
     aliases: dict[str, str],
-) -> tuple[list[int], list[dict[str, str]], list[dict[str, str]]]:
-    fingerprint = tuple(sorted(aliases.items()))
+) -> ModuleScopeTimeline:
     cached = getattr(tree, "_repogrammar_scope_timeline", None)
-    if cached is not None and cached[0] == fingerprint:
-        return cached[1], cached[2], cached[3]
+    if cached is not None and cached.aliases is aliases:
+        return cached
 
-    positions: list[int] = []
-    alias_states: list[dict[str, str]] = []
-    assignment_states: list[dict[str, str]] = []
+    alias_histories: dict[str, tuple[list[int], list[str | None]]] = {}
+    assignment_histories: dict[str, tuple[list[int], list[str | None]]] = {}
     visible: dict[str, str] = {}
     assignments: dict[str, str] = {}
     for node in sorted(tree.body, key=lambda item: node_range(starts, item)):
@@ -1690,18 +1750,19 @@ def module_scope_timeline(
                     assignments.pop(target.id, None)
                 else:
                     assignments[target.id] = role
+                record_scope_event(assignment_histories, target.id, start, role)
         for name in import_local_names(node):
             if name in aliases:
                 visible[name] = aliases[name]
+                record_scope_event(alias_histories, name, start, aliases[name])
         for name in top_level_rebound_names(node):
-            visible.pop(name, None)
-        positions.append(start)
-        alias_states.append(dict(visible))
-        assignment_states.append(dict(assignments))
+            if name in visible:
+                visible.pop(name)
+                record_scope_event(alias_histories, name, start, None)
 
-    result = (fingerprint, positions, alias_states, assignment_states)
+    result = ModuleScopeTimeline(aliases, alias_histories, assignment_histories)
     setattr(tree, "_repogrammar_scope_timeline", result)
-    return positions, alias_states, assignment_states
+    return result
 
 
 def collect_assignment_roles_until(
@@ -1709,10 +1770,8 @@ def collect_assignment_roles_until(
     starts: list[int],
     aliases: dict[str, str],
     offset: int,
-) -> dict[str, str]:
-    positions, _alias_states, assignment_states = module_scope_timeline(tree, starts, aliases)
-    index = bisect_left(positions, offset) - 1
-    return {} if index < 0 else dict(assignment_states[index])
+) -> Mapping[str, str]:
+    return module_scope_timeline(tree, starts, aliases).assignments_at(offset)
 
 
 def collect_parameter_roles(

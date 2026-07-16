@@ -15,9 +15,12 @@ use crate::ports::parser::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Origin engine stamped on facts produced by the CPython `ast` frontend. Used
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
@@ -34,11 +37,14 @@ const MAX_PYTHON_FACT_TARGET_BYTES: usize = 256;
 const MAX_PYTHON_FACT_NOTE_BYTES: usize = 160;
 const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 7;
 const MAX_PYTHON_FACT_ASSUMPTION_BYTES: usize = 128;
+const DEFAULT_PYTHON_FRONTEND_TIMEOUT: Duration = Duration::from_secs(30);
+const PYTHON_FRONTEND_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonAstParser {
     executable: String,
     worker_script: PathBuf,
+    timeout: Duration,
 }
 
 impl Default for PythonAstParser {
@@ -46,6 +52,7 @@ impl Default for PythonAstParser {
         Self {
             executable: default_python_executable(|key| std::env::var(key).ok()),
             worker_script: default_python_worker_script(),
+            timeout: DEFAULT_PYTHON_FRONTEND_TIMEOUT,
         }
     }
 }
@@ -56,6 +63,20 @@ impl PythonAstParser {
         Self {
             executable: executable.into(),
             worker_script,
+            timeout: DEFAULT_PYTHON_FRONTEND_TIMEOUT,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_worker_timeout(
+        executable: impl Into<String>,
+        worker_script: PathBuf,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            executable: executable.into(),
+            worker_script,
+            timeout,
         }
     }
 }
@@ -214,6 +235,7 @@ impl PythonAstParser {
     }
 
     fn run_worker_request(&self, serialized: &str) -> Result<String, ParseError> {
+        let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
             .arg(&self.worker_script)
             .stdin(Stdio::piped())
@@ -225,29 +247,103 @@ impl PythonAstParser {
             .stdin
             .take()
             .ok_or_else(|| ParseError::Internal("python ast frontend stdin unavailable".into()))?;
-        stdin
-            .write_all(serialized.as_bytes())
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ParseError::Internal("python ast frontend stdout unavailable".into()))?;
+        let request = serialized.as_bytes().to_vec();
+        let (write_sender, write_receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-stdin".to_string())
+            .spawn(move || {
+                let result = stdin
+                    .write_all(&request)
+                    .and_then(|()| stdin.write_all(b"\n"));
+                drop(stdin);
+                let _ = write_sender.send(result);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return Err(ParseError::Internal(
+                "python ast frontend request failed".into(),
+            ));
+        }
+        let (read_sender, read_receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-stdout".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let mut buffer = [0_u8; 8 * 1024];
+                let result = loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => break Ok(output),
+                        Ok(count) => {
+                            let remaining =
+                                (MAX_PYTHON_FRONTEND_OUTPUT_BYTES + 1).saturating_sub(output.len());
+                            output.extend_from_slice(&buffer[..count.min(remaining)]);
+                        }
+                        Err(error) => break Err(error),
+                    }
+                };
+                let _ = read_sender.send(result);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return Err(ParseError::Internal("python ast frontend failed".into()));
+        }
+
+        let status = wait_for_python_frontend(&mut child, deadline)?;
+        let write_result = write_receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| ParseError::Timeout)?;
+        write_result
             .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
-        drop(stdin);
-        let output = child
-            .wait_with_output()
+        let output = read_receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| ParseError::Timeout)?
             .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
-        if !output.status.success() {
+        if !status.success() {
             return Err(ParseError::Internal(
                 "python ast frontend rejected parse request".to_string(),
             ));
         }
-        if output.stdout.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
+        if output.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
             return Err(ParseError::Internal(
                 "python ast frontend output exceeded size limit".to_string(),
             ));
         }
-        String::from_utf8(output.stdout)
+        String::from_utf8(output)
             .map_err(|_| ParseError::Internal("python ast frontend output was not UTF-8".into()))
     }
+}
+
+fn wait_for_python_frontend(
+    child: &mut Child,
+    deadline: Instant,
+) -> Result<std::process::ExitStatus, ParseError> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(_) => {
+                terminate_python_frontend(child);
+                return Err(ParseError::Internal("python ast frontend failed".into()));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            terminate_python_frontend(child);
+            return Err(ParseError::Timeout);
+        }
+        thread::sleep(PYTHON_FRONTEND_POLL_INTERVAL.min(remaining));
+    }
+}
+
+fn terminate_python_frontend(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 struct PythonParseOutput {
@@ -4505,6 +4601,40 @@ def _api_client():
         assert!(report.units.len() > 100);
         assert!(report.semantic_facts.len() > 1_000);
         assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn cpython_frontend_timeout_is_typed_bounded_and_sanitized() {
+        let root = std::env::temp_dir().join(format!(
+            "repogrammar-python-timeout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("timeout fixture directory");
+        let worker = root.join("sleeping-worker.py");
+        fs::write(
+            &worker,
+            "import sys\nimport time\nsys.stdout.write('x' * 131072)\nsys.stdout.flush()\ntime.sleep(5)\n",
+        )
+        .expect("sleeping worker fixture");
+        let parser = PythonAstParser::with_worker_timeout(
+            platform_python_executable(),
+            worker,
+            Duration::from_millis(100),
+        );
+
+        let started = Instant::now();
+        let result = parser.parse(document("def ok():\n    pass\n"));
+
+        assert_eq!(result, Err(ParseError::Timeout));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "frontend timeout must remain bounded"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

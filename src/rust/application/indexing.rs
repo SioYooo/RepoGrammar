@@ -732,6 +732,11 @@ where
                 );
                 continue;
             }
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while analyzing a source file".to_string(),
+                ));
+            }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
                     "parser failed for {}: internal parser error",
@@ -1431,6 +1436,11 @@ where
                     known_work_units(index + 1, changed_files.len()),
                 );
                 continue;
+            }
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while analyzing a source file".to_string(),
+                ));
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -2201,6 +2211,11 @@ fn python_source_roots_from_project_config(
         }) {
             Ok(report) => report,
             Err(ParseError::UnsupportedLanguage) => continue,
+            Err(ParseError::Timeout) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "parser timed out while reading Python project context".to_string(),
+                ));
+            }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
                     "parser failed for {} source-root context: internal parser error",

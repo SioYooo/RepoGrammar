@@ -4134,6 +4134,42 @@ celery_app_kinds, celery_app_facts = _preview_parse(
 assert "celery_task" in celery_app_kinds
 assert "celery.task" in _anchor_targets(celery_app_facts, "celery_task_decorator")
 
+# Forty thousand legal top-level imports must build one event per binding, not
+# forty thousand progressively larger alias snapshots. Run the pure timeline
+# in an isolated interpreter so the timeout deterministically catches the old
+# quadratic memory/time behavior without depending on wall-clock assertions in
+# the main smoke process.
+large_import_timeline = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        """
+import ast
+import runpy
+import sys
+
+namespace = runpy.run_path(sys.argv[1])
+source = ''.join(f'import m{index}\\n' for index in range(40_000))
+tree = ast.parse(source)
+starts = namespace['byte_line_starts'](source)
+aliases = {f'm{index}': f'm{index}' for index in range(40_000)}
+timeline = namespace['module_scope_timeline'](tree, starts, aliases)
+view = timeline.aliases_at(len(source.encode('utf-8')) + 1)
+assert len(timeline.alias_histories) == 40_000
+assert len(view) == 40_000
+assert view['m0'] == 'm0'
+assert view['m39999'] == 'm39999'
+""",
+        str(WORKER),
+    ],
+    text=True,
+    capture_output=True,
+    check=False,
+    timeout=15,
+)
+assert large_import_timeline.returncode == 0, large_import_timeline.stderr
+assert large_import_timeline.stderr == ""
+
 # The checked-in worker is a real large-module regression fixture. It must
 # analyze itself within the bounded subprocess timeout without truncating its
 # source-free metadata response or exceeding the fact-count contract.

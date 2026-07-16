@@ -16,15 +16,18 @@ GitHub assets, and use the source-checkout path when either check fails.
   their dedicated options and reject `--project`. The historical dogfood
   evidence remains unchanged and still reports no paired token measurement.
 - Fixed two real-repository Python indexing blockers found during public-preview
-  dogfood. Module-scope alias/assignment snapshots and cached AST byte ranges
-  remove repeated large-module rescans; the bounded Rust response envelope now
-  admits valid metadata up to 2 MiB. The Rust parser also accepts the exact
-  seven-assumption `fastapi_include_router` context contract while rejecting
-  malformed fields and raw route literals; prefix metadata is reduced to
-  low-cardinality segment shapes, and dynamic prefix/binding outcomes retain
-  their typed affected-claim tokens. The bundled worker can now parse its own
-  source across the process boundary without weakening fact-count, path, hash,
-  typed `UNKNOWN`, or source-free validation.
+  dogfood. Per-name module-scope alias/assignment event histories and cached AST
+  byte ranges remove repeated large-module rescans without quadratic full-map
+  snapshots; the bounded Rust response envelope now admits valid metadata up to
+  2 MiB. The Rust Python frontend concurrently writes stdin and drains bounded
+  stdout under a 30-second wall-clock deadline, kills and waits for a timed-out
+  child, and returns a typed payload-free timeout. The Rust parser also accepts
+  the exact seven-assumption `fastapi_include_router` context contract while
+  rejecting malformed fields and raw route literals; prefix metadata is
+  reduced to low-cardinality segment shapes, and dynamic prefix/binding
+  outcomes retain their typed affected-claim tokens. The bundled worker can now
+  parse its own source across the process boundary without weakening fact-count,
+  path, hash, typed `UNKNOWN`, or source-free validation.
 - Added the zero-friction `repogrammar setup` onboarding path. One reviewed
   application-layer plan can detect Codex or Claude Code, reuse the existing
   reversible machine integration service, initialize and index the current
