@@ -224,13 +224,13 @@ pub struct AutosyncRunReport {
 }
 
 impl AutosyncRunReport {
-    pub fn display_synced_generation(&self) -> Option<&str> {
+    pub(crate) fn display_synced_generation(&self) -> Option<&str> {
         self.synced_generation
             .as_deref()
             .filter(|generation| valid_autosync_generation_id(generation))
     }
 
-    pub fn display_error(&self) -> Option<&str> {
+    pub(crate) fn display_error(&self) -> Option<&str> {
         sanitized_autosync_run_error(self.result, self.error.as_deref())
     }
 }
