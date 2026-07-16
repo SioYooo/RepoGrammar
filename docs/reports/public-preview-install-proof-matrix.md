@@ -99,3 +99,28 @@ creation remains a visible failed partial publication.
 
 The verdict for this dated evidence snapshot is `LOCAL_CANDIDATE_ONLY`; it must
 not be reused as the current registry-availability verdict.
+
+## Post-publication update (2026-07-17)
+
+The exact candidate was subsequently published from tag
+`v0.2.0-preview.0` at commit `fad41c73cac58b00e484f48a3e1771d5dcf51e7e`.
+Release run `29526875140` passed the full gate, all four packaged lifecycle
+smokes, GitHub prerelease publication, and npm publication. The public release
+contains four macOS/Linux archives, four archive checksums, `install.sh`, and
+its checksum; it contains no Windows artifact. A fresh isolated npm cache/HOME
+executed the exact published `version` and setup dry-run paths without Cargo.
+
+npm resolves `@sioyooo/repogrammar@0.2.0-preview.0`, and `preview` maps to that
+version. npm also initialized `latest` to the same first prerelease despite the
+logged `npm publish --tag preview`. The repository added a fail-closed
+post-publish reconciliation gate in merge commit
+`5574e0f24a8c4d85044b2969c02dae9ad9b7d30b`. Repair run `29528491034` with
+npm 10.9.8 and diagnostic run `29528818754` with npm 12.0.1 both received
+registry `E400` while executing the standard `dist-tag rm` request. No version
+was republished and no tag was moved.
+
+Current verdict: `PUBLIC_PREVIEW_PINNED_INSTALL_ONLY`. The exact version and
+`@preview` path are publicly usable; unversioned npm/npx also resolves the
+prerelease and is not the supported installation contract. The registry
+dist-tag condition remains an external blocker for an unqualified release-
+candidate-ready verdict.

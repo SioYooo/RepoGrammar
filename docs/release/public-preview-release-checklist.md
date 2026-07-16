@@ -107,7 +107,10 @@ run `.github/workflows/npm-tag-reconcile.yml` from merged `main`. That workflow
 derives the fixed package name and version from `package.json`, accepts no
 package/version input, never runs `npm publish`, and reuses the same classifier
 as the tag release. This does not change the `release.yml` rule that manual
-dispatch is build-only.
+dispatch is build-only. If the registry rejects the standard removal, keep the
+workflow red, require exact-version/`@preview` installation, and treat the
+dist-tag as an external release blocker. Do not republish the immutable version,
+move the tag, or manufacture a placeholder stable release.
 
 ## Phase 3: public verification
 
@@ -133,6 +136,22 @@ After the tag workflow succeeds, independently verify:
 README and quickstarts do not encode a permanent published/unpublished claim.
 They tell users to verify the exact npm version and matching GitHub asset, and
 to use the source path if either check fails.
+
+## Observed first-publication boundary (2026-07-17)
+
+The tag workflow for `v0.2.0-preview.0` completed before the reconciliation
+gate was added. GitHub prerelease assets and the exact npm version are public,
+and isolated `npx @sioyooo/repogrammar@0.2.0-preview.0 version` plus setup
+dry-run passed. The registry reports both `preview` and `latest` as
+`0.2.0-preview.0`.
+
+Reconciliation run `29528491034` used the same publishing token and npm 10.9.8;
+diagnostic run `29528818754` repeated the deletion with npm 12.0.1. Both
+received registry `E400` for the standard `dist-tag rm ... latest` operation.
+This rules out token absence and a missing `--tag preview` during publication;
+it does not prove why npm rejects the deletion. The current public
+preview is therefore usable only through the documented pinned install path;
+the no-prerelease-`latest` release gate remains unmet.
 
 ## Current external boundary
 
