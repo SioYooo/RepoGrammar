@@ -937,11 +937,11 @@ contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.
 
 Release-policy tests must also cover npm preview-tag classification: exact
-`preview` with no `latest` is read-only success; when no stable version exists
-and the preview is the only published version, the registry-required `latest`
-may map to that same prerelease as bounded public-preview success; a stable
-`latest` is preserved; and mismatched, malformed, or prerelease-valued
-`latest` state outside that first-publication exception fails closed. The
+`preview` with no `latest` is read-only success; when no stable version exists,
+the registry-required `latest` may map to a published prerelease as bounded
+public-preview success; a stable `latest` is preserved; and mismatched,
+malformed, unpublished, or prerelease-valued `latest` state outside that
+preview-only exception fails closed. The
 dedicated manual reconciliation workflow must never publish a package; the tag
 release may finish only after the shared reconciliation workflow verifies the
 post-publication registry state. Tests and release smoke must still use an

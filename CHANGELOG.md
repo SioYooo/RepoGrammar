@@ -6,9 +6,10 @@
 
 - Corrected the npm dist-tag release gate for a package whose only published
   version is a prerelease. npm requires `latest` and may map it to that sole
-  version even when publication used `--tag preview`; the gate now recognizes
-  the exact `preview`/`latest` mapping as a bounded public-preview state while
-  keeping exact-version or `@preview` installation mandatory. This does not
+  version even when publication used `--tag preview`; the gate now verifies the
+  exact `preview` target and accepts a published prerelease `latest` only while
+  no stable version exists, keeping exact-version or `@preview` installation
+  mandatory. This does not
   establish a stable release, and mismatched or malformed registry state still
   fails closed.
 

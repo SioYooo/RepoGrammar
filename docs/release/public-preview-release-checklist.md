@@ -91,18 +91,18 @@ proof that a GitHub Release or npm package already exists.
    `verify -> build -> publish_release -> publish_npm -> reconcile_npm_tags`.
    GitHub prerelease assets are created before npm publication, and the tag run
    is not green until the registry reports the exact `preview` tag and a valid
-   `latest` state. npm requires `latest`; when no stable version exists and this
-   preview is the package's only published version, `latest` may map to the
-   same prerelease as a bounded public-preview state. A stable `latest` is
+   `latest` state. npm requires `latest`; when no stable version exists,
+   `latest` may map to a published prerelease as a bounded public-preview
+   state. A stable `latest` is
    preserved. These services cannot publish atomically; if npm publication or
    reconciliation fails after the GitHub stage, the workflow must stay red and
    the release is a visible partial publication, not a successful release.
 6. `npm publish --tag preview` is necessary but not sufficient for a first
    package publication: the registry still maintains its required `latest`
    tag. The reusable reconciliation workflow queries versions and dist-tags,
-   accepts `latest` pointing to the intended prerelease only when it is the
-   sole published version and no stable version exists, and verifies the state
-   again. Missing/mismatched `preview`, malformed versions, registry failures,
+   accepts `latest` pointing to a published prerelease only when no stable
+   version exists, and verifies the state again. Missing/mismatched `preview`,
+   malformed versions, unpublished tag targets, registry failures,
    or any prerelease-valued `latest` outside that bounded condition fail
    closed. Acceptance here establishes public-preview publication only; it is
    not stable readiness.
@@ -127,8 +127,8 @@ After the tag workflow succeeds, independently verify:
   uses the published `install.sh` plus explicit preview tag;
 - `npm view @sioyooo/repogrammar@0.2.0-preview.0` resolves the intended package;
 - `npm view @sioyooo/repogrammar dist-tags --json` maps `preview` to
-  `0.2.0-preview.0`; if `latest` maps to that same version, the published
-  version inventory contains no stable version and no other version;
+  `0.2.0-preview.0`; if `latest` maps to a prerelease, that target is published
+  and the complete published-version inventory contains no stable version;
 - `npx @sioyooo/repogrammar@0.2.0-preview.0 version` and the documented setup
   smoke execute without Cargo on supported macOS/Linux hosts;
 - npm metadata admits only `darwin`/`linux` and `x64`/`arm64`; because npm's
