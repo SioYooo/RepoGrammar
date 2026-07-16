@@ -499,23 +499,27 @@ allowed.
   installer-script checksum contract checks, tag publication credential
   preflight, explicit build-only workflow dispatch, staged GitHub-assets-before-
   npm publication, exact packaged-artifact `version`/setup-dry-run/product-MCP
-  smoke, plus macOS and expanded `windows-installer-smoke` CI contracts,
+  `find`/advisory-`check` smoke, plus macOS product CI and the Windows
+  source-only boundary contracts,
   target/scope pass-through for comma-separated, `none`, and
   local-scope install requests, stale PATH prune failure propagation, and
   command removal.
   Default tests must not use wrapper scripts to call real `codex` or `claude`
   binaries.
   Windows PowerShell wrapper coverage must include `src/install/install.ps1`
-  source-checkout `-FromSource` installation with an already built local binary,
-  bundled worker asset installation, unmanaged command refusal without
-  `-ReplaceUnmanagedCommand` plus opt-in backup with it, no `.repogrammar/`
-  mutation, locked stale PATH prune failure propagation, and nonzero propagation
-  when delegated `repogrammar install` fails.
+  refusing a default/non-`-FromSource` install before network or filesystem
+  writes even when a fake release directory is supplied; absence of a release
+  download implementation; source-checkout `-FromSource` installation with an
+  already built local binary; bundled worker asset installation; unmanaged
+  command refusal without `-ReplaceUnmanagedCommand` plus opt-in backup with
+  it; no `.repogrammar/` mutation; locked stale PATH prune failure propagation;
+  and nonzero propagation when delegated `repogrammar install` fails.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
-  cover the full public-preview platform/artifact matrix, unsupported
-  platform/arch rejection, checksum rejection, binary/worker cache
-  installation, missing-worker artifact rejection, unexpected-entry rejection,
+  cover the full supported public-preview platform/artifact matrix,
+  unsupported platform/arch rejection, explicit Windows rejection, checksum
+  rejection, binary/worker cache installation, missing-worker artifact
+  rejection, unexpected-entry rejection,
   non-regular-file (symlink/hardlink) release-member rejection with no partial
   cached binary left behind, `REPOGRAMMAR_BINARY` local dogfood bypass, argument
   forwarding including target lists, local scope, `--print-config`, and the full

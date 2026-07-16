@@ -768,3 +768,12 @@ WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
 grep -q "FromSource" "$WINDOWS_INSTALLER"
 grep -q "REPOGRAMMAR_SOURCE_BINARY" "$WINDOWS_INSTALLER"
 grep -q "cargo build --release" "$WINDOWS_INSTALLER"
+grep -q "Windows is not supported by the public preview" "$WINDOWS_INSTALLER"
+grep -q "installation requires explicit -FromSource" "$WINDOWS_INSTALLER"
+if grep -Eq 'repogrammar-x86_64-pc-windows-msvc|Install-CliFromRelease|Get-WindowsArtifactName|Invoke-WebRequest' "$WINDOWS_INSTALLER"; then
+  echo "Windows contributor installer still contains a release-download path" >&2
+  exit 1
+fi
+WINDOWS_INSTALLER_TEST="${SCRIPT_DIR}/install.ps1.test.ps1"
+grep -q "Windows default release install unexpectedly succeeded" "$WINDOWS_INSTALLER_TEST"
+grep -q "refused Windows release install created command or install state" "$WINDOWS_INSTALLER_TEST"

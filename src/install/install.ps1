@@ -1,6 +1,4 @@
 param(
-    [string]$Version = $(if ($env:REPOGRAMMAR_VERSION) { $env:REPOGRAMMAR_VERSION } else { "latest" }),
-    [string]$Repo = $(if ($env:REPOGRAMMAR_REPO) { $env:REPOGRAMMAR_REPO } else { "SioYooo/RepoGrammar" }),
     [string]$CommandDir = $(if ($env:REPOGRAMMAR_COMMAND_DIR) { $env:REPOGRAMMAR_COMMAND_DIR } else { Join-Path $env:USERPROFILE ".local\bin" }),
     [string]$InstallDir = $(if ($env:REPOGRAMMAR_INSTALL_DIR) { $env:REPOGRAMMAR_INSTALL_DIR } elseif ($env:XDG_DATA_HOME) { Join-Path $env:XDG_DATA_HOME "repogrammar" } else { Join-Path $env:USERPROFILE ".local\share\repogrammar" }),
     [string]$WorkerRoot = $(if ($env:REPOGRAMMAR_WORKER_ROOT) { $env:REPOGRAMMAR_WORKER_ROOT } else { Join-Path $InstallDir "workers" }),
@@ -21,22 +19,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$PreviewVersionHint = $(if ($env:REPOGRAMMAR_PREVIEW_VERSION_HINT) { $env:REPOGRAMMAR_PREVIEW_VERSION_HINT } else { "v0.2.0-preview.0" })
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
-$UseSource = [bool]$FromSource
 
 function Show-Usage {
     Write-Output @"
-RepoGrammar Windows installer preview
+RepoGrammar Windows contributor installer
 
 Usage:
-  powershell -ExecutionPolicy Bypass -File install.ps1
-  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly
+  powershell -ExecutionPolicy Bypass -File install.ps1 -FromSource
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly -FromSource -Yes
-  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
-  powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -Target "codex,claude-code" -Scope global
   powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
   powershell -ExecutionPolicy Bypass -File install.ps1 -Verify
   powershell -ExecutionPolicy Bypass -File install.ps1 -Prune -Yes
@@ -53,21 +46,18 @@ uninit on -Project (the .repogrammar state), and deletes every repogrammar
 binary, worker asset, and the managed data directory. Add -Yes to skip the
 confirmation prompt.
 
-By default, the script downloads a prebuilt Windows x64 release artifact,
-verifies its checksum, installs repogrammar.exe into a user-writable command
-directory, and can launch repogrammar install for Codex / Claude Code MCP
-wiring. In a source checkout, use -FromSource to build or copy a local
-target\release\repogrammar.exe before running agent setup.
+The public preview does not publish or support a Windows release artifact.
+Installation is fail-closed unless -FromSource is passed explicitly from a
+RepoGrammar source checkout. -FromSource builds or copies a local
+target\release\repogrammar.exe before optional agent setup. -SourceBinary or
+REPOGRAMMAR_SOURCE_BINARY may point at an already built local executable and
+skip the cargo build, but neither option enables a release download.
 
 If the command directory already holds a repogrammar.exe that RepoGrammar did
 not install, the installer refuses to replace it unless you also pass
 -ReplaceUnmanagedCommand, which backs the existing file up first. -Yes alone
 does not replace an unmanaged command.
 
-For local artifact tests, set REPOGRAMMAR_RELEASE_DIR to a directory containing
-the Windows zip and matching .sha256 file. For source dogfood tests,
-REPOGRAMMAR_SOURCE_BINARY or -SourceBinary may point at an already built
-repogrammar.exe and skips the default cargo build.
 "@
 }
 
@@ -82,92 +72,6 @@ function Confirm-DefaultNo([string]$Prompt) {
     }
     $reply = Read-Host "$Prompt [y/N]"
     return $reply -match '^(?i)y(es)?$'
-}
-
-function Get-ReleaseBase {
-    if ($env:REPOGRAMMAR_RELEASE_BASE) {
-        return $env:REPOGRAMMAR_RELEASE_BASE.TrimEnd("/")
-    }
-    if ($Version -eq "latest") {
-        return "https://github.com/$Repo/releases/latest/download"
-    }
-    return "https://github.com/$Repo/releases/download/$Version"
-}
-
-function Copy-ReleaseAsset([string]$Name, [string]$Destination) {
-    if ($env:REPOGRAMMAR_RELEASE_DIR) {
-        $localAsset = Join-Path $env:REPOGRAMMAR_RELEASE_DIR $Name
-        if (!(Test-Path $localAsset)) {
-            throw "release artifact not found in REPOGRAMMAR_RELEASE_DIR: $Name"
-        }
-        Copy-Item $localAsset $Destination
-        return
-    }
-    $base = Get-ReleaseBase
-    $url = "$base/$Name"
-    # Windows PowerShell 5.1 on older hosts may negotiate TLS 1.0/1.1, which
-    # GitHub rejects; force TLS 1.2+ so the download does not fail with a
-    # misleading "not found" error.
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13 } catch {}
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $Destination -ErrorAction Stop
-    } catch {
-        throw "release artifact was not found: $url. For preview prereleases, rerun with -Version <preview-tag> (for example: -Version $PreviewVersionHint). For local artifact testing, set REPOGRAMMAR_RELEASE_DIR to a directory containing the zip and .sha256 file."
-    }
-}
-
-function Normalize-ArchiveEntry([string]$Entry) {
-    $normalized = $Entry.Trim()
-    if ($normalized.StartsWith("./")) {
-        $normalized = $normalized.Substring(2)
-    }
-    while ($normalized.EndsWith("/")) {
-        $normalized = $normalized.Substring(0, $normalized.Length - 1)
-    }
-    return $normalized
-}
-
-function Assert-SafeArchiveEntries([string]$Archive) {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $allowed = @(
-        "repogrammar.exe",
-        "workers",
-        "workers/python",
-        "workers/python/worker.py"
-    )
-    $hasBinary = $false
-    $hasWorker = $false
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)
-    try {
-        foreach ($entry in $zip.Entries) {
-            $name = Normalize-ArchiveEntry ($entry.FullName)
-            if ([string]::IsNullOrWhiteSpace($name) -or
-                $name.StartsWith("/") -or
-                $name.Contains("\") -or
-                $name.Contains("://") -or
-                $name -match "^[A-Za-z]:" -or
-                ($name -split "/") -contains "." -or
-                ($name -split "/") -contains ".." -or
-                !($allowed -contains $name)) {
-                throw "release artifact contains unsafe or unexpected path: $($entry.FullName)"
-            }
-            if ($name -eq "repogrammar.exe") {
-                $hasBinary = $true
-            }
-            if ($name -eq "workers/python/worker.py") {
-                $hasWorker = $true
-            }
-        }
-    } finally {
-        $zip.Dispose()
-    }
-    if (!$hasBinary) {
-        throw "release artifact did not contain repogrammar.exe"
-    }
-    if (!$hasWorker) {
-        throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
-    }
 }
 
 function Install-WorkerAsset([string]$WorkerSource) {
@@ -312,57 +216,15 @@ function Install-CliFromSource {
     Write-Output "Installed $CommandDir\repogrammar.exe from $sourceLabel"
 }
 
-function Get-WindowsArtifactName {
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
-    switch ($arch) {
-        "AMD64" { return "repogrammar-x86_64-pc-windows-msvc.zip" }
-        "ARM64" { throw "Windows ARM64 is not supported: the public preview publishes only the Windows x86_64 artifact." }
-        default { throw "unsupported Windows architecture: $arch" }
-    }
-}
-
-function Install-CliFromRelease {
-    $artifact = Get-WindowsArtifactName
-    $installedBinary = Join-Path (Join-Path $InstallDir "bin") "repogrammar.exe"
-    $commandPath = Join-Path $CommandDir "repogrammar.exe"
-    if ((Test-Path $commandPath) -and !(Test-ManagedCommandPath $commandPath $installedBinary) -and !$ReplaceUnmanagedCommand) {
-        throw "repogrammar command path already exists and is not managed by RepoGrammar; move it aside, choose a different -CommandDir, or pass -ReplaceUnmanagedCommand to back it up and replace it"
-    }
-    $temp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "repogrammar-install-$([System.Guid]::NewGuid())"))
-    try {
-        $archive = Join-Path $temp.FullName $artifact
-        $checksum = Join-Path $temp.FullName "$artifact.sha256"
-        Copy-ReleaseAsset $artifact $archive
-        Copy-ReleaseAsset "$artifact.sha256" $checksum
-        $expected = ((Get-Content $checksum -Raw) -split "\s+")[0].ToLowerInvariant()
-        $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-        if ($expected -ne $actual) {
-            throw "checksum verification failed for $artifact"
-        }
-        Assert-SafeArchiveEntries $archive
-        Expand-Archive -Path $archive -DestinationPath $temp.FullName -Force
-        $binary = Join-Path $temp.FullName "repogrammar.exe"
-        if (!(Test-Path $binary)) {
-            throw "release artifact did not contain repogrammar.exe"
-        }
-        $worker = Join-Path $temp.FullName "workers\python\worker.py"
-        if (!(Test-Path $worker)) {
-            throw "release artifact did not contain bundled Python worker at workers/python/worker.py"
-        }
-        Install-WorkerAsset $worker
-        Install-ManagedCliBinary $binary ([bool]$ReplaceUnmanagedCommand)
-    } finally {
-        Remove-Item -Recurse -Force $temp.FullName -ErrorAction SilentlyContinue
+function Assert-WindowsSourceInstallEnabled {
+    if (!$FromSource) {
+        throw "Windows is not supported by the public preview and no Windows release artifact is published; installation requires explicit -FromSource from a RepoGrammar source checkout"
     }
 }
 
 function Install-Cli {
-    if ($script:UseSource) {
-        Install-CliFromSource
-    } else {
-        Install-CliFromRelease
-    }
+    Assert-WindowsSourceInstallEnabled
+    Install-CliFromSource
 }
 
 function Test-ManagedCommandPath([string]$CommandPath, [string]$InstalledBinary) {
@@ -818,29 +680,21 @@ if ($UninstallCommand) {
     exit 0
 }
 
-Write-Output "RepoGrammar setup"
+Assert-WindowsSourceInstallEnabled
+Write-Output "RepoGrammar Windows contributor setup"
 Write-Output ""
-if (Test-SourceCheckout) {
-    Write-Output "1 = build/install from this source checkout and configure coding agents"
-    Write-Output "2 = build/install command from this source checkout only"
-} else {
-    Write-Output "1 = install or update repogrammar and configure coding agents"
-    Write-Output "2 = install or update repogrammar command only"
-}
+Write-Output "1 = build/install from this source checkout and configure coding agents"
+Write-Output "2 = build/install command from this source checkout only"
 Write-Output "3 = configure coding agents only"
 Write-Output "4 = uninstall repogrammar command only"
-if (Test-SourceCheckout) {
-    Write-Output "5 = install or update from release artifact instead"
-}
 Write-Output "q = cancel"
 $choice = Read-Host "Selection [1]"
 switch ($choice) {
-    "" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
-    "1" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
-    "2" { if (Test-SourceCheckout) { $script:UseSource = $true }; Install-Cli; Invoke-VerifyInstall $true; break }
+    "" { Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "1" { Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
+    "2" { Install-Cli; Invoke-VerifyInstall $true; break }
     "3" { Run-AgentInstall; break }
     "4" { Remove-Command; break }
-    "5" { if (Test-SourceCheckout) { $script:UseSource = $false; Install-Cli; Invoke-VerifyInstall $true } else { throw "invalid selection: $choice" }; break }
     "q" { Write-Output "Cancelled. No changes made."; break }
     "Q" { Write-Output "Cancelled. No changes made."; break }
     default { throw "invalid selection: $choice" }

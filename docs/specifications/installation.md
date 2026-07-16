@@ -195,10 +195,11 @@ for `install.ps1`); only with that opt-in may it back the file up with an
 `.unmanaged-backup` suffix and install the managed command. It must never
 silently delete the old file, and it must still refuse unsafe paths such as
 directories regardless of that opt-in. It must not directly create a foreign
-unmanaged command path that later causes the Rust installer to refuse ownership. If no release artifact is
-available and the script is not running from a source checkout with
-`--from-source`, it must fail with actionable guidance, including
-`REPOGRAMMAR_RELEASE_DIR` for local artifact tests. When a source wrapper runs
+unmanaged command path that later causes the Rust installer to refuse
+ownership. If no release artifact is available and the shell wrapper is not
+running from a source checkout with `--from-source`, it must fail with
+actionable guidance, including `REPOGRAMMAR_RELEASE_DIR` for local artifact
+tests. When a source wrapper runs
 without an explicit `REPOGRAMMAR_SOURCE_BINARY` or `-SourceBinary` override, it
 must run `cargo build --release` before copying `target/release/repogrammar`
 or `target\release\repogrammar.exe`, even if a previous release binary already
@@ -210,13 +211,16 @@ wrappers after the user invokes install/update; it does not relax
 unrelated foreign paths.
 
 Windows source checkouts retain `src/install/install.ps1` only as a contributor
-and local-dogfood path. It is not a tagged public-preview asset, and its
-prebuilt-archive path is outside the supported preview contract. `-FromSource`
-may build or copy a local `repogrammar.exe`, install bundled worker assets,
-refresh the user-writable command path, and delegate to `repogrammar install`.
-It supports `REPOGRAMMAR_SOURCE_BINARY` / `-SourceBinary` for deterministic
-local dogfood tests with an already built binary. This source path does not
-establish Windows product support.
+and local-dogfood path. It is not a tagged public-preview asset and contains no
+release-download installation path. Every CLI install action must fail before
+network access or filesystem writes unless the user passes `-FromSource`
+explicitly from a RepoGrammar source checkout. `-FromSource` may build or copy
+a local `repogrammar.exe`, install bundled worker assets, refresh the
+user-writable command path, and delegate to `repogrammar install`. It supports
+`REPOGRAMMAR_SOURCE_BINARY` / `-SourceBinary` for deterministic local dogfood
+tests with an already built binary, but `-SourceBinary` alone must not bypass
+the explicit `-FromSource` gate. This source path does not establish Windows
+product support.
 
 The npm package `@sioyooo/repogrammar` is a thin launcher only. Its `bin`
 entrypoint lives under `src/npm/`, detects OS/architecture, downloads the
@@ -445,12 +449,12 @@ noninteractive live writes, and a dependency-light text wizard:
   its noninteractive `--from-source` mode supports dogfood before release
   artifacts exist;
 - `src/install/install.ps1` is a Windows contributor/source-dogfood wrapper,
-  not a public-preview release asset. In a source checkout, its interactive
-  menu defaults to the contributor source-build path, and its noninteractive
-  `-FromSource` mode supports dogfood before release artifacts exist. Its
+  not a public-preview release asset. It has no release-download branch and
+  fails install actions unless `-FromSource` was passed explicitly. Its
+  interactive and noninteractive source modes support contributor dogfood. Its
   `-Verify` switch is a read-only report that compares, by SHA256, the
-  `repogrammar` copies on PATH,
-  the configured agent MCP command targets, and any running serve processes
+  `repogrammar` copies on PATH, the configured agent MCP command targets, and
+  any running serve processes
   against the managed authority binary, so a user can confirm that the command
   they invoke and the binary their agents run are the same build. `-Prune`
   additionally removes PATH copies whose hash differs from the authority, after

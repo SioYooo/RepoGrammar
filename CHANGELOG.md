@@ -66,7 +66,9 @@ source-checkout dogfood path.
   before npm publication; and a missing/disappearing npm token fails visibly
   instead of producing a green skipped-publish result. The preview matrix and
   npm launcher now admit exactly macOS/Linux x64/arm64, reject Windows, and no
-  longer publish a Windows archive or `install.ps1`. The canonical release
+  longer publish a Windows archive or `install.ps1`. The source-tree PowerShell
+  wrapper removes its release-download branch and refuses all install actions
+  unless `-FromSource` is explicit. The canonical release
   checklist separates build-only candidate evidence, tag publication, fresh
   HOME verification, and external publication proof. No GitHub release asset
   or npm publication has been verified by these local workflow changes.

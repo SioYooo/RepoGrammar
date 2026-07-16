@@ -16,7 +16,8 @@ proof that a GitHub Release or npm package already exists.
   - `repogrammar-aarch64-apple-darwin.tar.gz`.
 - Windows is outside the public-preview and npm platform set. Do not upload a
   Windows archive or `install.ps1`; the source-tree PowerShell path is
-  contributor dogfood only and does not establish product support.
+  contributor dogfood only, has no release-download branch, and requires an
+  explicit `-FromSource`. It does not establish product support.
 - Each archive contains the native `repogrammar` executable and
   `workers/python/worker.py`. Each archive and the published `install.sh` has a
   matching `.sha256` asset.
