@@ -11,6 +11,7 @@ cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
+cargo run --quiet --bin repo-guard -- preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty>
 ```
 
 ## check
@@ -44,6 +45,10 @@ The check command verifies:
 - GitHub workflow files do not use deprecated Node.js 20 action majors for
   first-party checkout or Node setup actions; currently `actions/checkout@v4`
   and `actions/setup-node@v4` are rejected in favor of `@v5` or newer.
+- the release workflow calls preview dist-tag reconciliation only after
+  `npm publish --tag preview`, while the manually dispatchable reconciliation
+  workflow contains no `npm publish` path and re-verifies registry state after
+  its bounded repair.
 
 Check mode reports concrete paths and rules and does not modify the repository.
 Linked-agent-worktree recognition reads at most 4 KiB from a regular,
@@ -86,6 +91,17 @@ new active generation while checking daemon liveness, stops the daemon, and
 requires its lock/readiness ownership to be removed. It does not inspect or
 modify the developer's real HOME, agent configuration, or repository state.
 
+## preview-dist-tag-action
+
+The preview dist-tag classifier is the single release-policy decision point
+used by both tag publication and the manual npm tag-reconciliation workflow.
+It requires the manifest version to be a bounded prerelease and the `preview`
+tag to match it exactly. It returns `no_latest`,
+`remove_prerelease_latest`, or `preserve_stable_latest`. Missing/mismatched
+preview state and malformed versions fail closed. The command does not access
+the network or modify npm; declarative workflows perform the bounded registry
+query/removal and must classify the final state again.
+
 ## Exit codes
 
 - `0`: requested guard passed.
@@ -108,3 +124,6 @@ CI runs `repo-guard check` on every push and pull request. Pull requests also
 run `check-diff` when base and head revisions are available. Native Linux and
 macOS jobs, plus every supported release-matrix build, invoke
 `smoke-packaged-artifact` against an unpacked candidate binary and worker.
+The release and manual repair workflows use `preview-dist-tag-action` before
+and after any removal so a prerelease-valued `latest` cannot be silently
+accepted.

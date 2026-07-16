@@ -15,7 +15,7 @@ on:
           - build-only
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -190,6 +190,8 @@ jobs:
     needs: build
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -229,3 +231,13 @@ jobs:
             exit 1
           fi
           npm publish --access public --tag preview
+
+  reconcile_npm_tags:
+    name: Verify npm preview dist-tags
+    needs: publish_npm
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/npm-tag-reconcile.yml
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

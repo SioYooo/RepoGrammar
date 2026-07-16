@@ -88,10 +88,26 @@ proof that a GitHub Release or npm package already exists.
    independently prove `HEAD` is an ancestor of `origin/main`. Do not use
    manual workflow dispatch as a publish mechanism.
 5. Observe the explicit staged order:
-   `verify -> build -> publish_release -> publish_npm`. GitHub prerelease assets
-   are created before npm publication. These services cannot publish atomically;
-   if npm fails after the GitHub stage, the workflow must stay red and the
-   release is a visible partial publication, not a successful release.
+   `verify -> build -> publish_release -> publish_npm -> reconcile_npm_tags`.
+   GitHub prerelease assets are created before npm publication, and the tag run
+   is not green until the registry reports the exact `preview` tag with no
+   prerelease-valued `latest`. A stable `latest` is preserved. These services
+   cannot publish atomically; if npm publication or reconciliation fails after
+   the GitHub stage, the workflow must stay red and the release is a visible
+   partial publication, not a successful release.
+6. `npm publish --tag preview` is necessary but not sufficient for a first
+   package publication: the registry can still initialize `latest` to that
+   prerelease. The reusable reconciliation workflow queries the final registry
+   state, removes only a prerelease-valued `latest`, and verifies the state
+   again. Missing/mismatched `preview`, malformed versions, registry failures,
+   or a failed removal fail closed.
+
+If a previously completed publication needs only this bounded repair, manually
+run `.github/workflows/npm-tag-reconcile.yml` from merged `main`. That workflow
+derives the fixed package name and version from `package.json`, accepts no
+package/version input, never runs `npm publish`, and reuses the same classifier
+as the tag release. This does not change the `release.yml` rule that manual
+dispatch is build-only.
 
 ## Phase 3: public verification
 

@@ -76,6 +76,7 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     ".agents/memories/v0.1-substrate-hardening-checkpoint.md",
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
+    ".github/workflows/npm-tag-reconcile.yml",
     "docs/specifications/semantic-workers.md",
     "src/rust/bin/repo_guard.rs",
 ];
@@ -182,13 +183,119 @@ where
                 }
             }
         }
+        [command, version_flag, version, preview_flag, preview, latest_flag, latest]
+            if command == "preview-dist-tag-action"
+                && version_flag == "--version"
+                && preview_flag == "--preview"
+                && latest_flag == "--latest" =>
+        {
+            match preview_dist_tag_action(version, preview, latest) {
+                Ok(action) => CommandResult::ok(format!("{}\n", action.as_str())),
+                Err(error) => {
+                    CommandResult::err(format!("preview dist-tag classification failed: {error}\n"))
+                }
+            }
+        }
         [] => CommandResult::err(format!("{}\n", usage())),
         _ => CommandResult::err(format!("unknown or invalid arguments\n{}\n", usage())),
     }
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty>"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewDistTagAction {
+    NoTag,
+    RemovePrerelease,
+    PreserveStable,
+}
+
+impl PreviewDistTagAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NoTag => "no_latest",
+            Self::RemovePrerelease => "remove_prerelease_latest",
+            Self::PreserveStable => "preserve_stable_latest",
+        }
+    }
+}
+
+fn preview_dist_tag_action(
+    version: &str,
+    preview: &str,
+    latest: &str,
+) -> Result<PreviewDistTagAction, &'static str> {
+    if !is_bounded_version(version) || !has_prerelease(version) {
+        return Err("manifest version is not a bounded prerelease");
+    }
+    if preview != version {
+        return Err("preview does not match the manifest version");
+    }
+    if latest.is_empty() {
+        return Ok(PreviewDistTagAction::NoTag);
+    }
+    if !is_bounded_version(latest) {
+        return Err("latest is malformed");
+    }
+    if has_prerelease(latest) {
+        Ok(PreviewDistTagAction::RemovePrerelease)
+    } else {
+        Ok(PreviewDistTagAction::PreserveStable)
+    }
+}
+
+fn has_prerelease(version: &str) -> bool {
+    version
+        .split_once('+')
+        .map_or(version, |(without_build, _)| without_build)
+        .contains('-')
+}
+
+fn is_bounded_version(version: &str) -> bool {
+    if version.is_empty()
+        || version.len() > 64
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return false;
+    }
+
+    let without_build = match version.split_once('+') {
+        Some((base, build)) if !build.contains('+') && valid_version_identifiers(build, false) => {
+            base
+        }
+        Some(_) => return false,
+        None => version,
+    };
+    let core = match without_build.split_once('-') {
+        Some((core, prerelease)) if valid_version_identifiers(prerelease, true) => core,
+        Some(_) => return false,
+        None => without_build,
+    };
+    let parts = core.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part == &"0" || !part.starts_with('0'))
+        })
+}
+
+fn valid_version_identifiers(value: &str, reject_numeric_leading_zero: bool) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && (!reject_numeric_leading_zero
+                    || !identifier.bytes().all(|byte| byte.is_ascii_digit())
+                    || identifier == "0"
+                    || !identifier.starts_with('0'))
+        })
 }
 
 struct PackagedArtifactSmoke {
@@ -318,12 +425,7 @@ fn smoke_packaged_artifact(
     fixture: &str,
     expected_version: &str,
 ) -> Result<(), String> {
-    if expected_version.is_empty()
-        || expected_version.len() > 64
-        || !expected_version
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
-    {
+    if !is_bounded_version(expected_version) {
         return Err("expected version is invalid".to_string());
     }
     let mut smoke = PackagedArtifactSmoke::new(repository_root, binary, worker, fixture)?;
@@ -655,6 +757,7 @@ fn check_repository(root: &Path) -> io::Result<Vec<GuardViolation>> {
     check_required_documents(root, &mut violations);
     check_required_skills(root, &mut violations);
     check_github_workflow_actions(root, &mut violations)?;
+    check_release_workflow_contract(root, &mut violations);
     check_tree_rules(root, &mut violations)?;
     Ok(violations)
 }
@@ -808,6 +911,47 @@ fn check_github_workflow_actions(
         }
     }
     Ok(())
+}
+
+fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolation>) {
+    let release_path = root.join(".github/workflows/release.yml");
+    let reconcile_path = root.join(".github/workflows/npm-tag-reconcile.yml");
+    let (Ok(release), Ok(reconcile)) = (
+        fs::read_to_string(&release_path),
+        fs::read_to_string(&reconcile_path),
+    ) else {
+        return;
+    };
+
+    let release_publish = release.find("npm publish --access public --tag preview");
+    let release_reconcile = release.find("uses: ./.github/workflows/npm-tag-reconcile.yml");
+    if !matches!((release_publish, release_reconcile), (Some(publish), Some(reconcile)) if publish < reconcile)
+    {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "ReleaseDistTagOrder",
+            "preview publication must call npm tag reconciliation after npm publish",
+        ));
+    }
+
+    let reconciliation_markers = [
+        "workflow_dispatch:",
+        "preview-dist-tag-action",
+        "npm dist-tag rm",
+        "tags_after=",
+        "final_action=",
+    ];
+    if reconcile.contains("npm publish")
+        || reconciliation_markers
+            .iter()
+            .any(|marker| !reconcile.contains(marker))
+    {
+        violations.push(GuardViolation::new(
+            ".github/workflows/npm-tag-reconcile.yml",
+            "NpmTagReconciliationContract",
+            "manual repair must be non-publishing and verify registry state after bounded reconciliation",
+        ));
+    }
 }
 
 fn workflow_relative_path(root: &Path, path: &Path) -> String {
@@ -1047,6 +1191,95 @@ fn check_diff_paths(paths: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn preview_dist_tags_without_latest_need_no_write() {
+        assert_eq!(
+            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", ""),
+            Ok(PreviewDistTagAction::NoTag)
+        );
+    }
+
+    #[test]
+    fn prerelease_latest_is_removed_even_when_it_is_an_older_preview() {
+        for latest in ["0.2.0-preview.0", "0.1.0-preview.9"] {
+            assert_eq!(
+                preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", latest),
+                Ok(PreviewDistTagAction::RemovePrerelease)
+            );
+        }
+    }
+
+    #[test]
+    fn stable_latest_is_preserved() {
+        for latest in ["0.1.0", "0.1.0+build-x"] {
+            assert_eq!(
+                preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", latest),
+                Ok(PreviewDistTagAction::PreserveStable)
+            );
+        }
+    }
+
+    #[test]
+    fn preview_dist_tag_classification_fails_closed() {
+        assert_eq!(
+            preview_dist_tag_action("0.2.0-preview.0", "", ""),
+            Err("preview does not match the manifest version")
+        );
+        assert_eq!(
+            preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "banana"),
+            Err("latest is malformed")
+        );
+        assert_eq!(
+            preview_dist_tag_action("0.2.0", "0.2.0", ""),
+            Err("manifest version is not a bounded prerelease")
+        );
+    }
+
+    #[test]
+    fn release_workflow_requires_post_publish_reconciliation() {
+        let root = TempRoot::new("release-workflow-order");
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            b"run: npm publish --access public --tag preview\nuses: ./.github/workflows/npm-tag-reconcile.yml\n",
+        );
+        write_file(
+            root.path().join(".github/workflows/npm-tag-reconcile.yml"),
+            b"workflow_dispatch:\npreview-dist-tag-action\nnpm dist-tag rm\ntags_after=\nfinal_action=\n",
+        );
+
+        let mut violations = Vec::new();
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(violations.is_empty());
+
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            b"uses: ./.github/workflows/npm-tag-reconcile.yml\nrun: npm publish --access public --tag preview\n",
+        );
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(violations
+            .iter()
+            .any(|violation| violation.rule == "ReleaseDistTagOrder"));
+    }
+
+    #[test]
+    fn manual_tag_repair_workflow_cannot_publish() {
+        let root = TempRoot::new("manual-tag-repair-publish");
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            b"run: npm publish --access public --tag preview\nuses: ./.github/workflows/npm-tag-reconcile.yml\n",
+        );
+        write_file(
+            root.path().join(".github/workflows/npm-tag-reconcile.yml"),
+            b"workflow_dispatch:\npreview-dist-tag-action\nnpm dist-tag rm\ntags_after=\nfinal_action=\nnpm publish\n",
+        );
+
+        let mut violations = Vec::new();
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(violations
+            .iter()
+            .any(|violation| violation.rule == "NpmTagReconciliationContract"));
+    }
 
     #[test]
     fn packaged_artifact_smoke_is_a_documented_command() {
