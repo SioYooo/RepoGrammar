@@ -6,10 +6,11 @@
 - Candidate code commit tested locally: `2a09e9a18dd1ce10194d75e80a3066430edb1f59`
 - Release checklist: `../release/public-preview-release-checklist.md`
 
-This report is an evidence snapshot, not a publication claim. The current
-state proves one native packaged candidate locally and proves that release
-automation is configured for four supported targets. It does not prove that
-the four remote artifacts, a GitHub prerelease, or an npm package exist.
+This report is a pre-tag evidence snapshot, not a current availability or
+publication claim. Availability must always be rechecked for the exact version
+with the commands in `../quickstart.md`. The recorded run proves one native
+packaged candidate locally and that release automation is configured for four
+supported targets; it is not evidence about later external state.
 
 ## Platform matrix
 
@@ -17,14 +18,19 @@ the four remote artifacts, a GitHub prerelease, or an npm package exist.
 |---|---:|---:|---:|---|
 | macOS arm64 (`aarch64-apple-darwin`) | yes | passed locally | no | native candidate verified |
 | macOS Intel (`x86_64-apple-darwin`) | yes | not run locally | no | remote build-only required |
-| Linux x86-64 (`x86_64-unknown-linux-gnu`) | yes | not run locally | no | remote build-only required |
-| Linux arm64 (`aarch64-unknown-linux-gnu`) | yes | not run locally | no | remote build-only required |
+| glibc 2.35+ Linux x86-64 (`x86_64-unknown-linux-gnu`) | yes | not run locally | not observed on evidence date | remote build-only + ABI inspection required |
+| glibc 2.39+ Linux arm64 (`aarch64-unknown-linux-gnu`) | yes | not run locally | not observed on evidence date | remote build-only + ABI inspection required |
 | Windows | no | not applicable | no | unsupported; no artifact claim |
 
 The Windows PowerShell installer is a source-checkout contributor path only.
 It fails closed for release installation unless `-FromSource` is explicit. The
 release matrix, npm launcher metadata, README, and installation specification
 therefore agree that this preview supports macOS and Linux only.
+
+The npm manifest cannot use a root `libc: glibc` restriction without also
+making the same package inapplicable on Darwin, where npm reports no libc.
+The manifest therefore limits OS/CPU only; the launcher and shell installer
+are the fail-closed Linux glibc family/version authorities before download.
 
 ## Local packaged-artifact proof
 
@@ -52,7 +58,7 @@ This proves repository-only CLI/index use from one packaged native artifact.
 It deliberately does not turn product self-test success into native coding-
 agent integration readiness.
 
-## Publication truth
+## Pre-tag external observations on 2026-07-16
 
 | Gate | Observed state | Consequence |
 |---|---|---|
@@ -63,9 +69,10 @@ agent integration readiness.
 | GitHub prerelease | not created | no release download is claimed |
 | tag | not created | `v0.2.0-preview.0` is reserved, not published |
 
-The tag workflow checks version agreement and authenticates `NPM_TOKEN` with
-`npm whoami` before writing GitHub release assets. Manual dispatch is build-
-only and cannot enter publication jobs. Publication remains explicitly staged
+The tag workflow checks version agreement, proves tag containment in
+`origin/main`, and authenticates `NPM_TOKEN` with `npm whoami` before writing
+GitHub release assets. Manual dispatch is build-only even from a tag ref and
+cannot enter credential or publication jobs. Publication remains explicitly staged
 as verify, build, GitHub prerelease, then npm; a failure after GitHub asset
 creation remains a visible failed partial publication.
 
@@ -79,5 +86,5 @@ creation remains a visible failed partial publication.
 6. create `v0.2.0-preview.0` only from that verified `main` commit;
 7. independently verify GitHub assets, npm metadata, `npx`, and a clean install.
 
-Until every step is recorded, the truthful release verdict is
-`LOCAL_CANDIDATE_ONLY`.
+The verdict for this dated evidence snapshot is `LOCAL_CANDIDATE_ONLY`; it must
+not be reused as the current registry-availability verdict.

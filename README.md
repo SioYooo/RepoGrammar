@@ -8,31 +8,34 @@ compact map of those implementation-pattern families before an agent reads
 source broadly. It returns metadata and a hash-checked read plan when evidence
 is strong, and a typed `UNKNOWN` instead of guessing when it is not.
 
-[![RepoGrammar terminal demo: setup, find, check, and typed UNKNOWN](docs/assets/repogrammar-demo.svg)](docs/demo/verified-cli-transcript.md)
+[![RepoGrammar terminal demo: setup, find, check, and typed UNKNOWN](https://raw.githubusercontent.com/SioYooo/RepoGrammar/main/docs/assets/repogrammar-demo.svg)](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md)
 
 This is an audited excerpt from a real `0.2.0-preview.0` CLI run against
 committed Python fixtures. Paths were normalized for display; the
-[commands and transcript](docs/demo/verified-cli-transcript.md) are
+[commands and transcript](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md) are
 reproducible from this checkout.
 
 ## Install
 
-### Public-preview path — activation pending
+### Public-preview path — verify the exact version
 
-RepoGrammar is preparing `v0.2.0-preview.0`, but no GitHub release artifact or
-`@sioyooo/repogrammar` npm package is claimed as published yet. Once the
-[preview release](https://github.com/SioYooo/RepoGrammar/releases) and npm
-package have both passed the publication-proof gates in the
-[zero-friction onboarding and release-candidate plan](docs/plans/build-week-zero-friction-onboarding-plan.md),
-a new user will be able to run the no-build path:
+Availability is decided by the exact `0.2.0-preview.0` publication, not by the
+contents of this README. Verify both registries before using the no-build path:
 
 ```bash
-npx @sioyooo/repogrammar setup --project /path/to/your/repo --target auto
+npm view @sioyooo/repogrammar@0.2.0-preview.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh.sha256
 ```
 
-Do not treat that command as available until the linked release contains
-verified assets and npm resolves the package. Until then, the supported
-contributor/dogfood path builds once from source:
+Only when both commands succeed, run the pinned preview:
+
+```bash
+npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
+```
+
+If either check fails, use the contributor/dogfood path, which builds once from
+source. The complete publication gate is in the
+[release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/public-preview-release-checklist.md).
 
 ```bash
 git clone https://github.com/SioYooo/RepoGrammar.git
@@ -42,7 +45,7 @@ bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
 
-The installed command needs `python3` for the current Python preview. It does
+The installed command needs Python 3.10 or newer (`python3`) for the current Python preview. It does
 not need Node.js, npm, Docker, a local model, an OpenAI API key, or a cloud API.
 
 ## From setup to trustworthy context
@@ -71,7 +74,7 @@ repogrammar find --project . --token-budget 8000 registered_router
 
 It returns `UNKNOWN`, identifies `InsufficientSupport`, and recommends source
 fallback. That is a successful safety decision, not a failed query. Use the
-[fixture-backed walkthrough](docs/demo/verified-cli-transcript.md) to reproduce
+[fixture-backed walkthrough](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md) to reproduce
 the exact `find → check → UNKNOWN` path.
 
 ## How it works
@@ -96,8 +99,8 @@ RepoGrammar ships a pattern-family-first CLI and one read-only MCP tool,
 
 The Rust implementation follows a dependency-inverted
 `core → ports → application → adapters → interfaces` architecture. See the
-[architecture overview](docs/architecture/overview.md) and
-[MCP contract](docs/specifications/mcp-api.md).
+[architecture overview](https://github.com/SioYooo/RepoGrammar/blob/main/docs/architecture/overview.md) and
+[MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md).
 
 ## Support and limitations
 
@@ -113,7 +116,7 @@ RepoGrammar is pre-alpha. It is not a sound static analyzer and does not replace
 source inspection. `estimated_potential_token_savings` is an **estimated** local
 read-displacement diagnostic—not measured savings or a causal claim. Measured
 savings require a controlled before/after study; the current
-[limitations](docs/limitations.md) keep that boundary explicit.
+[limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) keep that boundary explicit.
 
 macOS and Linux are the current supported platforms. Windows is not fully
 supported because its local index lifecycle still needs platform proof; no
@@ -140,20 +143,20 @@ Repository guardrails keep that collaboration auditable: the mirrored
 `AGENTS.md` / `CLAUDE.md` contract requires scoped changes, tests and docs in
 the same commit, no target-repository code execution, and typed `UNKNOWN`
 instead of unsupported claims. The reusable
-[demo script](docs/demo/build-week-demo.md) and
-[launch kit](docs/promotion/launch-kit.md) contain the Build Week submission
+[demo script](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md) and
+[launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md) contain the Build Week submission
 copy without turning the README into a competition-only landing page.
 
 ## Community
 
-- Start with the [general quickstart](docs/quickstart.md),
-  [Codex guide](docs/quickstart-codex.md), or
-  [Claude Code guide](docs/quickstart-claude.md).
-- Read the [documentation map](docs/README.md) and
-  [known limitations](docs/limitations.md).
+- Start with the [general quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md),
+  [Codex guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md), or
+  [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md).
+- Read the [documentation map](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md) and
+  [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
 - Report bugs or propose improvements with the repository's
   [issue templates](https://github.com/SioYooo/RepoGrammar/issues/new/choose).
-- Review [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
-  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
+- Review [CONTRIBUTING.md](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md), [SECURITY.md](https://github.com/SioYooo/RepoGrammar/blob/main/SECURITY.md), and
+  [CODE_OF_CONDUCT.md](https://github.com/SioYooo/RepoGrammar/blob/main/CODE_OF_CONDUCT.md) before contributing.
 
-RepoGrammar is licensed under the [MIT License](LICENSE).
+RepoGrammar is licensed under the [MIT License](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).

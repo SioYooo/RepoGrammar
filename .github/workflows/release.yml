@@ -34,6 +34,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Verify tag and version agreement
         env:
+          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -53,9 +54,9 @@ jobs:
             echo "version mismatch: package.json=${package_version} Cargo.toml=${cargo_version}" >&2
             exit 1
           fi
-          # A tag build must publish exactly the version it claims. workflow_dispatch
-          # (ref_type=branch) only verifies and builds; it never reaches publish/npm.
-          if [ "${REF_TYPE}" = "tag" ]; then
+          # Only a pushed tag is a publication event. A manual dispatch remains
+          # build-only even when its selected ref happens to be a tag.
+          if [ "${EVENT_NAME}" = "push" ] && [ "${REF_TYPE}" = "tag" ]; then
             if [ "${REF_NAME}" != "v${package_version}" ]; then
               echo "tag ${REF_NAME} does not match v${package_version}" >&2
               exit 1
@@ -64,8 +65,18 @@ jobs:
           else
             echo "ref_type=${REF_TYPE} is not a tag; skipping tag/version equality (verify/build only)"
           fi
+      - name: Verify publication tag authority
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "publication tag commit is not contained in origin/main" >&2
+            exit 1
+          fi
+          echo "publication tag commit is contained in origin/main"
       - name: Require npm credentials before tag publication
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -94,7 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: repogrammar-x86_64-unknown-linux-gnu.tar.gz
           - os: ubuntu-24.04-arm
@@ -116,6 +127,28 @@ jobs:
           node-version: 22
       - name: Build release binary
         run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
+      - name: Inspect Linux glibc ABI floor
+        if: contains(matrix.target, 'unknown-linux-gnu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/repogrammar"
+          required="$(objdump -T "${binary}" | sed -n 's/.*(GLIBC_\([0-9][0-9.]*\)).*/\1/p' | sort -V | tail -n 1)"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) floor="2.35" ;;
+            aarch64-unknown-linux-gnu) floor="2.39" ;;
+            *) echo "unexpected Linux target" >&2; exit 1 ;;
+          esac
+          if [ -z "${required}" ]; then
+            echo "could not inspect the packaged binary's glibc symbol requirements" >&2
+            exit 1
+          fi
+          highest="$(printf '%s\n%s\n' "${required}" "${floor}" | sort -V | tail -n 1)"
+          if [ "${highest}" != "${floor}" ]; then
+            echo "binary requires glibc ${required}, above declared floor ${floor}" >&2
+            exit 1
+          fi
+          echo "binary glibc requirement ${required} is within declared floor ${floor}"
       - name: Package release archive
         run: |
           mkdir -p dist
@@ -140,6 +173,7 @@ jobs:
           binary="${smoke_root}/unpacked/repogrammar"
           test -x "${binary}"
           test -f "${smoke_root}/unpacked/workers/python/worker.py"
+          python3 -c 'import sys; assert sys.version_info >= (3, 10), "RepoGrammar requires Python 3.10+"'
           expected_version="$(node -p "require('./package.json').version")"
           test "$("${binary}" version)" = "repogrammar ${expected_version}"
           HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
@@ -185,7 +219,7 @@ jobs:
   publish_release:
     name: Publish staged GitHub release assets
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -206,7 +240,7 @@ jobs:
   publish_npm:
     name: Publish npm launcher after GitHub assets
     needs: publish_release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -225,4 +259,4 @@ jobs:
             echo "NPM_TOKEN disappeared after the publication preflight" >&2
             exit 1
           fi
-          npm publish --access public
+          npm publish --access public --tag preview

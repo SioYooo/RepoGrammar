@@ -10,7 +10,47 @@ const path = require("node:path");
 
 const packageJson = require("../../package.json");
 
-function platformTarget(platform = process.platform, arch = process.arch) {
+function detectLinuxLibc(report = process.report?.getReport?.()) {
+  if (report?.header?.glibcVersionRuntime) {
+    return "glibc";
+  }
+  const sharedObjects = Array.isArray(report?.sharedObjects) ? report.sharedObjects : [];
+  if (sharedObjects.some((entry) => /(?:^|\/)ld-musl-[^/]+\.so(?:\.\d+)*$/i.test(entry))) {
+    return "musl";
+  }
+  return "unknown";
+}
+
+function detectLinuxGlibcVersion(report = process.report?.getReport?.()) {
+  const version = report?.header?.glibcVersionRuntime;
+  return typeof version === "string" && /^\d+\.\d+(?:\.\d+)?$/.test(version)
+    ? version
+    : null;
+}
+
+function versionAtLeast(actual, minimum) {
+  if (!/^\d+(?:\.\d+)*$/.test(actual || "") || !/^\d+(?:\.\d+)*$/.test(minimum || "")) {
+    return false;
+  }
+  const actualParts = actual.split(".").map(Number);
+  const minimumParts = minimum.split(".").map(Number);
+  const width = Math.max(actualParts.length, minimumParts.length);
+  for (let index = 0; index < width; index += 1) {
+    const actualPart = actualParts[index] || 0;
+    const minimumPart = minimumParts[index] || 0;
+    if (actualPart !== minimumPart) {
+      return actualPart > minimumPart;
+    }
+  }
+  return true;
+}
+
+function platformTarget(
+  platform = process.platform,
+  arch = process.arch,
+  linuxLibc = platform === "linux" ? detectLinuxLibc() : null,
+  glibcVersion = platform === "linux" ? detectLinuxGlibcVersion() : null
+) {
   if (platform === "win32") {
     throw new Error(
       "unsupported platform: win32; the public preview supports macOS and Linux only"
@@ -28,6 +68,19 @@ function platformTarget(platform = process.platform, arch = process.arch) {
     return `${normalizedArch}-apple-darwin`;
   }
   if (platform === "linux") {
+    if (linuxLibc !== "glibc") {
+      const classification = linuxLibc === "musl" ? "musl" : "unknown libc";
+      throw new Error(
+        `unsupported Linux runtime: ${classification}; the public preview requires glibc`
+      );
+    }
+    const minimum = arch === "x64" ? "2.35" : "2.39";
+    if (!versionAtLeast(glibcVersion, minimum)) {
+      const detected = glibcVersion || "unknown";
+      throw new Error(
+        `unsupported Linux glibc ${detected}; ${arch} public-preview binaries require glibc ${minimum}+`
+      );
+    }
     return `${normalizedArch}-unknown-linux-gnu`;
   }
   throw new Error(`unsupported platform: ${platform}`);
@@ -284,6 +337,32 @@ function isInstalled(binary) {
   return fs.existsSync(worker);
 }
 
+// Activate a fully staged install without ever deleting an install directory
+// that may have been won by another launcher process. A rename collision with
+// another complete install is success; an incomplete/foreign collision is
+// preserved and reported. Only this invocation's own backup may be restored
+// or removed.
+function activateStagedInstall(stagingDir, installDir, backupDir = null) {
+  try {
+    fs.renameSync(stagingDir, installDir);
+  } catch (error) {
+    if (isInstalled(path.join(installDir, binaryName()))) {
+      if (backupDir) {
+        fs.rmSync(backupDir, { recursive: true, force: true });
+      }
+      return false;
+    }
+    if (backupDir && !fs.existsSync(installDir) && fs.existsSync(backupDir)) {
+      fs.renameSync(backupDir, installDir);
+    }
+    throw error;
+  }
+  if (backupDir) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+  return true;
+}
+
 async function ensureBinary() {
   const target = platformTarget();
   const binaryOverride = process.env.REPOGRAMMAR_BINARY;
@@ -329,23 +408,25 @@ async function ensureBinary() {
     const workerDestination = path.join(stagingDir, "workers", "python");
     ensureDirectory(workerDestination);
     fs.copyFileSync(workerSource, path.join(workerDestination, "worker.py"));
-    const backupDir = fs.existsSync(installDir)
+    let backupDir = fs.existsSync(installDir)
       ? path.join(installParent, `.repogrammar-backup-${process.pid}-${Date.now()}`)
       : null;
     try {
+      if (isInstalled(installed)) {
+        return installed;
+      }
       if (backupDir) {
-        fs.renameSync(installDir, backupDir);
+        try {
+          fs.renameSync(installDir, backupDir);
+        } catch (error) {
+          if (error.code === "ENOENT") {
+            backupDir = null;
+          } else {
+            throw error;
+          }
+        }
       }
-      fs.renameSync(stagingDir, installDir);
-      if (backupDir) {
-        fs.rmSync(backupDir, { recursive: true, force: true });
-      }
-    } catch (error) {
-      fs.rmSync(installDir, { recursive: true, force: true });
-      if (backupDir && fs.existsSync(backupDir)) {
-        fs.renameSync(backupDir, installDir);
-      }
-      throw error;
+      activateStagedInstall(stagingDir, installDir, backupDir);
     } finally {
       fs.rmSync(stagingDir, { recursive: true, force: true });
     }
@@ -376,13 +457,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+  activateStagedInstall,
   artifactName,
   binaryPath,
   defaultReleaseTag,
+  detectLinuxLibc,
+  detectLinuxGlibcVersion,
   ensureBinary,
   platformTarget,
   resolveRedirect,
   validateArchiveEntries,
   validateReleaseTag,
+  versionAtLeast,
   verifyChecksum,
 };

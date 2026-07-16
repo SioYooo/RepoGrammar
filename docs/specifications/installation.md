@@ -58,7 +58,7 @@ and repository state is preserved. Setup never enables telemetry.
 End users must not need Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, a
 local LLM, an embedding model, or cloud API keys to install and run the
 RepoGrammar CLI. Rust/Cargo remains a contributor and source-build dependency
-only. The current Python preview still requires a `python3` interpreter at
+only. The current Python preview still requires a Python 3.10 or newer `python3` interpreter at
 indexing time because RepoGrammar uses a bundled CPython AST worker asset; it
 must not require a Python virtualenv or project dependency installation. Node.js
 is needed only for TypeScript worker test development.
@@ -93,6 +93,14 @@ Public-preview release artifacts use these platform targets:
 - `repogrammar-aarch64-unknown-linux-gnu.tar.gz`;
 - `repogrammar-x86_64-unknown-linux-gnu.tar.gz`.
 
+The Linux archives are glibc-only: x86_64 requires glibc 2.35 or newer and
+arm64 requires glibc 2.39 or newer. The npm launcher and shell installer must
+prove the matching runtime family and minimum version before download; musl,
+older glibc, and unknown libc fail closed. The x86_64 builder is pinned to
+Ubuntu 22.04 and the arm64 builder to Ubuntu 24.04, and each build records the
+highest imported GLIBC symbol version. Native build-only artifacts still
+require post-build ABI inspection before publication evidence is complete.
+
 These four macOS/Linux archives are the complete preview platform set. Windows
 is not a public-preview release or npm platform while its local index lifecycle
 remains unsupported; the workflow must not build, smoke, upload, or imply a
@@ -102,7 +110,7 @@ Every release artifact must include the `repogrammar` executable and the
 bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
 The release build must unpack and execute each exact archive on its native
-runner before upload. The packaged binary smoke runs `version`, isolated
+runner before upload. The packaged binary smoke enforces Python 3.10+ and runs `version`, isolated
 `setup --dry-run --json`, isolated live setup through the product MCP self-test,
 and `find` plus advisory `check` against a deterministic pytest family. The
 `check` result must remain `CONTEXT_ONLY` with `advisory_status: UNKNOWN` rather
@@ -111,7 +119,10 @@ insufficient. The published `install.sh` asset must also have a matching
 `.sha256` checksum asset. `install.ps1` is not published for this preview.
 Installers must fail instead of silently installing an artifact that omits the
 bundled Python worker.
-Manual release-workflow dispatch is build-only and cannot publish. A tag run
+Manual release-workflow dispatch is build-only and cannot publish, even when a
+tag is selected as its ref. Only a pushed tag is a publication event. Before
+publication, complete Git history must prove the tag commit is contained in
+`origin/main`. A pushed tag run
 must fail during preflight when npm publication credentials are absent, before
 GitHub assets are uploaded. GitHub prerelease assets are an explicit staged
 prerequisite for npm publication; because the two registries cannot publish
@@ -235,12 +246,27 @@ recurse until the process stack overflows.
 `npx` and global npm installs require Node/npm by definition, but they must not
 require Rust/Cargo.
 `package.json` admits only `darwin` and `linux`, with `x64` and `arm64` for the
-four release targets above. The npm launcher must reject every Windows
+four release targets above. A root npm `libc` field cannot encode Linux-only
+glibc while leaving Darwin applicable: npm also evaluates that field on Darwin,
+where the detected libc is undefined. Therefore the cross-platform package
+must omit root `libc`; the launcher is the fail-closed Linux libc/version
+authority before download. The manifest also carries canonical
+repository, homepage, and issue URLs because the packed README links to
+unbundled project documentation through absolute GitHub URLs. The npm launcher
+must reject every Windows
 architecture with an explicit macOS/Linux-only preview boundary before using a
-release artifact or a local binary override.
+release artifact or a local binary override. On Linux it must also reject musl,
+an unknown libc, or glibc below the architecture-specific minimum before using
+an override or downloading an artifact.
 
-Before `@sioyooo/repogrammar` is published, npm dogfood may use either a local
-packed package or a direct binary override:
+The npm launcher activates a staged cache directory without deleting an
+existing destination after a rename conflict. If another process completed the
+same first install, the loser accepts that complete install and removes only
+its own staging state. An incomplete or foreign conflicting destination is
+preserved and reported; rollback may restore or remove only this process's own
+backup.
+
+Npm dogfood uses either a local packed package or a direct binary override:
 
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
@@ -251,6 +277,12 @@ packed package or a direct binary override:
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
 path to an existing file and must not change the release-artifact default for
 published npm use.
+
+The deterministic package gate must create the real `.tgz` in a temporary
+directory, inspect its exact file set and metadata, install it into an isolated
+prefix offline, and execute the installed `repogrammar` wrapper against local
+fake release assets. Temporary tarballs must never remain in the repository.
+Preview publication must use npm dist-tag `preview`, never the default `latest`.
 
 Contributor release-readiness smoke may run `repogrammar install --target all
 --scope global --dry-run` and `repogrammar uninstall --target all --scope
@@ -435,10 +467,10 @@ The current implementation supports deterministic dry-run planning,
 noninteractive live writes, and a dependency-light text wizard:
 
 - public-preview release packaging is defined by the release workflow for
-  macOS arm64/x86_64 and Linux arm64/x86_64 only, each with a bundled Python
-  worker asset and `.sha256` checksum. Real GitHub
-  prerelease artifacts are not available until a preview tag is published, so
-  source-checkout dogfood remains the supported pre-release path;
+  macOS arm64/x86_64, glibc 2.35+ Linux x86_64, and glibc 2.39+ Linux arm64
+  only, each with a bundled Python worker asset and `.sha256` checksum. Docs
+  decide availability through exact-version GitHub/npm checks rather than a
+  statement that becomes stale when the tag publishes;
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, validates archive entry names before extraction,

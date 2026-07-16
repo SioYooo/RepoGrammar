@@ -1,8 +1,8 @@
 # Claude Code Quickstart
 
-This flow installs RepoGrammar from a source checkout and configures the global
-Claude Code MCP integration. Use it before public release artifacts or npm
-publication exist.
+This source-checkout flow installs RepoGrammar and configures the global Claude
+Code MCP integration. Use it whenever the exact-version availability gate in
+`quickstart.md` does not pass or contributor dogfood is desired.
 
 ## Install The Command
 
@@ -13,6 +13,8 @@ cargo build --release
 bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
+
+The current Python analysis path requires Python 3.10 or newer as `python3`.
 
 ## Review And Apply Claude Code Wiring
 

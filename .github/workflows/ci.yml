@@ -61,3 +61,13 @@ jobs:
             --project "${smoke_root}/project" --target auto --yes --no-autosync \
             --json --progress never > "${smoke_root}/live.json"
           python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["product_self_test_state"] == "passed" and v["repository_index_ready"] and not v["agent_query_ready"] and v["suggested_question"] is None' "${smoke_root}/live.json"
+
+  windows-source-installer-contract:
+    name: Windows source-only installer contract
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test source-only PowerShell installer
+        shell: pwsh
+        run: ./src/install/install.ps1.test.ps1

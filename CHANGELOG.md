@@ -2,12 +2,11 @@
 
 ## 0.2.0-preview.0 — unreleased preview candidate
 
-This is the target version for the first public-preview prerelease. It is not
-tagged, released, or published to npm yet: `Cargo.toml` and `package.json` carry
-`0.2.0-preview.0` so a `v0.2.0-preview.0` tag produces matching artifacts, but
-release availability depends on the maintainer running the release workflow and
-verifying artifacts, checksums, and npm publication. Until then, use the
-source-checkout dogfood path.
+This is the target version for the first public-preview prerelease.
+`Cargo.toml` and `package.json` carry `0.2.0-preview.0` so a
+`v0.2.0-preview.0` tag produces matching artifacts. This changelog does not
+establish registry availability: verify the exact npm version and matching
+GitHub assets, and use the source-checkout path when either check fails.
 
 ### Added
 
@@ -65,8 +64,9 @@ source-checkout dogfood path.
   all limitations; repository-only success has no suggested coding-agent
   question and initialization/indexing retain distinct stage labels.
 - Hardened release truth gates without claiming publication. Manual workflow
-  dispatch is explicitly build-only. Tag verification requires npm credentials
-  before any publication stage; exact packaged archives are unpacked and
+  dispatch is explicitly build-only even from a tag ref. Only a pushed tag may
+  enter credential or publication jobs; tag verification requires containment
+  in `origin/main` plus accepted npm credentials before publication. Exact packaged archives are unpacked and
   exercised through `version`, `setup --dry-run --json`, a live product MCP
   self-test, `find`, and advisory `check`; GitHub prerelease assets are staged
   before npm publication; and a missing/disappearing npm token fails visibly
@@ -76,8 +76,17 @@ source-checkout dogfood path.
   wrapper removes its release-download branch and refuses all install actions
   unless `-FromSource` is explicit. The canonical release
   checklist separates build-only candidate evidence, tag publication, fresh
-  HOME verification, and external publication proof. No GitHub release asset
-  or npm publication has been verified by these local workflow changes.
+  HOME verification, and external publication proof. Linux downloads now fail
+  closed before write for musl, unknown libc, glibc below 2.35 on x86_64, or
+  glibc below 2.39 on arm64; pinned builders and imported-symbol inspection
+  hold those ABI floors. The npm launcher also preserves a concurrent first-
+  install winner after rename collision. A real temporary npm tarball is
+  inspected, installed offline, and executed in tests, while packed README
+  links remain valid outside the repository. Python 3.10+ is the explicit
+  packaged runtime minimum. Native CI runs the PowerShell source-only contract
+  on Windows without publishing a Windows artifact. Preview npm publication
+  uses dist-tag `preview`, and local workflow changes alone remain no proof of
+  external publication.
 - ADR-0025 now records the Swift N1 architecture/security preflight plus bounded
   discovery/configuration inventory without adding a dependency, toolchain,
   worker, parser, project model, code unit, IR, fact, typed `UNKNOWN`, family,

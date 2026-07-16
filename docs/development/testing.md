@@ -17,6 +17,16 @@ allowed.
 - Tests must be deterministic and independent of execution order.
 - Tests must not access the network by default.
 - Temporary directories must be unique and cleaned up.
+- Release-wrapper tests must classify glibc family and architecture-specific
+  minimum versions before download, cover musl/old/unknown rejection offline,
+  and prove a concurrent npm cache activation loser never deletes the winning
+  install. Npm package tests must create the real tarball under a temporary
+  directory, inspect its files/metadata, install it into an isolated prefix
+  offline, execute its wrapper against local fake release assets, and remove
+  the tarball with the temporary directory.
+- Native CI must run the PowerShell source-only installer contract on Windows.
+  That job is platform evidence for the contributor path only and must not
+  upload or imply a Windows release artifact.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
 - Process-boundary tests that rely on inherited child pipes must make child

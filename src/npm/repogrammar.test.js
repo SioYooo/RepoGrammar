@@ -341,16 +341,34 @@ function testPlatformArtifactMatrixAndUnsupportedTargets() {
   assert.equal(packageJson.version, "0.2.0-preview.0");
   assert.deepEqual(packageJson.os, ["darwin", "linux"]);
   assert.deepEqual(packageJson.cpu, ["x64", "arm64"]);
+  // npm applies a root `libc` restriction to Darwin too (where libc is
+  // undefined), so one Darwin/Linux package cannot express Linux-only glibc
+  // support through standard manifest fields. The launcher owns that gate.
+  assert.equal(Object.hasOwn(packageJson, "libc"), false);
+  assert.equal(packageJson.repository.url, "git+https://github.com/SioYooo/RepoGrammar.git");
+  assert.equal(packageJson.homepage, "https://github.com/SioYooo/RepoGrammar#readme");
+  assert.equal(packageJson.bugs.url, "https://github.com/SioYooo/RepoGrammar/issues");
   const cases = [
-    ["darwin", "arm64", "aarch64-apple-darwin", "repogrammar-aarch64-apple-darwin.tar.gz"],
-    ["darwin", "x64", "x86_64-apple-darwin", "repogrammar-x86_64-apple-darwin.tar.gz"],
-    ["linux", "arm64", "aarch64-unknown-linux-gnu", "repogrammar-aarch64-unknown-linux-gnu.tar.gz"],
-    ["linux", "x64", "x86_64-unknown-linux-gnu", "repogrammar-x86_64-unknown-linux-gnu.tar.gz"],
+    ["darwin", "arm64", null, "aarch64-apple-darwin", "repogrammar-aarch64-apple-darwin.tar.gz"],
+    ["darwin", "x64", null, "x86_64-apple-darwin", "repogrammar-x86_64-apple-darwin.tar.gz"],
+    ["linux", "arm64", "glibc", "2.39", "aarch64-unknown-linux-gnu", "repogrammar-aarch64-unknown-linux-gnu.tar.gz"],
+    ["linux", "x64", "glibc", "2.35", "x86_64-unknown-linux-gnu", "repogrammar-x86_64-unknown-linux-gnu.tar.gz"],
   ];
-  for (const [platform, arch, target, artifact] of cases) {
-    assert.equal(launcher.platformTarget(platform, arch), target);
+  for (const entry of cases) {
+    const [platform, arch, libc, glibcVersion, target, artifact] =
+      entry.length === 6 ? entry : [entry[0], entry[1], entry[2], null, entry[3], entry[4]];
+    assert.equal(launcher.platformTarget(platform, arch, libc, glibcVersion), target);
     assert.equal(launcher.artifactName(target), artifact);
   }
+
+  assert.throws(
+    () => launcher.platformTarget("linux", "x64", "musl", null),
+    /unsupported Linux runtime: musl.*requires glibc/
+  );
+  assert.throws(
+    () => launcher.platformTarget("linux", "x64", "unknown", null),
+    /unsupported Linux runtime: unknown libc.*requires glibc/
+  );
 
   assert.throws(
     () => launcher.platformTarget("linux", "riscv64"),
@@ -368,6 +386,147 @@ function testPlatformArtifactMatrixAndUnsupportedTargets() {
     () => launcher.platformTarget("win32", "arm64"),
     /unsupported platform: win32.*macOS and Linux only/
   );
+  assert.throws(
+    () => launcher.platformTarget("linux", "x64", "glibc", "2.34"),
+    /x64 public-preview binaries require glibc 2\.35\+/
+  );
+  assert.throws(
+    () => launcher.platformTarget("linux", "arm64", "glibc", "2.38"),
+    /arm64 public-preview binaries require glibc 2\.39\+/
+  );
+}
+
+function testLinuxLibcReportClassification() {
+  assert.equal(
+    launcher.detectLinuxLibc({ header: { glibcVersionRuntime: "2.39" }, sharedObjects: [] }),
+    "glibc"
+  );
+  assert.equal(
+    launcher.detectLinuxLibc({
+      header: {},
+      sharedObjects: ["/lib/ld-musl-x86_64.so.1"],
+    }),
+    "musl"
+  );
+  assert.equal(launcher.detectLinuxLibc({ header: {}, sharedObjects: [] }), "unknown");
+  assert.equal(
+    launcher.detectLinuxGlibcVersion({ header: { glibcVersionRuntime: "2.39" } }),
+    "2.39"
+  );
+  assert.equal(launcher.detectLinuxGlibcVersion({ header: {} }), null);
+  assert.equal(launcher.versionAtLeast("2.35", "2.35"), true);
+  assert.equal(launcher.versionAtLeast("2.39", "2.35"), true);
+  assert.equal(launcher.versionAtLeast("2.34", "2.35"), false);
+  assert.equal(launcher.versionAtLeast("unknown", "2.35"), false);
+}
+
+function testConcurrentActivationPreservesWinningInstall() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-race-"));
+  try {
+    const staging = path.join(root, "staging");
+    const installDir = path.join(root, "install");
+    mkdir(path.join(staging, "workers", "python"));
+    fs.writeFileSync(path.join(staging, "repogrammar"), "losing staged binary\n");
+    fs.writeFileSync(path.join(staging, "workers", "python", "worker.py"), "losing worker\n");
+
+    // Simulate a concurrent launcher winning the first-install rename after
+    // this launcher staged its files but before it attempts activation.
+    mkdir(path.join(installDir, "workers", "python"));
+    fs.writeFileSync(path.join(installDir, "repogrammar"), "winning binary\n");
+    fs.writeFileSync(path.join(installDir, "workers", "python", "worker.py"), "winning worker\n");
+
+    const activated = launcher.activateStagedInstall(staging, installDir);
+    assert.equal(activated, false);
+    assert.equal(fs.readFileSync(path.join(installDir, "repogrammar"), "utf8"), "winning binary\n");
+    assert.equal(
+      fs.readFileSync(path.join(installDir, "workers", "python", "worker.py"), "utf8"),
+      "winning worker\n"
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testPackedNpmTarballInstallsAndExecutesOffline() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-pack-"));
+  try {
+    const repoRoot = path.resolve(__dirname, "../..");
+    const pack = childProcess.spawnSync(
+      "npm",
+      ["pack", "--json", "--ignore-scripts", "--pack-destination", root],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, npm_config_cache: path.join(root, "npm-cache") },
+        encoding: "utf8",
+      }
+    );
+    assert.equal(pack.status, 0, pack.stderr);
+    const packResult = JSON.parse(pack.stdout);
+    assert.equal(packResult.length, 1);
+    const tarball = path.join(root, packResult[0].filename);
+    assert.equal(fs.existsSync(tarball), true);
+
+    const entries = childProcess
+      .execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
+      .trim()
+      .split(/\r?\n/)
+      .sort();
+    assert.deepEqual(entries, [
+      "package/LICENSE",
+      "package/README.md",
+      "package/package.json",
+      "package/src/npm/repogrammar.js",
+    ]);
+
+    const unpacked = path.join(root, "unpacked");
+    mkdir(unpacked);
+    childProcess.execFileSync("tar", ["-xzf", tarball, "-C", unpacked]);
+    const packedManifest = JSON.parse(
+      fs.readFileSync(path.join(unpacked, "package", "package.json"), "utf8")
+    );
+    assert.equal(Object.hasOwn(packedManifest, "libc"), false);
+    assert.equal(packedManifest.repository.url, packageJson.repository.url);
+    const packedReadme = fs.readFileSync(path.join(unpacked, "package", "README.md"), "utf8");
+    assert.doesNotMatch(packedReadme, /\]\((?:docs\/|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|LICENSE\))/);
+
+    const installPrefix = path.join(root, "installed");
+    const install = childProcess.spawnSync(
+      "npm",
+      [
+        "install",
+        "--global",
+        "--prefix",
+        installPrefix,
+        "--ignore-scripts",
+        "--offline",
+        "--no-audit",
+        "--no-fund",
+        tarball,
+      ],
+      {
+        env: { ...process.env, npm_config_cache: path.join(root, "npm-cache") },
+        encoding: "utf8",
+      }
+    );
+    assert.equal(install.status, 0, install.stderr);
+
+    const { releaseDir } = makeFakeRelease(path.join(root, "fake-release"));
+    const executable = path.join(installPrefix, "bin", "repogrammar");
+    const run = childProcess.spawnSync(executable, ["version"], {
+      env: {
+        ...process.env,
+        REPOGRAMMAR_RELEASE_DIR: releaseDir,
+        REPOGRAMMAR_NPM_CACHE_DIR: path.join(root, "launcher-cache"),
+        REPOGRAMMAR_VERSION: "v0.1.0-test",
+        REPOGRAMMAR_BINARY: "",
+      },
+      encoding: "utf8",
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), "repogrammar 0.1.0-test");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function testForwardsInstallerAndSetupArgumentsThroughNpxLauncher() {
@@ -515,6 +674,8 @@ function testRedirectResolutionIsBoundedAndRelativeAware() {
 
 async function main() {
   testPlatformArtifactMatrixAndUnsupportedTargets();
+  testLinuxLibcReportClassification();
+  testConcurrentActivationPreservesWinningInstall();
   if (process.platform === "win32") {
     return;
   }
@@ -528,6 +689,7 @@ async function main() {
   await testRejectsReleaseWithHardlinkMember();
   testForwardsInstallerAndSetupArgumentsThroughNpxLauncher();
   testBinaryOverrideBypassesReleaseDownload();
+  testPackedNpmTarballInstallsAndExecutesOffline();
 }
 
 main().catch((error) => {

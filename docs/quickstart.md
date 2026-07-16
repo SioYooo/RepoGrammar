@@ -1,9 +1,8 @@
 # Quickstart
 
-RepoGrammar does not have verified public prerelease assets or a published npm
-package as of 2026-07-16. The current supported path is source-checkout
-contributor dogfood. The future release path below is deliberately labeled as
-unavailable until real assets are verified.
+This guide does not infer publication from its own version. Use the exact
+availability gate below; if either registry check fails, use source-checkout
+contributor dogfood.
 
 ## 1. Acquire The Command From Source
 
@@ -18,7 +17,8 @@ repogrammar version
 This acquisition step requires Rust/Cargo because it builds from source. The
 installed end-user command itself does not require Node.js, npm, Docker, the
 SQLite CLI, a local model, an embedding model, an OpenAI API key, or a cloud
-API. The current Python preview requires `python3` at runtime.
+API. The current Python preview requires Python 3.10 or newer as `python3` at
+runtime.
 
 ## 2. Run One Setup Command
 
@@ -88,13 +88,14 @@ source search for unsupported evidence.
 
 ## Supported Platforms
 
-The planned public-preview binary matrix is:
+The public-preview binary matrix is:
 
 - macOS arm64 and x86_64;
-- Linux arm64 and x86_64; and
-- Windows x86_64 preview.
+- glibc 2.35+ Linux x86_64; and
+- glibc 2.39+ Linux arm64.
 
-Windows ARM64 is not in the preview matrix. Live agent writers currently cover
+Musl-based Linux, older glibc, and Linux systems where glibc cannot be confirmed
+fail closed before download. Windows is not in the preview matrix. Live agent writers currently cover
 global Codex and global Claude Code only. Source-checkout installation has been
 tested locally on Unix-like paths; Windows source acquisition uses
 `src/install/install.ps1` and remains subject to the Windows proof recorded in
@@ -118,19 +119,24 @@ that stdout is one JSON value, stderr is empty, `.repogrammar/` is absent, and
 the temporary HOME remains empty. The complete release gate is in the
 [public-preview release checklist](release/public-preview-release-checklist.md).
 
-## Future Published Path — Not Available Yet
+## Exact Published-Version Gate
 
-After the exact preview release assets and npm package are independently
-verified, a new user should not need the source checkout or Rust/Cargo:
+First verify the exact npm version and matching GitHub asset:
 
 ```text
-npx @sioyooo/repogrammar setup --project /path/to/your/repo --target auto
+npm view @sioyooo/repogrammar@0.2.0-preview.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh.sha256
 ```
 
-Today this command is a future path, not an installation claim: npm currently
-returns package-not-found and no GitHub preview assets have been verified. The
-npm wrapper is a thin downloader/launcher for checksummed release binaries; it
-does not compile RepoGrammar or implement analysis in JavaScript.
+If both commands succeed, the pinned no-build path is:
+
+```text
+npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
+```
+
+If either check fails, stay on the source path above. The npm wrapper is a thin
+downloader/launcher for checksummed release binaries; it does not compile
+RepoGrammar or implement analysis in JavaScript.
 
 See the [Codex quickstart](quickstart-codex.md) and
 [Build Week demo](demo/build-week-demo.md) for the agent-specific and
