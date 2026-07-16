@@ -21,6 +21,7 @@ const AUTOSYNC_CONFIG_FILE: &str = "autosync.json";
 const DAEMON_LOCK_FILE: &str = "daemon.lock";
 const DAEMON_LIFECYCLE_FILE: &str = "daemon.lifecycle";
 const AUTOSYNC_RUN_FILE: &str = "autosync-run.json";
+const AUTOSYNC_STARTUP_FILE: &str = "autosync-startup.json";
 const AUTOSYNC_SCHEMA_VERSION: u64 = 1;
 const AUTOSYNC_STOP_MAX_ATTEMPTS: usize = 40;
 const AUTOSYNC_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
@@ -65,7 +66,74 @@ pub struct AutosyncReport {
     pub poll_ms: u64,
     pub debounce_ms: u64,
     pub last_run: Option<AutosyncRunReport>,
+    pub startup: AutosyncStartupReport,
+    pub repository_ready: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosyncDaemonPhase {
+    Starting,
+    Ready,
+}
+
+impl AutosyncDaemonPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosyncStartupState {
+    Idle,
+    Starting,
+    Ready,
+    Failed,
+}
+
+impl AutosyncStartupState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosyncStartupFailureCode {
+    WorkerEnvironmentInvalid,
+    RepositoryFingerprintFailed,
+    RepositoryStateUnavailable,
+    DaemonLockRefused,
+    ChildExitedBeforeReady,
+    StartupTimeout,
+    FirstHeartbeatFailed,
+}
+
+impl AutosyncStartupFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkerEnvironmentInvalid => "worker_environment_invalid",
+            Self::RepositoryFingerprintFailed => "repository_fingerprint_failed",
+            Self::RepositoryStateUnavailable => "repository_state_unavailable",
+            Self::DaemonLockRefused => "daemon_lock_refused",
+            Self::ChildExitedBeforeReady => "child_exited_before_ready",
+            Self::StartupTimeout => "startup_timeout",
+            Self::FirstHeartbeatFailed => "first_heartbeat_failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutosyncStartupReport {
+    pub state: AutosyncStartupState,
+    pub failure_code: Option<AutosyncStartupFailureCode>,
 }
 
 /// Typed result of the parent's bounded daemon-startup probe.
@@ -73,6 +141,7 @@ pub struct AutosyncReport {
 pub enum AutosyncStartupReadiness {
     Pending,
     Ready(AutosyncReport),
+    Failed(AutosyncStartupFailureCode),
     LockRefused,
 }
 
@@ -135,6 +204,39 @@ pub struct AutosyncDaemonGuard {
     contents: String,
 }
 
+impl AutosyncDaemonGuard {
+    /// Publish service readiness only while this guard still owns the exact
+    /// `starting` record. The lifecycle marker serializes cooperating lock
+    /// mutations, and the guard adopts the replacement bytes so `Drop`
+    /// remains compare-and-remove safe.
+    pub fn publish_ready(&mut self) -> Result<(), RepoGrammarError> {
+        let locks_dir = self
+            .path
+            .parent()
+            .ok_or_else(|| invalid_input("failed to publish auto-sync readiness"))?;
+        let _lifecycle = acquire_daemon_lifecycle_guard(locks_dir)?;
+        let current = read_limited_text(&self.path)
+            .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+        if current != self.contents {
+            return Err(invalid_input(
+                "auto-sync daemon ownership changed before readiness",
+            ));
+        }
+        let mut value: Value = serde_json::from_str(&current)
+            .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+        if value.get("phase").and_then(Value::as_str)
+            != Some(AutosyncDaemonPhase::Starting.as_str())
+        {
+            return Err(invalid_input("failed to publish auto-sync readiness"));
+        }
+        value["phase"] = Value::String(AutosyncDaemonPhase::Ready.as_str().to_string());
+        let replacement = value.to_string();
+        replace_owned_daemon_lock(&self.path, &current, &replacement)?;
+        self.contents = replacement;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct AutosyncDaemonLifecycleGuard {
     path: PathBuf,
@@ -189,7 +291,7 @@ pub fn disable_autosync(request: AutosyncRequest) -> Result<AutosyncReport, Repo
     let _lifecycle = acquire_daemon_lifecycle_guard(&locks_dir)?;
     let lock_path = locks_dir.join(DAEMON_LOCK_FILE);
     let lock = inspect_daemon_lock_path(&lock_path)?;
-    if lock.status.running {
+    if lock.status.owner_live {
         return Err(invalid_input(
             "auto-sync is running; run repogrammar autosync stop before disable",
         ));
@@ -230,11 +332,14 @@ pub fn inspect_autosync_startup(
         Err(_) => return Ok(AutosyncStartupReadiness::LockRefused),
     };
     let Some(_contents) = inspection.contents else {
+        if let Some(code) = read_startup_failure(&state.state_dir, expected_nonce) {
+            return Ok(AutosyncStartupReadiness::Failed(code));
+        }
         return Ok(AutosyncStartupReadiness::Pending);
     };
     let owns_expected_lock = inspection.status.pid == Some(expected_pid)
         && inspection.status.startup_nonce.as_deref() == Some(expected_nonce);
-    if owns_expected_lock {
+    if owns_expected_lock && inspection.status.phase == Some(AutosyncDaemonPhase::Ready) {
         let config = read_config(&state.state_dir)?;
         return Ok(AutosyncStartupReadiness::Ready(AutosyncReport {
             state_dir: state.state_dir_relative,
@@ -244,10 +349,21 @@ pub fn inspect_autosync_startup(
             poll_ms: config.settings.poll_ms,
             debounce_ms: config.settings.debounce_ms,
             last_run: read_run_state(&state.state_dir),
+            startup: AutosyncStartupReport {
+                state: AutosyncStartupState::Ready,
+                failure_code: None,
+            },
+            repository_ready: true,
             message: "auto-sync started".to_string(),
         }));
     }
-    if !inspection.status.running {
+    if owns_expected_lock {
+        if let Some(code) = read_startup_failure(&state.state_dir, expected_nonce) {
+            return Ok(AutosyncStartupReadiness::Failed(code));
+        }
+        return Ok(AutosyncStartupReadiness::Pending);
+    }
+    if !inspection.status.owner_live {
         return Ok(AutosyncStartupReadiness::Pending);
     }
     Ok(AutosyncStartupReadiness::LockRefused)
@@ -268,23 +384,28 @@ pub fn acquire_autosync_daemon(
     let _lifecycle = acquire_daemon_lifecycle_guard(&locks_dir)?;
     let lock_path = locks_dir.join(DAEMON_LOCK_FILE);
     let startup_nonce = startup_nonce_from_environment();
-    let contents = daemon_lock_contents(startup_nonce.as_deref());
+    let contents = daemon_lock_contents(AutosyncDaemonPhase::Starting, startup_nonce.as_deref());
 
     for _attempt in 0..2 {
         match create_daemon_lock_atomically(&lock_path, &contents)? {
             CreateDaemonLockResult::Acquired => {
-                return Ok((
-                    AutosyncDaemonGuard {
-                        path: lock_path,
-                        contents,
-                    },
-                    config.settings,
-                    state.root,
-                ));
+                let guard = AutosyncDaemonGuard {
+                    path: lock_path.clone(),
+                    contents: contents.clone(),
+                };
+                if let Some(nonce) = startup_nonce.as_deref() {
+                    write_startup_state(
+                        &state.state_dir,
+                        nonce,
+                        AutosyncStartupState::Starting,
+                        None,
+                    )?;
+                }
+                return Ok((guard, config.settings, state.root));
             }
             CreateDaemonLockResult::AlreadyExists => {
                 let inspection = inspect_daemon_lock_path(&lock_path)?;
-                if inspection.status.running {
+                if inspection.status.owner_live {
                     return Err(invalid_input("auto-sync is already running"));
                 }
                 if let Some(stale_contents) = inspection.contents {
@@ -314,7 +435,7 @@ pub fn stop_autosync(request: AutosyncRequest) -> Result<AutosyncReport, RepoGra
     let Some(pid) = lock.status.pid else {
         return autosync_status_for_state(&state, "auto-sync is not running");
     };
-    if lock.status.running {
+    if lock.status.owner_live {
         // A failed signal is not evidence that the owner stopped. Preserve its
         // lock and fail closed instead of reporting a false stopped state.
         terminate_process(pid)?;
@@ -334,7 +455,7 @@ pub fn stop_autosync(request: AutosyncRequest) -> Result<AutosyncReport, RepoGra
                         "auto-sync daemon ownership changed during stop",
                     ));
                 }
-                Some(_) if !current.status.running => {
+                Some(_) if !current.status.owner_live => {
                     let _ = remove_daemon_lock_if_contents_match(&lock_path, expected)?;
                     stopped = true;
                     break;
@@ -376,8 +497,10 @@ struct AutosyncState {
 
 struct DaemonLockStatus {
     running: bool,
+    owner_live: bool,
     pid: Option<u32>,
     startup_nonce: Option<String>,
+    phase: Option<AutosyncDaemonPhase>,
 }
 
 struct DaemonLockInspection {
@@ -433,8 +556,37 @@ fn autosync_status_for_state(
         poll_ms: config.settings.poll_ms,
         debounce_ms: config.settings.debounce_ms,
         last_run: read_run_state(&state.state_dir),
+        startup: startup_report(&state.state_dir, &lock),
+        repository_ready: true,
         message: message.to_string(),
     })
+}
+
+pub fn record_autosync_startup_failure(
+    request: &AutosyncRequest,
+    startup_nonce: &str,
+    code: AutosyncStartupFailureCode,
+) -> Result<(), RepoGrammarError> {
+    let state = require_initialized_state(request)?;
+    write_startup_state(
+        &state.state_dir,
+        startup_nonce,
+        AutosyncStartupState::Failed,
+        Some(code),
+    )
+}
+
+pub fn record_autosync_startup_ready(
+    request: &AutosyncRequest,
+    startup_nonce: &str,
+) -> Result<(), RepoGrammarError> {
+    let state = require_initialized_state(request)?;
+    write_startup_state(
+        &state.state_dir,
+        startup_nonce,
+        AutosyncStartupState::Ready,
+        None,
+    )
 }
 
 /// Record the outcome of one daemon sync attempt. Best-effort: callers ignore
@@ -507,6 +659,125 @@ fn read_run_state(state_dir: &Path) -> Option<AutosyncRunReport> {
     })
 }
 
+struct PersistedStartupState {
+    startup_nonce: String,
+    state: AutosyncStartupState,
+    failure_code: Option<AutosyncStartupFailureCode>,
+}
+
+fn startup_state_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(AUTOSYNC_STARTUP_FILE)
+}
+
+fn write_startup_state(
+    state_dir: &Path,
+    startup_nonce: &str,
+    state: AutosyncStartupState,
+    failure_code: Option<AutosyncStartupFailureCode>,
+) -> Result<(), RepoGrammarError> {
+    if !valid_startup_nonce(startup_nonce) {
+        return Err(invalid_input("failed to record auto-sync startup state"));
+    }
+    let path = startup_state_path(state_dir);
+    let tmp = path.with_extension("tmp");
+    let value = json!({
+        "schema_version": AUTOSYNC_SCHEMA_VERSION,
+        "startup_unix_seconds": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        "startup_nonce": startup_nonce,
+        "state": state.as_str(),
+        "failure_code": failure_code.map(AutosyncStartupFailureCode::as_str),
+    });
+    fs::write(&tmp, value.to_string())
+        .map_err(|_| invalid_input("failed to write auto-sync startup state"))?;
+    fs::rename(&tmp, path).map_err(|_| invalid_input("failed to replace auto-sync startup state"))
+}
+
+fn read_startup_state(state_dir: &Path) -> Option<PersistedStartupState> {
+    let text = read_limited_text(&startup_state_path(state_dir)).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    if value.get("schema_version").and_then(Value::as_u64) != Some(AUTOSYNC_SCHEMA_VERSION) {
+        return None;
+    }
+    let startup_nonce = value
+        .get("startup_nonce")
+        .and_then(Value::as_str)
+        .filter(|nonce| valid_startup_nonce(nonce))?
+        .to_string();
+    let state = match value.get("state").and_then(Value::as_str)? {
+        "starting" => AutosyncStartupState::Starting,
+        "ready" => AutosyncStartupState::Ready,
+        "failed" => AutosyncStartupState::Failed,
+        _ => return None,
+    };
+    let failure_code = value
+        .get("failure_code")
+        .and_then(Value::as_str)
+        .and_then(parse_startup_failure_code);
+    if state == AutosyncStartupState::Failed && failure_code.is_none() {
+        return None;
+    }
+    Some(PersistedStartupState {
+        startup_nonce,
+        state,
+        failure_code,
+    })
+}
+
+fn parse_startup_failure_code(value: &str) -> Option<AutosyncStartupFailureCode> {
+    match value {
+        "worker_environment_invalid" => Some(AutosyncStartupFailureCode::WorkerEnvironmentInvalid),
+        "repository_fingerprint_failed" => {
+            Some(AutosyncStartupFailureCode::RepositoryFingerprintFailed)
+        }
+        "repository_state_unavailable" => {
+            Some(AutosyncStartupFailureCode::RepositoryStateUnavailable)
+        }
+        "daemon_lock_refused" => Some(AutosyncStartupFailureCode::DaemonLockRefused),
+        "child_exited_before_ready" => Some(AutosyncStartupFailureCode::ChildExitedBeforeReady),
+        "startup_timeout" => Some(AutosyncStartupFailureCode::StartupTimeout),
+        "first_heartbeat_failed" => Some(AutosyncStartupFailureCode::FirstHeartbeatFailed),
+        _ => None,
+    }
+}
+
+fn read_startup_failure(
+    state_dir: &Path,
+    expected_nonce: &str,
+) -> Option<AutosyncStartupFailureCode> {
+    let startup = read_startup_state(state_dir)?;
+    (startup.startup_nonce == expected_nonce && startup.state == AutosyncStartupState::Failed)
+        .then_some(startup.failure_code)
+        .flatten()
+}
+
+fn startup_report(state_dir: &Path, lock: &DaemonLockStatus) -> AutosyncStartupReport {
+    if lock.owner_live {
+        return AutosyncStartupReport {
+            state: match lock.phase {
+                Some(AutosyncDaemonPhase::Starting) | None => AutosyncStartupState::Starting,
+                Some(AutosyncDaemonPhase::Ready) => AutosyncStartupState::Ready,
+            },
+            failure_code: None,
+        };
+    }
+    let failure_code = read_startup_state(state_dir).and_then(|startup| {
+        (startup.state == AutosyncStartupState::Failed)
+            .then_some(startup.failure_code)
+            .flatten()
+    });
+    AutosyncStartupReport {
+        state: if failure_code.is_some() {
+            AutosyncStartupState::Failed
+        } else {
+            AutosyncStartupState::Idle
+        },
+        failure_code,
+    }
+}
+
 fn read_config(state_dir: &Path) -> Result<AutosyncConfig, RepoGrammarError> {
     let path = config_path(state_dir);
     let text = match read_limited_text(&path) {
@@ -570,8 +841,10 @@ fn inspect_daemon_lock_path(path: &Path) -> Result<DaemonLockInspection, RepoGra
             return Ok(DaemonLockInspection {
                 status: DaemonLockStatus {
                     running: false,
+                    owner_live: false,
                     pid: None,
                     startup_nonce: None,
+                    phase: None,
                 },
                 contents: None,
             });
@@ -595,6 +868,14 @@ fn inspect_daemon_lock_path(path: &Path) -> Result<DaemonLockInspection, RepoGra
         .and_then(Value::as_str)
         .filter(|nonce| valid_startup_nonce(nonce))
         .map(str::to_string);
+    let phase = match value.get("phase").and_then(Value::as_str) {
+        Some("starting") => Some(AutosyncDaemonPhase::Starting),
+        Some("ready") => Some(AutosyncDaemonPhase::Ready),
+        Some(_) => return Err(invalid_input("auto-sync daemon lock is invalid")),
+        None => None,
+    };
+    let owner_live =
+        autosync_daemon_process_liveness(pid, started_unix_seconds) == ProcessLiveness::Live;
     Ok(DaemonLockInspection {
         status: DaemonLockStatus {
             // The PID alone is not proof of liveness: after an unclean daemon
@@ -602,10 +883,11 @@ fn inspect_daemon_lock_path(path: &Path) -> Result<DaemonLockInspection, RepoGra
             // that the PID exists and that it is actually a RepoGrammar autosync
             // daemon, so `stop` never signals a stranger and `start` is never
             // permanently blocked by a reused PID.
-            running: autosync_daemon_process_liveness(pid, started_unix_seconds)
-                == ProcessLiveness::Live,
+            running: owner_live && phase == Some(AutosyncDaemonPhase::Ready),
+            owner_live,
             pid: Some(pid),
             startup_nonce,
+            phase,
         },
         contents: Some(text),
     })
@@ -770,11 +1052,9 @@ fn write_daemon_lock_contents<W: Write>(
     lock_path: &Path,
     contents: &str,
 ) -> Result<(), RepoGrammarError> {
-    if let Err(error) = writer.write_all(contents.as_bytes()) {
+    if writer.write_all(contents.as_bytes()).is_err() {
         let _ = fs::remove_file(lock_path);
-        return Err(invalid_input(format!(
-            "failed to write auto-sync daemon lock: {error}"
-        )));
+        return Err(invalid_input("failed to write auto-sync daemon lock"));
     }
     Ok(())
 }
@@ -800,7 +1080,39 @@ fn remove_daemon_lock_if_contents_match(
     }
 }
 
-fn daemon_lock_contents(startup_nonce: Option<&str>) -> String {
+fn replace_owned_daemon_lock(
+    lock_path: &Path,
+    expected: &str,
+    replacement: &str,
+) -> Result<(), RepoGrammarError> {
+    let current = read_limited_text(lock_path)
+        .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+    if current != expected {
+        return Err(invalid_input(
+            "auto-sync daemon ownership changed before readiness",
+        ));
+    }
+    let tmp_path = temporary_daemon_lock_path(lock_path);
+    let tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+    write_daemon_lock_contents(tmp_file, &tmp_path, replacement)
+        .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+    let current = read_limited_text(lock_path)
+        .map_err(|_| invalid_input("failed to publish auto-sync readiness"))?;
+    if current != expected {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(invalid_input(
+            "auto-sync daemon ownership changed before readiness",
+        ));
+    }
+    fs::rename(&tmp_path, lock_path)
+        .map_err(|_| invalid_input("failed to publish auto-sync readiness"))
+}
+
+fn daemon_lock_contents(phase: AutosyncDaemonPhase, startup_nonce: Option<&str>) -> String {
     let startup_nonce = startup_nonce.filter(|nonce| valid_startup_nonce(nonce));
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -813,6 +1125,7 @@ fn daemon_lock_contents(startup_nonce: Option<&str>) -> String {
         "started_unix_seconds": started,
         "repogrammar_version": env!("CARGO_PKG_VERSION"),
         "startup_nonce": startup_nonce,
+        "phase": phase.as_str(),
     })
     .to_string()
 }
@@ -948,6 +1261,18 @@ mod tests {
         AutosyncRequest::new(workspace.path().display().to_string())
     }
 
+    fn initialized_autosync_workspace(name: &str) -> TempWorkspace {
+        let workspace = TempWorkspace::new(name);
+        init_repository(RepositoryLifecycleInitRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+            write_root_gitignore: false,
+        })
+        .expect("init");
+        enable_autosync(request(&workspace), AutosyncSettings::default()).expect("enable");
+        workspace
+    }
+
     fn repository_report(
         status: RepositoryStatus,
         missing_subdirs: Vec<String>,
@@ -1049,10 +1374,166 @@ mod tests {
     }
 
     #[test]
+    fn starting_lock_is_not_ready_until_guard_publishes_ready() {
+        let workspace = initialized_autosync_workspace("autosync-starting-ready-phase");
+        let nonce = "0123456789abcdef";
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        let starting = daemon_lock_contents(AutosyncDaemonPhase::Starting, Some(nonce));
+        fs::write(&lock_path, &starting).expect("write starting lock");
+        let mut guard = AutosyncDaemonGuard {
+            path: lock_path.clone(),
+            contents: starting,
+        };
+
+        assert_eq!(
+            inspect_autosync_startup(&request(&workspace), std::process::id(), nonce)
+                .expect("inspect starting"),
+            AutosyncStartupReadiness::Pending
+        );
+
+        guard.publish_ready().expect("publish ready");
+        let ready = fs::read_to_string(&lock_path).expect("read ready lock");
+        assert_eq!(
+            serde_json::from_str::<Value>(&ready).expect("ready JSON")["phase"],
+            "ready"
+        );
+        assert!(matches!(
+            inspect_autosync_startup(&request(&workspace), std::process::id(), nonce)
+                .expect("inspect ready"),
+            AutosyncStartupReadiness::Ready(_)
+        ));
+
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn startup_failure_after_starting_lock_is_observed_before_false_ready() {
+        let workspace = initialized_autosync_workspace("autosync-startup-failure-record");
+        let nonce = "fedcba9876543210";
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        let starting = daemon_lock_contents(AutosyncDaemonPhase::Starting, Some(nonce));
+        fs::write(&lock_path, &starting).expect("write starting lock");
+        let guard = AutosyncDaemonGuard {
+            path: lock_path.clone(),
+            contents: starting,
+        };
+        record_autosync_startup_failure(
+            &request(&workspace),
+            nonce,
+            AutosyncStartupFailureCode::RepositoryFingerprintFailed,
+        )
+        .expect("record failure");
+
+        assert_eq!(
+            inspect_autosync_startup(&request(&workspace), std::process::id(), nonce)
+                .expect("inspect failed startup"),
+            AutosyncStartupReadiness::Failed(
+                AutosyncStartupFailureCode::RepositoryFingerprintFailed
+            )
+        );
+
+        drop(guard);
+        let status = autosync_status(request(&workspace)).expect("status after failure");
+        assert!(!status.running);
+        assert_eq!(status.startup.state, AutosyncStartupState::Failed);
+        assert_eq!(
+            status.startup.failure_code,
+            Some(AutosyncStartupFailureCode::RepositoryFingerprintFailed)
+        );
+    }
+
+    #[test]
+    fn stale_ready_record_from_another_pid_or_nonce_is_never_accepted() {
+        let workspace = initialized_autosync_workspace("autosync-stale-ready-record");
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        fs::write(
+            lock_path,
+            daemon_lock_contents(AutosyncDaemonPhase::Ready, Some("0123456789abcdef")),
+        )
+        .expect("write stale ready lock");
+
+        assert_eq!(
+            inspect_autosync_startup(
+                &request(&workspace),
+                std::process::id().saturating_add(1),
+                "fedcba9876543210",
+            )
+            .expect("inspect stale ready"),
+            AutosyncStartupReadiness::Pending
+        );
+    }
+
+    #[test]
+    fn ready_transition_preserves_replacement_owner_and_guard_cleanup_is_safe() {
+        let workspace = initialized_autosync_workspace("autosync-ready-replacement-owner");
+        let lock_path = workspace.path().join(".repogrammar/locks/daemon.lock");
+        let starting =
+            daemon_lock_contents(AutosyncDaemonPhase::Starting, Some("0123456789abcdef"));
+        fs::write(&lock_path, &starting).expect("write starting lock");
+        let mut guard = AutosyncDaemonGuard {
+            path: lock_path.clone(),
+            contents: starting,
+        };
+        let replacement =
+            daemon_lock_contents(AutosyncDaemonPhase::Ready, Some("fedcba9876543210"));
+        fs::write(&lock_path, &replacement).expect("replace owner");
+
+        let error = guard
+            .publish_ready()
+            .expect_err("replacement owner must block transition");
+        assert_eq!(
+            error,
+            RepoGrammarError::InvalidInput(
+                "auto-sync daemon ownership changed before readiness".to_string()
+            )
+        );
+        drop(guard);
+        assert_eq!(
+            fs::read_to_string(lock_path).expect("replacement preserved"),
+            replacement
+        );
+    }
+
+    #[test]
+    fn startup_failure_codes_round_trip_without_sensitive_payloads() {
+        let workspace = initialized_autosync_workspace("autosync-startup-code-roundtrip");
+        let nonce = "0123456789abcdef";
+        for code in [
+            AutosyncStartupFailureCode::WorkerEnvironmentInvalid,
+            AutosyncStartupFailureCode::RepositoryFingerprintFailed,
+            AutosyncStartupFailureCode::RepositoryStateUnavailable,
+            AutosyncStartupFailureCode::DaemonLockRefused,
+            AutosyncStartupFailureCode::ChildExitedBeforeReady,
+            AutosyncStartupFailureCode::StartupTimeout,
+            AutosyncStartupFailureCode::FirstHeartbeatFailed,
+        ] {
+            record_autosync_startup_failure(&request(&workspace), nonce, code)
+                .expect("record startup failure");
+            assert_eq!(
+                read_startup_failure(workspace.path().join(".repogrammar").as_path(), nonce),
+                Some(code)
+            );
+            assert!(code
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
+            assert!(!code.as_str().contains('/'));
+            assert!(!code.as_str().contains("REPOGRAMMAR_"));
+        }
+        let persisted =
+            fs::read_to_string(workspace.path().join(".repogrammar/autosync-startup.json"))
+                .expect("read startup state");
+        assert!(!persisted.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!persisted.contains("credential"));
+    }
+
+    #[test]
     fn daemon_lock_records_only_valid_startup_nonces() {
-        let valid = daemon_lock_contents(Some("0123456789abcdef"));
+        let valid = daemon_lock_contents(AutosyncDaemonPhase::Starting, Some("0123456789abcdef"));
         let value: Value = serde_json::from_str(&valid).expect("valid lock JSON");
         assert_eq!(value["startup_nonce"], "0123456789abcdef");
+        assert_eq!(value["phase"], "starting");
         assert!(valid_startup_nonce("0123456789abcdef"));
         assert!(!valid_startup_nonce("secret/path/value"));
         assert!(!valid_startup_nonce("short"));

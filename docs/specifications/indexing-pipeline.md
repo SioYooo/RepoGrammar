@@ -809,7 +809,14 @@ The checked-in Python worker currently has three bounded modes relevant to
 indexing: private parse-document, private project-config, and semantic-worker-
 compatible project analysis. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
-`ast`-derived code-unit metadata without hand-written Python parsing. Default
+`ast`-derived code-unit metadata without hand-written Python parsing. The
+private parse-document boundary requires the exact request/response tuple
+`protocol_version=1, contract_revision=1`. Full rebuilds and incremental
+reparses use the same gate. Missing or different revisions, including mixed
+installations where an older worker rejects the revision-bearing request, abort
+the candidate generation as typed `PythonFrontendContractMismatch` with only a
+rebuild/reinstall recovery; they do not activate partial facts, reveal paths or
+payloads, or turn the mismatch into an empty Python result. Default
 indexing now passes the discovered repo-relative `.py` inventory, bounded
 module file texts, sanitized root source roots from the matching
 `pyproject.toml`/`tomllib`, `setup.cfg`/`configparser`, or static

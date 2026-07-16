@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 /// Origin engine stamped on facts produced by the CPython `ast` frontend. Used
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
+const PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION: u64 = 1;
+const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 1;
 
 // A source file can legitimately produce substantially more metadata than its
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
@@ -218,7 +220,7 @@ impl PythonAstParser {
                 "python ast frontend request exceeded size limit".to_string(),
             ));
         }
-        self.run_worker_request(&payload)
+        self.run_worker_request(&payload, false)
     }
 
     fn parse_document(
@@ -227,14 +229,18 @@ impl PythonAstParser {
         context: Option<&ParserProjectContext>,
     ) -> Result<PythonParseOutput, ParseError> {
         let (serialized, context_omitted) = serialize_parse_request(document, context)?;
-        let response = self.run_worker_request(&serialized)?;
+        let response = self.run_worker_request(&serialized, true)?;
         Ok(PythonParseOutput {
             response,
             context_omitted,
         })
     }
 
-    fn run_worker_request(&self, serialized: &str) -> Result<String, ParseError> {
+    fn run_worker_request(
+        &self,
+        serialized: &str,
+        parse_document_contract: bool,
+    ) -> Result<String, ParseError> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
             .arg(&self.worker_script)
@@ -305,6 +311,13 @@ impl PythonAstParser {
             .map_err(|_| ParseError::Timeout)?
             .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
         if !status.success() {
+            if parse_document_contract
+                && status.code() == Some(2)
+                && output.is_empty()
+                && self.worker_script.is_file()
+            {
+                return Err(ParseError::PythonFrontendContractMismatch);
+            }
             return Err(ParseError::Internal(
                 "python ast frontend rejected parse request".to_string(),
             ));
@@ -376,7 +389,8 @@ fn parse_document_payload(
     context: Option<&ParserProjectContext>,
 ) -> Value {
     let mut payload = json!({
-        "protocol_version": 1,
+        "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+        "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
         "mode": "parse_document",
         "path": document.path,
         "content_hash": document.content_hash.as_str(),
@@ -431,6 +445,7 @@ fn parse_worker_response(
         "parse_document",
         &[
             "protocol_version",
+            "contract_revision",
             "mode",
             "path",
             "units",
@@ -516,9 +531,29 @@ fn parse_report_response(
     let object = value.as_object().ok_or_else(|| {
         ParseError::Internal("python ast frontend response was not an object".into())
     })?;
+    if object.get("error_code").and_then(Value::as_str) == Some("PYTHON_FRONTEND_CONTRACT_MISMATCH")
+    {
+        validate_allowed_keys(
+            object,
+            &[
+                "protocol_version",
+                "contract_revision",
+                "mode",
+                "error_code",
+            ],
+            "python ast frontend contract mismatch response",
+        )?;
+        return Err(ParseError::PythonFrontendContractMismatch);
+    }
+    if object.get("protocol_version").and_then(Value::as_u64)
+        != Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+        || object.get("contract_revision").and_then(Value::as_u64)
+            != Some(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION)
+    {
+        return Err(ParseError::PythonFrontendContractMismatch);
+    }
     validate_allowed_keys(object, allowed_keys, "python ast frontend response")?;
-    if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
-        || object.get("mode").and_then(Value::as_str) != Some(expected_mode)
+    if object.get("mode").and_then(Value::as_str) != Some(expected_mode)
         || object.get("path").and_then(Value::as_str) != Some(document.path)
     {
         return Err(ParseError::Internal(
@@ -2643,6 +2678,33 @@ class User(BaseModel):
     }
 
     #[test]
+    fn committed_pydantic_fixture_preserves_field_validator_fact_and_typed_unknown() {
+        let source =
+            include_str!("../../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
+        let report = PythonAstParser::default()
+            .parse(document_at("schemas.py", source))
+            .expect("parse committed Pydantic fixture");
+
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Symbol
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("pydantic.field_validator")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=pydantic_validator")
+        }));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
+                && fact.assumptions.iter().any(|assumption| {
+                    assumption == "affected_claim=pydantic_validator_side_effects"
+                })
+        }));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("return value.lower()"));
+    }
+
+    #[test]
     fn cpython_frontend_emits_generic_python_code_units() {
         let source = r#"
 def helper():
@@ -4515,6 +4577,44 @@ def _api_client():
         let mut valid = valid_response(source, vec![valid_structural_fact(source)]);
         assert!(parse_worker_response(&document(source), &valid).is_ok());
 
+        for (field, value) in [
+            ("protocol_version", json!(2)),
+            ("contract_revision", json!(2)),
+        ] {
+            let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+            let mut envelope: Value = serde_json::from_str(&response).expect("response JSON");
+            envelope[field] = value;
+            response = envelope.to_string();
+            assert_eq!(
+                parse_worker_response(&document(source), &response),
+                Err(ParseError::PythonFrontendContractMismatch)
+            );
+        }
+
+        let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+        let mut envelope: Value = serde_json::from_str(&response).expect("response JSON");
+        envelope
+            .as_object_mut()
+            .expect("response object")
+            .remove("contract_revision");
+        response = envelope.to_string();
+        assert_eq!(
+            parse_worker_response(&document(source), &response),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+
+        let mismatch = json!({
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "parse_document",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+        })
+        .to_string();
+        assert_eq!(
+            parse_worker_response(&document(source), &mismatch),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+
         valid.push_str("\n{}");
         assert!(matches!(
             parse_worker_response(&document(source), &valid),
@@ -4565,6 +4665,56 @@ def _api_client():
             parse_worker_response(&document(source), &response),
             Err(ParseError::Internal(_))
         ));
+    }
+
+    #[test]
+    fn parse_document_request_carries_exact_private_contract_tuple() {
+        let source = "def ok():\n    pass\n";
+        let (serialized, context_omitted) =
+            serialize_parse_request(&document(source), None).expect("serialize parse request");
+        let request: Value = serde_json::from_str(&serialized).expect("request JSON");
+
+        assert!(!context_omitted);
+        assert_eq!(
+            request.get("protocol_version").and_then(Value::as_u64),
+            Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+        );
+        assert_eq!(
+            request.get("contract_revision").and_then(Value::as_u64),
+            Some(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION)
+        );
+        assert_eq!(
+            request.get("mode").and_then(Value::as_str),
+            Some("parse_document")
+        );
+    }
+
+    #[test]
+    fn new_host_maps_old_worker_rejection_to_typed_contract_mismatch() {
+        let root = std::env::temp_dir().join(format!(
+            "repogrammar-python-old-worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("old worker fixture directory");
+        let worker = root.join("old-worker.py");
+        fs::write(
+            &worker,
+            "import json\nimport sys\npayload = json.loads(sys.stdin.readline())\nraise SystemExit(2 if 'contract_revision' in payload else 0)\n",
+        )
+        .expect("old worker fixture");
+        let parser = PythonAstParser::with_worker(platform_python_executable(), worker);
+
+        let result = parser.parse(document("def ok():\n    pass\n"));
+
+        assert_eq!(result, Err(ParseError::PythonFrontendContractMismatch));
+        let debug = format!("{result:?}");
+        assert!(!debug.contains(root.to_string_lossy().as_ref()));
+        assert!(!debug.contains("contract_revision"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -4660,7 +4810,8 @@ def _api_client():
 
     fn valid_response(source: &str, facts: Vec<Value>) -> String {
         json!({
-            "protocol_version": 1,
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": "app.py",
             "units": [{

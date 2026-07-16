@@ -9,8 +9,9 @@ use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorke
 use repogrammar::application::autosync::{
     acquire_autosync_daemon, autosync_status, classify_autosync_repository_status, daemon_log_path,
     disable_autosync, enable_autosync, inspect_autosync_startup, record_autosync_run,
-    stop_autosync, AutosyncReport, AutosyncRepositoryUnavailable, AutosyncRequest,
-    AutosyncRunResult, AutosyncSettings, AutosyncStartupReadiness, AUTOSYNC_STARTUP_NONCE_ENV,
+    record_autosync_startup_failure, record_autosync_startup_ready, stop_autosync, AutosyncReport,
+    AutosyncRepositoryUnavailable, AutosyncRequest, AutosyncRunResult, AutosyncSettings,
+    AutosyncStartupFailureCode, AutosyncStartupReadiness, AUTOSYNC_STARTUP_NONCE_ENV,
 };
 use repogrammar::application::indexing::{
     index_repository_with_discovery_parser_frameworks_rust_provider_families_and_store_with_progress,
@@ -331,9 +332,7 @@ impl AutosyncFailureLogState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutosyncStartupFailure {
-    ChildExited,
-    LockRefused,
-    Timeout,
+    Classified(AutosyncStartupFailureCode),
     VerificationUnavailable,
 }
 
@@ -353,11 +352,36 @@ impl AutosyncRecordedFailure {
 }
 
 impl AutosyncStartupFailure {
+    fn code(self) -> Option<AutosyncStartupFailureCode> {
+        match self {
+            Self::Classified(code) => Some(code),
+            Self::VerificationUnavailable => None,
+        }
+    }
+
     fn into_error(self) -> RepoGrammarError {
         let message = match self {
-            Self::ChildExited => "auto-sync exited before startup readiness was confirmed",
-            Self::LockRefused => "auto-sync could not acquire daemon ownership",
-            Self::Timeout => "auto-sync startup readiness timed out",
+            Self::Classified(AutosyncStartupFailureCode::WorkerEnvironmentInvalid) => {
+                "auto-sync worker environment is invalid; correct the worker configuration and retry"
+            }
+            Self::Classified(AutosyncStartupFailureCode::RepositoryFingerprintFailed) => {
+                "auto-sync could not compute the initial repository fingerprint"
+            }
+            Self::Classified(AutosyncStartupFailureCode::RepositoryStateUnavailable) => {
+                "auto-sync repository state is unavailable; run repogrammar doctor"
+            }
+            Self::Classified(AutosyncStartupFailureCode::DaemonLockRefused) => {
+                "auto-sync could not acquire daemon ownership"
+            }
+            Self::Classified(AutosyncStartupFailureCode::ChildExitedBeforeReady) => {
+                "auto-sync exited before startup readiness was confirmed"
+            }
+            Self::Classified(AutosyncStartupFailureCode::StartupTimeout) => {
+                "auto-sync startup readiness timed out"
+            }
+            Self::Classified(AutosyncStartupFailureCode::FirstHeartbeatFailed) => {
+                "auto-sync failed its first repository heartbeat"
+            }
             Self::VerificationUnavailable => "failed to verify auto-sync startup readiness",
         };
         RepoGrammarError::InvalidInput(message.to_string())
@@ -379,23 +403,84 @@ where
         match readiness {
             AutosyncStartupReadiness::Ready(report) => {
                 if child_exited {
-                    return Err(AutosyncStartupFailure::ChildExited);
+                    return Err(AutosyncStartupFailure::Classified(
+                        AutosyncStartupFailureCode::ChildExitedBeforeReady,
+                    ));
                 }
                 return Ok(report);
             }
+            AutosyncStartupReadiness::Failed(code) => {
+                return Err(AutosyncStartupFailure::Classified(code));
+            }
             AutosyncStartupReadiness::LockRefused => {
-                return Err(AutosyncStartupFailure::LockRefused);
+                return Err(AutosyncStartupFailure::Classified(
+                    AutosyncStartupFailureCode::DaemonLockRefused,
+                ));
             }
             AutosyncStartupReadiness::Pending => {}
         }
         if child_exited {
-            return Err(AutosyncStartupFailure::ChildExited);
+            return Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::ChildExitedBeforeReady,
+            ));
         }
         if attempt + 1 < max_attempts {
             pause();
         }
     }
-    Err(AutosyncStartupFailure::Timeout)
+    Err(AutosyncStartupFailure::Classified(
+        AutosyncStartupFailureCode::StartupTimeout,
+    ))
+}
+
+fn initialize_autosync_service<W, R, E, F, L, H>(
+    repository_validation: R,
+    worker_validation: E,
+    initial_fingerprint: F,
+    daemon_log_initialization: L,
+    first_heartbeat: H,
+) -> Result<(W, String, std::path::PathBuf), AutosyncStartupFailureCode>
+where
+    R: FnOnce() -> Result<(), ()>,
+    E: FnOnce() -> Result<W, ()>,
+    F: FnOnce() -> Result<String, ()>,
+    L: FnOnce() -> Result<std::path::PathBuf, ()>,
+    H: FnOnce() -> Result<(), ()>,
+{
+    repository_validation().map_err(|()| AutosyncStartupFailureCode::RepositoryStateUnavailable)?;
+    let worker =
+        worker_validation().map_err(|()| AutosyncStartupFailureCode::WorkerEnvironmentInvalid)?;
+    let fingerprint = initial_fingerprint()
+        .map_err(|()| AutosyncStartupFailureCode::RepositoryFingerprintFailed)?;
+    let log_path = daemon_log_initialization()
+        .map_err(|()| AutosyncStartupFailureCode::RepositoryStateUnavailable)?;
+    first_heartbeat().map_err(|()| AutosyncStartupFailureCode::FirstHeartbeatFailed)?;
+    Ok((worker, fingerprint, log_path))
+}
+
+fn initialize_autosync_daemon_log(path: std::path::PathBuf) -> Result<std::path::PathBuf, ()> {
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map(|_| path)
+        .map_err(|_| ())
+}
+
+fn startup_nonce_from_process() -> Option<String> {
+    std::env::var(AUTOSYNC_STARTUP_NONCE_ENV)
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+fn persist_startup_failure(
+    request: &AutosyncRequest,
+    startup_nonce: Option<&str>,
+    code: AutosyncStartupFailureCode,
+) {
+    if let Some(startup_nonce) = startup_nonce {
+        let _ = record_autosync_startup_failure(request, startup_nonce, code);
+    }
 }
 
 impl ProductCliRuntime {
@@ -448,12 +533,56 @@ impl ProductCliRuntime {
     ) -> Result<AutosyncReport, RepoGrammarError> {
         let autosync_request = self.autosync_request(&request);
         let initial_report = autosync_status(autosync_request.clone())?;
-        let log_path = daemon_log_path(&autosync_request).ok();
-        let (_guard, settings, root) = acquire_autosync_daemon(autosync_request.clone())?;
+        let (mut guard, settings, root) = match acquire_autosync_daemon(autosync_request.clone()) {
+            Ok(acquired) => acquired,
+            Err(error) => {
+                persist_startup_failure(
+                    &autosync_request,
+                    startup_nonce_from_process().as_deref(),
+                    AutosyncStartupFailureCode::DaemonLockRefused,
+                );
+                return Err(error);
+            }
+        };
+        let startup_nonce = startup_nonce_from_process();
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let (semantic_worker_executable, semantic_worker_args) =
-            autosync_semantic_worker_environment_from_lookup(&env_lookup)?;
-        let mut current = self.repository_fingerprint(&request)?;
+        let initialized = initialize_autosync_service(
+            || match self.autosync_terminal_repository_state(&request) {
+                Ok(None) => Ok(()),
+                Ok(Some(_)) | Err(_) => Err(()),
+            },
+            || autosync_semantic_worker_environment_from_lookup(&env_lookup).map_err(|_| ()),
+            || self.repository_fingerprint(&request).map_err(|_| ()),
+            || {
+                daemon_log_path(&autosync_request)
+                    .map_err(|_| ())
+                    .and_then(initialize_autosync_daemon_log)
+            },
+            || match autosync_status(autosync_request.clone()) {
+                Ok(status) if status.enabled => Ok(()),
+                Ok(_) | Err(_) => Err(()),
+            },
+        );
+        let ((semantic_worker_executable, semantic_worker_args), mut current, log_path) =
+            match initialized {
+                Ok(initialized) => initialized,
+                Err(code) => {
+                    persist_startup_failure(&autosync_request, startup_nonce.as_deref(), code);
+                    return Err(AutosyncStartupFailure::Classified(code).into_error());
+                }
+            };
+        if let Some(startup_nonce) = startup_nonce.as_deref() {
+            if record_autosync_startup_ready(&autosync_request, startup_nonce).is_err() {
+                let code = AutosyncStartupFailureCode::RepositoryStateUnavailable;
+                persist_startup_failure(&autosync_request, Some(startup_nonce), code);
+                return Err(AutosyncStartupFailure::Classified(code).into_error());
+            }
+        }
+        if guard.publish_ready().is_err() {
+            let code = AutosyncStartupFailureCode::DaemonLockRefused;
+            persist_startup_failure(&autosync_request, startup_nonce.as_deref(), code);
+            return Err(AutosyncStartupFailure::Classified(code).into_error());
+        }
         if !request.quiet {
             eprintln!("autosync: watching repository for changes");
         }
@@ -464,13 +593,13 @@ impl ProductCliRuntime {
                 Ok(status) if status.enabled => {}
                 Ok(status) => {
                     for line in failure_log.terminal_lines() {
-                        append_autosync_daemon_log(log_path.as_deref(), &line);
+                        append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
                             eprintln!("{line}");
                         }
                     }
                     let line = "autosync: stopping because auto-sync is disabled".to_string();
-                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    append_autosync_daemon_log(Some(&log_path), &line);
                     if !request.quiet {
                         eprintln!("{line}");
                     }
@@ -490,14 +619,14 @@ impl ProductCliRuntime {
                         Some(message),
                     );
                     for line in failure_log.terminal_lines() {
-                        append_autosync_daemon_log(log_path.as_deref(), &line);
+                        append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
                             eprintln!("{line}");
                         }
                     }
                     let line =
                         "autosync: stopping because repository state is unavailable".to_string();
-                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    append_autosync_daemon_log(Some(&log_path), &line);
                     if !request.quiet {
                         eprintln!("{line}");
                     }
@@ -509,6 +638,8 @@ impl ProductCliRuntime {
                         poll_ms: settings.poll_ms,
                         debounce_ms: settings.debounce_ms,
                         last_run: initial_report.last_run.clone(),
+                        startup: initial_report.startup.clone(),
+                        repository_ready: false,
                         message: "auto-sync stopped because repository state is unavailable"
                             .to_string(),
                     });
@@ -548,13 +679,13 @@ impl ProductCliRuntime {
             match self.index_repository("sync", sync_request) {
                 Ok(outcome) => {
                     for line in failure_log.success_lines() {
-                        append_autosync_daemon_log(log_path.as_deref(), &line);
+                        append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
                             eprintln!("{line}");
                         }
                     }
                     let line = format_autosync_sync_log(&outcome, started.elapsed().as_millis());
-                    append_autosync_daemon_log(log_path.as_deref(), &line);
+                    append_autosync_daemon_log(Some(&log_path), &line);
                     if !request.quiet {
                         eprintln!("{line}");
                     }
@@ -569,7 +700,7 @@ impl ProductCliRuntime {
                     let message = AutosyncRecordedFailure::RepositorySyncFailed.as_str();
                     let lines = failure_log.failure_lines(message, started.elapsed().as_millis());
                     for line in lines {
-                        append_autosync_daemon_log(log_path.as_deref(), &line);
+                        append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
                             eprintln!("{line}");
                         }
@@ -582,14 +713,14 @@ impl ProductCliRuntime {
                     );
                     if self.autosync_terminal_repository_state(&request)?.is_some() {
                         for line in failure_log.terminal_lines() {
-                            append_autosync_daemon_log(log_path.as_deref(), &line);
+                            append_autosync_daemon_log(Some(&log_path), &line);
                             if !request.quiet {
                                 eprintln!("{line}");
                             }
                         }
                         let line = "autosync: stopping because repository state is unavailable"
                             .to_string();
-                        append_autosync_daemon_log(log_path.as_deref(), &line);
+                        append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
                             eprintln!("{line}");
                         }
@@ -601,6 +732,8 @@ impl ProductCliRuntime {
                             poll_ms: settings.poll_ms,
                             debounce_ms: settings.debounce_ms,
                             last_run: initial_report.last_run.clone(),
+                            startup: initial_report.startup.clone(),
+                            repository_ready: false,
                             message: "auto-sync stopped because repository state is unavailable"
                                 .to_string(),
                         });
@@ -623,8 +756,13 @@ impl ProductCliRuntime {
                 ..status
             });
         }
+        let startup_nonce = new_autosync_startup_nonce();
         let env_lookup = |key: &str| std::env::var(key).ok();
-        autosync_semantic_worker_environment_from_lookup(&env_lookup)?;
+        if autosync_semantic_worker_environment_from_lookup(&env_lookup).is_err() {
+            let code = AutosyncStartupFailureCode::WorkerEnvironmentInvalid;
+            persist_startup_failure(&autosync_request, Some(&startup_nonce), code);
+            return Err(AutosyncStartupFailure::Classified(code).into_error());
+        }
         enable_autosync(autosync_request.clone(), settings)?;
         let status = autosync_status(autosync_request.clone())?;
         if status.running {
@@ -633,9 +771,19 @@ impl ProductCliRuntime {
                 ..status
             });
         }
-        let _log_path = daemon_log_path(&autosync_request)?;
-        let startup_nonce = new_autosync_startup_nonce();
-        let mut child = spawn_autosync_daemon(request, &startup_nonce)?;
+        if daemon_log_path(&autosync_request).is_err() {
+            let code = AutosyncStartupFailureCode::RepositoryStateUnavailable;
+            persist_startup_failure(&autosync_request, Some(&startup_nonce), code);
+            return Err(AutosyncStartupFailure::Classified(code).into_error());
+        }
+        let mut child = match spawn_autosync_daemon(request, &startup_nonce) {
+            Ok(child) => child,
+            Err(_) => {
+                let code = AutosyncStartupFailureCode::ChildExitedBeforeReady;
+                persist_startup_failure(&autosync_request, Some(&startup_nonce), code);
+                return Err(AutosyncStartupFailure::Classified(code).into_error());
+            }
+        };
         let child_pid = child.id();
         let readiness = wait_for_autosync_startup(
             || {
@@ -651,6 +799,9 @@ impl ProductCliRuntime {
             Ok(report) => Ok(report),
             Err(failure) => {
                 child.terminate();
+                if let Some(code) = failure.code() {
+                    persist_startup_failure(&autosync_request, Some(&startup_nonce), code);
+                }
                 Err(failure.into_error())
             }
         }
@@ -2239,6 +2390,11 @@ mod tests {
             poll_ms: 1000,
             debounce_ms: 750,
             last_run: None,
+            startup: repogrammar::application::autosync::AutosyncStartupReport {
+                state: repogrammar::application::autosync::AutosyncStartupState::Ready,
+                failure_code: None,
+            },
+            repository_ready: true,
             message: "auto-sync started".to_string(),
         }
     }
@@ -2248,7 +2404,12 @@ mod tests {
         let result =
             wait_for_autosync_startup(|| Ok((AutosyncStartupReadiness::Pending, true)), || {}, 3);
 
-        assert_eq!(result, Err(AutosyncStartupFailure::ChildExited));
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::ChildExitedBeforeReady
+            ))
+        );
     }
 
     #[test]
@@ -2264,7 +2425,12 @@ mod tests {
             1,
         );
 
-        assert_eq!(result, Err(AutosyncStartupFailure::ChildExited));
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::ChildExitedBeforeReady
+            ))
+        );
     }
 
     #[test]
@@ -2275,7 +2441,12 @@ mod tests {
             3,
         );
 
-        assert_eq!(result, Err(AutosyncStartupFailure::LockRefused));
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::DaemonLockRefused
+            ))
+        );
     }
 
     #[test]
@@ -2291,7 +2462,12 @@ mod tests {
             4,
         );
 
-        assert_eq!(result, Err(AutosyncStartupFailure::Timeout));
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::StartupTimeout
+            ))
+        );
         assert_eq!(observations, 4);
         assert_eq!(pauses, 3);
     }
@@ -2318,21 +2494,139 @@ mod tests {
     }
 
     #[test]
+    fn autosync_startup_preserves_child_reported_failure_class() {
+        let result = wait_for_autosync_startup(
+            || {
+                Ok((
+                    AutosyncStartupReadiness::Failed(
+                        AutosyncStartupFailureCode::RepositoryFingerprintFailed,
+                    ),
+                    false,
+                ))
+            },
+            || {},
+            3,
+        );
+
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailure::Classified(
+                AutosyncStartupFailureCode::RepositoryFingerprintFailed
+            ))
+        );
+    }
+
+    #[test]
+    fn autosync_initialization_completes_all_steps_before_ready_publication() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let initialized = initialize_autosync_service(
+            || {
+                calls.borrow_mut().push("repository");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("worker");
+                Ok((None::<String>, Vec::<String>::new()))
+            },
+            || {
+                calls.borrow_mut().push("fingerprint");
+                Ok("fingerprint".to_string())
+            },
+            || {
+                calls.borrow_mut().push("log");
+                Ok(std::path::PathBuf::from("daemon.log"))
+            },
+            || {
+                calls.borrow_mut().push("heartbeat");
+                Ok(())
+            },
+        )
+        .expect("initialize service");
+
+        assert_eq!(initialized.1, "fingerprint");
+        assert_eq!(
+            calls.into_inner(),
+            vec!["repository", "worker", "fingerprint", "log", "heartbeat"]
+        );
+    }
+
+    #[test]
+    fn autosync_initialization_stops_at_repository_state_failure() {
+        let later_step_called = std::cell::Cell::new(false);
+        let result = initialize_autosync_service(
+            || Err(()),
+            || {
+                later_step_called.set(true);
+                Ok(())
+            },
+            || Ok("fingerprint".to_string()),
+            || Ok(std::path::PathBuf::from("daemon.log")),
+            || Ok(()),
+        );
+
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailureCode::RepositoryStateUnavailable)
+        );
+        assert!(!later_step_called.get());
+    }
+
+    #[test]
+    fn autosync_initialization_classifies_initial_fingerprint_failure() {
+        let heartbeat_called = std::cell::Cell::new(false);
+        let result = initialize_autosync_service(
+            || Ok(()),
+            || Ok(()),
+            || Err(()),
+            || Ok(std::path::PathBuf::from("daemon.log")),
+            || {
+                heartbeat_called.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailureCode::RepositoryFingerprintFailed)
+        );
+        assert!(!heartbeat_called.get());
+    }
+
+    #[test]
+    fn autosync_initialization_classifies_first_heartbeat_failure() {
+        let result = initialize_autosync_service(
+            || Ok(()),
+            || Ok(()),
+            || Ok("fingerprint".to_string()),
+            || Ok(std::path::PathBuf::from("daemon.log")),
+            || Err(()),
+        );
+
+        assert_eq!(
+            result,
+            Err(AutosyncStartupFailureCode::FirstHeartbeatFailed)
+        );
+    }
+
+    #[test]
     fn autosync_startup_errors_are_sanitized_by_semantic_class() {
         assert_eq!(
-            AutosyncStartupFailure::ChildExited.into_error(),
+            AutosyncStartupFailure::Classified(AutosyncStartupFailureCode::ChildExitedBeforeReady)
+                .into_error(),
             RepoGrammarError::InvalidInput(
                 "auto-sync exited before startup readiness was confirmed".to_string()
             )
         );
         assert_eq!(
-            AutosyncStartupFailure::LockRefused.into_error(),
+            AutosyncStartupFailure::Classified(AutosyncStartupFailureCode::DaemonLockRefused)
+                .into_error(),
             RepoGrammarError::InvalidInput(
                 "auto-sync could not acquire daemon ownership".to_string()
             )
         );
         assert_eq!(
-            AutosyncStartupFailure::Timeout.into_error(),
+            AutosyncStartupFailure::Classified(AutosyncStartupFailureCode::StartupTimeout)
+                .into_error(),
             RepoGrammarError::InvalidInput("auto-sync startup readiness timed out".to_string())
         );
     }

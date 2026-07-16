@@ -8453,20 +8453,37 @@ fn autosync_human(
         output.push_str(&format!("pid: {pid}\n"));
     }
     output.push_str(&format!(
-        "poll_ms: {}\ndebounce_ms: {}\n",
-        report.poll_ms, report.debounce_ms
+        "startup_state: {}\ndaemon_state: {}\nrepository_ready: {}\npoll_ms: {}\ndebounce_ms: {}\n",
+        report.startup.state.as_str(),
+        if report.running {
+            "running"
+        } else if report.startup.state
+            == crate::application::autosync::AutosyncStartupState::Starting
+        {
+            "starting"
+        } else {
+            "stopped"
+        },
+        report.repository_ready,
+        report.poll_ms,
+        report.debounce_ms
     ));
+    if let Some(code) = report.startup.failure_code {
+        output.push_str(&format!("startup_failure_code: {}\n", code.as_str()));
+    }
     if let Some(run) = &report.last_run {
         output.push_str(&format!(
-            "last_sync_unix_seconds: {}\nlast_sync_result: {}\n",
+            "previous_autosync_attempt_unix_seconds: {}\nprevious_autosync_attempt_result: {}\n",
             run.last_sync_unix_seconds,
             run.result.as_str()
         ));
         if let Some(generation) = &run.synced_generation {
-            output.push_str(&format!("last_sync_generation: {generation}\n"));
+            output.push_str(&format!(
+                "previous_autosync_attempt_generation: {generation}\n"
+            ));
         }
         if let Some(error) = &run.error {
-            output.push_str(&format!("last_sync_error: {error}\n"));
+            output.push_str(&format!("previous_autosync_attempt_error: {error}\n"));
         }
     }
     output
@@ -8477,6 +8494,14 @@ fn autosync_json(command: AutosyncCommand, report: &AutosyncReport) -> String {
 }
 
 fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_json::Value {
+    let previous_autosync_attempt = report.last_run.as_ref().map(|run| {
+        json!({
+            "unix_seconds": run.last_sync_unix_seconds,
+            "result": run.result.as_str(),
+            "synced_generation": run.synced_generation,
+            "error": run.error,
+        })
+    });
     json!({
         "command": "autosync",
         "subcommand": command.as_str(),
@@ -8484,6 +8509,16 @@ fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_js
         "state_dir": report.state_dir,
         "enabled": report.enabled,
         "running": report.running,
+        "startup_state": report.startup.state.as_str(),
+        "startup_failure_code": report.startup.failure_code.map(|code| code.as_str()),
+        "daemon_state": if report.running {
+            "running"
+        } else if report.startup.state == crate::application::autosync::AutosyncStartupState::Starting {
+            "starting"
+        } else {
+            "stopped"
+        },
+        "repository_ready": report.repository_ready,
         "pid": report.pid,
         "poll_ms": report.poll_ms,
         "debounce_ms": report.debounce_ms,
@@ -8493,6 +8528,7 @@ fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_js
             "synced_generation": run.synced_generation,
             "error": run.error,
         })),
+        "previous_autosync_attempt": previous_autosync_attempt,
         "message": report.message,
     })
 }
@@ -9830,6 +9866,11 @@ mod tests {
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
                 last_run: None,
+                startup: crate::application::autosync::AutosyncStartupReport {
+                    state: crate::application::autosync::AutosyncStartupState::Ready,
+                    failure_code: None,
+                },
+                repository_ready: true,
                 message: "autosync start ok".to_string(),
             })
         }
@@ -9886,6 +9927,15 @@ mod tests {
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
                 last_run: None,
+                startup: crate::application::autosync::AutosyncStartupReport {
+                    state: if matches!(command, AutosyncCommand::Start | AutosyncCommand::Run) {
+                        crate::application::autosync::AutosyncStartupState::Ready
+                    } else {
+                        crate::application::autosync::AutosyncStartupState::Idle
+                    },
+                    failure_code: None,
+                },
+                repository_ready: true,
                 message: format!("autosync {} ok", command.as_str()),
             })
         }
@@ -10035,6 +10085,11 @@ mod tests {
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
                 last_run: None,
+                startup: crate::application::autosync::AutosyncStartupReport {
+                    state: crate::application::autosync::AutosyncStartupState::Ready,
+                    failure_code: None,
+                },
+                repository_ready: true,
                 message: "setup autosync test".to_string(),
             })
         }
@@ -10186,6 +10241,11 @@ mod tests {
                 poll_ms: AutosyncSettings::default().poll_ms,
                 debounce_ms: AutosyncSettings::default().debounce_ms,
                 last_run: None,
+                startup: crate::application::autosync::AutosyncStartupReport {
+                    state: crate::application::autosync::AutosyncStartupState::Ready,
+                    failure_code: None,
+                },
+                repository_ready: true,
                 message: "setup autosync test".to_string(),
             })
         }
@@ -15584,6 +15644,11 @@ mod tests {
                 synced_generation: Some("gen-000007".to_string()),
                 error: None,
             }),
+            startup: crate::application::autosync::AutosyncStartupReport {
+                state: crate::application::autosync::AutosyncStartupState::Ready,
+                failure_code: None,
+            },
+            repository_ready: true,
             message: "auto-sync status".to_string(),
         };
         let output = autosync_human(
@@ -15591,11 +15656,49 @@ mod tests {
             &report,
             &AutosyncOptions::default(),
         );
-        assert!(output.contains("last_sync_result: ok"), "{output}");
         assert!(
-            output.contains("last_sync_generation: gen-000007"),
+            output.contains("previous_autosync_attempt_result: ok"),
             "{output}"
         );
+        assert!(
+            output.contains("previous_autosync_attempt_generation: gen-000007"),
+            "{output}"
+        );
+        assert!(!output.contains("last_sync_result"), "{output}");
+    }
+
+    #[test]
+    fn autosync_json_separates_current_state_from_previous_attempt() {
+        let report = AutosyncReport {
+            state_dir: ".repogrammar".to_string(),
+            enabled: true,
+            running: false,
+            pid: None,
+            poll_ms: 1000,
+            debounce_ms: 750,
+            last_run: Some(crate::application::autosync::AutosyncRunReport {
+                last_sync_unix_seconds: 1_700_000_000,
+                result: crate::application::autosync::AutosyncRunResult::Error,
+                synced_generation: None,
+                error: Some("repository sync failed".to_string()),
+            }),
+            startup: crate::application::autosync::AutosyncStartupReport {
+                state: crate::application::autosync::AutosyncStartupState::Failed,
+                failure_code: Some(
+                    crate::application::autosync::AutosyncStartupFailureCode::StartupTimeout,
+                ),
+            },
+            repository_ready: true,
+            message: "auto-sync status".to_string(),
+        };
+
+        let value = autosync_value(AutosyncCommand::Status, &report);
+        assert_eq!(value["startup_state"], "failed");
+        assert_eq!(value["startup_failure_code"], "startup_timeout");
+        assert_eq!(value["daemon_state"], "stopped");
+        assert_eq!(value["repository_ready"], true);
+        assert_eq!(value["previous_autosync_attempt"]["result"], "error");
+        assert_eq!(value["last_run"]["result"], "error");
     }
 
     #[test]

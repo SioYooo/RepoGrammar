@@ -514,7 +514,19 @@ certainty for recognized framework-shaped code units; these records are not
 worker facts and remain blocked from family claims as insufficient support.
 The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
-CPython `ast` code-unit metadata for `.py` files. That private mode now also
+CPython `ast` code-unit metadata for `.py` files. This private mode has its own
+exact host/worker contract tuple, currently `protocol_version=1` and
+`contract_revision=1`; both fields are required in every parse-document request
+and normal response. A worker that receives a missing or different tuple emits
+only the low-cardinality `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope, without
+source, repository paths, environment values, or raw payloads. The Rust host
+also treats a missing or different response revision, and an old worker's
+bounded exit-2 rejection of the new request field, as typed
+`PythonFrontendContractMismatch`. Indexing then stops with source-free recovery
+to rebuild or reinstall the product binary and bundled Python worker from the
+same release. This revision gate is private to parse-document; it does not
+silently change the public semantic-worker NDJSON contract or the separate
+private project-config mode. That private mode now also
 returns worker-local structural fact payloads for import bindings, decorator
 anchors, class bases, Pydantic model-member anchors for fields, field
 annotation targets, imported `Field(...)` metadata calls, `model_config`,

@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # Python < 3.11.
     tomllib = None
 
 PROTOCOL_VERSION = 1
+PARSE_DOCUMENT_CONTRACT_REVISION = 1
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
 MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
@@ -269,6 +270,17 @@ def emit_worker_error(request_id: str, error_code: str, text: str) -> None:
             "protocol_version": PROTOCOL_VERSION,
             "message_type": "end_of_stream",
             "request_id": request_id,
+        }
+    )
+
+
+def emit_parse_document_contract_mismatch() -> None:
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "parse_document",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
         }
     )
 
@@ -5195,8 +5207,16 @@ def analyze_source(
 
 
 def parse_document(payload: dict[str, Any]) -> int:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+        or payload.get("contract_revision") != PARSE_DOCUMENT_CONTRACT_REVISION
+    ):
+        emit_parse_document_contract_mismatch()
+        return 0
     required_fields = {
         "protocol_version",
+        "contract_revision",
         "mode",
         "path",
         "content_hash",
@@ -5206,7 +5226,7 @@ def parse_document(payload: dict[str, Any]) -> int:
     allowed_fields = {*required_fields, "module_paths", "source_roots", "conftest_files", "module_files"}
     if not isinstance(payload, dict) or not required_fields.issubset(payload) or set(payload) - allowed_fields:
         return 2
-    if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_document":
+    if payload.get("mode") != "parse_document":
         return 2
     if not is_safe_repo_relative_path(payload.get("path")) or not is_strict_content_hash(payload.get("content_hash")):
         return 2
@@ -5237,6 +5257,7 @@ def parse_document(payload: dict[str, Any]) -> int:
     message(
         {
             "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": payload["path"],
             "units": units,

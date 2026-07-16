@@ -1,7 +1,7 @@
 # Python Analysis Specification
 
 - Status: Active v0.1 target specification
-- Last updated: 2026-06-25
+- Last updated: 2026-07-17
 - Scope: Python-first v0.1 analysis algorithms and claim discipline
 - Supersedes: `docs/plans/python-dogfooding-plan.md` for v0.1 scope
 
@@ -80,6 +80,14 @@ The current implementation covers a bounded static CPython `ast` slice only:
 
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
+- an exact private parse-document host/worker tuple of
+  `protocol_version=1` and `contract_revision=1` on requests and responses.
+  Missing or different revisions fail closed as typed
+  `PythonFrontendContractMismatch`; the user-facing recovery is to rebuild or
+  reinstall the binary and bundled worker from the same release, and it does
+  not include source, paths, environment values, or raw worker payloads. This
+  tuple does not version the separate project-config mode or public
+  semantic-worker-compatible mode;
 - source-ordered per-name module-scope event histories and immutable AST range
   caching for bounded large-module analysis. Point-in-source framework alias
   and assignment-role queries use read-only history views instead of rescanning
@@ -287,6 +295,12 @@ The current implementation covers a bounded static CPython `ast` slice only:
   `options`, `patch`, `post`, and `put` for both `FastAPI` and `APIRouter`.
   The dynamic-unknown fixture covers dynamic import, `sys.path` mutation,
   dynamic call target, dynamic decorator, and monkey-patch boundaries;
+- direct-worker, Rust parser-adapter, full-index, and incremental-sync
+  regression coverage for the exact committed `pydantic-basic` fixture. Its
+  `field_validator` declaration remains a structural Pydantic member fact while
+  `value.lower()` in the validator body remains a typed, non-blocking
+  `FrameworkMagic` UNKNOWN for `pydantic_validator_side_effects`; neither is
+  upgraded into unsupported semantic certainty;
 - product CLI smoke tests that copy those fixtures into temporary repositories,
   prove low-support or dynamic Python evidence remains typed `UNKNOWN`, prove
   exact FastAPI, FastAPI router-alias, pytest tests, pytest fixtures,

@@ -68,6 +68,7 @@ pub enum ParseDiagnosticSeverity {
 pub enum ParseError {
     UnsupportedLanguage,
     Timeout,
+    PythonFrontendContractMismatch,
     Internal(String),
 }
 

@@ -542,7 +542,21 @@ enables auto-sync for the current repository if needed and launches a
 background `repogrammar autosync run` worker. Before enabling or launching a
 new background worker, `start` validates the inherited semantic-worker
 environment and reports invalid worker argv configuration synchronously rather
-than claiming the daemon started. The worker polls a lightweight
+than claiming the daemon started. The child first publishes a `starting`
+daemon-lock phase, then validates repository/config state, validates its own
+semantic-worker environment, computes the initial repository fingerprint,
+initializes daemon log/startup state, and completes one repository-state
+heartbeat. Only after those fallible steps succeed may the same lock owner
+atomically transition its exact PID-plus-startup-nonce record to `ready` and
+enter the polling loop. The parent reports `running: true` only while its child
+handle remains alive and the exact expected PID, nonce, current lock owner, and
+`ready` phase all match. A `starting` record is never running. Failed startup
+persists only one sanitized low-cardinality code:
+`worker_environment_invalid`, `repository_fingerprint_failed`,
+`repository_state_unavailable`, `daemon_lock_refused`,
+`child_exited_before_ready`, `startup_timeout`, or
+`first_heartbeat_failed`; raw worker errors, paths, source, environment values,
+credentials, nonces, and daemon internals are excluded. The worker polls a lightweight
 supported-file metadata fingerprint, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
 lightweight detector must skip RepoGrammar state directories, default excluded
@@ -584,11 +598,16 @@ both exists and is confirmed to be a RepoGrammar `autosync run` daemon.
 
 After each sync attempt the daemon records a best-effort run state in
 `.repogrammar/autosync-run.json` (last sync time, result, synced generation,
-and any error). `autosync status` surfaces it as `last_sync_unix_seconds`,
-`last_sync_result`, optional `last_sync_generation`, and optional
-`last_sync_error`, so `running: true` can be distinguished from "actually synced
-recently". A missing or unreadable run-state file is reported as absent rather
-than failing the status read.
+and any error). This historical record is not the outcome of the current
+`start` or `status` command. Human output therefore labels it as the
+`previous_autosync_attempt` time/result plus optional generation/error. JSON
+retains the preview-compatible `last_run` object and adds the explicit
+`previous_autosync_attempt` alias. Both output modes separately report current
+`startup_state`, current `daemon_state`, current `repository_ready`, and an
+optional `startup_failure_code`; `running: true` can therefore be distinguished
+from both startup readiness and a previously completed sync. A missing or
+unreadable run-state file is reported as absent rather than failing the status
+read, and historical errors remain preserved.
 
 `autosync` supports `--project <path>`, `--path <path>`, `--json`, `--quiet`,
 `--progress auto|always|never` for long-running command compatibility,

@@ -14,9 +14,19 @@ import tempfile
 from pathlib import Path
 
 WORKER = Path(__file__).with_name("worker.py")
+PYDANTIC_FIXTURE = (
+    WORKER.parents[2]
+    / "fixtures"
+    / "python"
+    / "release"
+    / "v0_1"
+    / "pydantic-basic"
+    / "schemas.py"
+)
+PARSE_DOCUMENT_CONTRACT_REVISION = 1
 
 
-def run_worker(payload):
+def run_worker_exact(payload):
     data = payload if isinstance(payload, str) else json.dumps(payload) + "\n"
     result = subprocess.run(
         [sys.executable, str(WORKER)],
@@ -29,6 +39,16 @@ def run_worker(payload):
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+
+def run_worker(payload):
+    if (
+        isinstance(payload, dict)
+        and payload.get("mode") == "parse_document"
+        and "contract_revision" not in payload
+    ):
+        payload = {**payload, "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION}
+    return run_worker_exact(payload)
 
 
 def valid_request(root: str):
@@ -242,6 +262,78 @@ def test_users(client, status, missing_fixture):
 """,
     }
 )
+
+assert parse_messages[0]["protocol_version"] == 1
+assert parse_messages[0]["contract_revision"] == PARSE_DOCUMENT_CONTRACT_REVISION
+
+# An old host omits the private parse-document revision. The new worker returns
+# one bounded, path-free mismatch envelope rather than accepting or guessing the
+# payload contract.
+old_host_messages = run_worker_exact(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "private.py",
+        "content_hash": "sha256:" + "0" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "SECRET_SOURCE = True\n",
+    }
+)
+assert old_host_messages == [
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+        "mode": "parse_document",
+        "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+    }
+]
+assert "private.py" not in json.dumps(old_host_messages)
+assert "SECRET_SOURCE" not in json.dumps(old_host_messages)
+
+# Wrong future revisions receive the same low-cardinality response.
+future_host_request = {
+    "protocol_version": 1,
+    "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION + 1,
+    "mode": "parse_document",
+    "path": "private.py",
+    "content_hash": "sha256:" + "0" * 64,
+    "repository_revision": "UNKNOWN",
+    "text": "SECRET_SOURCE = True\n",
+}
+assert run_worker_exact(future_host_request) == old_host_messages
+
+# The exact checked-in Pydantic release fixture exercises the same private
+# contract directly: the validator remains a structural member anchor and its
+# body call stays a typed, claim-scoped UNKNOWN.
+pydantic_fixture_source = PYDANTIC_FIXTURE.read_text(encoding="utf-8")
+pydantic_fixture_messages = run_worker_exact(
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+        "mode": "parse_document",
+        "path": "schemas.py",
+        "content_hash": "sha256:"
+        + hashlib.sha256(pydantic_fixture_source.encode()).hexdigest(),
+        "repository_revision": "UNKNOWN",
+        "text": pydantic_fixture_source,
+    }
+)
+assert len(pydantic_fixture_messages) == 1
+pydantic_fixture_facts = pydantic_fixture_messages[0]["facts"]
+assert any(
+    fact["fact_kind"] == "SYMBOL"
+    and fact["target"] == "pydantic.field_validator"
+    and "python_anchor_kind=pydantic_validator" in fact["assumptions"]
+    for fact in pydantic_fixture_facts
+)
+assert any(
+    fact["fact_kind"] == "UNKNOWN"
+    and fact["target"] == "FrameworkMagic"
+    and "affected_claim=pydantic_validator_side_effects" in fact["assumptions"]
+    for fact in pydantic_fixture_facts
+)
+assert "return value.lower()" not in json.dumps(pydantic_fixture_messages)
+
 assert len(parse_messages) == 1
 unit_kinds = [unit["kind"] for unit in parse_messages[0]["units"]]
 assert "module" in unit_kinds
@@ -3389,6 +3481,7 @@ assert any(
 
 bad_parse_context_payload = {
         "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
         "mode": "parse_document",
         "path": "app.py",
         "content_hash": "sha256:" + "7" * 64,
@@ -3409,6 +3502,7 @@ assert "secret" not in bad_parse_context.stderr
 
 bad_conftest_context_payload = {
     "protocol_version": 1,
+    "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
     "mode": "parse_document",
     "path": "app.py",
     "content_hash": "sha256:" + "a" * 64,
