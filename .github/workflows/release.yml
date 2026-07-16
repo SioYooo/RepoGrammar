@@ -164,50 +164,19 @@ jobs:
         run: |
           set -euo pipefail
           smoke_root="${RUNNER_TEMP}/repogrammar-package-smoke"
-          rm -rf "${smoke_root}"
-          mkdir -p "${smoke_root}/unpacked" "${smoke_root}/home" "${smoke_root}/project" "${smoke_root}/tools"
-          ln -s "$(command -v git)" "${smoke_root}/tools/git"
-          ln -s "$(command -v python3)" "${smoke_root}/tools/python3"
-          tool_path="${smoke_root}/tools"
+          mkdir -p "${smoke_root}/unpacked"
           tar -xzf "${{ matrix.archive }}" -C "${smoke_root}/unpacked"
           binary="${smoke_root}/unpacked/repogrammar"
+          worker="${smoke_root}/unpacked/workers/python/worker.py"
           test -x "${binary}"
-          test -f "${smoke_root}/unpacked/workers/python/worker.py"
+          test -f "${worker}"
           python3 -c 'import sys; assert sys.version_info >= (3, 10), "RepoGrammar requires Python 3.10+"'
           expected_version="$(node -p "require('./package.json').version")"
-          test "$("${binary}" version)" = "repogrammar ${expected_version}"
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
-            --json --progress never > "${smoke_root}/dry-run.json"
-          node -e '
-            const fs = require("fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (value.status !== "dry_run" || value.repository_index_ready !== false) process.exit(1);
-          ' "${smoke_root}/dry-run.json"
-          mkdir -p "${smoke_root}/project/tests"
-          for name in one two three; do
-            printf 'def test_%s():\n    assert True\n' "${name}" > "${smoke_root}/project/tests/test_${name}.py"
-          done
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
-            --project "${smoke_root}/project" --target auto --yes --no-autosync \
-            --json --progress never > "${smoke_root}/live.json"
-          node -e '
-            const fs = require("fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (value.product_self_test_state !== "passed" || value.repository_index_ready !== true) process.exit(1);
-            if (value.agent_query_ready !== false || value.suggested_question !== null) process.exit(1);
-          ' "${smoke_root}/live.json"
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" find \
-            --project "${smoke_root}/project" --json tests/test_one.py > "${smoke_root}/find.json"
-          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" check \
-            --project "${smoke_root}/project" --json tests/test_one.py > "${smoke_root}/check.json"
-          node -e '
-            const fs = require("fs");
-            const find = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const check = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-            if (find.status !== "ok" || !find.query_route?.selected_family_id) process.exit(1);
-            if (check.status !== "CONTEXT_ONLY" || check.check?.advisory_status !== "UNKNOWN") process.exit(1);
-          ' "${smoke_root}/find.json" "${smoke_root}/check.json"
+          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+            --binary "${binary}" \
+            --worker "${worker}" \
+            --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            --expected-version "${expected_version}"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}

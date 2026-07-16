@@ -806,38 +806,18 @@ require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'unpacked/workers/python/worke
   "packaged smoke must verify the worker inside the extracted archive"
 require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'sys\.version_info[[:space:]]*>=[[:space:]]*\(3,[[:space:]]*10\)' \
   "packaged smoke must enforce the Python 3.10+ runtime contract"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*version' \
-  "packaged smoke must run version from the extracted binary"
 require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'expected_version=.*package\.json' \
   "packaged smoke must derive the expected version from the release manifest"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'repogrammar.*expected_version' \
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'cargo run --quiet --bin repo-guard -- smoke-packaged-artifact' \
+  "packaged smoke must delegate product lifecycle assertions to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--binary.*binary' \
+  "packaged smoke must pass the extracted binary to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--worker.*worker' \
+  "packaged smoke must pass the extracted worker to repo-guard"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "packaged smoke must use the exact committed Pydantic release fixture"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--expected-version.*expected_version' \
   "packaged smoke must require exact binary/manifest version agreement"
-require_workflow_count_at_least "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*setup' 2 \
-  "packaged smoke must run both dry-run and live setup from the extracted binary"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--dry-run' \
-  "packaged smoke must run setup --dry-run --json"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--json' \
-  "packaged smoke must validate machine-readable setup and query output"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'command -v git' \
-  "packaged smoke must preserve git in its isolated tool PATH"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'command -v python3' \
-  "packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'PATH=.*tool_path' \
-  "packaged smoke must isolate setup from real agent configuration"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'HOME=.*home' \
-  "packaged smoke must use a fresh isolated HOME"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'product_self_test_state' \
-  "packaged smoke must inspect product MCP self-test evidence"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'product_self_test_state.*passed' \
-  "packaged smoke must require a passed product MCP self-test"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*find' \
-  "packaged smoke must exercise find from the extracted binary"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*check' \
-  "packaged smoke must exercise check from the extracted binary"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'CONTEXT_ONLY' \
-  "packaged check smoke must preserve advisory context semantics"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'advisory_status.*UNKNOWN' \
-  "packaged check smoke must preserve typed UNKNOWN truthfulness"
 require_workflow_match "$BUILD_JOB" 'os:[[:space:]]+ubuntu-22\.04' \
   "Linux x86_64 release builds must pin the declared glibc 2.35 floor runner"
 require_workflow_match "$BUILD_JOB" 'os:[[:space:]]+ubuntu-24\.04-arm' \
@@ -856,6 +836,7 @@ require_workflow_match "$LINUX_ABI_STEP" '2\.39' \
 
 CI_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/ci.yml"
 MACOS_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" macos-product-smoke)"
+LINUX_PACKAGED_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" linux-packaged-product-smoke)"
 WINDOWS_SOURCE_JOB="$(workflow_job "$CI_WORKFLOW" windows-source-installer-contract)"
 if [[ -z "$MACOS_SMOKE_JOB" ]]; then
   echo "CI must include the macos-product-smoke job" >&2
@@ -865,24 +846,25 @@ require_workflow_match "$MACOS_SMOKE_JOB" 'runs-on:[[:space:]]+macos-' \
   "macOS product smoke must run on a macOS runner"
 require_workflow_match "$MACOS_SMOKE_JOB" 'cargo test --workspace --all-features' \
   "macOS coverage must exercise the Rust workspace rather than compilation only"
-require_workflow_match "$MACOS_SMOKE_JOB" '\$\{binary\}.*version' \
-  "macOS coverage must run the product version path"
-require_workflow_match "$MACOS_SMOKE_JOB" '\$\{binary\}.*setup' \
-  "macOS coverage must invoke isolated product setup"
-require_workflow_match "$MACOS_SMOKE_JOB" '--dry-run' \
-  "macOS coverage must run isolated setup JSON smoke"
-require_workflow_match "$MACOS_SMOKE_JOB" '--json' \
-  "macOS coverage must validate setup JSON"
-require_workflow_match "$MACOS_SMOKE_JOB" 'command -v git' \
-  "macOS coverage must preserve git in its isolated tool PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'command -v python3' \
-  "macOS coverage must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'tool_path=.*tools' \
-  "macOS coverage must build a dedicated tool-only PATH"
-require_workflow_match "$MACOS_SMOKE_JOB" 'PATH=.*tool_path' \
-  "macOS coverage must isolate setup from real agent CLIs"
-require_workflow_match "$MACOS_SMOKE_JOB" 'product_self_test_state' \
-  "macOS coverage must validate product MCP self-test evidence"
+require_workflow_match "$MACOS_SMOKE_JOB" 'tar[[:space:]].*-x' \
+  "macOS coverage must extract its candidate package"
+require_workflow_match "$MACOS_SMOKE_JOB" 'smoke-packaged-artifact' \
+  "macOS coverage must exercise the packaged product lifecycle"
+require_workflow_match "$MACOS_SMOKE_JOB" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "macOS packaged coverage must use the committed Pydantic fixture"
+
+if [[ -z "$LINUX_PACKAGED_SMOKE_JOB" ]]; then
+  echo "CI must include the linux-packaged-product-smoke job" >&2
+  exit 1
+fi
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'runs-on:[[:space:]]+ubuntu-22\.04' \
+  "Linux packaged smoke must run on the declared x86_64 release floor"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'tar[[:space:]].*-x' \
+  "Linux packaged smoke must extract its candidate package"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'smoke-packaged-artifact' \
+  "Linux coverage must exercise the packaged product lifecycle"
+require_workflow_match "$LINUX_PACKAGED_SMOKE_JOB" 'src/fixtures/python/release/v0_1/pydantic-basic/schemas\.py' \
+  "Linux packaged coverage must use the committed Pydantic fixture"
 
 if [[ -z "$WINDOWS_SOURCE_JOB" ]]; then
   echo "CI must include the Windows source-only installer contract job" >&2

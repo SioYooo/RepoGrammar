@@ -520,9 +520,13 @@ allowed.
   rejection, release-workflow tag/version-guard and artifact and
   installer-script checksum contract checks, tag publication credential
   preflight, explicit build-only workflow dispatch, staged GitHub-assets-before-
-  npm publication, exact packaged-artifact `version`/setup-dry-run/product-MCP
-  `find`/advisory-`check` smoke, plus macOS product CI and the Windows
-  source-only boundary contracts,
+  npm publication, and the exact packaged-artifact lifecycle gate. That gate
+  must unpack the candidate binary with its worker, use the committed Pydantic
+  release fixture in an isolated HOME, and cover exact `version`, setup
+  dry-run/live product-MCP self-test, explicit `resync`, unchanged incremental
+  copy-forward, `find`/advisory-`check`, autosync readiness across at least three
+  poll intervals, changed-file generation activation, stop, and daemon-lock
+  removal on native Linux and macOS. Windows remains a source-only boundary,
   target/scope pass-through for comma-separated, `none`, and
   local-scope install requests, stale PATH prune failure propagation, and
   command removal.

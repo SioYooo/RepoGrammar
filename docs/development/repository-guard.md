@@ -10,6 +10,7 @@ cargo run --quiet --bin repo-guard -- check
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
+cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
 ```
 
 ## check
@@ -65,6 +66,26 @@ The diff command compares two Git revisions with `git diff --name-only`. If any
 change. This is a minimum gate, not proof that the documentation is semantically
 complete.
 
+## smoke-packaged-artifact
+
+The packaged-artifact smoke is the executable macOS/Linux release-candidate
+gate. It accepts only regular, non-symlink files for the unpacked product
+binary, its bundled Python worker, and the committed Pydantic release fixture.
+It runs the product with a fresh temporary HOME, XDG directories, Codex home,
+repository, and tool-only PATH. It requires the worker at the product's bundled
+layout and removes any worker-path override so the unpacked binary must resolve
+that exact sibling worker itself. Temporary state is removed after success or
+failure.
+
+The gate proves exact version agreement, truthful setup dry-run and live setup
+JSON, the product MCP self-test, explicit full `resync`, unchanged incremental
+copy-forward, and the packaged `find`/advisory `check` path. It then starts the
+real detached autosync daemon at a 100 ms poll interval, verifies that readiness
+survives at least three poll intervals, edits the isolated fixture, waits for a
+new active generation while checking daemon liveness, stops the daemon, and
+requires its lock/readiness ownership to be removed. It does not inspect or
+modify the developer's real HOME, agent configuration, or repository state.
+
 ## Exit codes
 
 - `0`: requested guard passed.
@@ -84,4 +105,6 @@ authority document from an otherwise complete temporary repository and assert a
 ## CI integration
 
 CI runs `repo-guard check` on every push and pull request. Pull requests also
-run `check-diff` when base and head revisions are available.
+run `check-diff` when base and head revisions are available. Native Linux and
+macOS jobs, plus every supported release-matrix build, invoke
+`smoke-packaged-artifact` against an unpacked candidate binary and worker.

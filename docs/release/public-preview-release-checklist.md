@@ -36,26 +36,37 @@ proof that a GitHub Release or npm package already exists.
 3. Download all four workflow artifacts. Confirm that each contains exactly one
    release archive and its checksum; do not treat source-tree binaries as
    packaged-artifact evidence.
-4. On every native platform available to the maintainer, unpack the archive
-   into a fresh temporary directory and use a fresh `HOME` plus a PATH exposing
-   only `git` and Python 3.10+ as `python3`. Execute the same smoke path enforced in the
-   workflow:
+4. On every native platform available to the maintainer, unpack the archive and
+   run the same `repo-guard smoke-packaged-artifact` gate enforced by the
+   workflow. Pass the unpacked binary and bundled worker, the exact committed
+   `src/fixtures/python/release/v0_1/pydantic-basic/schemas.py` fixture, and the
+   manifest version. The gate creates its own fresh HOME, XDG directories,
+   repository, and tool-only PATH, then executes this product path:
 
    ```text
    repogrammar version
    repogrammar setup --project <fresh-project> --target auto --dry-run --no-autosync --json --progress never
    repogrammar setup --project <fresh-project> --target auto --yes --no-autosync --json --progress never
-   repogrammar find --project <fresh-project> --json tests/test_one.py
-   repogrammar check --project <fresh-project> --json tests/test_one.py
+   repogrammar resync --project <fresh-project> --json --progress never
+   repogrammar sync --project <fresh-project> --json --progress never
+   repogrammar autosync start --project <fresh-project> --poll-ms 100 --debounce-ms 50 --json
+   repogrammar autosync status --project <fresh-project> --json
+   # edit schemas.py, then wait for a different active generation
+   repogrammar find --project <fresh-project> --json schemas.py
+   repogrammar check --project <fresh-project> --json schemas.py
+   repogrammar autosync stop --project <fresh-project> --json
    ```
 
-   The fixture contains three simple pytest test functions so a family is
-   deterministic. The live setup must report
+   The live setup must report
    `product_self_test_state: "passed"` and `repository_index_ready: true`.
    With no native coding-agent CLI on the isolated PATH it must also report
-   `agent_query_ready: false` and `suggested_question: null`. `find` must select
-   the pytest family; `check` must remain `CONTEXT_ONLY` with
-   `advisory_status: "UNKNOWN"`.
+   `agent_query_ready: false` and `suggested_question: null`. The explicit
+   `resync` must parse the committed `field_validator` fixture; unchanged
+   `sync` must copy forward from that generation. Autosync must remain
+   `running: true` and `startup_state: "ready"` after at least three poll
+   intervals, the edit must activate a new generation, and stop must remove
+   daemon lock/readiness ownership. `find` must select the Pydantic family;
+   `check` must remain `CONTEXT_ONLY` with `advisory_status: "UNKNOWN"`.
 5. For both Linux archives, preserve the highest imported GLIBC symbol version
    reported by the workflow and independently inspect the downloaded binary.
    Reject an x86_64 requirement above 2.35 or arm64 requirement above 2.39.

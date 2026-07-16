@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -168,13 +168,445 @@ where
                 Err(error) => CommandResult::err(format!("{error}\n")),
             }
         }
+        [command, binary_flag, binary, worker_flag, worker, fixture_flag, fixture, version_flag, expected_version]
+            if command == "smoke-packaged-artifact"
+                && binary_flag == "--binary"
+                && worker_flag == "--worker"
+                && fixture_flag == "--fixture"
+                && version_flag == "--expected-version" =>
+        {
+            match smoke_packaged_artifact(root, binary, worker, fixture, expected_version) {
+                Ok(()) => CommandResult::ok("packaged artifact smoke passed\n"),
+                Err(error) => {
+                    CommandResult::err(format!("packaged artifact smoke failed: {error}\n"))
+                }
+            }
+        }
         [] => CommandResult::err(format!("{}\n", usage())),
         _ => CommandResult::err(format!("unknown or invalid arguments\n{}\n", usage())),
     }
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>"
+}
+
+struct PackagedArtifactSmoke {
+    root: PathBuf,
+    home: PathBuf,
+    project: PathBuf,
+    tools: PathBuf,
+    binary: PathBuf,
+    python: PathBuf,
+    autosync_started: bool,
+}
+
+impl PackagedArtifactSmoke {
+    fn new(
+        repository_root: &Path,
+        binary: &str,
+        worker: &str,
+        fixture: &str,
+    ) -> Result<Self, String> {
+        let binary = regular_input_file(repository_root, binary, "packaged binary")?;
+        let worker = regular_input_file(repository_root, worker, "packaged Python worker")?;
+        let fixture = regular_input_file(repository_root, fixture, "committed Pydantic fixture")?;
+        let expected_worker = binary
+            .parent()
+            .ok_or_else(|| "packaged binary layout is invalid".to_string())?
+            .join("workers/python/worker.py");
+        let expected_worker = fs::canonicalize(expected_worker)
+            .map_err(|_| "packaged worker layout is invalid".to_string())?;
+        if worker != expected_worker {
+            return Err("packaged worker layout is invalid".to_string());
+        }
+        let root = unique_smoke_root();
+        let home = root.join("home");
+        let project = root.join("project");
+        let tools = root.join("tools");
+        fs::create_dir_all(&home).map_err(|_| "could not create isolated HOME".to_string())?;
+        fs::create_dir_all(&project)
+            .map_err(|_| "could not create isolated fixture repository".to_string())?;
+        fs::create_dir_all(&tools)
+            .map_err(|_| "could not create isolated tool PATH".to_string())?;
+        let python = prepare_isolated_tool_path(&tools)?;
+        fs::copy(fixture, project.join("schemas.py"))
+            .map_err(|_| "could not stage committed Pydantic fixture".to_string())?;
+        Ok(Self {
+            root,
+            home,
+            project,
+            tools,
+            binary,
+            python,
+            autosync_started: false,
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_clear()
+            .current_dir(&self.project)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env("CODEX_HOME", self.home.join(".codex"))
+            .env("PATH", &self.tools)
+            .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python);
+        command
+    }
+
+    fn run_text(&self, stage: &'static str, args: &[&str]) -> Result<String, String> {
+        let output = self
+            .command()
+            .args(args)
+            .output()
+            .map_err(|_| format!("{stage} could not execute"))?;
+        if !output.status.success() {
+            return Err(format!("{stage} returned a failure status"));
+        }
+        String::from_utf8(output.stdout).map_err(|_| format!("{stage} output was not UTF-8"))
+    }
+
+    fn run_json(&self, stage: &'static str, args: &[&str]) -> Result<serde_json::Value, String> {
+        let stdout = self.run_text(stage, args)?;
+        serde_json::from_str(stdout.trim()).map_err(|_| format!("{stage} output was not JSON"))
+    }
+
+    fn project_text(&self) -> Result<String, String> {
+        self.project
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "isolated project path was not UTF-8".to_string())
+    }
+
+    fn append_third_pydantic_model(&self) -> Result<(), String> {
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(self.project.join("schemas.py"))
+            .map_err(|_| "could not modify isolated Pydantic fixture".to_string())?;
+        file.write_all(b"\n\nclass AuditRead(BaseModel):\n    id: int\n")
+            .map_err(|_| "could not modify isolated Pydantic fixture".to_string())
+    }
+}
+
+impl Drop for PackagedArtifactSmoke {
+    fn drop(&mut self) {
+        if self.autosync_started {
+            let _ = self
+                .command()
+                .args([
+                    "autosync",
+                    "stop",
+                    "--project",
+                    self.project.to_string_lossy().as_ref(),
+                    "--json",
+                ])
+                .output();
+        }
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn smoke_packaged_artifact(
+    repository_root: &Path,
+    binary: &str,
+    worker: &str,
+    fixture: &str,
+    expected_version: &str,
+) -> Result<(), String> {
+    if expected_version.is_empty()
+        || expected_version.len() > 64
+        || !expected_version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return Err("expected version is invalid".to_string());
+    }
+    let mut smoke = PackagedArtifactSmoke::new(repository_root, binary, worker, fixture)?;
+    let project = smoke.project_text()?;
+
+    let version = smoke.run_text("version", &["version"])?;
+    if version.trim() != format!("repogrammar {expected_version}") {
+        return Err("version did not match release manifests".to_string());
+    }
+
+    let dry_run = smoke.run_json(
+        "setup dry-run",
+        &[
+            "setup",
+            "--project",
+            &project,
+            "--target",
+            "auto",
+            "--dry-run",
+            "--no-autosync",
+            "--json",
+            "--progress",
+            "never",
+        ],
+    )?;
+    if dry_run["status"] != "dry_run" || dry_run["repository_index_ready"] != false {
+        return Err("setup dry-run readiness was not truthful".to_string());
+    }
+
+    let setup = smoke.run_json(
+        "live setup",
+        &[
+            "setup",
+            "--project",
+            &project,
+            "--target",
+            "auto",
+            "--yes",
+            "--no-autosync",
+            "--json",
+            "--progress",
+            "never",
+        ],
+    )?;
+    if setup["product_self_test_state"] != "passed"
+        || setup["repository_index_ready"] != true
+        || setup["agent_query_ready"] != false
+        || !setup["suggested_question"].is_null()
+    {
+        return Err("live setup or product MCP self-test evidence was not truthful".to_string());
+    }
+
+    let resync = smoke.run_json(
+        "Pydantic resync",
+        &[
+            "resync",
+            "--project",
+            &project,
+            "--json",
+            "--progress",
+            "never",
+        ],
+    )?;
+    let resync_generation = json_string(&resync, "generation_id", "Pydantic resync")?;
+    if resync["status"] != "complete" || resync["command"] != "resync" {
+        return Err("Pydantic resync did not complete".to_string());
+    }
+
+    let incremental = smoke.run_json(
+        "Pydantic incremental sync",
+        &[
+            "sync",
+            "--project",
+            &project,
+            "--json",
+            "--progress",
+            "never",
+        ],
+    )?;
+    let incremental_generation =
+        json_string(&incremental, "generation_id", "Pydantic incremental sync")?;
+    if incremental["status"] != "complete"
+        || incremental["command"] != "sync"
+        || incremental["sync_mode"] != "incremental"
+        || incremental["base_generation"].as_str() != Some(resync_generation.as_str())
+        || incremental["reparsed_files"] != 0
+        || incremental_generation == resync_generation
+    {
+        return Err("unchanged Pydantic incremental sync was not a copy-forward".to_string());
+    }
+
+    let started = smoke.run_json(
+        "autosync start",
+        &[
+            "autosync",
+            "start",
+            "--project",
+            &project,
+            "--poll-ms",
+            "100",
+            "--debounce-ms",
+            "50",
+            "--json",
+        ],
+    )?;
+    if started["running"] != true
+        || started["startup_state"] != "ready"
+        || started["daemon_state"] != "running"
+    {
+        return Err("autosync start did not prove ready daemon ownership".to_string());
+    }
+    smoke.autosync_started = true;
+
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let after_three_polls = smoke.run_json(
+        "autosync three-poll status",
+        &["autosync", "status", "--project", &project, "--json"],
+    )?;
+    if after_three_polls["running"] != true
+        || after_three_polls["startup_state"] != "ready"
+        || after_three_polls["daemon_state"] != "running"
+        || after_three_polls["repository_ready"] != true
+    {
+        return Err(format!(
+            "autosync did not remain ready for three poll intervals (running={}, startup_state={}, daemon_state={}, repository_ready={}, startup_failure_code={})",
+            json_bool_label(&after_three_polls, "running"),
+            json_string_label(&after_three_polls, "startup_state"),
+            json_string_label(&after_three_polls, "daemon_state"),
+            json_bool_label(&after_three_polls, "repository_ready"),
+            json_string_label(&after_three_polls, "startup_failure_code"),
+        ));
+    }
+
+    smoke.append_third_pydantic_model()?;
+    let mut activated_generation = None;
+    for _attempt in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let status = smoke.run_json(
+            "autosync generation status",
+            &["status", "--project", &project, "--json"],
+        )?;
+        if let Some(generation) = status["active_generation"].as_str() {
+            if generation != incremental_generation {
+                activated_generation = Some(generation.to_string());
+                break;
+            }
+        }
+        let daemon = smoke.run_json(
+            "autosync liveness status",
+            &["autosync", "status", "--project", &project, "--json"],
+        )?;
+        if daemon["running"] != true {
+            return Err("autosync exited before activating the changed generation".to_string());
+        }
+    }
+    if activated_generation.is_none() {
+        return Err("autosync did not activate a changed generation before timeout".to_string());
+    }
+    let after_activation = smoke.run_json(
+        "autosync post-activation status",
+        &["autosync", "status", "--project", &project, "--json"],
+    )?;
+    if after_activation["running"] != true
+        || after_activation["startup_state"] != "ready"
+        || after_activation["daemon_state"] != "running"
+    {
+        return Err("autosync did not remain ready after generation activation".to_string());
+    }
+
+    let find = smoke.run_json(
+        "packaged find",
+        &["find", "--project", &project, "--json", "schemas.py"],
+    )?;
+    if find["status"] != "ok" || find["query_route"]["selected_family_id"].is_null() {
+        return Err("packaged find did not select the Pydantic family".to_string());
+    }
+    let check = smoke.run_json(
+        "packaged check",
+        &["check", "--project", &project, "--json", "schemas.py"],
+    )?;
+    if check["status"] != "CONTEXT_ONLY" || check["check"]["advisory_status"] != "UNKNOWN" {
+        return Err("packaged check did not preserve advisory UNKNOWN".to_string());
+    }
+
+    let stopped = smoke.run_json(
+        "autosync stop",
+        &["autosync", "stop", "--project", &project, "--json"],
+    )?;
+    if stopped["running"] != false || stopped["daemon_state"] != "stopped" {
+        return Err("autosync stop did not report a stopped daemon".to_string());
+    }
+    smoke.autosync_started = false;
+    let stopped_status = smoke.run_json(
+        "autosync stopped status",
+        &["autosync", "status", "--project", &project, "--json"],
+    )?;
+    if stopped_status["running"] != false
+        || stopped_status["daemon_state"] != "stopped"
+        || stopped_status["startup_state"] != "idle"
+        || smoke
+            .project
+            .join(".repogrammar/locks/daemon.lock")
+            .exists()
+    {
+        return Err("autosync stop left daemon readiness ownership behind".to_string());
+    }
+    Ok(())
+}
+
+fn json_string(
+    value: &serde_json::Value,
+    key: &str,
+    stage: &'static str,
+) -> Result<String, String> {
+    value[key]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("{stage} omitted {key}"))
+}
+
+fn json_bool_label(value: &serde_json::Value, key: &str) -> &'static str {
+    match value[key].as_bool() {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    }
+}
+
+fn json_string_label<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+    value[key].as_str().unwrap_or("none")
+}
+
+fn regular_input_file(root: &Path, input: &str, label: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(input);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    let metadata = fs::symlink_metadata(&path).map_err(|_| format!("{label} is unavailable"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{label} must be a regular file"));
+    }
+    fs::canonicalize(path).map_err(|_| format!("{label} is unavailable"))
+}
+
+fn unique_smoke_root() -> PathBuf {
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "repogrammar-packaged-smoke-{}-{started}",
+        std::process::id()
+    ))
+}
+
+#[cfg(unix)]
+fn prepare_isolated_tool_path(tools: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::symlink;
+    let git = executable_on_path("git").ok_or_else(|| "git is unavailable".to_string())?;
+    let python =
+        executable_on_path("python3").ok_or_else(|| "Python 3 is unavailable".to_string())?;
+    let kill = executable_on_path("kill").ok_or_else(|| "kill is unavailable".to_string())?;
+    let ps = executable_on_path("ps").ok_or_else(|| "ps is unavailable".to_string())?;
+    symlink(git, tools.join("git")).map_err(|_| "could not isolate git".to_string())?;
+    symlink(&python, tools.join("python3"))
+        .map_err(|_| "could not isolate Python 3".to_string())?;
+    symlink(kill, tools.join("kill")).map_err(|_| "could not isolate kill".to_string())?;
+    symlink(ps, tools.join("ps")).map_err(|_| "could not isolate ps".to_string())?;
+    Ok(tools.join("python3"))
+}
+
+#[cfg(not(unix))]
+fn prepare_isolated_tool_path(_tools: &Path) -> Result<PathBuf, String> {
+    Err("packaged artifact smoke supports the declared macOS/Linux release hosts only".to_string())
+}
+
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 fn run_check(root: &Path) -> CommandResult {
@@ -609,6 +1041,77 @@ fn check_diff_paths(paths: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn packaged_artifact_smoke_is_a_documented_command() {
+        assert!(usage().contains(
+            "smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>"
+        ));
+    }
+
+    #[test]
+    fn packaged_artifact_smoke_rejects_missing_inputs_without_repository_state() {
+        let root = TempRoot::new("packaged-smoke-missing-input");
+
+        let error = smoke_packaged_artifact(
+            root.path(),
+            "missing-repogrammar",
+            "missing-worker.py",
+            "missing-fixture.py",
+            "0.2.0-preview.0",
+        )
+        .expect_err("missing packaged artifact must fail closed");
+
+        assert_eq!(error, "packaged binary is unavailable");
+        assert!(!root.path().join(".repogrammar").exists());
+    }
+
+    #[test]
+    fn packaged_artifact_smoke_requires_the_bundled_worker_layout() {
+        let root = TempRoot::new("packaged-smoke-worker-layout");
+        write_file(root.path().join("package/repogrammar"), b"not executed\n");
+        write_file(root.path().join("other/worker.py"), b"# not bundled\n");
+        write_file(
+            root.path().join("fixture.py"),
+            b"class Example:\n    pass\n",
+        );
+
+        let error = smoke_packaged_artifact(
+            root.path(),
+            "package/repogrammar",
+            "other/worker.py",
+            "fixture.py",
+            "0.2.0-preview.0",
+        )
+        .expect_err("worker outside packaged layout must fail closed");
+
+        assert_eq!(error, "packaged worker layout is invalid");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_artifact_smoke_rejects_symlinked_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempRoot::new("packaged-smoke-symlink");
+        write_file(root.path().join("repogrammar-real"), b"not executed\n");
+        symlink(
+            root.path().join("repogrammar-real"),
+            root.path().join("repogrammar"),
+        )
+        .expect("create packaged binary symlink");
+
+        let error = smoke_packaged_artifact(
+            root.path(),
+            "repogrammar",
+            "missing-worker.py",
+            "missing-fixture.py",
+            "0.2.0-preview.0",
+        )
+        .expect_err("symlinked packaged binary must fail closed");
+
+        assert_eq!(error, "packaged binary must be a regular file");
+    }
 
     #[test]
     fn skill_front_matter_requires_expected_name_and_description() {
