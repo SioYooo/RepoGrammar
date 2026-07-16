@@ -1,7 +1,7 @@
 {
   "schema_version": "public-preview-dogfood.v2",
   "evidence_date": "2026-07-16",
-  "verdict": "PUBLIC_REPOSITORY_INDEX_READY_WITH_PARTIAL_CONTEXT",
+  "verdict": "INTEGRATED_CANDIDATE_INDEX_READY_WITH_PARTIAL_CONTEXT",
   "product": {
     "version": "0.2.0-preview.0",
     "host_os": "darwin",
@@ -29,6 +29,13 @@
         "commit": "736187f0de3f62b2383bfd7666c9c805420e76da",
         "integrated_commit": "2a09e9a18dd1ce10194d75e80a3066430edb1f59",
         "binary_sha256": "dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b"
+      },
+      {
+        "id": "integrated_candidate",
+        "commit": "d64f861799d0fa77bcceb66f2c3d9428fbebf1e1",
+        "binary_sha256": "8f7ac7c05ffc5287e5e0e74909b5b750ecef675dabc29aa50660aa89a0b93529",
+        "archive_sha256": "fde8de2613ce9ef122a13b635b67bc8a14b89ca76e403ffb03b01db78aef3bbc",
+        "archive_size_bytes": 3892030
       }
     ]
   },
@@ -61,7 +68,33 @@
       "find": "fallback_to_code_search",
       "check": "fallback_to_code_search",
       "stats": "no_active_generation",
-      "failure_class": "parser_internal_error"
+      "failure_class": "parser_internal_error",
+      "integrated_candidate_rerun": {
+        "init": "complete",
+        "sync": "incremental_complete",
+        "active_generation": true,
+        "indexed_files": 344,
+        "indexed_code_units": 17300,
+        "semantic_facts": 26139,
+        "parser_diagnostic_warnings": 7,
+        "families": 373,
+        "family_members": 106,
+        "find": "partial_context",
+        "check": "partial_context_advisory_unknown",
+        "source_snippets_included": false,
+        "read_plan_items": 1,
+        "unknowns": {
+          "total": 10397,
+          "blocking": 186,
+          "recoverable": 10168,
+          "irreducible": 3,
+          "non_blocking": 40
+        },
+        "estimated_potential_token_savings": 0,
+        "estimated_metric_kind": "ESTIMATED",
+        "token_savings": null,
+        "measurement_status": "no_paired_measurement"
+      }
     },
     {
       "id": "public_fastapi_pytest",
@@ -134,6 +167,35 @@
           "estimated_metric_kind": "ESTIMATED",
           "token_savings": null,
           "measurement_status": "no_paired_measurement"
+        },
+        {
+          "checkpoint": "integrated_candidate",
+          "init": "complete",
+          "sync": "incremental_complete",
+          "active_generation": true,
+          "indexed_files": 144,
+          "skipped_paths": 96,
+          "indexed_code_units": 677,
+          "semantic_facts": 2632,
+          "parser_diagnostic_warnings": 1,
+          "families": 9,
+          "family_members": 81,
+          "find": "partial_context",
+          "check": "partial_context_advisory_unknown",
+          "query_reason": "InsufficientSupport",
+          "source_snippets_included": false,
+          "read_plan_items": 1,
+          "unknowns": {
+            "total": 124,
+            "blocking": 96,
+            "recoverable": 22,
+            "irreducible": 0,
+            "non_blocking": 6
+          },
+          "estimated_potential_token_savings": 0,
+          "estimated_metric_kind": "ESTIMATED",
+          "token_savings": null,
+          "measurement_status": "no_paired_measurement"
         }
       ]
     },
@@ -164,15 +226,38 @@
       "estimated_potential_token_savings": 0,
       "estimated_metric_kind": "ESTIMATED",
       "token_savings": null,
-      "measurement_status": "no_paired_measurement"
+      "measurement_status": "no_paired_measurement",
+      "integrated_candidate_one_file_rerun": {
+        "scope": "dynamic.py only",
+        "init": "complete",
+        "sync": "incremental_complete",
+        "active_generation": true,
+        "indexed_files": 1,
+        "indexed_code_units": 7,
+        "semantic_facts": 46,
+        "families": 0,
+        "find": "partial_context",
+        "check": "partial_context_advisory_unknown",
+        "source_snippets_included": false,
+        "read_plan_items": 1,
+        "unknowns": {
+          "total": 14,
+          "blocking": 0,
+          "recoverable": 12,
+          "irreducible": 1,
+          "non_blocking": 1
+        },
+        "estimated_potential_token_savings": 0,
+        "estimated_metric_kind": "ESTIMATED",
+        "token_savings": null,
+        "measurement_status": "no_paired_measurement"
+      }
     }
   ],
   "limitations": [
     "single_host_checkpoint",
-    "self_dogfood_not_rerun_after_remediation",
     "selected_public_target_has_partial_context_only",
     "no_paired_agent_token_measurement",
-    "dogfood_not_rerun_after_experiment_help_fix",
     "external_publication_not_verified"
   ]
 }

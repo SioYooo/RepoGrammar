@@ -3,7 +3,8 @@
 - Evidence date: 2026-07-16
 - Candidate version: `0.2.0-preview.0`
 - Candidate tag: `v0.2.0-preview.0`
-- Candidate code commit tested locally: `2a09e9a18dd1ce10194d75e80a3066430edb1f59`
+- Setup/MCP smoke commit tested locally: `2a09e9a18dd1ce10194d75e80a3066430edb1f59`
+- Integrated dogfood commit tested locally: `d64f861799d0fa77bcceb66f2c3d9428fbebf1e1`
 - Release checklist: `../release/public-preview-release-checklist.md`
 
 This report is a pre-tag evidence snapshot, not a current availability or
@@ -57,6 +58,16 @@ The archive was temporary and was not committed.
 This proves repository-only CLI/index use from one packaged native artifact.
 It deliberately does not turn product self-test success into native coding-
 agent integration readiness.
+
+The later integrated candidate at
+`d64f861799d0fa77bcceb66f2c3d9428fbebf1e1` was separately packaged with the
+same native archive layout. Its 3,892,030-byte archive had SHA-256
+`fde8de2613ce9ef122a13b635b67bc8a14b89ca76e403ffb03b01db78aef3bbc`.
+From that unpacked archive, self-dogfood, the frozen public FastAPI repository,
+and a one-file dynamic control each completed `init`, `sync`, `find`, `check`,
+and `stats`. This is integrated index/query evidence; the setup and MCP rows
+above belong to the explicitly recorded earlier commit and must not be silently
+attributed to the later archive.
 
 ## Pre-tag external observations on 2026-07-16
 

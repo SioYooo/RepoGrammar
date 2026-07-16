@@ -30,7 +30,7 @@ complete and must not be described as complete.
 | P1 | accessible demo transcript | complete | audited command/output transcript linked from README |
 | P1 | reusable video plan | script complete | 96-second narrated shot list and evidence checklist exist |
 | P1 | animated GIF and public video | not produced | requires real screen recording, audio, editing, and public upload |
-| P1 | public FastAPI dogfood | complete for one frozen repository | index/query path passes with truthful `PARTIAL_CONTEXT` and advisory `UNKNOWN` |
+| P1 | packaged candidate dogfood | complete on one host | self, frozen public FastAPI, and a dynamic control pass with truthful `PARTIAL_CONTEXT` and advisory `UNKNOWN` |
 | P1 | measured token reduction | not measured | no paired baseline/treatment agent run; estimated diagnostics stay labeled estimated |
 | P2 | repository description and topics | blocked externally | GitHub CLI authentication must be restored |
 | P3 | Devpost copy | prepared | product description, technical story, boundaries, and video script in launch kit |
@@ -52,11 +52,13 @@ complete and must not be described as complete.
 
 ## Dogfood evidence boundary
 
-The frozen public FastAPI repository completes `init`, `sync`, `find`, `check`,
-and `stats` after three conservative Python boundary fixes found during the
-run. The selected target returns useful source-free routing context while
-remaining `PARTIAL_CONTEXT`; conformance remains `UNKNOWN`. That is product
-evidence for index/query usability, not proof of runtime equivalence.
+The packaged integrated candidate completes `init`, `sync`, `find`, `check`,
+and `stats` for RepoGrammar itself, the frozen public FastAPI repository, and a
+dynamic insufficient-evidence control after conservative Python boundary fixes
+found during the earlier run. Each selected target returns useful source-free
+routing context while remaining `PARTIAL_CONTEXT`; conformance remains
+`UNKNOWN`. That is one-host product evidence for index/query usability, not
+proof of runtime equivalence or multi-platform release readiness.
 
 The run reports an estimated diagnostic and no paired measurement. README or
 Devpost may say “estimated potential token reduction” only. “Measured token

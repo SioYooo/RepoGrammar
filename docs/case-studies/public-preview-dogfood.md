@@ -8,10 +8,12 @@
 - Integrated equivalent: `e13f84343bb0053daab8dfd66851a2f72eedeffd`
 - Final remediation rerun commit: `736187f0de3f62b2383bfd7666c9c805420e76da`
 - Integrated equivalent: `2a09e9a18dd1ce10194d75e80a3066430edb1f59`
+- Integrated candidate rerun commit: `d64f861799d0fa77bcceb66f2c3d9428fbebf1e1`
 - Product version: `0.2.0-preview.0`
 - Baseline binary SHA-256: `e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1`
 - First remediation rerun binary SHA-256: `54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72`
 - Final remediation rerun binary SHA-256: `dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b`
+- Integrated candidate binary SHA-256: `8f7ac7c05ffc5287e5e0e74909b5b750ecef675dabc29aa50660aa89a0b93529`
 - Host class: macOS arm64
 - Protocol: `../experiments/v0.2-real-repo-dogfood.md`
 - Machine-readable summary: `public-preview-dogfood.summary.json`
@@ -25,7 +27,7 @@ machine-local paths.
 
 ## Verdict
 
-`PUBLIC_REPOSITORY_INDEX_READY_WITH_PARTIAL_CONTEXT`
+`INTEGRATED_CANDIDATE_INDEX_READY_WITH_PARTIAL_CONTEXT`
 
 The baseline candidate produced an honest, useful `PARTIAL_CONTEXT` result on
 the controlled dynamic case, but it could not build an active index for either
@@ -65,6 +67,13 @@ for reproducible reruns. The integrated-equivalent hashes above contain the
 same remediation changes on the release-candidate branch and are the hashes
 expected to remain reachable after that branch is published.
 
+The final integrated candidate was also packaged with its Python worker and
+rerun from the unpacked archive. RepoGrammar self-dogfood, the same frozen
+public repository, and a one-file dynamic control all completed `init`, `sync`,
+`find`, `check`, and `stats`. This closes the earlier self-dogfood rerun gap. It
+does not replace the original three-file control result or add multi-platform,
+agent-integration, publication, or measured-token evidence.
+
 ## Baseline results
 
 | Case | `init` | `sync` | `find` | `check` | `stats` |
@@ -93,6 +102,18 @@ Across all indexed languages it preserved 96 blocking, 22 recoverable, 0
 irreducible, and 6 non-blocking UNKNOWN records. TypeScript/JavaScript remained
 bounded preview with high support risk; that preview inventory is not evidence
 of official Python-family support.
+
+## Integrated packaged-candidate rerun
+
+| Case | `init` / `sync` | `find` / `check` | `stats` |
+|---|---|---|---|
+| RepoGrammar self-dogfood | 344 indexed files, 17,300 units, 26,139 facts; unchanged sync reparsed 0 files | one-item source-free `PARTIAL_CONTEXT` read plan; advisory conformance `UNKNOWN` | 373 families, 106 members; 10,397 typed UNKNOWNs; no paired measurement |
+| Frozen public FastAPI/pytest repository | 144 indexed files, 677 units, 2,632 facts; unchanged sync reparsed 0 files | one-item source-free `PARTIAL_CONTEXT` / `InsufficientSupport` read plan; advisory conformance `UNKNOWN` | 9 families, 81 members; 124 typed UNKNOWNs; no paired measurement |
+| One-file dynamic control | 1 indexed file, 7 units, 46 facts; unchanged sync reparsed 0 files | one-item source-free `PARTIAL_CONTEXT` read plan; advisory conformance `UNKNOWN` | 0 families; 14 typed UNKNOWNs; no paired measurement |
+
+All fifteen commands exited 0. Source snippets remained absent and the read
+plans required source before edit. The one-file control is deliberately labeled
+separately from the original three-file fixture run.
 
 The dynamic control's `stats --unknowns --json` reported:
 
@@ -154,8 +175,9 @@ from this commit.
 - The public repository was successfully cloned only after network access was
   authorized; its commit fixes the result independently of future network
   availability.
-- The observed parser blocker is cleared on the same frozen public commit, but
-  this single macOS rerun does not establish multi-platform release readiness.
+- The observed parser blocker is cleared on both the same frozen public commit
+  and the integrated packaged candidate, but this single macOS rerun does not
+  establish multi-platform release readiness.
 - The selected public target returned useful source-free routing context, not a
   family match or proven conformance result.
 - The run exposed a help/parser disagreement for experiment `--project`. The
@@ -168,5 +190,4 @@ from this commit.
 
 The next highest-value measurement action is to run a correctness-gated
 baseline/treatment pair before making any measured token-saving claim.
-Multi-platform dogfood and a fresh self-dogfood rerun remain separate
-release-candidate evidence gaps.
+Multi-platform dogfood remains a separate release-candidate evidence gap.
