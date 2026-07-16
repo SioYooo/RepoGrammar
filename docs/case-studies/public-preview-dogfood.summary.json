@@ -1,7 +1,7 @@
 {
   "schema_version": "public-preview-dogfood.v2",
   "evidence_date": "2026-07-16",
-  "verdict": "BLOCKED_BY_PARSER_FAILURE",
+  "verdict": "PUBLIC_REPOSITORY_INDEX_READY_WITH_PARTIAL_CONTEXT",
   "product": {
     "version": "0.2.0-preview.0",
     "host_os": "darwin",
@@ -16,6 +16,16 @@
         "id": "bounded_large_module_remediation",
         "commit": "dd689a4634d0dac4e4cce19d948d046441f99a5d",
         "binary_sha256": "54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72"
+      },
+      {
+        "id": "router_context_contract_remediation",
+        "commit": "e12e45e5a9d8e6627a0a5f8811d910b5de0cafe6",
+        "binary_sha256": "3f1f1c135fc8b6a17aa62b3f2a46fafeda8f140c19585170d8a293221205cd4a"
+      },
+      {
+        "id": "router_unknown_claim_remediation",
+        "commit": "736187f0de3f62b2383bfd7666c9c805420e76da",
+        "binary_sha256": "dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b"
       }
     ]
   },
@@ -75,6 +85,50 @@
           "worker_context_file_count": 46,
           "emitted_assumption_count": 7,
           "host_assumption_limit": 4
+        },
+        {
+          "checkpoint": "router_context_contract_remediation",
+          "init": "parser_failure",
+          "active_generation": false,
+          "failure_class": "unsupported_unknown_affected_claim",
+          "unknown_reason": "FrameworkMagic",
+          "affected_claim": "fastapi_router_prefix"
+        },
+        {
+          "checkpoint": "router_unknown_claim_remediation",
+          "init": "complete",
+          "sync": "incremental_complete",
+          "active_generation": true,
+          "indexed_files": 144,
+          "skipped_paths": 96,
+          "indexed_code_units": 677,
+          "semantic_facts": 2632,
+          "parser_diagnostic_warnings": 1,
+          "families": 9,
+          "family_members": 81,
+          "find": "partial_context",
+          "check": "partial_context_advisory_unknown",
+          "query_reason": "InsufficientSupport",
+          "source_snippets_included": false,
+          "read_plan_items": 1,
+          "python_official_scope": {
+            "eligible_code_units": 99,
+            "families": 8,
+            "family_members": 81,
+            "family_support_coverage": 0.8181818181818182,
+            "support_risk": "low"
+          },
+          "unknowns": {
+            "total": 124,
+            "blocking": 96,
+            "recoverable": 22,
+            "irreducible": 0,
+            "non_blocking": 6
+          },
+          "estimated_potential_token_savings": 0,
+          "estimated_metric_kind": "ESTIMATED",
+          "token_savings": null,
+          "measurement_status": "no_paired_measurement"
         }
       ]
     },
@@ -108,9 +162,9 @@
     }
   ],
   "limitations": [
-    "parser_failure_blocks_positive_real_repository_evidence",
-    "worker_host_assumption_contract_mismatch",
     "single_host_checkpoint",
+    "self_dogfood_not_rerun_after_remediation",
+    "selected_public_target_has_partial_context_only",
     "no_paired_agent_token_measurement",
     "experiment_project_option_help_parser_mismatch",
     "external_publication_not_verified"

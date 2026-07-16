@@ -3,16 +3,19 @@
 - Evidence date: 2026-07-16
 - Baseline product commit: `73770e6964ba28b5ac1064552fbd722666c4de03`
 - First remediation rerun commit: `dd689a4634d0dac4e4cce19d948d046441f99a5d`
+- Router-contract remediation rerun commit: `e12e45e5a9d8e6627a0a5f8811d910b5de0cafe6`
+- Final remediation rerun commit: `736187f0de3f62b2383bfd7666c9c805420e76da`
 - Product version: `0.2.0-preview.0`
 - Baseline binary SHA-256: `e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1`
 - First remediation rerun binary SHA-256: `54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72`
+- Final remediation rerun binary SHA-256: `dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b`
 - Host class: macOS arm64
 - Protocol: `../experiments/v0.2-real-repo-dogfood.md`
 - Machine-readable summary: `public-preview-dogfood.summary.json`
 
 ## Verdict
 
-`BLOCKED_BY_PARSER_FAILURE`
+`PUBLIC_REPOSITORY_INDEX_READY_WITH_PARTIAL_CONTEXT`
 
 The baseline candidate produced an honest, useful `PARTIAL_CONTEXT` result on
 the controlled dynamic case, but it could not build an active index for either
@@ -33,6 +36,16 @@ The current worker itself accepted the failing input with the complete 46-file
 Python context, so this post-remediation failure is not evidence of a worker
 startup or Python-syntax failure.
 
+The router-contract remediation accepted the seven-assumption FastAPI context
+shape and moved indexing past the original failure. It then exposed a second
+worker/host mismatch: the worker's typed `FrameworkMagic` UNKNOWN for
+`fastapi_router_prefix` was missing from the host affected-claim allowlist. The
+final remediation aligned that allowlist. With the same fixed public commit and
+a new isolated home, `init`, `sync`, `find`, `check`, and `stats` all exited 0.
+The selected target truthfully remained `PARTIAL_CONTEXT` with
+`InsufficientSupport`; the fix restored index and query readiness without
+claiming unsupported family membership or runtime conformance.
+
 The first failing Python input in each positive baseline case was independently
 accepted by CPython bytecode compilation with a disposable cache. The first
 remediation rerun supplies the stronger root-cause evidence above; the public
@@ -40,7 +53,7 @@ CLI remained sanitized. No product code was authored on this documentation
 branch: remediation commits were supplied by the coordinator and cherry-picked
 for reproducible reruns.
 
-## Results
+## Baseline results
 
 | Case | `init` | `sync` | `find` | `check` | `stats` |
 |---|---|---|---|---|---|
@@ -51,6 +64,23 @@ for reproducible reruns.
 The first-remediation public rerun produced the same command-level results as
 the public row above: `init` and `sync` exited 2 with a sanitized parser error;
 `find`, `check`, and `stats` each exited 2 with `no_active_generation`.
+
+## Final public-repository rerun
+
+| Command | Exit | Evidence-backed result |
+|---|---:|---|
+| `init` | 0 | Generation 1 active; 144 files stored, 677 units indexed, and 2,632 semantic facts persisted. One source-tied parser diagnostic warning remained. |
+| `sync` | 0 | Generation 2 active; all 144 files copied forward unchanged, 0 parser attempts, and 9 families recomputed. |
+| `find` | 0 | `PARTIAL_CONTEXT` / `InsufficientSupport`; exact target resolved, one source-free read-plan item returned, and source remained required before edit. |
+| `check` | 0 | Same `PARTIAL_CONTEXT`; advisory conformance stayed `UNKNOWN` because runtime equivalence was unproven. |
+| `stats` | 0 | `ready_active_index`; 9 families, 81 family members, and 124 typed UNKNOWN records across the indexed repository. |
+
+For the official Python v0.1 scope, `stats` reported 99 eligible units, 8
+families, 81 family members, support coverage about 0.818, and low support risk.
+Across all indexed languages it preserved 96 blocking, 22 recoverable, 0
+irreducible, and 6 non-blocking UNKNOWN records. TypeScript/JavaScript remained
+bounded preview with high support risk; that preview inventory is not evidence
+of official Python-family support.
 
 The dynamic control's `stats --unknowns --json` reported:
 
@@ -85,6 +115,11 @@ Accordingly:
 - the dynamic case's zero potential saving is an `ESTIMATED` diagnostic only;
 - parser failures and query fallbacks provide no token-saving evidence.
 
+The successful final rerun also provides no measured token-saving evidence.
+Its `stats` result reported `estimated_potential_token_savings: 0` with
+measurement kind `ESTIMATED`, while `token_savings` and `token_savings_ratio`
+remained null and measurement status remained `no_paired_measurement`.
+
 ## Provenance and reproducibility
 
 Each product binary was built from its recorded product commit, matched its
@@ -107,16 +142,17 @@ from this commit.
 - The public repository was successfully cloned only after network access was
   authorized; its commit fixes the result independently of future network
   availability.
-- The baseline parser failures and first-remediation worker/host contract
-  failure prevent a truthful positive real-repository case study. They remain a
-  release-candidate blocker until the contract is fixed and the same frozen
-  public commit completes the command matrix.
+- The observed parser blocker is cleared on the same frozen public commit, but
+  this single macOS rerun does not establish multi-platform release readiness.
+- The selected public target returned useful source-free routing context, not a
+  family match or proven conformance result.
 - The experiment help/parser disagreement for `--project` is a usability defect
   discovered while checking paired measurement support.
 - No live coding-agent session, source-read baseline, treatment run, or host
   token export was available, so there is no measured or causal token result.
 - No GitHub release or npm publication claim follows from local dogfood.
 
-The next highest-value action is to fix the parser internal error without
-weakening typed failure behavior, then rerun this exact protocol on all three
-frozen cases before presenting public-preview real-repository evidence.
+The next highest-value action is to fix the experiment `--project` CLI mismatch
+and run a correctness-gated baseline/treatment pair before making any measured
+token-saving claim. Multi-platform dogfood and a fresh self-dogfood rerun remain
+separate release-candidate evidence gaps.
