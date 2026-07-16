@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Added a post-publication npm dist-tag reconciliation gate after the first
+  public preview showed that the registry could initialize `latest` even when
+  `npm publish --tag preview` was used. Tag publication now remains red until
+  `preview` matches the manifest prerelease and `latest` is absent or stable;
+  an idempotent manual repair workflow fixes already-published registry state
+  without republishing the immutable version.
+
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 
 This is the first public-preview prerelease.
