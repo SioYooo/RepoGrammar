@@ -1,13 +1,23 @@
 {
-  "schema_version": "public-preview-dogfood.v1",
+  "schema_version": "public-preview-dogfood.v2",
   "evidence_date": "2026-07-16",
   "verdict": "BLOCKED_BY_PARSER_FAILURE",
   "product": {
-    "commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
     "version": "0.2.0-preview.0",
-    "binary_sha256": "e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1",
     "host_os": "darwin",
-    "host_arch": "arm64"
+    "host_arch": "arm64",
+    "checkpoints": [
+      {
+        "id": "baseline",
+        "commit": "73770e6964ba28b5ac1064552fbd722666c4de03",
+        "binary_sha256": "e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1"
+      },
+      {
+        "id": "bounded_large_module_remediation",
+        "commit": "dd689a4634d0dac4e4cce19d948d046441f99a5d",
+        "binary_sha256": "54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72"
+      }
+    ]
   },
   "privacy": {
     "source_included": false,
@@ -51,7 +61,22 @@
       "find": "fallback_to_code_search",
       "check": "fallback_to_code_search",
       "stats": "no_active_generation",
-      "failure_class": "parser_internal_error"
+      "failure_class": "parser_internal_error",
+      "remediation_reruns": [
+        {
+          "checkpoint": "bounded_large_module_remediation",
+          "init": "parser_failure",
+          "sync": "parser_failure_reproduced",
+          "active_generation": false,
+          "find": "fallback_to_code_search",
+          "check": "fallback_to_code_search",
+          "stats": "no_active_generation",
+          "failure_class": "fact_assumption_count_exceeds_host_limit",
+          "worker_context_file_count": 46,
+          "emitted_assumption_count": 7,
+          "host_assumption_limit": 4
+        }
+      ]
     },
     {
       "id": "bundled_dynamic_unknown",
@@ -84,6 +109,7 @@
   ],
   "limitations": [
     "parser_failure_blocks_positive_real_repository_evidence",
+    "worker_host_assumption_contract_mismatch",
     "single_host_checkpoint",
     "no_paired_agent_token_measurement",
     "experiment_project_option_help_parser_mismatch",

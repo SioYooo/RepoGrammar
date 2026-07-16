@@ -1,9 +1,11 @@
 # Public Preview Dogfood Case Study
 
 - Evidence date: 2026-07-16
-- Product commit: `73770e6964ba28b5ac1064552fbd722666c4de03`
+- Baseline product commit: `73770e6964ba28b5ac1064552fbd722666c4de03`
+- First remediation rerun commit: `dd689a4634d0dac4e4cce19d948d046441f99a5d`
 - Product version: `0.2.0-preview.0`
-- Product binary SHA-256: `e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1`
+- Baseline binary SHA-256: `e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1`
+- First remediation rerun binary SHA-256: `54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72`
 - Host class: macOS arm64
 - Protocol: `../experiments/v0.2-real-repo-dogfood.md`
 - Machine-readable summary: `public-preview-dogfood.summary.json`
@@ -12,7 +14,7 @@
 
 `BLOCKED_BY_PARSER_FAILURE`
 
-The current candidate produced an honest, useful `PARTIAL_CONTEXT` result on
+The baseline candidate produced an honest, useful `PARTIAL_CONTEXT` result on
 the controlled dynamic case, but it could not build an active index for either
 RepoGrammar itself or the fixed public FastAPI/pytest repository. Both positive
 cases stopped on the same sanitized `parser_internal_error` class, and an
@@ -21,11 +23,22 @@ commands correctly returned `FALLBACK_TO_CODE_SEARCH` with
 `no_active_generation`; those fallbacks are truthful failure handling, not
 successful dogfood.
 
-The first failing Python input in each positive case was independently accepted
-by CPython bytecode compilation with a disposable cache. That narrows this
-checkpoint away from an invalid-Python fixture explanation, but it does not by
-itself identify the RepoGrammar parser root cause. No code fix was attempted on
-this documentation-only branch.
+The first remediation fixed bounded analysis of large Python modules and its
+worker regression suite passed. Repeating the full public-repository matrix on
+the same fixed upstream commit and an isolated home nevertheless produced the
+same public outcome. A restored-after-use diagnostic build identified the
+remaining root cause as a worker/host contract mismatch: a FastAPI
+`include_router` fact carried seven assumptions while the host limit was four.
+The current worker itself accepted the failing input with the complete 46-file
+Python context, so this post-remediation failure is not evidence of a worker
+startup or Python-syntax failure.
+
+The first failing Python input in each positive baseline case was independently
+accepted by CPython bytecode compilation with a disposable cache. The first
+remediation rerun supplies the stronger root-cause evidence above; the public
+CLI remained sanitized. No product code was authored on this documentation
+branch: remediation commits were supplied by the coordinator and cherry-picked
+for reproducible reruns.
 
 ## Results
 
@@ -34,6 +47,10 @@ this documentation-only branch.
 | RepoGrammar self-dogfood | error: `PARSER_FAILURE`; state created, no active generation | same failure reproduced | exit 2, `FALLBACK_TO_CODE_SEARCH` | exit 2, `FALLBACK_TO_CODE_SEARCH` | exit 2, no active generation; estimate unavailable |
 | Public FastAPI/pytest repository | error: `PARSER_FAILURE`; state created, no active generation | same failure reproduced | exit 2, `FALLBACK_TO_CODE_SEARCH` | exit 2, `FALLBACK_TO_CODE_SEARCH` | exit 2, no active generation; estimate unavailable |
 | Bundled dynamic/insufficient control | initialized generation 1: 3 files, 12 units, 66 semantic facts | incremental generation 2: 3 unchanged files, 0 parser attempts | exit 0, `PARTIAL_CONTEXT`, `InsufficientSupport` | exit 0, `PARTIAL_CONTEXT`; advisory conformance `UNKNOWN` | exit 0, 0 families, 16 typed unknowns |
+
+The first-remediation public rerun produced the same command-level results as
+the public row above: `init` and `sync` exited 2 with a sanitized parser error;
+`find`, `check`, and `stats` each exited 2 with `no_active_generation`.
 
 The dynamic control's `stats --unknowns --json` reported:
 
@@ -70,9 +87,10 @@ Accordingly:
 
 ## Provenance and reproducibility
 
-The product binary was built from the recorded product commit, matched the
-recorded SHA-256, and identified itself as `0.2.0-preview.0`. The self case used a disposable standalone clone of
-that commit. The public case used a read-only clone of
+Each product binary was built from its recorded product commit, matched its
+recorded SHA-256, and identified itself as `0.2.0-preview.0`. The self case used
+a disposable standalone clone of the baseline commit. The public case used a
+read-only clone of
 `fastapi/full-stack-fastapi-template` fixed at
 `4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8` (240 tracked files). The negative
 control copied the repository's checked-in `dynamic-unknown` fixture from the
@@ -89,9 +107,10 @@ from this commit.
 - The public repository was successfully cloned only after network access was
   authorized; its commit fixes the result independently of future network
   availability.
-- The two parser failures prevent a truthful positive real-repository case
-  study and are a release-candidate blocker until reproduced, diagnosed, fixed,
-  and rerun on the same frozen commits.
+- The baseline parser failures and first-remediation worker/host contract
+  failure prevent a truthful positive real-repository case study. They remain a
+  release-candidate blocker until the contract is fixed and the same frozen
+  public commit completes the command matrix.
 - The experiment help/parser disagreement for `--project` is a usability defect
   discovered while checking paired measurement support.
 - No live coding-agent session, source-read baseline, treatment run, or host
