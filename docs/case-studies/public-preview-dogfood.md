@@ -13,6 +13,13 @@
 - Protocol: `../experiments/v0.2-real-repo-dogfood.md`
 - Machine-readable summary: `public-preview-dogfood.summary.json`
 
+The predeclared `find`/`check` targets were
+`src/rust/application/setup.rs` for RepoGrammar self-dogfood,
+`backend/app/api/main.py` for the frozen public FastAPI repository, and
+`dynamic.py` for the bundled negative control. Publishing these repo-relative
+paths makes the command matrix reproducible without publishing source text or
+machine-local paths.
+
 ## Verdict
 
 `PUBLIC_REPOSITORY_INDEX_READY_WITH_PARTIAL_CONTEXT`
