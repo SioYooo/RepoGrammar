@@ -8475,12 +8475,12 @@ fn autosync_human(
             run.last_sync_unix_seconds,
             run.result.as_str()
         ));
-        if let Some(generation) = &run.synced_generation {
+        if let Some(generation) = run.display_synced_generation() {
             output.push_str(&format!(
                 "previous_autosync_attempt_generation: {generation}\n"
             ));
         }
-        if let Some(error) = &run.error {
+        if let Some(error) = run.display_error() {
             output.push_str(&format!("previous_autosync_attempt_error: {error}\n"));
         }
     }
@@ -8496,8 +8496,8 @@ fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_js
         json!({
             "unix_seconds": run.last_sync_unix_seconds,
             "result": run.result.as_str(),
-            "synced_generation": run.synced_generation,
-            "error": run.error,
+            "synced_generation": run.display_synced_generation(),
+            "error": run.display_error(),
         })
     });
     json!({
@@ -8518,8 +8518,8 @@ fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_js
         "last_run": report.last_run.as_ref().map(|run| json!({
             "last_sync_unix_seconds": run.last_sync_unix_seconds,
             "result": run.result.as_str(),
-            "synced_generation": run.synced_generation,
-            "error": run.error,
+            "synced_generation": run.display_synced_generation(),
+            "error": run.display_error(),
         })),
         "previous_autosync_attempt": previous_autosync_attempt,
         "message": report.message,
@@ -15751,6 +15751,63 @@ mod tests {
         );
         assert!(human.contains("daemon_state: unknown"), "{human}");
         assert!(!human.contains("daemon_state: stopped"), "{human}");
+    }
+
+    #[test]
+    fn autosync_output_sanitizes_untrusted_run_error_and_generation() {
+        let sensitive = "/private/repository SECRET_SOURCE REPOGRAMMAR_TOKEN=credential-value";
+        let invalid_generation = "gen-000007/../../private";
+        let report = AutosyncReport {
+            state_dir: ".repogrammar".to_string(),
+            enabled: true,
+            running: false,
+            daemon_state: crate::application::autosync::AutosyncDaemonState::Stopped,
+            pid: None,
+            poll_ms: 1000,
+            debounce_ms: 750,
+            last_run: Some(crate::application::autosync::AutosyncRunReport {
+                last_sync_unix_seconds: 1_700_000_000,
+                result: crate::application::autosync::AutosyncRunResult::Error,
+                synced_generation: Some(invalid_generation.to_string()),
+                error: Some(sensitive.to_string()),
+            }),
+            startup: crate::application::autosync::AutosyncStartupReport {
+                state: crate::application::autosync::AutosyncStartupState::Idle,
+                failure_code: None,
+                previous_failure_code: None,
+            },
+            repository_ready: true,
+            message: "auto-sync status".to_string(),
+        };
+
+        let human = autosync_human(
+            AutosyncCommand::Status,
+            &report,
+            &AutosyncOptions::default(),
+        );
+        let value = autosync_value(AutosyncCommand::Status, &report);
+        let rendered_json = value.to_string();
+
+        for rendered in [&human, &rendered_json] {
+            assert!(!rendered.contains(sensitive), "{rendered}");
+            assert!(!rendered.contains(invalid_generation), "{rendered}");
+            assert!(!rendered.contains("SECRET_SOURCE"), "{rendered}");
+            assert!(!rendered.contains("REPOGRAMMAR_TOKEN"), "{rendered}");
+            assert!(!rendered.contains("credential-value"), "{rendered}");
+        }
+        assert!(
+            human.contains("previous_autosync_attempt_error: previous autosync attempt failed"),
+            "{human}"
+        );
+        assert_eq!(
+            value["previous_autosync_attempt"]["error"],
+            "previous autosync attempt failed"
+        );
+        assert_eq!(
+            value["previous_autosync_attempt"]["synced_generation"],
+            Value::Null
+        );
+        assert_eq!(value["last_run"]["synced_generation"], Value::Null);
     }
 
     #[test]

@@ -617,7 +617,13 @@ and any error). This historical record is not the outcome of the current
 `start` or `status` command. Human output therefore labels it as the
 `previous_autosync_attempt` time/result plus optional generation/error. JSON
 retains the preview-compatible `last_run` object and adds the explicit
-`previous_autosync_attempt` alias. Both output modes separately report current
+`previous_autosync_attempt` alias. Run-state writes and both renderers accept
+only the fixed errors `repository fingerprint failed`, `repository state is
+unavailable`, and `repository sync failed`; any other legacy or malformed
+error is preserved on disk but rendered as `previous autosync attempt failed`.
+Synced generations are rendered only when they are canonical positive `gen-N`
+ids with exactly six ASCII digits; invalid legacy values are omitted. Both
+output modes separately report current
 `startup_state`, current `daemon_state`, current `repository_ready`, and an
 optional `startup_failure_code`; `running: true` can therefore be distinguished
 from both startup readiness and a previously completed sync. A failed startup

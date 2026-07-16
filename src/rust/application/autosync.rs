@@ -23,6 +23,10 @@ const DAEMON_LIFECYCLE_FILE: &str = "daemon.lifecycle";
 const AUTOSYNC_RUN_FILE: &str = "autosync-run.json";
 const AUTOSYNC_STARTUP_FILE: &str = "autosync-startup.json";
 const AUTOSYNC_SCHEMA_VERSION: u64 = 1;
+const AUTOSYNC_RUN_ERROR_FINGERPRINT_FAILED: &str = "repository fingerprint failed";
+const AUTOSYNC_RUN_ERROR_STATE_UNAVAILABLE: &str = "repository state is unavailable";
+const AUTOSYNC_RUN_ERROR_SYNC_FAILED: &str = "repository sync failed";
+const AUTOSYNC_RUN_ERROR_UNKNOWN: &str = "previous autosync attempt failed";
 const AUTOSYNC_STOP_MAX_ATTEMPTS: usize = 40;
 const AUTOSYNC_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
 pub const AUTOSYNC_STARTUP_NONCE_ENV: &str = "REPOGRAMMAR_AUTOSYNC_STARTUP_NONCE";
@@ -217,6 +221,18 @@ pub struct AutosyncRunReport {
     pub result: AutosyncRunResult,
     pub synced_generation: Option<String>,
     pub error: Option<String>,
+}
+
+impl AutosyncRunReport {
+    pub fn display_synced_generation(&self) -> Option<&str> {
+        self.synced_generation
+            .as_deref()
+            .filter(|generation| valid_autosync_generation_id(generation))
+    }
+
+    pub fn display_error(&self) -> Option<&str> {
+        sanitized_autosync_run_error(self.result, self.error.as_deref())
+    }
 }
 
 #[derive(Debug)]
@@ -686,6 +702,9 @@ fn write_run_state(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let synced_generation =
+        synced_generation.filter(|generation| valid_autosync_generation_id(generation));
+    let error = sanitized_autosync_run_error(result, error);
     let value = json!({
         "schema_version": AUTOSYNC_SCHEMA_VERSION,
         "last_sync_unix_seconds": last_sync_unix_seconds,
@@ -715,10 +734,9 @@ fn read_run_state(state_dir: &Path) -> Option<AutosyncRunReport> {
     let synced_generation = value
         .get("synced_generation")
         .and_then(Value::as_str)
+        .filter(|generation| valid_autosync_generation_id(generation))
         .map(str::to_string);
-    let error = value
-        .get("error")
-        .and_then(Value::as_str)
+    let error = sanitized_autosync_run_error(result, value.get("error").and_then(Value::as_str))
         .map(str::to_string);
     Some(AutosyncRunReport {
         last_sync_unix_seconds,
@@ -726,6 +744,27 @@ fn read_run_state(state_dir: &Path) -> Option<AutosyncRunReport> {
         synced_generation,
         error,
     })
+}
+
+fn sanitized_autosync_run_error(result: AutosyncRunResult, error: Option<&str>) -> Option<&str> {
+    if result != AutosyncRunResult::Error {
+        return None;
+    }
+    Some(match error {
+        Some(AUTOSYNC_RUN_ERROR_FINGERPRINT_FAILED) => AUTOSYNC_RUN_ERROR_FINGERPRINT_FAILED,
+        Some(AUTOSYNC_RUN_ERROR_STATE_UNAVAILABLE) => AUTOSYNC_RUN_ERROR_STATE_UNAVAILABLE,
+        Some(AUTOSYNC_RUN_ERROR_SYNC_FAILED) => AUTOSYNC_RUN_ERROR_SYNC_FAILED,
+        _ => AUTOSYNC_RUN_ERROR_UNKNOWN,
+    })
+}
+
+fn valid_autosync_generation_id(value: &str) -> bool {
+    let Some(digits) = value.strip_prefix("gen-") else {
+        return false;
+    };
+    digits.len() == 6
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits.parse::<u32>().is_ok_and(|number| number > 0)
 }
 
 struct PersistedStartupState {
@@ -1998,12 +2037,136 @@ mod tests {
         assert!(state.error.is_none());
         assert!(state.last_sync_unix_seconds > 0);
 
-        write_run_state(dir, AutosyncRunResult::Error, None, Some("boom"))
-            .expect("write error run state");
+        write_run_state(
+            dir,
+            AutosyncRunResult::Error,
+            None,
+            Some(AUTOSYNC_RUN_ERROR_SYNC_FAILED),
+        )
+        .expect("write error run state");
         let state = read_run_state(dir).expect("read run state");
         assert_eq!(state.result, AutosyncRunResult::Error);
-        assert_eq!(state.error.as_deref(), Some("boom"));
+        assert_eq!(state.error.as_deref(), Some(AUTOSYNC_RUN_ERROR_SYNC_FAILED));
         assert!(state.synced_generation.is_none());
+    }
+
+    #[test]
+    fn run_state_write_sanitizes_error_and_invalid_generation_before_persisting() {
+        let workspace = TempWorkspace::new("autosync-run-write-sanitized");
+        let sensitive = "/private/repository SECRET_SOURCE REPOGRAMMAR_TOKEN=credential-value";
+        let invalid_generation = "gen-000007/../../private";
+
+        write_run_state(
+            workspace.path(),
+            AutosyncRunResult::Error,
+            Some(invalid_generation),
+            Some(sensitive),
+        )
+        .expect("write sanitized run state");
+
+        let raw = fs::read_to_string(run_state_path(workspace.path())).expect("read raw run state");
+        assert!(!raw.contains(sensitive));
+        assert!(!raw.contains(invalid_generation));
+        let state = read_run_state(workspace.path()).expect("read sanitized run state");
+        assert_eq!(state.synced_generation, None);
+        assert_eq!(state.error.as_deref(), Some(AUTOSYNC_RUN_ERROR_UNKNOWN));
+    }
+
+    #[test]
+    fn legacy_run_state_is_preserved_but_untrusted_fields_are_sanitized_on_read() {
+        let workspace = TempWorkspace::new("autosync-run-legacy-sanitized");
+        let sensitive = "/private/repository SECRET_SOURCE REPOGRAMMAR_TOKEN=credential-value";
+        let invalid_generation = "gen-1000000/../../private";
+        let raw = json!({
+            "schema_version": AUTOSYNC_SCHEMA_VERSION,
+            "last_sync_unix_seconds": 1_700_000_000_u64,
+            "result": "error",
+            "synced_generation": invalid_generation,
+            "error": sensitive,
+        })
+        .to_string();
+        fs::write(run_state_path(workspace.path()), &raw).expect("write legacy run state");
+
+        let state = read_run_state(workspace.path()).expect("read legacy run state");
+
+        assert_eq!(state.synced_generation, None);
+        assert_eq!(state.error.as_deref(), Some(AUTOSYNC_RUN_ERROR_UNKNOWN));
+        assert_eq!(state.display_synced_generation(), None);
+        assert_eq!(state.display_error(), Some(AUTOSYNC_RUN_ERROR_UNKNOWN));
+        assert_eq!(
+            fs::read_to_string(run_state_path(workspace.path())).expect("legacy file preserved"),
+            raw
+        );
+
+        let malformed = json!({
+            "schema_version": AUTOSYNC_SCHEMA_VERSION,
+            "last_sync_unix_seconds": 1_700_000_001_u64,
+            "result": "error",
+            "synced_generation": [invalid_generation],
+            "error": {"raw": sensitive},
+        })
+        .to_string();
+        fs::write(run_state_path(workspace.path()), &malformed)
+            .expect("write malformed legacy run state");
+        let malformed_state =
+            read_run_state(workspace.path()).expect("read malformed legacy run state");
+        assert_eq!(malformed_state.synced_generation, None);
+        assert_eq!(
+            malformed_state.error.as_deref(),
+            Some(AUTOSYNC_RUN_ERROR_UNKNOWN)
+        );
+        assert_eq!(
+            fs::read_to_string(run_state_path(workspace.path()))
+                .expect("malformed legacy file preserved"),
+            malformed
+        );
+    }
+
+    #[test]
+    fn autosync_run_error_allowlist_is_exact_and_result_aware() {
+        for allowed in [
+            AUTOSYNC_RUN_ERROR_FINGERPRINT_FAILED,
+            AUTOSYNC_RUN_ERROR_STATE_UNAVAILABLE,
+            AUTOSYNC_RUN_ERROR_SYNC_FAILED,
+        ] {
+            assert_eq!(
+                sanitized_autosync_run_error(AutosyncRunResult::Error, Some(allowed)),
+                Some(allowed)
+            );
+        }
+        assert_eq!(
+            sanitized_autosync_run_error(AutosyncRunResult::Error, Some("repository sync failed ")),
+            Some(AUTOSYNC_RUN_ERROR_UNKNOWN)
+        );
+        assert_eq!(
+            sanitized_autosync_run_error(AutosyncRunResult::Error, None),
+            Some(AUTOSYNC_RUN_ERROR_UNKNOWN)
+        );
+        assert_eq!(
+            sanitized_autosync_run_error(
+                AutosyncRunResult::Ok,
+                Some(AUTOSYNC_RUN_ERROR_SYNC_FAILED)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn autosync_generation_ids_are_bounded_and_canonical() {
+        for valid in ["gen-000001", "gen-999999"] {
+            assert!(valid_autosync_generation_id(valid), "{valid}");
+        }
+        for invalid in [
+            "gen-000000",
+            "gen-0000001",
+            "gen-1000000",
+            "gen-01",
+            "gen-100000000000000000000",
+            "gen-999999x",
+            "../gen-000001",
+        ] {
+            assert!(!valid_autosync_generation_id(invalid), "{invalid}");
+        }
     }
 
     #[test]
