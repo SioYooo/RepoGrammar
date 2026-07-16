@@ -11,10 +11,11 @@ guessing when evidence is weak.
 
 ---
 
-## 🏆 Hackathon
+## Objective
 
-RepoGrammar was built to answer one question: *can we make coding agents spend
-fewer tokens and make fewer confident-but-wrong guesses about a codebase?*
+RepoGrammar was built to answer one question: *can we make coding agents spend*
+
+*fewer tokens and make fewer confident-but-wrong guesses about a codebase?*
 
 - **The problem** — agents re-read broad swaths of a repo to relearn its
   conventions, and RAG/LLM approaches happily hallucinate.
@@ -97,13 +98,13 @@ AI/agent attribution.
 
 ## What it can do
 
-| Language | What RepoGrammar can do |
-|---|---|
-| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Bounded framework-family context (not full semantics) |
-| **TS/JS** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Exact-anchor family context |
-| **Java/Spring, C#, C/C++** | Structural family context |
-| **Rust** | Self-dogfood plus general framework context |
-| **Go, PHP, Ruby, Swift** | File discovery only (not yet analyzed) |
+| Language                                                                   | What RepoGrammar can do                               |
+| -------------------------------------------------------------------------- | ----------------------------------------------------- |
+| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy                  | Bounded framework-family context (not full semantics) |
+| **TS/JS** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Exact-anchor family context                           |
+| **Java/Spring, C#, C/C++**                                           | Structural family context                             |
+| **Rust**                                                             | Self-dogfood plus general framework context           |
+| **Go, PHP, Ruby, Swift**                                             | File discovery only (not yet analyzed)                |
 
 RepoGrammar is pre-alpha. It is not a sound static analyzer, does not replace
 direct source inspection, and does not claim measured token savings by default.
