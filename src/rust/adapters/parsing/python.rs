@@ -1440,6 +1440,8 @@ fn python_affected_claim_is_supported(value: &str) -> bool {
             | "python_call_target"
             | "python_framework_identity"
             | "fastapi_dependency_target"
+            | "fastapi_router_binding"
+            | "fastapi_router_prefix"
             | "pydantic_validator_side_effects"
             | "sqlalchemy_query_shape"
             | "sqlalchemy_relationship_target"
@@ -2298,6 +2300,38 @@ api_router.include_router(login.router, prefix="/private/api")
             &raw_prefix_assumptions,
         )
         .is_err());
+    }
+
+    #[test]
+    fn cpython_frontend_accepts_typed_dynamic_include_router_boundaries() {
+        let source = r#"from fastapi import APIRouter, FastAPI
+from vendor.routes import external_router
+
+app = FastAPI()
+local_router = APIRouter()
+app.include_router(external_router)
+app.include_router(local_router, prefix=build_prefix())
+"#;
+
+        let report = PythonAstParser::default()
+            .parse(document_at("backend/app/main.py", source))
+            .expect("dynamic router context should remain typed UNKNOWN");
+        let affected_claims = report
+            .semantic_facts
+            .iter()
+            .filter(|fact| fact.kind == SemanticFactKind::Unknown)
+            .filter_map(|fact| {
+                fact.assumptions
+                    .iter()
+                    .find_map(|value| value.strip_prefix("affected_claim="))
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert!(affected_claims.contains("fastapi_router_binding"));
+        assert!(affected_claims.contains("fastapi_router_prefix"));
+        let debug = format!("{:?}", report.semantic_facts);
+        assert!(!debug.contains("app.include_router"));
+        assert!(!debug.contains("prefix=build_prefix"));
     }
 
     #[test]

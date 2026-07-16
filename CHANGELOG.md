@@ -17,7 +17,8 @@ source-checkout dogfood path.
   admits valid metadata up to 2 MiB. The Rust parser also accepts the exact
   seven-assumption `fastapi_include_router` context contract while rejecting
   malformed fields and raw route literals; prefix metadata is reduced to
-  low-cardinality segment shapes. The bundled worker can now parse its own
+  low-cardinality segment shapes, and dynamic prefix/binding outcomes retain
+  their typed affected-claim tokens. The bundled worker can now parse its own
   source across the process boundary without weakening fact-count, path, hash,
   typed `UNKNOWN`, or source-free validation.
 - Added the zero-friction `repogrammar setup` onboarding path. One reviewed

@@ -163,7 +163,11 @@ The current implementation covers a bounded static CPython `ast` slice only:
 - typed
   `RuntimeDependencyInjection` `UNKNOWN` facts for dynamic dependency target
   expressions such as `Depends(make_dependency())`, and typed `UNKNOWN` facts
-  for dynamic include-router prefixes or unresolved/external router bindings;
+  for dynamic include-router prefixes or unresolved/external router bindings.
+  The Rust host allowlist recognizes the exact `fastapi_router_prefix` and
+  `fastapi_router_binding` affected-claim tokens so these conservative worker
+  outcomes remain valid typed `UNKNOWN`s instead of aborting repository
+  indexing;
 - FastAPI `HTTPException(...)`, literal `HTTPException(status_code=...)`
   status-code effect slots, static FastAPI request body and request-parameter
   marker slots for `Body`, `Path`,
