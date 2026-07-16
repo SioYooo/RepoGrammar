@@ -545,10 +545,16 @@ environment and reports invalid worker argv configuration synchronously rather
 than claiming the daemon started. The child first publishes a `starting`
 daemon-lock phase, then validates repository/config state, validates its own
 semantic-worker environment, computes the initial repository fingerprint,
-initializes daemon log/startup state, and completes one repository-state
-heartbeat. Only after those fallible steps succeed may the same lock owner
-atomically transition its exact PID-plus-startup-nonce record to `ready` and
-enter the polling loop. The parent reports `running: true` only while its child
+initializes daemon log/startup state, and completes one immediate service
+heartbeat. That heartbeat revalidates the exact `starting` lock owner,
+repository readiness, and a second repository fingerprint; the second
+fingerprint becomes the polling baseline. Only after those fallible steps
+succeed may the same lock owner atomically transition its exact
+PID-plus-startup-nonce record to `ready` and enter the polling loop. The
+transition quarantines the owned `starting` record and installs `ready` with a
+no-overwrite link, so a non-cooperating replacement is preserved and readiness
+fails closed rather than overwriting another owner. The parent reports
+`running: true` only while its child
 handle remains alive and the exact expected PID, nonce, current lock owner, and
 `ready` phase all match. A `starting` record is never running. Failed startup
 persists only one sanitized low-cardinality code:
@@ -559,6 +565,10 @@ persists only one sanitized low-cardinality code:
 credentials, nonces, and daemon internals are excluded. The worker polls a lightweight
 supported-file metadata fingerprint, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
+daemon records a sanitized `repository fingerprint failed` previous-attempt
+error and remains alive when a later polling fingerprint transiently fails;
+such a post-ready runtime failure is not retroactively presented as an
+unverified startup success.
 lightweight detector must skip RepoGrammar state directories, default excluded
 directories, unsupported extensions, oversized files, symlinks, and paths
 outside the repository; the following `sync` remains the authoritative
@@ -595,6 +605,11 @@ unclean daemon exit the operating system can reuse that PID for an unrelated
 process; treating it as live would let `stop` signal a stranger and permanently
 block `start`. A lock's PID is therefore reported as `running` only when the PID
 both exists and is confirmed to be a RepoGrammar `autosync run` daemon.
+When the platform can prove process existence but cannot inspect its command,
+daemon liveness is `unknown`, not stopped: status renders
+`daemon_state: unknown`, and stale cleanup, replacement, disable, and stop
+preserve the lock instead of starting another daemon or signaling an
+unverified process.
 
 After each sync attempt the daemon records a best-effort run state in
 `.repogrammar/autosync-run.json` (last sync time, result, synced generation,
@@ -605,7 +620,11 @@ retains the preview-compatible `last_run` object and adds the explicit
 `previous_autosync_attempt` alias. Both output modes separately report current
 `startup_state`, current `daemon_state`, current `repository_ready`, and an
 optional `startup_failure_code`; `running: true` can therefore be distinguished
-from both startup readiness and a previously completed sync. A missing or
+from both startup readiness and a previously completed sync. A failed startup
+belongs to the current state only while the same live lock nonce owns it. Once
+that owner exits, or when a concurrent different nonce failed, current
+`startup_state` is not rewritten as failed; the sanitized code is exposed only
+as `previous_startup_failure_code`. A missing or
 unreadable run-state file is reported as absent rather than failing the status
 read, and historical errors remain preserved.
 

@@ -30,12 +30,7 @@ pub(crate) fn autosync_daemon_process_liveness(
 
     #[cfg(unix)]
     {
-        match process_command_line(pid) {
-            Some(command_line) if command_line_is_autosync_daemon(&command_line) => {
-                ProcessLiveness::Live
-            }
-            Some(_) | None => ProcessLiveness::Dead,
-        }
+        classify_autosync_daemon_command_line(process_command_line(pid).as_deref())
     }
     #[cfg(windows)]
     {
@@ -46,6 +41,17 @@ pub(crate) fn autosync_daemon_process_liveness(
     #[cfg(not(any(unix, windows)))]
     {
         ProcessLiveness::Unknown
+    }
+}
+
+#[cfg(unix)]
+fn classify_autosync_daemon_command_line(command_line: Option<&str>) -> ProcessLiveness {
+    match command_line {
+        Some(command_line) if command_line_is_autosync_daemon(command_line) => {
+            ProcessLiveness::Live
+        }
+        Some(_) => ProcessLiveness::Dead,
+        None => ProcessLiveness::Unknown,
     }
 }
 
@@ -266,5 +272,24 @@ mod tests {
         assert!(!command_line_is_autosync_daemon("/usr/bin/vim /etc/hosts"));
         assert!(!command_line_is_autosync_daemon("autosync"));
         assert!(!command_line_is_autosync_daemon(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_daemon_command_probe_is_unknown_not_dead() {
+        assert_eq!(
+            classify_autosync_daemon_command_line(None),
+            ProcessLiveness::Unknown
+        );
+        assert_eq!(
+            classify_autosync_daemon_command_line(Some(
+                "/opt/bin/repogrammar autosync run --quiet"
+            )),
+            ProcessLiveness::Live
+        );
+        assert_eq!(
+            classify_autosync_daemon_command_line(Some("/usr/bin/vim /etc/hosts")),
+            ProcessLiveness::Dead
+        );
     }
 }

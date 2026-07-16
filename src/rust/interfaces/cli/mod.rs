@@ -8455,21 +8455,19 @@ fn autosync_human(
     output.push_str(&format!(
         "startup_state: {}\ndaemon_state: {}\nrepository_ready: {}\npoll_ms: {}\ndebounce_ms: {}\n",
         report.startup.state.as_str(),
-        if report.running {
-            "running"
-        } else if report.startup.state
-            == crate::application::autosync::AutosyncStartupState::Starting
-        {
-            "starting"
-        } else {
-            "stopped"
-        },
+        report.daemon_state.as_str(),
         report.repository_ready,
         report.poll_ms,
         report.debounce_ms
     ));
     if let Some(code) = report.startup.failure_code {
         output.push_str(&format!("startup_failure_code: {}\n", code.as_str()));
+    }
+    if let Some(code) = report.startup.previous_failure_code {
+        output.push_str(&format!(
+            "previous_startup_failure_code: {}\n",
+            code.as_str()
+        ));
     }
     if let Some(run) = &report.last_run {
         output.push_str(&format!(
@@ -8511,13 +8509,8 @@ fn autosync_value(command: AutosyncCommand, report: &AutosyncReport) -> serde_js
         "running": report.running,
         "startup_state": report.startup.state.as_str(),
         "startup_failure_code": report.startup.failure_code.map(|code| code.as_str()),
-        "daemon_state": if report.running {
-            "running"
-        } else if report.startup.state == crate::application::autosync::AutosyncStartupState::Starting {
-            "starting"
-        } else {
-            "stopped"
-        },
+        "previous_startup_failure_code": report.startup.previous_failure_code.map(|code| code.as_str()),
+        "daemon_state": report.daemon_state.as_str(),
         "repository_ready": report.repository_ready,
         "pid": report.pid,
         "poll_ms": report.poll_ms,
@@ -9862,6 +9855,7 @@ mod tests {
                 state_dir: DEFAULT_STATE_DIR.to_string(),
                 enabled: true,
                 running: true,
+                daemon_state: crate::application::autosync::AutosyncDaemonState::Running,
                 pid: Some(1234),
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
@@ -9869,6 +9863,7 @@ mod tests {
                 startup: crate::application::autosync::AutosyncStartupReport {
                     state: crate::application::autosync::AutosyncStartupState::Ready,
                     failure_code: None,
+                    previous_failure_code: None,
                 },
                 repository_ready: true,
                 message: "autosync start ok".to_string(),
@@ -9922,6 +9917,11 @@ mod tests {
                         | AutosyncCommand::Run
                 ),
                 running: matches!(command, AutosyncCommand::Start | AutosyncCommand::Run),
+                daemon_state: if matches!(command, AutosyncCommand::Start | AutosyncCommand::Run) {
+                    crate::application::autosync::AutosyncDaemonState::Running
+                } else {
+                    crate::application::autosync::AutosyncDaemonState::Stopped
+                },
                 pid: matches!(command, AutosyncCommand::Start | AutosyncCommand::Run)
                     .then_some(1234),
                 poll_ms: request.poll_ms,
@@ -9934,6 +9934,7 @@ mod tests {
                         crate::application::autosync::AutosyncStartupState::Idle
                     },
                     failure_code: None,
+                    previous_failure_code: None,
                 },
                 repository_ready: true,
                 message: format!("autosync {} ok", command.as_str()),
@@ -10081,6 +10082,11 @@ mod tests {
                 state_dir: DEFAULT_STATE_DIR.to_string(),
                 enabled: true,
                 running: command == AutosyncCommand::Start,
+                daemon_state: if command == AutosyncCommand::Start {
+                    crate::application::autosync::AutosyncDaemonState::Running
+                } else {
+                    crate::application::autosync::AutosyncDaemonState::Stopped
+                },
                 pid: (command == AutosyncCommand::Start).then_some(1234),
                 poll_ms: request.poll_ms,
                 debounce_ms: request.debounce_ms,
@@ -10088,6 +10094,7 @@ mod tests {
                 startup: crate::application::autosync::AutosyncStartupReport {
                     state: crate::application::autosync::AutosyncStartupState::Ready,
                     failure_code: None,
+                    previous_failure_code: None,
                 },
                 repository_ready: true,
                 message: "setup autosync test".to_string(),
@@ -10237,6 +10244,7 @@ mod tests {
                 state_dir: DEFAULT_STATE_DIR.to_string(),
                 enabled: true,
                 running: true,
+                daemon_state: crate::application::autosync::AutosyncDaemonState::Running,
                 pid: Some(1234),
                 poll_ms: AutosyncSettings::default().poll_ms,
                 debounce_ms: AutosyncSettings::default().debounce_ms,
@@ -10244,6 +10252,7 @@ mod tests {
                 startup: crate::application::autosync::AutosyncStartupReport {
                     state: crate::application::autosync::AutosyncStartupState::Ready,
                     failure_code: None,
+                    previous_failure_code: None,
                 },
                 repository_ready: true,
                 message: "setup autosync test".to_string(),
@@ -15635,6 +15644,7 @@ mod tests {
             state_dir: ".repogrammar".to_string(),
             enabled: true,
             running: true,
+            daemon_state: crate::application::autosync::AutosyncDaemonState::Running,
             pid: Some(42),
             poll_ms: 1000,
             debounce_ms: 750,
@@ -15647,6 +15657,9 @@ mod tests {
             startup: crate::application::autosync::AutosyncStartupReport {
                 state: crate::application::autosync::AutosyncStartupState::Ready,
                 failure_code: None,
+                previous_failure_code: Some(
+                    crate::application::autosync::AutosyncStartupFailureCode::StartupTimeout,
+                ),
             },
             repository_ready: true,
             message: "auto-sync status".to_string(),
@@ -15665,6 +15678,10 @@ mod tests {
             "{output}"
         );
         assert!(!output.contains("last_sync_result"), "{output}");
+        assert!(
+            output.contains("previous_startup_failure_code: startup_timeout"),
+            "{output}"
+        );
     }
 
     #[test]
@@ -15673,6 +15690,7 @@ mod tests {
             state_dir: ".repogrammar".to_string(),
             enabled: true,
             running: false,
+            daemon_state: crate::application::autosync::AutosyncDaemonState::Stopped,
             pid: None,
             poll_ms: 1000,
             debounce_ms: 750,
@@ -15687,6 +15705,7 @@ mod tests {
                 failure_code: Some(
                     crate::application::autosync::AutosyncStartupFailureCode::StartupTimeout,
                 ),
+                previous_failure_code: None,
             },
             repository_ready: true,
             message: "auto-sync status".to_string(),
@@ -15695,10 +15714,43 @@ mod tests {
         let value = autosync_value(AutosyncCommand::Status, &report);
         assert_eq!(value["startup_state"], "failed");
         assert_eq!(value["startup_failure_code"], "startup_timeout");
+        assert_eq!(value["previous_startup_failure_code"], Value::Null);
         assert_eq!(value["daemon_state"], "stopped");
         assert_eq!(value["repository_ready"], true);
         assert_eq!(value["previous_autosync_attempt"]["result"], "error");
         assert_eq!(value["last_run"]["result"], "error");
+    }
+
+    #[test]
+    fn autosync_output_preserves_unknown_daemon_liveness() {
+        let report = AutosyncReport {
+            state_dir: ".repogrammar".to_string(),
+            enabled: true,
+            running: false,
+            daemon_state: crate::application::autosync::AutosyncDaemonState::Unknown,
+            pid: None,
+            poll_ms: 1000,
+            debounce_ms: 750,
+            last_run: None,
+            startup: crate::application::autosync::AutosyncStartupReport {
+                state: crate::application::autosync::AutosyncStartupState::Idle,
+                failure_code: None,
+                previous_failure_code: None,
+            },
+            repository_ready: true,
+            message: "auto-sync status".to_string(),
+        };
+
+        let value = autosync_value(AutosyncCommand::Status, &report);
+        assert_eq!(value["daemon_state"], "unknown");
+        assert_eq!(value["startup_state"], "idle");
+        let human = autosync_human(
+            AutosyncCommand::Status,
+            &report,
+            &AutosyncOptions::default(),
+        );
+        assert!(human.contains("daemon_state: unknown"), "{human}");
+        assert!(!human.contains("daemon_state: stopped"), "{human}");
     }
 
     #[test]
