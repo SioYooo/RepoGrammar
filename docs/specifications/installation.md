@@ -91,19 +91,26 @@ Public-preview release artifacts use these platform targets:
 - `repogrammar-aarch64-apple-darwin.tar.gz`;
 - `repogrammar-x86_64-apple-darwin.tar.gz`;
 - `repogrammar-aarch64-unknown-linux-gnu.tar.gz`;
-- `repogrammar-x86_64-unknown-linux-gnu.tar.gz`;
-- `repogrammar-x86_64-pc-windows-msvc.zip`.
+- `repogrammar-x86_64-unknown-linux-gnu.tar.gz`.
+
+These four macOS/Linux archives are the complete preview platform set. Windows
+is not a public-preview release or npm platform while its local index lifecycle
+remains unsupported; the workflow must not build, smoke, upload, or imply a
+Windows archive.
 
 Every release artifact must include the `repogrammar` executable and the
 bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
 The release build must unpack and execute each exact archive on its native
 runner before upload. The packaged binary smoke runs `version`, isolated
-`setup --dry-run --json`, and isolated live setup through the product MCP
-self-test; exercising only a source-tree binary is insufficient.
-The published `install.sh` and `install.ps1` assets must also have matching
-`.sha256` checksum assets. Installers must fail instead of silently installing
-an artifact that omits the bundled Python worker.
+`setup --dry-run --json`, isolated live setup through the product MCP self-test,
+and `find` plus advisory `check` against a deterministic pytest family. The
+`check` result must remain `CONTEXT_ONLY` with `advisory_status: UNKNOWN` rather
+than being promoted to runtime proof. Exercising only a source-tree binary is
+insufficient. The published `install.sh` asset must also have a matching
+`.sha256` checksum asset. `install.ps1` is not published for this preview.
+Installers must fail instead of silently installing an artifact that omits the
+bundled Python worker.
 Manual release-workflow dispatch is build-only and cannot publish. A tag run
 must fail during preflight when npm publication credentials are absent, before
 GitHub assets are uploaded. GitHub prerelease assets are an explicit staged
@@ -116,7 +123,7 @@ Public preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect, because
 preview releases may be marked prerelease. When a `latest` or explicit artifact
 lookup fails, installers must report that the release artifact was not found,
-suggest `--version` / `-Version <preview-tag>`, and mention
+suggest `--version <preview-tag>`, and mention
 `REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
 Installers must validate archive entry names before extraction: absolute paths,
 Windows absolute paths, traversal components, URI-like names, backslashes, and
@@ -125,10 +132,7 @@ types must also be validated: only regular files and directories are allowed,
 so a symlink or hardlink member — which could redirect extraction outside the
 temp directory on older `tar` — is rejected before extraction, and extracted
 paths are re-verified as regular files (not symlinks) before they are copied
-into place. The `install.ps1` installer detects the Windows architecture and
-rejects Windows ARM64 with a clear platform-boundary error (only the x86_64
-artifact is published), and forces TLS 1.2+ before downloading so an older
-Windows PowerShell host does not fail the download by negotiating TLS 1.0/1.1.
+into place.
 
 Source checkouts may provide a dependency-light wrapper script at
 `src/install/repogrammar-install.sh`. The script is a convenience TUI entrypoint
@@ -205,13 +209,14 @@ wrappers after the user invokes install/update; it does not relax
 `repogrammar install` ownership rules for agent configuration, receipts, or
 unrelated foreign paths.
 
-Windows public-preview source checkouts provide `src/install/install.ps1` with
-the same binary-download and checksum-verification boundary. In a source
-checkout, `-FromSource` is a contributor path that builds or copies a local
-`repogrammar.exe`, installs bundled worker assets, refreshes the user-writable
-command path, and may then delegate to `repogrammar install`. It supports
-`REPOGRAMMAR_SOURCE_BINARY` / `-SourceBinary` for deterministic local dogfood
-tests with an already built binary.
+Windows source checkouts retain `src/install/install.ps1` only as a contributor
+and local-dogfood path. It is not a tagged public-preview asset, and its
+prebuilt-archive path is outside the supported preview contract. `-FromSource`
+may build or copy a local `repogrammar.exe`, install bundled worker assets,
+refresh the user-writable command path, and delegate to `repogrammar install`.
+It supports `REPOGRAMMAR_SOURCE_BINARY` / `-SourceBinary` for deterministic
+local dogfood tests with an already built binary. This source path does not
+establish Windows product support.
 
 The npm package `@sioyooo/repogrammar` is a thin launcher only. Its `bin`
 entrypoint lives under `src/npm/`, detects OS/architecture, downloads the
@@ -225,10 +230,10 @@ relative `Location` headers against the current URL, so a redirect loop cannot
 recurse until the process stack overflows.
 `npx` and global npm installs require Node/npm by definition, but they must not
 require Rust/Cargo.
-`package.json` allows `arm64` because macOS arm64 and Linux arm64 release
-artifacts are supported. That does not imply Windows ARM64 support: the public
-preview publishes only the Windows x86_64 artifact, and the npm launcher must
-reject Windows ARM64 with a clear platform-boundary error.
+`package.json` admits only `darwin` and `linux`, with `x64` and `arm64` for the
+four release targets above. The npm launcher must reject every Windows
+architecture with an explicit macOS/Linux-only preview boundary before using a
+release artifact or a local binary override.
 
 Before `@sioyooo/repogrammar` is published, npm dogfood may use either a local
 packed package or a direct binary override:
@@ -426,8 +431,8 @@ The current implementation supports deterministic dry-run planning,
 noninteractive live writes, and a dependency-light text wizard:
 
 - public-preview release packaging is defined by the release workflow for
-  macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64 preview, each with
-  a bundled Python worker asset and `.sha256` checksum. Real GitHub
+  macOS arm64/x86_64 and Linux arm64/x86_64 only, each with a bundled Python
+  worker asset and `.sha256` checksum. Real GitHub
   prerelease artifacts are not available until a preview tag is published, so
   source-checkout dogfood remains the supported pre-release path;
 - `src/install/repogrammar-install.sh` is the macOS/Linux installer wrapper. By
@@ -439,12 +444,12 @@ noninteractive live writes, and a dependency-light text wizard:
   its interactive menu makes the contributor source-build path first-class, and
   its noninteractive `--from-source` mode supports dogfood before release
   artifacts exist;
-- `src/install/install.ps1` is the Windows preview installer wrapper for the
-  Windows x86_64 artifact. It verifies checksums and validates zip entry names
-  before extraction. In a source checkout, its interactive menu defaults to
-  the contributor source-build path, and its noninteractive `-FromSource` mode
-  supports dogfood before release artifacts exist. Its `-Verify` switch is a
-  read-only report that compares, by SHA256, the `repogrammar` copies on PATH,
+- `src/install/install.ps1` is a Windows contributor/source-dogfood wrapper,
+  not a public-preview release asset. In a source checkout, its interactive
+  menu defaults to the contributor source-build path, and its noninteractive
+  `-FromSource` mode supports dogfood before release artifacts exist. Its
+  `-Verify` switch is a read-only report that compares, by SHA256, the
+  `repogrammar` copies on PATH,
   the configured agent MCP command targets, and any running serve processes
   against the managed authority binary, so a user can confirm that the command
   they invoke and the binary their agents run are the same build. `-Prune`

@@ -52,13 +52,15 @@ source-checkout dogfood path.
 - Hardened release truth gates without claiming publication. Manual workflow
   dispatch is explicitly build-only. Tag verification requires npm credentials
   before any publication stage; exact packaged archives are unpacked and
-  exercised through `version`, `setup --dry-run --json`, and a live product MCP
-  self-test; GitHub prerelease assets are staged before npm publication; and a
-  missing/disappearing npm token fails visibly instead of producing a green
-  skipped-publish result. CI now adds a macOS Rust/onboarding smoke and expands
-  Windows beyond installer/version into isolated setup and MCP self-test
-  coverage. No GitHub release asset or npm publication has been verified by
-  these local workflow changes.
+  exercised through `version`, `setup --dry-run --json`, a live product MCP
+  self-test, `find`, and advisory `check`; GitHub prerelease assets are staged
+  before npm publication; and a missing/disappearing npm token fails visibly
+  instead of producing a green skipped-publish result. The preview matrix and
+  npm launcher now admit exactly macOS/Linux x64/arm64, reject Windows, and no
+  longer publish a Windows archive or `install.ps1`. The canonical release
+  checklist separates build-only candidate evidence, tag publication, fresh
+  HOME verification, and external publication proof. No GitHub release asset
+  or npm publication has been verified by these local workflow changes.
 - ADR-0025 now records the Swift N1 architecture/security preflight plus bounded
   discovery/configuration inventory without adding a dependency, toolchain,
   worker, parser, project model, code unit, IR, fact, typed `UNKNOWN`, family,
@@ -798,8 +800,9 @@ source-checkout dogfood path.
     candidate classification is tightened (arrow-vs-callback, Next.js
     `src/pages/`, Rust method-by-receiver, `#[path]` attribute, escape-aware
     import specifiers).
-  - Installer/npm/telemetry: `install.ps1` detects Windows ARM64 and forces TLS
-    1.2+; the npm launcher bounds redirects; telemetry state files are written
+  - Installer/npm/telemetry: the source-only `install.ps1` retains its local
+    contributor guards; the npm launcher bounds redirects and rejects Windows
+    before artifact or override use; telemetry state files are written
     owner-only (`0600`) and a negative token-savings ratio uses a distinct
     `negative` bucket.
 - The TypeScript worker now performs path-alias wildcard substitution with
@@ -877,11 +880,11 @@ source-checkout dogfood path.
   React/broad TS/JS semantics, source-span opt-in, token-saving claim limits, and
   installer platform boundaries. A readiness report and real-repo dogfood
   protocol were added under `docs/reports/` and `docs/experiments/`.
-- Release/install readiness tests now verify npm platform-to-artifact mappings
-  for macOS, Linux, and Windows preview targets, unsupported npm platform/arch
-  rejection, required bundled Python worker assets, Bash installer state-boundary
-  behavior, release workflow artifact names, and installer script checksum
-  publication.
+- Release/install readiness tests now verify the exact four macOS/Linux npm and
+  release targets, explicit Windows/unsupported-architecture rejection,
+  required bundled Python worker assets, Bash installer state-boundary
+  behavior, exact packaged `setup`/`find`/`check` smoke, and `install.sh`
+  checksum publication.
 - Additional v0.2 JS/TS fixtures cover JavaScript Jest/Vitest family support,
   exact Next/Fastify/Prisma/Drizzle positives, and React/package-only/dynamic/raw
   lookalikes that must not form public family rows.
@@ -974,10 +977,11 @@ source-checkout dogfood path.
   binary, installing or repairing the command, configuring or uninstalling
   Codex/Claude Code integrations, removing the local command path after
   confirmation, or explicitly choosing a contributor source build.
-- Release automation now builds prebuilt `repogrammar` artifacts with checksum
-  assets for macOS arm64/x86_64, Linux arm64/x86_64, and Windows x86_64
-  preview, bundles the current Python worker asset, and publishes `install.sh`
-  / `install.ps1` installer assets for tagged preview releases. Real
+- Release automation now builds exactly four prebuilt `repogrammar` artifacts
+  with checksum assets for macOS arm64/x86_64 and Linux arm64/x86_64, bundles
+  the current Python worker asset, and publishes `install.sh` plus its checksum
+  for tagged preview releases. Windows and `install.ps1` are outside this
+  preview publication set. Real
   downloadable prerelease artifacts are available only after a preview tag is
   published.
 - Added the `@sioyooo/repogrammar` npm package manifest and thin `npx`

@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const launcher = require("./repogrammar.js");
+const packageJson = require("../../package.json");
 
 function mkdir(directory) {
   fs.mkdirSync(directory, { recursive: true });
@@ -23,32 +24,25 @@ function makeFakeRelease(root) {
   const releaseDir = path.join(root, "release");
   const packageDir = path.join(root, "package");
   mkdir(path.join(packageDir, "workers", "python"));
-  const binaryPath = path.join(packageDir, process.platform === "win32" ? "repogrammar.exe" : "repogrammar");
-  if (process.platform === "win32") {
-    fs.writeFileSync(
-      binaryPath,
-      "@echo off\r\necho windows fake repogrammar is not used in default tests\r\n"
-    );
-  } else {
-    fs.writeFileSync(
-      binaryPath,
-      [
-        "#!/usr/bin/env sh",
-        "if [ -n \"${REPOGRAMMAR_FAKE_LOG:-}\" ]; then",
-        "  printf '%s' \"$1\" >> \"$REPOGRAMMAR_FAKE_LOG\"",
-        "  shift",
-        "  for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$REPOGRAMMAR_FAKE_LOG\"; done",
-        "  printf '\\n' >> \"$REPOGRAMMAR_FAKE_LOG\"",
-        "fi",
-        "case \"${1:-}\" in",
-        "  --version|version) echo 'repogrammar 0.1.0-test' ;;",
-        "  *) exit 0 ;;",
-        "esac",
-        "",
-      ].join("\n")
-    );
-    fs.chmodSync(binaryPath, 0o755);
-  }
+  const binaryPath = path.join(packageDir, "repogrammar");
+  fs.writeFileSync(
+    binaryPath,
+    [
+      "#!/usr/bin/env sh",
+      "if [ -n \"${REPOGRAMMAR_FAKE_LOG:-}\" ]; then",
+      "  printf '%s' \"$1\" >> \"$REPOGRAMMAR_FAKE_LOG\"",
+      "  shift",
+      "  for arg in \"$@\"; do printf ' %s' \"$arg\" >> \"$REPOGRAMMAR_FAKE_LOG\"; done",
+      "  printf '\\n' >> \"$REPOGRAMMAR_FAKE_LOG\"",
+      "fi",
+      "case \"${1:-}\" in",
+      "  --version|version) echo 'repogrammar 0.1.0-test' ;;",
+      "  *) exit 0 ;;",
+      "esac",
+      "",
+    ].join("\n")
+  );
+  fs.chmodSync(binaryPath, 0o755);
   fs.writeFileSync(
     path.join(packageDir, "workers", "python", "worker.py"),
     "print('fake worker')\n"
@@ -56,26 +50,11 @@ function makeFakeRelease(root) {
   mkdir(releaseDir);
   const artifact = launcher.artifactName(target);
   const artifactPath = path.join(releaseDir, artifact);
-  if (process.platform === "win32") {
-    childProcess.execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Compress-Archive -Path ${JSON.stringify(
-          path.join(packageDir, "*")
-        )} -DestinationPath ${JSON.stringify(artifactPath)} -Force`,
-      ],
-      { stdio: "ignore" }
-    );
-  } else {
-    childProcess.execFileSync(
-      "tar",
-      ["-czf", artifactPath, "-C", packageDir, "repogrammar", "workers"],
-      { stdio: "ignore" }
-    );
-  }
+  childProcess.execFileSync(
+    "tar",
+    ["-czf", artifactPath, "-C", packageDir, "repogrammar", "workers"],
+    { stdio: "ignore" }
+  );
   fs.writeFileSync(path.join(releaseDir, `${artifact}.sha256`), `${sha256(artifactPath)}  ${artifact}\n`);
   return { artifact, releaseDir, target };
 }
@@ -85,37 +64,17 @@ function makeFakeReleaseWithoutWorker(root) {
   const releaseDir = path.join(root, "release");
   const packageDir = path.join(root, "package");
   mkdir(packageDir);
-  const binaryPath = path.join(packageDir, process.platform === "win32" ? "repogrammar.exe" : "repogrammar");
-  fs.writeFileSync(
-    binaryPath,
-    process.platform === "win32"
-      ? "@echo off\r\necho fake repogrammar\r\n"
-      : "#!/usr/bin/env sh\necho fake repogrammar\n"
-  );
-  if (process.platform !== "win32") {
-    fs.chmodSync(binaryPath, 0o755);
-  }
+  const binaryPath = path.join(packageDir, "repogrammar");
+  fs.writeFileSync(binaryPath, "#!/usr/bin/env sh\necho fake repogrammar\n");
+  fs.chmodSync(binaryPath, 0o755);
   mkdir(releaseDir);
   const artifact = launcher.artifactName(target);
   const artifactPath = path.join(releaseDir, artifact);
-  if (process.platform === "win32") {
-    childProcess.execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Compress-Archive -Path ${JSON.stringify(binaryPath)} -DestinationPath ${JSON.stringify(artifactPath)} -Force`,
-      ],
-      { stdio: "ignore" }
-    );
-  } else {
-    childProcess.execFileSync(
-      "tar",
-      ["-czf", artifactPath, "-C", packageDir, "repogrammar"],
-      { stdio: "ignore" }
-    );
-  }
+  childProcess.execFileSync(
+    "tar",
+    ["-czf", artifactPath, "-C", packageDir, "repogrammar"],
+    { stdio: "ignore" }
+  );
   fs.writeFileSync(path.join(releaseDir, `${artifact}.sha256`), `${sha256(artifactPath)}  ${artifact}\n`);
   return { releaseDir };
 }
@@ -125,16 +84,9 @@ function makeFakeReleaseWithUnexpectedEntry(root) {
   const releaseDir = path.join(root, "release");
   const packageDir = path.join(root, "package");
   mkdir(path.join(packageDir, "workers", "python"));
-  const binaryPath = path.join(packageDir, process.platform === "win32" ? "repogrammar.exe" : "repogrammar");
-  fs.writeFileSync(
-    binaryPath,
-    process.platform === "win32"
-      ? "@echo off\r\necho fake repogrammar\r\n"
-      : "#!/usr/bin/env sh\necho fake repogrammar\n"
-  );
-  if (process.platform !== "win32") {
-    fs.chmodSync(binaryPath, 0o755);
-  }
+  const binaryPath = path.join(packageDir, "repogrammar");
+  fs.writeFileSync(binaryPath, "#!/usr/bin/env sh\necho fake repogrammar\n");
+  fs.chmodSync(binaryPath, 0o755);
   fs.writeFileSync(
     path.join(packageDir, "workers", "python", "worker.py"),
     "print('fake worker')\n"
@@ -143,26 +95,11 @@ function makeFakeReleaseWithUnexpectedEntry(root) {
   mkdir(releaseDir);
   const artifact = launcher.artifactName(target);
   const artifactPath = path.join(releaseDir, artifact);
-  if (process.platform === "win32") {
-    childProcess.execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Compress-Archive -Path ${JSON.stringify(
-          path.join(packageDir, "*")
-        )} -DestinationPath ${JSON.stringify(artifactPath)} -Force`,
-      ],
-      { stdio: "ignore" }
-    );
-  } else {
-    childProcess.execFileSync(
-      "tar",
-      ["-czf", artifactPath, "-C", packageDir, "repogrammar", "workers", "unexpected.txt"],
-      { stdio: "ignore" }
-    );
-  }
+  childProcess.execFileSync(
+    "tar",
+    ["-czf", artifactPath, "-C", packageDir, "repogrammar", "workers", "unexpected.txt"],
+    { stdio: "ignore" }
+  );
   fs.writeFileSync(path.join(releaseDir, `${artifact}.sha256`), `${sha256(artifactPath)}  ${artifact}\n`);
   return { releaseDir };
 }
@@ -253,7 +190,7 @@ async function testInstallsFromLocalReleaseAndCachesWorker() {
       },
       async () => {
         const binary = await launcher.ensureBinary();
-        assert.equal(binary, path.join(cacheDir, "v0.1.0-test", target, process.platform === "win32" ? "repogrammar.exe" : "repogrammar"));
+        assert.equal(binary, path.join(cacheDir, "v0.1.0-test", target, "repogrammar"));
         assert.equal(fs.existsSync(binary), true);
         assert.equal(
           fs.existsSync(path.join(path.dirname(binary), "workers", "python", "worker.py")),
@@ -320,9 +257,6 @@ async function testRejectsUnexpectedArchiveEntry() {
 }
 
 async function testRejectsReleaseWithSymlinkMember() {
-  if (process.platform === "win32") {
-    return;
-  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-symlink-"));
   try {
     const { releaseDir } = makeFakeReleaseWithSymlinkMember(root);
@@ -352,9 +286,6 @@ async function testRejectsReleaseWithSymlinkMember() {
 }
 
 async function testRejectsReleaseWithHardlinkMember() {
-  if (process.platform === "win32") {
-    return;
-  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-hardlink-"));
   try {
     const { releaseDir } = makeFakeReleaseWithHardlinkMember(root);
@@ -407,16 +338,18 @@ function testRejectsUnsafeReleaseTagsAndCachePaths() {
 }
 
 function testPlatformArtifactMatrixAndUnsupportedTargets() {
+  assert.equal(packageJson.version, "0.2.0-preview.0");
+  assert.deepEqual(packageJson.os, ["darwin", "linux"]);
+  assert.deepEqual(packageJson.cpu, ["x64", "arm64"]);
   const cases = [
     ["darwin", "arm64", "aarch64-apple-darwin", "repogrammar-aarch64-apple-darwin.tar.gz"],
     ["darwin", "x64", "x86_64-apple-darwin", "repogrammar-x86_64-apple-darwin.tar.gz"],
     ["linux", "arm64", "aarch64-unknown-linux-gnu", "repogrammar-aarch64-unknown-linux-gnu.tar.gz"],
     ["linux", "x64", "x86_64-unknown-linux-gnu", "repogrammar-x86_64-unknown-linux-gnu.tar.gz"],
-    ["win32", "x64", "x86_64-pc-windows-msvc", "repogrammar-x86_64-pc-windows-msvc.zip"],
   ];
   for (const [platform, arch, target, artifact] of cases) {
     assert.equal(launcher.platformTarget(platform, arch), target);
-    assert.equal(launcher.artifactName(target, platform), artifact);
+    assert.equal(launcher.artifactName(target), artifact);
   }
 
   assert.throws(
@@ -428,15 +361,16 @@ function testPlatformArtifactMatrixAndUnsupportedTargets() {
     /unsupported platform: freebsd/
   );
   assert.throws(
+    () => launcher.platformTarget("win32", "x64"),
+    /unsupported platform: win32.*macOS and Linux only/
+  );
+  assert.throws(
     () => launcher.platformTarget("win32", "arm64"),
-    /Windows preview supports x86_64 only.*package\.json permits arm64/
+    /unsupported platform: win32.*macOS and Linux only/
   );
 }
 
 function testForwardsInstallerAndSetupArgumentsThroughNpxLauncher() {
-  if (process.platform === "win32") {
-    return;
-  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-forward-"));
   try {
     const { releaseDir } = makeFakeRelease(root);
@@ -510,9 +444,6 @@ function testForwardsInstallerAndSetupArgumentsThroughNpxLauncher() {
 }
 
 function testBinaryOverrideBypassesReleaseDownload() {
-  if (process.platform === "win32") {
-    return;
-  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repogrammar-npm-binary-"));
   try {
     const binary = path.join(root, "repogrammar");
@@ -584,6 +515,9 @@ function testRedirectResolutionIsBoundedAndRelativeAware() {
 
 async function main() {
   testPlatformArtifactMatrixAndUnsupportedTargets();
+  if (process.platform === "win32") {
+    return;
+  }
   testChecksumRejectsMismatch();
   testRejectsUnsafeReleaseTagsAndCachePaths();
   testRedirectResolutionIsBoundedAndRelativeAware();

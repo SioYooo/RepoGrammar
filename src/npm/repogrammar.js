@@ -11,6 +11,11 @@ const path = require("node:path");
 const packageJson = require("../../package.json");
 
 function platformTarget(platform = process.platform, arch = process.arch) {
+  if (platform === "win32") {
+    throw new Error(
+      "unsupported platform: win32; the public preview supports macOS and Linux only"
+    );
+  }
   const archMap = new Map([
     ["x64", "x86_64"],
     ["arm64", "aarch64"],
@@ -25,14 +30,6 @@ function platformTarget(platform = process.platform, arch = process.arch) {
   if (platform === "linux") {
     return `${normalizedArch}-unknown-linux-gnu`;
   }
-  if (platform === "win32") {
-    if (normalizedArch !== "x86_64") {
-      throw new Error(
-        "Windows preview supports x86_64 only; package.json permits arm64 for macOS/Linux release artifacts, but no Windows ARM64 artifact is published"
-      );
-    }
-    return "x86_64-pc-windows-msvc";
-  }
   throw new Error(`unsupported platform: ${platform}`);
 }
 
@@ -40,10 +37,7 @@ function defaultReleaseTag() {
   return validateReleaseTag(process.env.REPOGRAMMAR_VERSION || `v${packageJson.version}`);
 }
 
-function artifactName(target, platform = process.platform) {
-  if (platform === "win32") {
-    return `repogrammar-${target}.zip`;
-  }
+function artifactName(target) {
   return `repogrammar-${target}.tar.gz`;
 }
 
@@ -62,8 +56,8 @@ function cacheRoot() {
   );
 }
 
-function binaryName(platform = process.platform) {
-  return platform === "win32" ? "repogrammar.exe" : "repogrammar";
+function binaryName() {
+  return "repogrammar";
 }
 
 function binaryPath(target, tag = defaultReleaseTag()) {
@@ -187,40 +181,14 @@ function verifyChecksum(archivePath, checksumPath) {
   }
 }
 
-function extractArchive(archivePath, destination, platform = process.platform) {
+function extractArchive(archivePath, destination) {
   ensureDirectory(destination);
-  if (platform === "win32") {
-    const command = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `Expand-Archive -LiteralPath ${JSON.stringify(
-        archivePath
-      )} -DestinationPath ${JSON.stringify(destination)} -Force`,
-    ];
-    childProcess.execFileSync("powershell", command, { stdio: "ignore" });
-    return;
-  }
   childProcess.execFileSync("tar", ["-xzf", archivePath, "-C", destination], {
     stdio: "ignore",
   });
 }
 
-function listArchiveEntries(archivePath, platform = process.platform) {
-  if (platform === "win32") {
-    const script = [
-      "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
-      `$archive = ${JSON.stringify(archivePath)};`,
-      "$zip = [System.IO.Compression.ZipFile]::OpenRead($archive);",
-      "try { $zip.Entries | ForEach-Object { $_.FullName } } finally { $zip.Dispose() }",
-    ].join(" ");
-    const output = childProcess.execFileSync(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8" }
-    );
-    return output.split(/\r?\n/).filter(Boolean);
-  }
+function listArchiveEntries(archivePath) {
   const output = childProcess.execFileSync("tar", ["-tzf", archivePath], {
     encoding: "utf8",
   });
@@ -231,36 +199,7 @@ function listArchiveEntries(archivePath, platform = process.platform) {
 // hostile archive whose checksum matches cannot redirect extraction outside the
 // temp directory on older `tar` implementations. This mirrors the shell
 // installer's `validate_release_archive_entries` type gate.
-function assertArchiveMemberTypesAreRegular(archivePath, platform = process.platform) {
-  if (platform === "win32") {
-    // In a zip, a symlink member is encoded through the Unix file mode in the
-    // high 16 bits of the entry's external attributes (S_IFLNK = 0xA000).
-    // Directories carry no such mode. Emit the offending names and reject in JS.
-    const script = [
-      "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
-      `$archive = ${JSON.stringify(archivePath)};`,
-      "$zip = [System.IO.Compression.ZipFile]::OpenRead($archive);",
-      "try {",
-      "  foreach ($entry in $zip.Entries) {",
-      "    $mode = ($entry.ExternalAttributes -shr 16) -band 0xF000;",
-      "    if ($mode -eq 0xA000) { Write-Output $entry.FullName }",
-      "  }",
-      "} finally { $zip.Dispose() }",
-    ].join(" ");
-    const output = childProcess.execFileSync(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8" }
-    );
-    const offending = output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (offending.length > 0) {
-      throw new Error(`release artifact contains a non-regular-file member: ${offending[0]}`);
-    }
-    return;
-  }
+function assertArchiveMemberTypesAreRegular(archivePath) {
   // The first character of each `tar -tvzf` line is the member type: '-'
   // regular file and 'd' directory are the only safe types across GNU and BSD
   // tar; 'l' (symlink), 'h' (hardlink), and device/pipe/socket types are not.
@@ -300,16 +239,16 @@ function normalizeArchiveEntry(entry) {
   return normalized;
 }
 
-function validateArchiveEntries(archivePath, platform = process.platform) {
-  assertArchiveMemberTypesAreRegular(archivePath, platform);
+function validateArchiveEntries(archivePath) {
+  assertArchiveMemberTypesAreRegular(archivePath);
   const allowed = new Set([
-    binaryName(platform),
+    binaryName(),
     "workers",
     "workers/python",
     "workers/python/worker.py",
   ]);
   const entries = new Set();
-  for (const entry of listArchiveEntries(archivePath, platform)) {
+  for (const entry of listArchiveEntries(archivePath)) {
     const normalized = normalizeArchiveEntry(entry);
     if (!normalized) {
       continue;
@@ -319,8 +258,8 @@ function validateArchiveEntries(archivePath, platform = process.platform) {
     }
     entries.add(normalized);
   }
-  if (!entries.has(binaryName(platform))) {
-    throw new Error(`release artifact did not contain ${binaryName(platform)}`);
+  if (!entries.has(binaryName())) {
+    throw new Error(`release artifact did not contain ${binaryName()}`);
   }
   if (!entries.has("workers/python/worker.py")) {
     throw new Error("release artifact did not contain bundled Python worker at workers/python/worker.py");
@@ -346,6 +285,7 @@ function isInstalled(binary) {
 }
 
 async function ensureBinary() {
+  const target = platformTarget();
   const binaryOverride = process.env.REPOGRAMMAR_BINARY;
   if (binaryOverride && binaryOverride.trim()) {
     if (!path.isAbsolute(binaryOverride)) {
@@ -357,7 +297,6 @@ async function ensureBinary() {
     }
     return binaryOverride;
   }
-  const target = platformTarget();
   const tag = defaultReleaseTag();
   const installed = binaryPath(target, tag);
   if (isInstalled(installed)) {
@@ -386,9 +325,7 @@ async function ensureBinary() {
     const stagingDir = fs.mkdtempSync(path.join(installParent, ".repogrammar-install-"));
     const stagedBinary = path.join(stagingDir, binaryName());
     fs.copyFileSync(extractedBinary, stagedBinary);
-    if (process.platform !== "win32") {
-      fs.chmodSync(stagedBinary, 0o755);
-    }
+    fs.chmodSync(stagedBinary, 0o755);
     const workerDestination = path.join(stagingDir, "workers", "python");
     ensureDirectory(workerDestination);
     fs.copyFileSync(workerSource, path.join(workerDestination, "worker.py"));

@@ -31,6 +31,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
       - name: Verify tag and version agreement
         env:
           REF_TYPE: ${{ github.ref_type }}
@@ -73,7 +74,8 @@ jobs:
             echo "NPM_TOKEN is required before publishing any tag assets" >&2
             exit 1
           fi
-          echo "tag publication credentials are present"
+          npm whoami --registry https://registry.npmjs.org >/dev/null
+          echo "tag publication credentials are present and accepted by npm"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
@@ -104,18 +106,17 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             archive: repogrammar-aarch64-apple-darwin.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: repogrammar-x86_64-pc-windows-msvc.zip
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - name: Build release binary
         run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
-      - name: Package Unix binary
-        if: runner.os != 'Windows'
+      - name: Package release archive
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/repogrammar" dist/repogrammar
@@ -125,19 +126,7 @@ jobs:
           tar -czf "${{ matrix.archive }}" -C dist repogrammar workers
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
         shell: bash
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/repogrammar.exe" "dist/repogrammar.exe"
-          New-Item -ItemType Directory -Force -Path "dist/workers/python" | Out-Null
-          Copy-Item "src/workers/python/worker.py" "dist/workers/python/worker.py"
-          Compress-Archive -Path "dist/repogrammar.exe","dist/workers" -DestinationPath "${{ matrix.archive }}" -Force
-          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLowerInvariant()
-          "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
-        shell: pwsh
-      - name: Smoke packaged Unix artifact
-        if: runner.os != 'Windows'
+      - name: Smoke packaged artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -151,7 +140,8 @@ jobs:
           binary="${smoke_root}/unpacked/repogrammar"
           test -x "${binary}"
           test -f "${smoke_root}/unpacked/workers/python/worker.py"
-          "${binary}" version
+          expected_version="$(node -p "require('./package.json').version")"
+          test "$("${binary}" version)" = "repogrammar ${expected_version}"
           HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
             --project "${smoke_root}/project" --target auto --dry-run --no-autosync \
             --json --progress never > "${smoke_root}/dry-run.json"
@@ -160,7 +150,10 @@ jobs:
             const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             if (value.status !== "dry_run" || value.repository_index_ready !== false) process.exit(1);
           ' "${smoke_root}/dry-run.json"
-          printf 'def packaged_smoke():\n    return True\n' > "${smoke_root}/project/app.py"
+          mkdir -p "${smoke_root}/project/tests"
+          for name in one two three; do
+            printf 'def test_%s():\n    assert True\n' "${name}" > "${smoke_root}/project/tests/test_${name}.py"
+          done
           HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" setup \
             --project "${smoke_root}/project" --target auto --yes --no-autosync \
             --json --progress never > "${smoke_root}/live.json"
@@ -170,50 +163,17 @@ jobs:
             if (value.product_self_test_state !== "passed" || value.repository_index_ready !== true) process.exit(1);
             if (value.agent_query_ready !== false || value.suggested_question !== null) process.exit(1);
           ' "${smoke_root}/live.json"
-      - name: Smoke packaged Windows artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "repogrammar-package-smoke"
-          $unpacked = Join-Path $smokeRoot "unpacked"
-          $home = Join-Path $smokeRoot "home"
-          $project = Join-Path $smokeRoot "project"
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $smokeRoot
-          New-Item -ItemType Directory -Force -Path $unpacked,$home,$project | Out-Null
-          Expand-Archive -LiteralPath "${{ matrix.archive }}" -DestinationPath $unpacked
-          $binary = Join-Path $unpacked "repogrammar.exe"
-          if (!(Test-Path -LiteralPath (Join-Path $unpacked "workers/python/worker.py"))) {
-            throw "packaged Python worker is missing"
-          }
-          & $binary version
-          if ($LASTEXITCODE -ne 0) { throw "packaged version smoke failed" }
-          $oldHome = $env:HOME
-          $oldProfile = $env:USERPROFILE
-          $oldPath = $env:PATH
-          $gitDirectory = Split-Path -Parent (Get-Command git).Source
-          $pythonDirectory = Split-Path -Parent (Get-Command python).Source
-          $env:HOME = $home
-          $env:USERPROFILE = $home
-          $env:PATH = "$gitDirectory;$pythonDirectory;$env:SystemRoot\System32;$env:SystemRoot"
-          try {
-            $dryRun = & $binary setup --project $project --target auto --dry-run --no-autosync --json --progress never | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $dryRun.status -ne "dry_run" -or $dryRun.repository_index_ready) {
-              throw "packaged setup dry-run smoke failed"
-            }
-            "def packaged_smoke():`n    return True`n" | Set-Content -Encoding utf8 (Join-Path $project "app.py")
-            $live = & $binary setup --project $project --target auto --yes --no-autosync --json --progress never | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $live.product_self_test_state -ne "passed" -or !$live.repository_index_ready) {
-              throw "packaged product MCP self-test smoke failed"
-            }
-            if ($live.agent_query_ready -or $null -ne $live.suggested_question) {
-              throw "repository-only package smoke overclaimed agent readiness"
-            }
-          } finally {
-            $env:HOME = $oldHome
-            $env:USERPROFILE = $oldProfile
-            $env:PATH = $oldPath
-          }
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" find \
+            --project "${smoke_root}/project" --json tests/test_one.py > "${smoke_root}/find.json"
+          HOME="${smoke_root}/home" PATH="${tool_path}" "${binary}" check \
+            --project "${smoke_root}/project" --json tests/test_one.py > "${smoke_root}/check.json"
+          node -e '
+            const fs = require("fs");
+            const find = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const check = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+            if (find.status !== "ok" || !find.query_route?.selected_family_id) process.exit(1);
+            if (check.status !== "CONTEXT_ONLY" || check.check?.advisory_status !== "UNKNOWN") process.exit(1);
+          ' "${smoke_root}/find.json" "${smoke_root}/check.json"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
@@ -236,10 +196,8 @@ jobs:
       - name: Add installer scripts
         run: |
           cp src/install/repogrammar-install.sh release-assets/install.sh
-          cp src/install/install.ps1 release-assets/install.ps1
           cd release-assets
           sha256sum install.sh > install.sh.sha256
-          sha256sum install.ps1 > install.ps1.sha256
       - uses: softprops/action-gh-release@v3
         with:
           prerelease: true

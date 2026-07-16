@@ -10,6 +10,7 @@ RELEASE_BINARY_EXISTED=0
 ORIGINAL_PATH="${PATH:-}"
 SYSTEM_PATH="$(command -p getconf PATH 2>/dev/null || printf '/usr/bin:/bin')"
 CARGO_BIN="$(command -v cargo || true)"
+NODE_BIN="$(command -v node || true)"
 PATH="$SYSTEM_PATH"
 
 restore_release_binary() {
@@ -99,6 +100,19 @@ require_workflow_count_at_least() {
   count="$(grep -Ec -- "$pattern" <<<"$body" || true)"
   if [[ "$count" -lt "$minimum" ]]; then
     echo "$failure" >&2
+    exit 1
+  fi
+}
+
+require_workflow_count_exactly() {
+  local body="$1"
+  local pattern="$2"
+  local expected="$3"
+  local failure="$4"
+  local count
+  count="$(grep -Ec -- "$pattern" <<<"$body" || true)"
+  if [[ "$count" -ne "$expected" ]]; then
+    echo "$failure (expected $expected, found $count)" >&2
     exit 1
   fi
 }
@@ -571,6 +585,19 @@ if [[ -e "${TMP_ROOT}/missing-worker-bin/repogrammar" || -e "${TMP_ROOT}/missing
 fi
 
 RELEASE_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/release.yml"
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node is required for release manifest validation" >&2
+  exit 1
+fi
+PACKAGE_VERSION="$("$NODE_BIN" -p "require('${SCRIPT_DIR}/../../package.json').version")"
+CARGO_VERSION="$(awk -F' *= *' '
+  /^\[/ { section = $0 }
+  section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
+' "${SCRIPT_DIR}/../../Cargo.toml")"
+if [[ "$PACKAGE_VERSION" != "0.2.0-preview.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "public-preview manifests must agree on 0.2.0-preview.0" >&2
+  exit 1
+fi
 WORKFLOW_DISPATCH_TRIGGER="$(awk '
   /^  workflow_dispatch:[[:space:]]*$/ { in_dispatch = 1 }
   in_dispatch && /^[A-Za-z0-9_-]+:[[:space:]]*$/ { exit }
@@ -603,8 +630,10 @@ require_workflow_match "$BUILD_JOB" 'repogrammar-x86_64-apple-darwin\.tar\.gz' \
   "release build matrix is missing macOS x86_64"
 require_workflow_match "$BUILD_JOB" 'repogrammar-aarch64-apple-darwin\.tar\.gz' \
   "release build matrix is missing macOS arm64"
-require_workflow_match "$BUILD_JOB" 'repogrammar-x86_64-pc-windows-msvc\.zip' \
-  "release build matrix is missing Windows x86_64"
+require_workflow_count_exactly "$BUILD_JOB" '^[[:space:]]+target:[[:space:]]+' 4 \
+  "public-preview release matrix must contain exactly four supported targets"
+require_workflow_absence "$BUILD_JOB" 'windows|Windows|pc-windows|\.zip|pwsh|PowerShell|Compress-Archive' \
+  "public-preview release builds must not claim or package Windows support"
 require_workflow_match "$BUILD_JOB" 'src/workers/python/worker\.py' \
   "release artifacts must package the Python worker"
 require_workflow_match "$BUILD_JOB" '\.sha256' \
@@ -629,6 +658,8 @@ require_workflow_match "$CREDENTIAL_PREFLIGHT" 'if[[:space:]].*-z.*NODE_AUTH_TOK
   "the tag publication credential preflight must classify an absent token"
 require_workflow_match "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+1' \
   "missing npm publication credentials must fail the tag release gate"
+require_workflow_match "$CREDENTIAL_PREFLIGHT" 'npm[[:space:]]+whoami' \
+  "tag publication preflight must verify that npm accepts the configured token"
 require_workflow_absence "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+0|NPM_TOKEN.*skipp|skipp.*NPM_TOKEN' \
   "the tag release gate must not describe missing npm credentials as skippable"
 
@@ -640,8 +671,8 @@ require_workflow_match "$PUBLISH_RELEASE_JOB" 'softprops/action-gh-release' \
   "publish_release must create the GitHub prerelease"
 require_workflow_match "$PUBLISH_RELEASE_JOB" 'install\.sh' \
   "GitHub prerelease assets must include install.sh"
-require_workflow_match "$PUBLISH_RELEASE_JOB" 'install\.ps1' \
-  "GitHub prerelease assets must include install.ps1"
+require_workflow_absence "$PUBLISH_RELEASE_JOB" 'install\.ps1|windows|Windows' \
+  "GitHub prerelease assets must not publish the unsupported Windows installer"
 require_workflow_match "$PUBLISH_RELEASE_JOB" '\.sha256' \
   "GitHub prerelease assets must include installer checksums"
 
@@ -658,75 +689,49 @@ require_workflow_absence "$PUBLISH_NPM_JOB" 'exit[[:space:]]+0|skipping npm publ
 # binaries do not prove that an archive is executable or contains the runtime
 # worker. The live no-agent setup also exercises the product tools/list
 # self-test; its JSON evidence must say that the product self-test passed.
-UNIX_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged Unix artifact")"
-WINDOWS_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged Windows artifact")"
-if [[ -z "$UNIX_ARTIFACT_SMOKE" || -z "$WINDOWS_ARTIFACT_SMOKE" ]]; then
-  echo "release build must have named Unix and Windows packaged-artifact smoke steps" >&2
+PACKAGED_ARTIFACT_SMOKE="$(workflow_named_step "$BUILD_JOB" "Smoke packaged artifact")"
+if [[ -z "$PACKAGED_ARTIFACT_SMOKE" ]]; then
+  echo "release build must have a named packaged-artifact smoke step" >&2
   exit 1
 fi
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'tar[[:space:]].*-x' \
-  "Unix packaged smoke must extract the archive it will upload"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'binary=.*unpacked/repogrammar' \
-  "Unix packaged smoke must bind the executable from the extracted archive"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'unpacked/workers/python/worker\.py' \
-  "Unix packaged smoke must verify the worker inside the extracted archive"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*version' \
-  "Unix packaged smoke must run version from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*setup' \
-  "Unix packaged smoke must invoke setup through the extracted binary"
-require_workflow_count_at_least "$UNIX_ARTIFACT_SMOKE" '\$\{binary\}.*setup' 2 \
-  "Unix packaged smoke must run both dry-run and live setup from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '--dry-run' \
-  "Unix packaged smoke must run setup --dry-run --json from the extracted binary"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" '--json' \
-  "Unix packaged smoke must validate setup JSON"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'command -v git' \
-  "Unix packaged smoke must preserve git in its isolated tool PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'command -v python3' \
-  "Unix packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'ln -s.*git|ln -sf.*git' \
-  "Unix packaged smoke must expose only the resolved git executable to setup"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'ln -s.*python3|ln -sf.*python3' \
-  "Unix packaged smoke must expose only the resolved Python runtime to setup"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'tool_path=.*tools' \
-  "Unix packaged smoke must build a dedicated tool-only PATH"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'PATH=.*tool_path' \
-  "Unix packaged smoke must isolate live setup from real agent configuration"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'product_self_test_state' \
-  "Unix packaged smoke must inspect product MCP self-test evidence"
-require_workflow_match "$UNIX_ARTIFACT_SMOKE" 'passed' \
-  "Unix packaged smoke must require a passed product MCP self-test"
-
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Expand-Archive' \
-  "Windows packaged smoke must extract the archive it will upload"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'repogrammar\.exe' \
-  "Windows packaged smoke must select the extracted executable"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '\$binary.*\$unpacked.*repogrammar\.exe' \
-  "Windows packaged smoke must bind the executable from the extracted archive"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'workers/python/worker\.py' \
-  "Windows packaged smoke must verify the worker inside the extracted archive"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+version' \
-  "Windows packaged smoke must run version from the extracted binary"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+setup' \
-  "Windows packaged smoke must run setup from the extracted binary"
-require_workflow_count_at_least "$WINDOWS_ARTIFACT_SMOKE" '&[[:space:]]+\$binary[[:space:]]+setup' 2 \
-  "Windows packaged smoke must run both dry-run and live setup from the extracted binary"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '--dry-run' \
-  "Windows packaged smoke must include a dry-run setup"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '--json' \
-  "Windows packaged smoke must validate setup JSON"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Get-Command[[:space:]]+git' \
-  "Windows packaged smoke must preserve git in its isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'Get-Command[[:space:]]+python' \
-  "Windows packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'System32' \
-  "Windows packaged smoke must preserve required system commands while isolating agents"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" '\$env:PATH[[:space:]]*=' \
-  "Windows packaged smoke must install an isolated tool PATH"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'product_self_test_state' \
-  "Windows packaged smoke must inspect product MCP self-test evidence"
-require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'passed' \
-  "Windows packaged smoke must require a passed product MCP self-test"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'tar[[:space:]].*-x' \
+  "packaged smoke must extract the exact archive it will upload"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'binary=.*unpacked/repogrammar' \
+  "packaged smoke must bind the executable from the extracted archive"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'unpacked/workers/python/worker\.py' \
+  "packaged smoke must verify the worker inside the extracted archive"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*version' \
+  "packaged smoke must run version from the extracted binary"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'expected_version=.*package\.json' \
+  "packaged smoke must derive the expected version from the release manifest"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'repogrammar.*expected_version' \
+  "packaged smoke must require exact binary/manifest version agreement"
+require_workflow_count_at_least "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*setup' 2 \
+  "packaged smoke must run both dry-run and live setup from the extracted binary"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--dry-run' \
+  "packaged smoke must run setup --dry-run --json"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--json' \
+  "packaged smoke must validate machine-readable setup and query output"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'command -v git' \
+  "packaged smoke must preserve git in its isolated tool PATH"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'command -v python3' \
+  "packaged smoke must preserve the Python worker runtime in its isolated tool PATH"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'PATH=.*tool_path' \
+  "packaged smoke must isolate setup from real agent configuration"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'HOME=.*home' \
+  "packaged smoke must use a fresh isolated HOME"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'product_self_test_state' \
+  "packaged smoke must inspect product MCP self-test evidence"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'product_self_test_state.*passed' \
+  "packaged smoke must require a passed product MCP self-test"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*find' \
+  "packaged smoke must exercise find from the extracted binary"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '\$\{binary\}.*check' \
+  "packaged smoke must exercise check from the extracted binary"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'CONTEXT_ONLY' \
+  "packaged check smoke must preserve advisory context semantics"
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'advisory_status.*UNKNOWN' \
+  "packaged check smoke must preserve typed UNKNOWN truthfulness"
 
 CI_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/ci.yml"
 MACOS_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" macos-product-smoke)"
@@ -758,11 +763,8 @@ require_workflow_match "$MACOS_SMOKE_JOB" 'product_self_test_state' \
   "macOS coverage must validate product MCP self-test evidence"
 
 WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
-grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
-grep -q "Get-FileHash -Algorithm SHA256" "$WINDOWS_INSTALLER"
-grep -q "Assert-SafeArchiveEntries" "$WINDOWS_INSTALLER"
-grep -q "release artifact was not found" "$WINDOWS_INSTALLER"
-grep -q "v0.2.0-preview.0" "$WINDOWS_INSTALLER"
+# Windows remains a source-checkout contributor path, not a public-preview
+# release artifact or npm platform claim.
 grep -q "FromSource" "$WINDOWS_INSTALLER"
 grep -q "REPOGRAMMAR_SOURCE_BINARY" "$WINDOWS_INSTALLER"
 grep -q "cargo build --release" "$WINDOWS_INSTALLER"
