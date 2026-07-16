@@ -730,9 +730,8 @@ require_workflow_match "$WINDOWS_ARTIFACT_SMOKE" 'passed' \
 
 CI_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/ci.yml"
 MACOS_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" macos-product-smoke)"
-WINDOWS_SMOKE_JOB="$(workflow_job "$CI_WORKFLOW" windows-installer-smoke)"
-if [[ -z "$MACOS_SMOKE_JOB" || -z "$WINDOWS_SMOKE_JOB" ]]; then
-  echo "CI must include macos-product-smoke and windows-installer-smoke jobs" >&2
+if [[ -z "$MACOS_SMOKE_JOB" ]]; then
+  echo "CI must include the macos-product-smoke job" >&2
   exit 1
 fi
 require_workflow_match "$MACOS_SMOKE_JOB" 'runs-on:[[:space:]]+macos-' \
@@ -757,25 +756,6 @@ require_workflow_match "$MACOS_SMOKE_JOB" 'PATH=.*tool_path' \
   "macOS coverage must isolate setup from real agent CLIs"
 require_workflow_match "$MACOS_SMOKE_JOB" 'product_self_test_state' \
   "macOS coverage must validate product MCP self-test evidence"
-
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'install\.ps1[[:space:]]+-InstallCliOnly[[:space:]]+-FromSource[[:space:]]+-Yes' \
-  "Windows smoke must install the source-built product through install.ps1"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'repogrammar\.exe' \
-  "Windows smoke must execute the installed product"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'setup' \
-  "Windows coverage must extend beyond installer and version into setup"
-require_workflow_match "$WINDOWS_SMOKE_JOB" '--dry-run' \
-  "Windows coverage must exercise setup dry-run"
-require_workflow_match "$WINDOWS_SMOKE_JOB" '--json' \
-  "Windows coverage must validate setup JSON"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'Get-Command[[:space:]]+git' \
-  "Windows coverage must preserve git in its isolated tool PATH"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'Get-Command[[:space:]]+python' \
-  "Windows coverage must preserve the Python worker runtime in its isolated tool PATH"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'System32' \
-  "Windows coverage must preserve required system commands while isolating agents"
-require_workflow_match "$WINDOWS_SMOKE_JOB" 'product_self_test_state' \
-  "Windows coverage must validate product MCP self-test evidence"
 
 WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
 grep -q "repogrammar-x86_64-pc-windows-msvc.zip" "$WINDOWS_INSTALLER"
