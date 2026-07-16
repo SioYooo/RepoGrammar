@@ -1,0 +1,7 @@
+[package]
+name = "repogrammar-rust-thiserror-exact-errors-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1"

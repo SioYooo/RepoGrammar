@@ -1,0 +1,7 @@
+[package]
+name = "repogrammar-rust-axum-exact-routes-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"

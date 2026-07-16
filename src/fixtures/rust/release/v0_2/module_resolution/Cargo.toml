@@ -1,0 +1,10 @@
+[package]
+name = "repogrammar-rust-module-resolution-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["crates/*"]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
