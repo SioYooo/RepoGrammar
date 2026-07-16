@@ -80,6 +80,11 @@ The current implementation covers a bounded static CPython `ast` slice only:
 
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
+- source-ordered module-scope snapshots and immutable AST range caching for
+  bounded large-module analysis. Per-unit framework alias, assignment-role,
+  and range queries reuse those snapshots instead of rescanning all preceding
+  top-level statements. The private Rust process boundary accepts at most a
+  2 MiB response while preserving the 1 MiB request and 2,000-fact limits;
 - CPython `ast` structural fact output for ordinary import bindings, decorator
   anchors, class bases, simple call targets, bounded same-function application
   call targets, pytest test-function anchors, alias-aware pytest fixture

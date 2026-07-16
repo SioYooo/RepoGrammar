@@ -608,8 +608,10 @@ allowed.
   `getattr(...)` assignments that do not become dynamic call-target UNKNOWNs,
   oversized request
   rejection, unsafe path and symlink-escape rejection, bounded semantic-mode
-  source reads, and absence of source snippets, absolute paths, or unsafe
-  dynamic-import literal targets.
+  source reads, checked-in-worker self-analysis within a bounded subprocess
+  timeout and through the Rust parser boundary, responses above the former 1
+  MiB ceiling but below the explicit 2 MiB response limit, and absence of
+  source snippets, absolute paths, or unsafe dynamic-import literal targets.
 - Release fixture smoke tests currently copy committed TS/JS source fixtures
   from both the legacy transitional `src/fixtures/typescript/release/v0_1/`
   corpus and the conservative exact-anchor `src/fixtures/typescript/release/v0_2/`

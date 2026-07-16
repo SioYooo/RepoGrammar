@@ -23,7 +23,10 @@ use std::process::{Command, Stdio};
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
 
-const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 1024 * 1024;
+// A source file can legitimately produce substantially more metadata than its
+// input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
+// bounded, but leave enough room for the bundled worker to analyze itself.
+const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PYTHON_FRONTEND_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_PYTHON_FRONTEND_FACTS: usize = 2_000;
 const MAX_PYTHON_FACT_TEXT_BYTES: usize = 2_048;
@@ -4332,6 +4335,28 @@ def _api_client():
             report.diagnostics[0].severity,
             ParseDiagnosticSeverity::Error
         );
+    }
+
+    #[test]
+    fn cpython_frontend_parses_bundled_worker_with_bounded_large_output() {
+        let worker_path = source_checkout_python_worker_script();
+        let source = fs::read_to_string(&worker_path).expect("checked-in Python worker");
+        assert!(
+            source.len() > 200_000,
+            "fixture must exercise a large module"
+        );
+
+        let report = PythonAstParser::default()
+            .parse(document_at("src/workers/python/worker.py", &source))
+            .expect("bundled worker should analyze its own source");
+
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind == CodeUnitKind::Module));
+        assert!(report.units.len() > 100);
+        assert!(report.semantic_facts.len() > 1_000);
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]

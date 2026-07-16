@@ -611,7 +611,15 @@ Python worker tests run under `python3` and assert parseable JSON/NDJSON,
 repo-relative paths, strict content hashes, no source snippets, invalid path
 rejection, syntax diagnostics, structural fact output, typed `UNKNOWN` output,
 bounded semantic-mode file reads, project-config summary sanitization, and
-framework-role heuristic output.
+framework-role heuristic output. Private parse-document analysis precomputes a
+source-ordered module-scope timeline and caches immutable AST byte ranges, so
+per-unit alias and assignment lookups do not repeatedly rescan a large module.
+The Rust adapter keeps both directions bounded: requests remain limited to 1
+MiB, while responses are limited to 2 MiB because a valid source can emit more
+metadata than its input while still remaining below the 2,000-fact cap. The
+checked-in worker must parse its own source within the executable-test timeout
+and across the Rust process boundary without weakening fact, path, hash, or
+source-free validation.
 
 It still does not bundle a TypeScript compiler dependency, run package scripts,
 run Pyrefly/Pyright, expose raw semantic facts through query/MCP commands, or

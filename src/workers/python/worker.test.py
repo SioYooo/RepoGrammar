@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import runpy
@@ -23,6 +24,7 @@ def run_worker(payload):
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
@@ -4131,3 +4133,24 @@ celery_app_kinds, celery_app_facts = _preview_parse(
 )
 assert "celery_task" in celery_app_kinds
 assert "celery.task" in _anchor_targets(celery_app_facts, "celery_task_decorator")
+
+# The checked-in worker is a real large-module regression fixture. It must
+# analyze itself within the bounded subprocess timeout without truncating its
+# source-free metadata response or exceeding the fact-count contract.
+self_source = WORKER.read_text()
+self_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_document",
+        "path": "src/workers/python/worker.py",
+        "content_hash": "sha256:" + hashlib.sha256(self_source.encode()).hexdigest(),
+        "repository_revision": "UNKNOWN",
+        "text": self_source,
+    }
+)
+assert len(self_messages) == 1
+self_response = self_messages[0]
+assert self_response["diagnostics"] == []
+assert len(self_response["units"]) > 100
+assert 1_000 < len(self_response["facts"]) <= 2_000
+assert_no_fact_source_payloads(self_response["facts"])
