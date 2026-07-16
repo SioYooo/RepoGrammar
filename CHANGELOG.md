@@ -74,6 +74,13 @@ GitHub assets, and use the source-checkout path when either check fails.
   repository-index readiness, auto-sync readiness, family-evidence state, and
   all limitations; repository-only success has no suggested coding-agent
   question and initialization/indexing retain distinct stage labels.
+- Corrected two native release-gate false failures. Unix lock-owner liveness
+  now tolerates only the one-second rounding window of the `ps etimes` probe,
+  preventing a healthy autosync daemon from becoming `running=false` at a
+  wall-clock boundary while still rejecting later PID reuse. The Windows
+  source-only installer contract now returns explicit success after verifying
+  its intentionally failing delegated-install case, so that expected child
+  status cannot leak into the CI job result.
 - Versioned the private CPython parse-document boundary independently of the
   public semantic-worker protocol. Requests and normal responses now require
   the exact `protocol_version=1, contract_revision=1` tuple. A newer worker

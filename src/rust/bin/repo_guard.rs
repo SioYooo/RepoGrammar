@@ -476,7 +476,13 @@ fn smoke_packaged_artifact(
             &["autosync", "status", "--project", &project, "--json"],
         )?;
         if daemon["running"] != true {
-            return Err("autosync exited before activating the changed generation".to_string());
+            return Err(format!(
+                "autosync was not verifiably running before activating the changed generation (startup_state={}, daemon_state={}, repository_ready={}, startup_failure_code={})",
+                json_string_label(&daemon, "startup_state"),
+                json_string_label(&daemon, "daemon_state"),
+                json_bool_label(&daemon, "repository_ready"),
+                json_string_label(&daemon, "startup_failure_code"),
+            ));
         }
     }
     if activated_generation.is_none() {

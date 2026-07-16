@@ -26,7 +26,9 @@ allowed.
   the tarball with the temporary directory.
 - Native CI must run the PowerShell source-only installer contract on Windows.
   That job is platform evidence for the contributor path only and must not
-  upload or imply a Windows release artifact.
+  upload or imply a Windows release artifact. The wrapper must explicitly
+  return success after asserting an intentionally failing child invocation so
+  the expected child status cannot become the native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
 - Process-boundary tests that rely on inherited child pipes must make child
@@ -84,7 +86,8 @@ allowed.
   `uninit --yes`, unlock inspection without `--force --yes`, confirmed stale
   `index.lock` removal with `--force --yes`, active/unknown/invalid lock
   refusal, PID-reuse-aware stale lock classification when the platform exposes
-  live process start time, shared process-liveness policy coverage,
+  live process start time, including the one-second precision boundary of the
+  Unix elapsed-time probe, shared process-liveness policy coverage,
   daemon/SQLite lock preservation, repo-local autosync
   enable/status/disable config behavior, autosync daemon-lock inspection,
   repository readiness rejecting daemon locks whose PID is live but whose Unix
@@ -526,7 +529,9 @@ allowed.
   dry-run/live product-MCP self-test, explicit `resync`, unchanged incremental
   copy-forward, `find`/advisory-`check`, autosync readiness across at least three
   poll intervals, changed-file generation activation, stop, and daemon-lock
-  removal on native Linux and macOS. Windows remains a source-only boundary,
+  removal on native Linux and macOS. Lifecycle failures must report only
+  low-cardinality readiness fields and must not claim that a process exited
+  when liveness was merely unverifiable. Windows remains a source-only boundary,
   target/scope pass-through for comma-separated, `none`, and
   local-scope install requests, stale PATH prune failure propagation, and
   command removal.

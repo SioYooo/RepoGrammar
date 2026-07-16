@@ -519,3 +519,9 @@ exit /B 1
     if ($null -ne $SavedGlobalHome) { $env:HOME = $SavedGlobalHome } else { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $TempRoot -ErrorAction SilentlyContinue
 }
+
+# The final contract case intentionally invokes a failing delegated install.
+# Do not leak that expected child status as the test process result after all
+# assertions and cleanup have completed successfully.
+Write-Host "PowerShell source-only installer contract passed"
+exit 0
