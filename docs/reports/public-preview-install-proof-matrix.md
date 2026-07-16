@@ -119,8 +119,9 @@ npm 10.9.8 and diagnostic run `29528818754` with npm 12.0.1 both received
 registry `E400` while executing the standard `dist-tag rm` request. No version
 was republished and no tag was moved.
 
-Current verdict: `PUBLIC_PREVIEW_PINNED_INSTALL_ONLY`. The exact version and
+The prerelease is the package's only published version, so npm's required
+`latest` tag may map to it without turning the package into a stable release.
+Current bounded verdict: `PUBLIC_PREVIEW_READY_PINNED`. The exact version and
 `@preview` path are publicly usable; unversioned npm/npx also resolves the
-prerelease and is not the supported installation contract. The registry
-dist-tag condition remains an external blocker for an unqualified release-
-candidate-ready verdict.
+prerelease and remains outside the supported installation contract. This is
+public-preview readiness, not stable readiness.
