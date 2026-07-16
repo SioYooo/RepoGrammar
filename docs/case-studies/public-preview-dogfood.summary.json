@@ -15,16 +15,19 @@
       {
         "id": "bounded_large_module_remediation",
         "commit": "dd689a4634d0dac4e4cce19d948d046441f99a5d",
+        "integrated_commit": "9d8648c9d24443fc2f4812f6974c4fffa69c33a4",
         "binary_sha256": "54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72"
       },
       {
         "id": "router_context_contract_remediation",
         "commit": "e12e45e5a9d8e6627a0a5f8811d910b5de0cafe6",
+        "integrated_commit": "e13f84343bb0053daab8dfd66851a2f72eedeffd",
         "binary_sha256": "3f1f1c135fc8b6a17aa62b3f2a46fafeda8f140c19585170d8a293221205cd4a"
       },
       {
         "id": "router_unknown_claim_remediation",
         "commit": "736187f0de3f62b2383bfd7666c9c805420e76da",
+        "integrated_commit": "2a09e9a18dd1ce10194d75e80a3066430edb1f59",
         "binary_sha256": "dc08de1e13db8f3369fde90667951628a24851d96beea6b846e103901227ad4b"
       }
     ]

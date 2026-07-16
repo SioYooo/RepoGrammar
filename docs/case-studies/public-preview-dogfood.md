@@ -3,8 +3,11 @@
 - Evidence date: 2026-07-16
 - Baseline product commit: `73770e6964ba28b5ac1064552fbd722666c4de03`
 - First remediation rerun commit: `dd689a4634d0dac4e4cce19d948d046441f99a5d`
+- Integrated equivalent: `9d8648c9d24443fc2f4812f6974c4fffa69c33a4`
 - Router-contract remediation rerun commit: `e12e45e5a9d8e6627a0a5f8811d910b5de0cafe6`
+- Integrated equivalent: `e13f84343bb0053daab8dfd66851a2f72eedeffd`
 - Final remediation rerun commit: `736187f0de3f62b2383bfd7666c9c805420e76da`
+- Integrated equivalent: `2a09e9a18dd1ce10194d75e80a3066430edb1f59`
 - Product version: `0.2.0-preview.0`
 - Baseline binary SHA-256: `e8b234a372033710fdb9ec18d1e3ba74679dbdbb5f1ae1aa6417ce2eb0b125a1`
 - First remediation rerun binary SHA-256: `54fd8ca3a2db1823bef73fa68e6865b51f20cad132f081c25ef1f3567484de72`
@@ -58,7 +61,9 @@ accepted by CPython bytecode compilation with a disposable cache. The first
 remediation rerun supplies the stronger root-cause evidence above; the public
 CLI remained sanitized. No product code was authored on this documentation
 branch: remediation commits were supplied by the coordinator and cherry-picked
-for reproducible reruns.
+for reproducible reruns. The integrated-equivalent hashes above contain the
+same remediation changes on the release-candidate branch and are the hashes
+expected to remain reachable after that branch is published.
 
 ## Baseline results
 
