@@ -8,8 +8,10 @@
   public preview showed that the registry could initialize `latest` even when
   `npm publish --tag preview` was used. Tag publication now remains red until
   `preview` matches the manifest prerelease and `latest` is absent or stable;
-  an idempotent manual repair workflow fixes already-published registry state
-  without republishing the immutable version.
+  an idempotent manual repair workflow attempts correction without republishing
+  the immutable version. npm currently rejects removal for this first-package
+  state with registry `E400`, so pinned `@preview`/exact-version installation is
+  documented and the unresolved gate remains visible.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 

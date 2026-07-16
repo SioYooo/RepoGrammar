@@ -33,6 +33,12 @@ Only when both commands succeed, run the pinned preview:
 npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
 ```
 
+Always include `@0.2.0-preview.0` or `@preview`. npm initialized `latest` to
+this first prerelease and currently rejects the standard dist-tag removal with
+`E400`, so an unversioned `npm install`/`npx` also resolves the preview. The
+exact-version path above is the supported public-preview contract until npm
+accepts the repair or RepoGrammar publishes a real stable release.
+
 If either check fails, use the contributor/dogfood path, which builds once from
 source. The complete publication gate is in the
 [release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/public-preview-release-checklist.md).
