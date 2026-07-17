@@ -4,14 +4,44 @@
 
 No unreleased changes.
 
-## 0.2.1 — 2026-07-17 stable channel
+## 0.2.2 — 2026-07-17 stable channel
 
-RepoGrammar `0.2.1` is the patch-forward stable-channel candidate intended to
+RepoGrammar `0.2.2` is the patch-forward stable-channel candidate intended to
 become the first published stable-channel pre-1.0 release. It makes no
 production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
 measured-token-savings, Windows-support, or expanded-language-support claim.
 Registry availability must be verified independently; this source record does
 not prove that GitHub or npm publication completed.
+
+### Changed
+
+- Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
+  current install documentation on `0.2.2`. Historical
+  `0.2.0-preview.0` evidence remains historical and the npm `preview` dist-tag
+  must stay on that immutable prerelease.
+- Advanced the stable release authority to `v0.2.2`. The retained `v0.2.0` and
+  `v0.2.1` candidate tags remain non-reusable, and neither failed unpublished
+  version may appear in the stable registry inventory.
+
+### Fixed
+
+- Corrected the npm staging package spec to
+  `./npm-candidate/sioyooo-repogrammar-0.2.2.tgz`. The explicit `./` makes the
+  argument an unambiguous local tarball instead of GitHub shorthand.
+
+## 0.2.1 — 2026-07-17 failed publication candidate
+
+The retained annotated `v0.2.1` tag points to
+`22956a2d5dc8ef19241ae86cefbe42c6709b05a5`. Its tag workflow run
+`29582156611`, attempt 1, completed all artifact and private-draft gates. The
+expected 11-asset private GitHub draft, id `355686885`, remained unpublished.
+npm staging then failed before registry staging because the bare
+`npm-candidate/sioyooo-repogrammar-0.2.1.tgz` argument was parsed as GitHub
+shorthand instead of a local package file. The npm stage inventory remained
+empty. GitHub `v0.2.1` and npm `@sioyooo/repogrammar@0.2.1` were never
+published. The tag and private draft are retained and must not be moved,
+replaced, published as another version, or reused; `0.2.2` is the required
+patch-forward publication candidate.
 
 ### Added
 
@@ -38,7 +68,7 @@ not prove that GitHub or npm publication completed.
   `session_restart_recommended` JSON boolean. This avoids implying that an
   already-running agent hot-reloads newly synchronized instructions.
 - Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
-  current install documentation on `0.2.1`. Historical
+  the candidate source documentation on `0.2.1`. Historical
   `0.2.0-preview.0` evidence remains historical and the npm `preview` dist-tag
   must stay on that immutable prerelease.
 - Generalized the release policy from preview-only to fail-closed preview and
@@ -78,8 +108,9 @@ The retained annotated `v0.2.0` tag points to
 `29571508953`, attempt 1, failed before creating a GitHub draft or npm stage
 because the workflow used a runner-incompatible `gh api --slurp --jq`
 combination. GitHub `v0.2.0` and npm `@sioyooo/repogrammar@0.2.0` were never
-published. The tag is retained and must not be moved, deleted, or reused;
-`0.2.1` is the required patch-forward publication candidate.
+published. The tag is retained and must not be moved, deleted, or reused.
+`0.2.1` was the next patch-forward candidate but also remained unpublished;
+`0.2.2` is the current publication candidate.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 

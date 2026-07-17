@@ -338,7 +338,7 @@ function testRejectsUnsafeReleaseTagsAndCachePaths() {
 }
 
 function testPlatformArtifactMatrixAndUnsupportedTargets() {
-  assert.equal(packageJson.version, "0.2.1");
+  assert.equal(packageJson.version, "0.2.2");
   assert.deepEqual(packageJson.os, ["darwin", "linux"]);
   assert.deepEqual(packageJson.cpu, ["x64", "arm64"]);
   // npm applies a root `libc` restriction to Darwin too (where libc is

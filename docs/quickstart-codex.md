@@ -121,7 +121,7 @@ After the exact npm version, complete npm channel mapping, and matching GitHub
 asset pass the availability gate in `quickstart.md`:
 
 ```text
-npx @sioyooo/repogrammar@0.2.1 setup --project /path/to/your/repo --target codex
+npx @sioyooo/repogrammar@0.2.2 setup --project /path/to/your/repo --target codex
 ```
 
 If any check fails, use the source acquisition path above.

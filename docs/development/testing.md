@@ -974,13 +974,15 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. Stable requires exact `latest=0.2.1`, exact
+state. Stable requires exact `latest=0.2.2`, exact
 `preview=0.2.0-preview.0`, both immutable versions in the registry inventory,
-the explicit absence of the failed `0.2.0` candidate, and a retained-candidate
-SRI match. Any other prerelease under `preview`, any prerelease-valued `latest`
-after stable, the failed `0.2.0` candidate appearing as published, malformed
-inventories, or unpublished tag targets fail closed. Manual reconciliation
-remains read-only. Stable
+the explicit absence of the failed `0.2.0` and `0.2.1` candidates, and a
+retained-candidate SRI match. Any other prerelease under `preview`, any
+prerelease-valued `latest` after stable, either failed candidate appearing as
+published, malformed inventories, or unpublished tag targets fail closed. The
+workflow contract tests require the exact `./npm-candidate/...` local package
+spec and reject the bare relative form that npm can interpret as GitHub
+shorthand. Manual reconciliation remains read-only. Stable
 completion additionally requires immutable GitHub release verification, the
 exact 11-asset inventory including the public npm candidate manifest, every
 asset attestation and checksum, npm signature/provenance verification, and the

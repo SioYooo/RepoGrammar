@@ -129,10 +129,13 @@ Git history must prove the tag is the exact version tag at the current
 match. Preview and stable tags both use the same stage-only npm Trusted
 Publisher, protected `npm-release` GitHub environment, and one exact package
 tarball produced and smoked in that tag run. They do not use a traditional npm
-write token. The tag run uploads a private GitHub draft and privately stages
-npm; a human reviews those exact candidates before making either registry
-public. The GitHub draft contains exactly four archives, their four checksums,
-`install.sh`, its checksum, and `npm-candidate-manifest.json` (11 assets). A
+write token. The staging package spec must begin with `./` and name that exact
+local tarball; a bare relative path is forbidden because npm may parse it as
+GitHub shorthand instead of local package input. The tag run uploads a private
+GitHub draft and privately stages npm; a human reviews those exact candidates
+before making either registry public. The GitHub draft contains exactly four
+archives, their four checksums, `install.sh`, its checksum, and
+`npm-candidate-manifest.json` (11 assets). A
 full tag-run rerun refuses any existing release or draft instead of replacing
 candidate files; rerunning only failed staging jobs remains available. Stable
 publication then publishes the complete GitHub draft as an immutable normal
@@ -144,7 +147,7 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-documentation should pin `v0.2.1` for reproducible acquisition even after the
+documentation should pin `v0.2.2` for reproducible acquisition even after the
 normal release becomes GitHub `latest`. When a `latest` or explicit artifact
 lookup fails, installers must report that the release artifact was not found,
 suggest the exact `--version <release-tag>`, and mention
@@ -284,7 +287,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.2.1.tgz`;
+  `npm install -g ./sioyooo-repogrammar-0.2.2.tgz`;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
