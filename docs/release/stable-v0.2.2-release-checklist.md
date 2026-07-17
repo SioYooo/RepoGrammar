@@ -1,7 +1,7 @@
 # Stable v0.2.2 Release Checklist
 
-This checklist is the canonical gate for RepoGrammar `0.2.2`, the intended
-first published stable-channel pre-1.0 release. It makes `0.2.2` the npm
+This checklist records the canonical gate for RepoGrammar `0.2.2`, the first
+published stable-channel pre-1.0 release. It makes `0.2.2` the npm
 `latest` version. It does not claim production readiness, 1.0 API stability,
 a stable MCP API, sound static analysis, measured token savings, Windows
 support, or support beyond the documented bounded language and framework
@@ -66,11 +66,22 @@ index and passing product self-test. The verifier tool allowlist therefore
 includes `git`; the release tag, artifacts, package, candidate identity, and
 permissions remain unchanged.
 
+Finalizer run
+[`29591027524`](https://github.com/SioYooo/RepoGrammar/actions/runs/29591027524)
+used the verifier definition at main commit
+`4920656a7029861ffcd4f2b3868b0273c03ba030`, checked out immutable tag
+`v0.2.2`, and remained bound to candidate run `29586694524`, attempt 1. It
+passed every immutable GitHub release, npm integrity/provenance, packaged
+native, installer, pinned/latest/preview launcher, repository setup/index, and
+product MCP self-test gate. The final evidence step emitted exactly
+`STABLE_RELEASE_READY`.
+
 ## Immutable identities
 
 - Cargo, Cargo lockfile, and npm manifest versions are exactly `0.2.2`.
-- The publication candidate tag is `v0.2.2`, created at the exact current `origin/main`
-  commit after all gates pass.
+- The publication tag is `v0.2.2` at
+  `21d6db428e1836afe09d15743dcb55c4c1cd6f2b`, the exact `origin/main` commit
+  when the tag was created.
 - npm `@sioyooo/repogrammar@0.2.2` is a new immutable version. The existing
   `0.2.0-preview.0` tarball and `preview` dist-tag are never replaced,
   unpublished, or repurposed.

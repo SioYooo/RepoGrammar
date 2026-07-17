@@ -158,8 +158,13 @@ passes its qualification gates.
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md>
 - Limitations:
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md>
-- Stable-channel `0.2.2` release: **pending; add only after the immutable tag,
-  exact assets, npm version, provenance, and public smokes are verified**
+- Stable-channel `0.2.2` GitHub release:
+  <https://github.com/SioYooo/RepoGrammar/releases/tag/v0.2.2>
+- Stable-channel `0.2.2` npm package:
+  <https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.2.2>
+- Final public verification: Actions run
+  [`29591027524`](https://github.com/SioYooo/RepoGrammar/actions/runs/29591027524)
+  emitted `STABLE_RELEASE_READY`
 - Public YouTube demo: **pending recording, audio, upload, and signed-out access
   verification**
 - Codex `/feedback` Session ID: **pending verified submission receipt**
@@ -168,8 +173,8 @@ passes its qualification gates.
 
 - [ ] Repository link points at the public repository and the submitted commit
       is reachable.
-- [ ] A no-build evaluator path is live, or the submission clearly labels the
-      remaining source-build requirement.
+- [x] A no-build evaluator path is live through the pinned npm package and
+      immutable GitHub release.
 - [ ] The public video is under three minutes, contains spoken audio, and works
       while signed out.
 - [ ] The project description explains the GPT-5.6 planning/review and Codex
@@ -212,12 +217,10 @@ correctness-gated study defined by the repository dogfood protocol.
 Repository copy and the audited static terminal visual are ready. The following
 steps cannot be completed by a documentation commit:
 
-1. verify and publish the exact stable `v0.2.2` tag, GitHub artifacts, and npm
-   package;
-2. record the live 90–100 second demo with spoken audio;
-3. edit, caption, and upload the video to YouTube;
-4. verify the video from a signed-out session; and
-5. submit Devpost fields and capture the accepted Codex `/feedback` Session ID.
+1. record the live 90–100 second demo with spoken audio;
+2. edit, caption, and upload the video to YouTube;
+3. verify the video from a signed-out session; and
+4. submit Devpost fields and capture the accepted Codex `/feedback` Session ID.
 
 Until those steps are evidenced, keep every placeholder and pending label in
 this file.
