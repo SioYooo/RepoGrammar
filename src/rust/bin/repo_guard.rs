@@ -2210,7 +2210,7 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
 }
 
 const PRODUCT_EVAL_CORPUS_SCHEMA: &str = "product-eval-corpus.v1";
-const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v1";
+const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalOutcome {
@@ -2287,12 +2287,48 @@ impl EvalOperation {
     }
 }
 
+/// Declares what correct behavior a query is measuring. `retrieval` means a
+/// specific family should be resolved; `abstention` means the correct behavior
+/// is a typed `UNKNOWN` (ambiguous, unsupported, unsafe, or stale input);
+/// `context` means metadata-only local context (`PARTIAL_CONTEXT` or a
+/// zero-family repository). The intent partitions the retrieval metrics below;
+/// it does not change the raw match verdict, which stays field-by-field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalIntent {
+    Retrieval,
+    Abstention,
+    Context,
+}
+
+impl EvalIntent {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalIntent::Retrieval => "retrieval",
+            EvalIntent::Abstention => "abstention",
+            EvalIntent::Context => "context",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "retrieval" => Ok(EvalIntent::Retrieval),
+            "abstention" => Ok(EvalIntent::Abstention),
+            "context" => Ok(EvalIntent::Context),
+            other => Err(format!("unsupported query intent '{other}'")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct EvalExpected {
     outcome: Option<EvalOutcome>,
     family: Option<String>,
     family_prefix: Option<String>,
     family_any_of: Option<Vec<String>>,
+    /// Family-id prefixes that should appear in the actual candidate set. Gold
+    /// for Recall@K/MRR; independent of which single family (if any) is
+    /// selected. An empty/absent list leaves the query out of candidate recall.
+    candidates_include: Option<Vec<String>>,
     unknown_reason: Option<String>,
     route: Option<String>,
 }
@@ -2310,31 +2346,14 @@ impl EvalExpected {
                 )?)?)
             }
         };
-        let family_any_of = match object.get("family_any_of") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(array) => {
-                let array = array
-                    .as_array()
-                    .ok_or_else(|| "expected.family_any_of must be an array".to_string())?;
-                let mut prefixes = Vec::with_capacity(array.len());
-                for entry in array {
-                    prefixes.push(
-                        entry
-                            .as_str()
-                            .ok_or_else(|| {
-                                "expected.family_any_of entries must be strings".to_string()
-                            })?
-                            .to_string(),
-                    );
-                }
-                Some(prefixes)
-            }
-        };
+        let family_any_of = optional_string_array(object, "family_any_of")?;
+        let candidates_include = optional_string_array(object, "candidates_include")?;
         Ok(Self {
             outcome,
             family: optional_object_string(object, "family")?,
             family_prefix: optional_object_string(object, "family_prefix")?,
             family_any_of,
+            candidates_include,
             unknown_reason: optional_object_string(object, "unknown_reason")?,
             route: optional_object_string(object, "route")?,
         })
@@ -2354,6 +2373,9 @@ impl EvalExpected {
         if let Some(list) = &self.family_any_of {
             map.insert("family_any_of".to_string(), list.clone().into());
         }
+        if let Some(list) = &self.candidates_include {
+            map.insert("candidates_include".to_string(), list.clone().into());
+        }
         if let Some(reason) = &self.unknown_reason {
             map.insert("unknown_reason".to_string(), reason.clone().into());
         }
@@ -2371,6 +2393,12 @@ struct EvalActual {
     selected_family: Option<String>,
     candidate_family_count: usize,
     candidate_families: Vec<String>,
+    /// Count of families the product hydrated before selecting/abstaining, and
+    /// count of retrieval-pipeline stages executed. Both are read directly from
+    /// `query_route` and stay `None` until the product surfaces them; a later
+    /// wave adds the fields, at which point they populate without a schema bump.
+    hydrated_family_count: Option<u64>,
+    retrieval_stage_count: Option<u64>,
     unknown_reason: Option<String>,
     active_generation: Option<String>,
 }
@@ -2407,6 +2435,12 @@ impl EvalActual {
             .and_then(|first| first.get("reason"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let hydrated_family_count = query_route
+            .and_then(|route| route.get("hydrated_family_count"))
+            .and_then(serde_json::Value::as_u64);
+        let retrieval_stage_count = query_route
+            .and_then(|route| route.get("retrieval_stage_count"))
+            .and_then(serde_json::Value::as_u64);
         let active_generation = value
             .get("active_generation")
             .and_then(serde_json::Value::as_str)
@@ -2417,6 +2451,8 @@ impl EvalActual {
             selected_family,
             candidate_family_count: candidate_families.len(),
             candidate_families,
+            hydrated_family_count,
+            retrieval_stage_count,
             unknown_reason,
             active_generation,
         })
@@ -2429,6 +2465,8 @@ impl EvalActual {
             "selected_family": self.selected_family,
             "candidate_family_count": self.candidate_family_count,
             "candidate_families": self.candidate_families,
+            "hydrated_family_count": self.hydrated_family_count,
+            "retrieval_stage_count": self.retrieval_stage_count,
             "unknown_reason": self.unknown_reason,
             "active_generation": self.active_generation,
         })
@@ -2447,6 +2485,11 @@ struct EvalQuery {
     query_id: String,
     fixture_id: String,
     kind: String,
+    /// Optional measurement intent (`retrieval`/`abstention`/`context`). Parsed
+    /// as a new optional field so the corpus schema stays `product-eval-corpus.v1`
+    /// and legacy corpora without it still parse; intent-partitioned metrics only
+    /// count queries that declare an intent.
+    intent: Option<EvalIntent>,
     operation: EvalOperation,
     target: String,
     mode: String,
@@ -2477,10 +2520,15 @@ impl EvalQuery {
                 .get("expected")
                 .ok_or_else(|| "corpus query omitted expected".to_string())?,
         )?;
+        let intent = match optional_object_string(object, "intent")? {
+            None => None,
+            Some(token) => Some(EvalIntent::from_token(&token)?),
+        };
         Ok(Self {
             query_id: required_object_string(object, "query_id")?,
             fixture_id: required_object_string(object, "fixture_id")?,
             kind: required_object_string(object, "kind")?,
+            intent,
             operation: EvalOperation::from_token(&required_object_string(object, "operation")?)?,
             target: required_object_string(object, "target")?,
             mode: optional_object_string(object, "mode")?.unwrap_or_else(|| "compact".to_string()),
@@ -2583,6 +2631,30 @@ fn optional_object_string(
     }
 }
 
+fn optional_string_array(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<Vec<String>>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(array) => {
+            let array = array
+                .as_array()
+                .ok_or_else(|| format!("field '{key}' must be an array"))?;
+            let mut values = Vec::with_capacity(array.len());
+            for entry in array {
+                values.push(
+                    entry
+                        .as_str()
+                        .ok_or_else(|| format!("field '{key}' entries must be strings"))?
+                        .to_string(),
+                );
+            }
+            Ok(Some(values))
+        }
+    }
+}
+
 fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<String>) {
     let mut mismatches = Vec::new();
     if let Some(outcome) = expected.outcome {
@@ -2656,6 +2728,242 @@ fn is_false_family_selection(expected: &EvalExpected, actual: &EvalActual) -> bo
         }
     }
     has_constraint && !satisfied
+}
+
+/// True when the query declares at least one family constraint
+/// (`family`/`family_prefix`/`family_any_of`).
+fn has_family_constraint(expected: &EvalExpected) -> bool {
+    expected.family.is_some()
+        || expected.family_prefix.is_some()
+        || expected.family_any_of.is_some()
+}
+
+/// True when `id` satisfies every declared family constraint. Mirrors the
+/// per-field match semantics: exact `family`, `family_prefix` by prefix, and
+/// `family_any_of` by any prefix; all present constraints must hold. Returns
+/// false when no family constraint is declared, so a gold hit always requires an
+/// explicit family target.
+fn id_satisfies_family_gold(expected: &EvalExpected, id: &str) -> bool {
+    let mut present = false;
+    if let Some(family) = &expected.family {
+        present = true;
+        if id != family.as_str() {
+            return false;
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        present = true;
+        if !id.starts_with(prefix.as_str()) {
+            return false;
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        present = true;
+        if !prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix.as_str()))
+        {
+            return false;
+        }
+    }
+    present
+}
+
+/// True when the selected family satisfies the query's family gold. This is the
+/// Hit@1 predicate: a single supported selection that matches the gold family.
+fn selected_satisfies_family_gold(expected: &EvalExpected, actual: &EvalActual) -> bool {
+    actual
+        .selected_family
+        .as_deref()
+        .is_some_and(|selected| id_satisfies_family_gold(expected, selected))
+}
+
+/// Reciprocal rank of the first gold-satisfying family. The selected family, when
+/// it satisfies gold, is rank 1; otherwise the first gold-satisfying id in the
+/// candidate list (1-based) sets the rank. Returns 0.0 when no gold-satisfying id
+/// is present or no family constraint is declared.
+fn reciprocal_rank(expected: &EvalExpected, actual: &EvalActual) -> f64 {
+    if !has_family_constraint(expected) {
+        return 0.0;
+    }
+    if selected_satisfies_family_gold(expected, actual) {
+        return 1.0;
+    }
+    for (index, candidate) in actual.candidate_families.iter().enumerate() {
+        if id_satisfies_family_gold(expected, candidate) {
+            return 1.0 / (index as f64 + 1.0);
+        }
+    }
+    0.0
+}
+
+/// True when every `candidates_include` prefix is matched by at least one actual
+/// candidate family. Empty gold vacuously holds, but such queries are excluded
+/// from the candidate-recall denominator by the caller.
+fn candidate_recall_satisfied(includes: &[String], candidates: &[String]) -> bool {
+    includes.iter().all(|include| {
+        candidates
+            .iter()
+            .any(|candidate| candidate.starts_with(include.as_str()))
+    })
+}
+
+/// One evaluated query reduced to the fields the retrieval metrics need.
+struct EvalMetricRecord<'a> {
+    intent: Option<EvalIntent>,
+    kind: &'a str,
+    expected: &'a EvalExpected,
+    actual: &'a EvalActual,
+    is_match: bool,
+}
+
+/// Retrieval-quality metrics derived from the intent taxonomy. Every rate keeps
+/// its integer numerator/denominator so a reader can audit it without trusting
+/// the float, and a rate over an empty denominator serializes as `null`.
+#[derive(Debug, Default, PartialEq)]
+struct ProductEvalMetrics {
+    hit_at_1_num: usize,
+    hit_at_1_den: usize,
+    candidate_recall_num: usize,
+    candidate_recall_den: usize,
+    mrr_sum: f64,
+    mrr_den: usize,
+    correct_abstention_num: usize,
+    correct_abstention_den: usize,
+    false_family_selections: usize,
+    family_constrained_total: usize,
+    unsupported_rejection_num: usize,
+    unsupported_rejection_den: usize,
+    ambiguity_precision_num: usize,
+    ambiguity_precision_den: usize,
+    by_intent: std::collections::BTreeMap<&'static str, (usize, usize)>,
+}
+
+fn ratio_value(num: usize, den: usize) -> serde_json::Value {
+    if den == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(num as f64 / den as f64)
+    }
+}
+
+fn mean_value(sum: f64, den: usize) -> serde_json::Value {
+    if den == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(sum / den as f64)
+    }
+}
+
+fn format_mean(sum: f64, den: usize) -> String {
+    if den == 0 {
+        "n/a".to_string()
+    } else {
+        format!("{:.3}", sum / den as f64)
+    }
+}
+
+fn compute_product_eval_metrics(records: &[EvalMetricRecord]) -> ProductEvalMetrics {
+    let mut metrics = ProductEvalMetrics::default();
+    for record in records {
+        if let Some(intent) = record.intent {
+            let counters = metrics.by_intent.entry(intent.as_str()).or_insert((0, 0));
+            counters.0 += 1;
+            if record.is_match {
+                counters.1 += 1;
+            }
+        }
+        if has_family_constraint(record.expected) {
+            metrics.family_constrained_total += 1;
+            if is_false_family_selection(record.expected, record.actual) {
+                metrics.false_family_selections += 1;
+            }
+        }
+        if let Some(includes) = &record.expected.candidates_include {
+            if !includes.is_empty() {
+                metrics.candidate_recall_den += 1;
+                if candidate_recall_satisfied(includes, &record.actual.candidate_families) {
+                    metrics.candidate_recall_num += 1;
+                }
+            }
+        }
+        if record.kind == "unsupported_concept" {
+            metrics.unsupported_rejection_den += 1;
+            if record.actual.outcome == EvalOutcome::Unknown {
+                metrics.unsupported_rejection_num += 1;
+            }
+        }
+        match record.intent {
+            Some(EvalIntent::Retrieval) => {
+                metrics.hit_at_1_den += 1;
+                if selected_satisfies_family_gold(record.expected, record.actual) {
+                    metrics.hit_at_1_num += 1;
+                }
+                metrics.mrr_den += 1;
+                metrics.mrr_sum += reciprocal_rank(record.expected, record.actual);
+            }
+            Some(EvalIntent::Abstention) => {
+                metrics.correct_abstention_den += 1;
+                if record.actual.outcome == EvalOutcome::Unknown {
+                    metrics.correct_abstention_num += 1;
+                }
+                if record.kind == "ambiguous" || record.kind == "nl_pattern_question" {
+                    metrics.ambiguity_precision_den += 1;
+                    if record.actual.outcome == EvalOutcome::Unknown {
+                        metrics.ambiguity_precision_num += 1;
+                    }
+                }
+            }
+            Some(EvalIntent::Context) | None => {}
+        }
+    }
+    metrics
+}
+
+impl ProductEvalMetrics {
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "hit_at_1": ratio_value(self.hit_at_1_num, self.hit_at_1_den),
+            "hit_at_1_counts": { "num": self.hit_at_1_num, "den": self.hit_at_1_den },
+            "candidate_recall": ratio_value(self.candidate_recall_num, self.candidate_recall_den),
+            "candidate_recall_counts": {
+                "num": self.candidate_recall_num,
+                "den": self.candidate_recall_den,
+            },
+            "mrr": mean_value(self.mrr_sum, self.mrr_den),
+            "mrr_counts": { "den": self.mrr_den },
+            "correct_abstention_rate": ratio_value(
+                self.correct_abstention_num,
+                self.correct_abstention_den,
+            ),
+            "correct_abstention_counts": {
+                "num": self.correct_abstention_num,
+                "den": self.correct_abstention_den,
+            },
+            "false_family_rate": ratio_value(
+                self.false_family_selections,
+                self.family_constrained_total,
+            ),
+            "false_family_selections": self.false_family_selections,
+            "family_constrained_total": self.family_constrained_total,
+            "unsupported_rejection_rate": ratio_value(
+                self.unsupported_rejection_num,
+                self.unsupported_rejection_den,
+            ),
+            "unsupported_rejection_counts": {
+                "num": self.unsupported_rejection_num,
+                "den": self.unsupported_rejection_den,
+            },
+            "ambiguity_precision": ratio_value(
+                self.ambiguity_precision_num,
+                self.ambiguity_precision_den,
+            ),
+            "ambiguity_precision_counts": {
+                "num": self.ambiguity_precision_num,
+                "den": self.ambiguity_precision_den,
+            },
+        })
+    }
 }
 
 fn percentile(values: &[u128], percentile: u8) -> u128 {
@@ -3149,6 +3457,10 @@ fn run_product_eval(
     let mut false_family_selections = 0usize;
     let mut by_kind: std::collections::BTreeMap<String, (usize, usize)> =
         std::collections::BTreeMap::new();
+    // (intent, kind, expected, actual, is_match) retained so intent-partitioned
+    // metrics can be computed once after every query has been driven.
+    let mut metric_inputs: Vec<(Option<EvalIntent>, String, EvalExpected, EvalActual, bool)> =
+        Vec::new();
 
     for query in &corpus.queries {
         let base = base_workspaces
@@ -3226,15 +3538,28 @@ fn run_product_eval(
             "query_id": query.query_id,
             "fixture_id": query.fixture_id,
             "kind": query.kind,
+            "intent": query.intent.map(EvalIntent::as_str),
             "operation": query.operation.as_str(),
             "target": query.target,
             "expected": query.expected.to_value(),
             "actual": actual.to_value(),
             "match": is_match,
             "mismatch_fields": mismatch_fields,
+            "reciprocal_rank": if query.intent == Some(EvalIntent::Retrieval) {
+                serde_json::json!(reciprocal_rank(&query.expected, &actual))
+            } else {
+                serde_json::Value::Null
+            },
             "latency_ms_all_reps": latencies,
             "latency_ms_p50": query_p50,
         }));
+        metric_inputs.push((
+            query.intent,
+            query.kind.clone(),
+            query.expected.clone(),
+            actual,
+            is_match,
+        ));
     }
 
     let finished_at = rfc3339_utc(unix_seconds_now());
@@ -3249,14 +3574,39 @@ fn run_product_eval(
             )
         })
         .collect();
+    let metric_records: Vec<EvalMetricRecord> = metric_inputs
+        .iter()
+        .map(
+            |(intent, kind, expected, actual, is_match)| EvalMetricRecord {
+                intent: *intent,
+                kind: kind.as_str(),
+                expected,
+                actual,
+                is_match: *is_match,
+            },
+        )
+        .collect();
+    let metrics = compute_product_eval_metrics(&metric_records);
+    let by_intent_value: serde_json::Map<String, serde_json::Value> = metrics
+        .by_intent
+        .iter()
+        .map(|(intent, (intent_total, intent_matches))| {
+            (
+                (*intent).to_string(),
+                serde_json::json!({ "total": intent_total, "matches": intent_matches }),
+            )
+        })
+        .collect();
     let summary = serde_json::json!({
         "total": total,
         "matches": matches,
         "mismatches": mismatches,
         "by_kind": serde_json::Value::Object(by_kind_value),
+        "by_intent": serde_json::Value::Object(by_intent_value),
         "latency_ms_p50": percentile(&all_latencies, 50),
         "latency_ms_p95": percentile(&all_latencies, 95),
         "false_family_selections": false_family_selections,
+        "metrics": metrics.to_value(),
     });
 
     let results = serde_json::json!({
@@ -3307,6 +3657,30 @@ fn run_product_eval(
         percentile(&all_latencies, 50),
         percentile(&all_latencies, 95),
     ));
+    report.push_str(&format!(
+        "metrics: hit@1 {}/{} | candidate_recall {}/{} | mrr {} | correct_abstention {}/{} | false_family_rate {}/{} | unsupported_rejection {}/{} | ambiguity_precision {}/{}\n",
+        metrics.hit_at_1_num,
+        metrics.hit_at_1_den,
+        metrics.candidate_recall_num,
+        metrics.candidate_recall_den,
+        format_mean(metrics.mrr_sum, metrics.mrr_den),
+        metrics.correct_abstention_num,
+        metrics.correct_abstention_den,
+        metrics.false_family_selections,
+        metrics.family_constrained_total,
+        metrics.unsupported_rejection_num,
+        metrics.unsupported_rejection_den,
+        metrics.ambiguity_precision_num,
+        metrics.ambiguity_precision_den,
+    ));
+    let intent_summary: Vec<String> = metrics
+        .by_intent
+        .iter()
+        .map(|(intent, (intent_total, intent_matches))| {
+            format!("{intent} {intent_matches}/{intent_total}")
+        })
+        .collect();
+    report.push_str(&format!("by_intent: {}\n", intent_summary.join(" | ")));
     Ok(report)
 }
 
@@ -6366,7 +6740,23 @@ verify-stable-release-evidence --evidence-dir evidence
             candidate_families: vec![
                 "family:python:fastapi_route:framework_fastapi_route".to_string()
             ],
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
             unknown_reason: None,
+            active_generation: Some("gen-000002".to_string()),
+        }
+    }
+
+    fn abstain_actual() -> EvalActual {
+        EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("discovery_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
+            unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
         }
     }
@@ -6444,6 +6834,8 @@ verify-stable-release-evidence --evidence-dir evidence
             selected_family: None,
             candidate_family_count: 0,
             candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
             unknown_reason: Some("StaleEvidence".to_string()),
             active_generation: Some("gen-000002".to_string()),
         };
@@ -6502,6 +6894,8 @@ verify-stable-release-evidence --evidence-dir evidence
             selected_family: None,
             candidate_family_count: 0,
             candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
             unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
         };
@@ -6536,5 +6930,297 @@ verify-stable-release-evidence --evidence-dir evidence
             .expect("mismatch fields array")
             .iter()
             .any(|field| field == "outcome"));
+    }
+
+    #[test]
+    fn product_eval_corpus_parses_intent_and_candidates_include() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "src/fixtures/x", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "ambiguous",
+                "intent": "abstention",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {
+                    "outcome": "unknown",
+                    "candidates_include": [
+                        "family:python:fastapi_route",
+                        "family:python:pydantic_model"
+                    ]
+                }
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&value).expect("corpus parses");
+        assert_eq!(corpus.queries[0].intent, Some(EvalIntent::Abstention));
+        assert_eq!(
+            corpus.queries[0].expected.candidates_include,
+            Some(vec![
+                "family:python:fastapi_route".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn product_eval_intent_is_optional_and_rejects_unknown_token() {
+        // Absent intent stays None so a legacy v1 corpus keeps parsing.
+        let legacy = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_path",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&legacy).expect("legacy corpus parses");
+        assert_eq!(corpus.queries[0].intent, None);
+
+        let bad_intent = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_path",
+                "intent": "recall",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        assert!(EvalCorpus::from_value(&bad_intent).is_err());
+    }
+
+    #[test]
+    fn product_eval_actual_reads_optional_count_fields() {
+        let with_counts = serde_json::json!({
+            "status": "ok",
+            "active_generation": "gen-000009",
+            "query_route": {
+                "route": "discover_hydrate_compose",
+                "selected_family_id": "family:python:fastapi_route:framework_fastapi_route",
+                "candidate_family_ids": [
+                    "family:python:fastapi_route:framework_fastapi_route"
+                ],
+                "hydrated_family_count": 3,
+                "retrieval_stage_count": 4
+            }
+        });
+        let actual = EvalActual::from_query_json(&with_counts).expect("parses");
+        assert_eq!(actual.hydrated_family_count, Some(3));
+        assert_eq!(actual.retrieval_stage_count, Some(4));
+
+        // Absent count fields (current product) stay None and serialize as null.
+        let without_counts = serde_json::json!({
+            "status": "UNKNOWN",
+            "query_route": {"route": "discovery_unknown", "candidate_family_ids": []}
+        });
+        let actual = EvalActual::from_query_json(&without_counts).expect("parses");
+        assert_eq!(actual.hydrated_family_count, None);
+        assert_eq!(actual.retrieval_stage_count, None);
+        assert!(actual.to_value()["hydrated_family_count"].is_null());
+        assert!(actual.to_value()["retrieval_stage_count"].is_null());
+    }
+
+    #[test]
+    fn product_eval_reciprocal_rank_ranks_selected_then_candidates() {
+        let expected = EvalExpected {
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        // Selected satisfies gold -> rank 1.
+        assert_eq!(reciprocal_rank(&expected, &sample_found_actual()), 1.0);
+
+        // Not selected, gold appears second in the candidate list -> 1/2.
+        let ranked = EvalActual {
+            selected_family: None,
+            candidate_families: vec![
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ],
+            ..abstain_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &ranked), 0.5);
+
+        // Gold absent entirely -> 0.
+        assert_eq!(reciprocal_rank(&expected, &abstain_actual()), 0.0);
+
+        // No family constraint -> 0 regardless of selection.
+        assert_eq!(
+            reciprocal_rank(&EvalExpected::default(), &sample_found_actual()),
+            0.0
+        );
+    }
+
+    #[test]
+    fn product_eval_candidate_recall_requires_every_prefix() {
+        let includes = vec![
+            "family:python:fastapi_route".to_string(),
+            "family:python:pydantic_model".to_string(),
+        ];
+        let both = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854".to_string(),
+        ];
+        assert!(candidate_recall_satisfied(&includes, &both));
+        let only_one = vec!["family:python:fastapi_route:framework_fastapi_route".to_string()];
+        assert!(!candidate_recall_satisfied(&includes, &only_one));
+    }
+
+    #[test]
+    fn product_eval_metrics_math_is_deterministic() {
+        // Retrieval hit: selected family matches gold prefix.
+        let retrieval_hit_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let retrieval_hit_actual = sample_found_actual();
+
+        // Retrieval gap: gold family exists but product abstains (the NL gap).
+        let retrieval_gap_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:pytest_fixture".to_string()),
+            ..EvalExpected::default()
+        };
+        let retrieval_gap_actual = abstain_actual();
+
+        // Abstention with candidates surfaced: gold candidates_include is met.
+        let abstain_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            candidates_include: Some(vec![
+                "family:python:fastapi_route".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ]),
+            ..EvalExpected::default()
+        };
+        let abstain_actual_candidates = EvalActual {
+            candidate_family_count: 2,
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854".to_string(),
+            ],
+            ..abstain_actual()
+        };
+
+        // Unsupported concept: correctly rejected as unknown.
+        let unsupported_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+
+        let expected_slots = [
+            retrieval_hit_expected,
+            retrieval_gap_expected,
+            abstain_expected,
+            unsupported_expected,
+        ];
+        let actual_slots = [
+            retrieval_hit_actual,
+            retrieval_gap_actual,
+            abstain_actual_candidates,
+            abstain_actual(),
+        ];
+        let records = vec![
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "nl_pattern_question",
+                expected: &expected_slots[0],
+                actual: &actual_slots[0],
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "nl_pattern_question",
+                expected: &expected_slots[1],
+                actual: &actual_slots[1],
+                is_match: false,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "ambiguous",
+                expected: &expected_slots[2],
+                actual: &actual_slots[2],
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "unsupported_concept",
+                expected: &expected_slots[3],
+                actual: &actual_slots[3],
+                is_match: true,
+            },
+        ];
+        let metrics = compute_product_eval_metrics(&records);
+
+        // Hit@1 over the two retrieval queries: one hit.
+        assert_eq!((metrics.hit_at_1_num, metrics.hit_at_1_den), (1, 2));
+        // MRR: 1.0 (hit) + 0.0 (gap) over 2 retrieval queries -> 0.5.
+        assert_eq!(metrics.mrr_den, 2);
+        assert_eq!(metrics.mrr_sum, 1.0);
+        // Candidate recall: only the abstention query declares candidates_include.
+        assert_eq!(
+            (metrics.candidate_recall_num, metrics.candidate_recall_den),
+            (1, 1)
+        );
+        // Correct abstention: both abstention queries returned unknown.
+        assert_eq!(
+            (
+                metrics.correct_abstention_num,
+                metrics.correct_abstention_den
+            ),
+            (2, 2)
+        );
+        // Only the retrieval-hit query carries a satisfied family constraint;
+        // no false family selections anywhere.
+        assert_eq!(metrics.false_family_selections, 0);
+        assert_eq!(metrics.family_constrained_total, 2);
+        // Unsupported rejection: the one unsupported_concept query is unknown.
+        assert_eq!(
+            (
+                metrics.unsupported_rejection_num,
+                metrics.unsupported_rejection_den
+            ),
+            (1, 1)
+        );
+        // Ambiguity precision: the ambiguous abstention query is unknown.
+        assert_eq!(
+            (
+                metrics.ambiguity_precision_num,
+                metrics.ambiguity_precision_den
+            ),
+            (1, 1)
+        );
+        assert_eq!(metrics.by_intent.get("retrieval"), Some(&(2, 1)));
+        assert_eq!(metrics.by_intent.get("abstention"), Some(&(2, 2)));
+
+        let value = metrics.to_value();
+        assert_eq!(value["hit_at_1"], serde_json::json!(0.5));
+        assert_eq!(value["mrr"], serde_json::json!(0.5));
+        assert_eq!(value["candidate_recall"], serde_json::json!(1.0));
+        assert_eq!(value["false_family_rate"], serde_json::json!(0.0));
+    }
+
+    #[test]
+    fn product_eval_metrics_empty_denominators_serialize_null() {
+        let metrics = compute_product_eval_metrics(&[]);
+        let value = metrics.to_value();
+        assert!(value["hit_at_1"].is_null());
+        assert!(value["mrr"].is_null());
+        assert!(value["candidate_recall"].is_null());
+        assert!(value["correct_abstention_rate"].is_null());
+        assert!(value["false_family_rate"].is_null());
+        assert!(value["unsupported_rejection_rate"].is_null());
+        assert!(value["ambiguity_precision"].is_null());
     }
 }

@@ -973,21 +973,71 @@ When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
 next to `repo-guard`; both build into the same target directory.
 
 The run writes `<output-dir>/product-eval-results.json`
-(`schema_version: product-eval-results.v1`) with per-fixture `resync` latency
+(`schema_version: product-eval-results.v2`) with per-fixture `resync` latency
 and discovered/stored counts, per-query expected/actual/`match`/mismatch-field
-detail with all repetition latencies, and a summary of matches, per-kind
-counts, p50/p95 latency, and `false_family_selections`. Mismatches are baseline
-data, so the command exits `0` when the run completes; it exits nonzero only on
-a genuine harness error (missing binary, unparseable corpus, subprocess failure,
-or non-JSON query output). Corpus gold expectations encode product intent, not
-current output, so retrieval-intent natural-language questions over families
-that exist are recorded as mismatches rather than softened. Latency figures are
-machine-dependent; verdict, per-kind, and `false_family_selections` counts are
+detail with all repetition latencies, and a summary of matches, per-kind and
+per-intent counts, p50/p95 latency, `false_family_selections`, and a `metrics`
+object. Each result also carries `intent`, `reciprocal_rank` (retrieval queries
+only), and the actual's null-tolerant `hydrated_family_count` and
+`retrieval_stage_count` placeholders. Mismatches are baseline data, so the
+command exits `0` when the run completes; it exits nonzero only on a genuine
+harness error (missing binary, unparseable corpus, subprocess failure, or
+non-JSON query output). Corpus gold expectations encode product intent, not
+current output, so retrieval-intent natural-language and synonym questions over
+families that exist are recorded as mismatches rather than softened. Latency
+figures are machine-dependent; verdicts, per-kind/per-intent counts,
+`false_family_selections`, and the integer metric numerators/denominators are
 stable for a pinned corpus and product commit. The current baseline reading is
 recorded in [`../experiments/product-core-baseline.md`](../experiments/product-core-baseline.md).
-Harness parsing, matching, hashing, and result-serialization logic is covered by
-unit tests in `src/rust/bin/repo_guard.rs` that do not depend on the product
-binary or the network.
+Harness parsing, matching, hashing, metric math, and result-serialization logic
+are covered by unit tests in `src/rust/bin/repo_guard.rs` that do not depend on
+the product binary or the network.
+
+### Query intent taxonomy
+
+Every corpus query declares a measurement `intent` (a new optional field, so the
+corpus schema stays backward-compatible `product-eval-corpus.v1`):
+
+- `retrieval` — a specific family should be resolved. Gold carries an `ok`
+  outcome and a `family`/`family_prefix`/`family_any_of` target. Exact ids,
+  members, paths, roles, and `path:line`/`path:start-end` locators over a
+  single-family path resolve today; bare framework-name-as-concept, synonyms, and
+  natural-language questions abstain and are recorded as the measured retrieval
+  gap, not softened.
+- `abstention` — the correct behavior is a typed `UNKNOWN`. Covers ambiguous
+  targets, unsupported-language questions, unsafe typo inputs, bare framework
+  tokens (the deterministic resolver must not guess a family from a short
+  substring), stale evidence, and byte-range locators spanning multiple families.
+- `context` — metadata-only local context (`PARTIAL_CONTEXT`) or a zero-family
+  repository, where no family claim is safe but a read plan is.
+
+An optional `expected.candidates_include` lists family-id prefixes that should
+appear in the actual candidate set; it is the Recall@K/MRR gold and is
+independent of which single family (if any) is selected.
+
+### Retrieval metrics
+
+The `summary.metrics` object reports, each as a rate plus its integer
+numerator/denominator (a rate over an empty denominator serializes as `null`):
+
+- `hit_at_1` — over retrieval-intent queries, the fraction whose selected family
+  satisfies the family gold.
+- `candidate_recall` — over queries with `candidates_include`, the fraction where
+  every listed prefix is matched by some actual candidate family.
+- `mrr` — over retrieval-intent queries, mean reciprocal rank of the first
+  gold-satisfying id (the selected family is rank 1; a gold id in the candidate
+  list contributes `1/rank`; absence contributes `0`).
+- `correct_abstention_rate` — over abstention-intent queries, the fraction whose
+  actual outcome is `unknown`.
+- `false_family_rate` — `false_family_selections` divided by the number of
+  queries that declare a family constraint; the absolute count is kept.
+- `unsupported_rejection_rate` — over `unsupported_concept` queries, the fraction
+  that abstain.
+- `ambiguity_precision` — over abstention-intent `ambiguous`/`nl_pattern_question`
+  queries, the fraction that abstain.
+
+`summary.by_intent` reports per-intent `{total, matches}` totals alongside the
+existing `summary.by_kind`.
 
 ## Required local gate
 

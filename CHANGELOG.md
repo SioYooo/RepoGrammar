@@ -43,14 +43,45 @@
 - Committed the deterministic product-core evaluation harness: a report-only
   `repo-guard product-eval` command that indexes committed fixtures in isolated
   temporary workspaces and drives the product binary through
-  `src/fixtures/evaluation/query-corpus-v1.json` (26 gold-labeled queries over
-  python-v0_1, typescript-v0_2, and a new zero-family fixture), writing
-  machine-readable `product-eval-results.v1` output. The recorded baseline at
-  `docs/experiments/product-core-baseline.md` shows exact
-  id/member/path/role/abstention queries matching gold (21/26, zero false
-  family selections) while all five retrieval-intent natural-language pattern
-  questions abstain — the measured retrieval gap this baseline freezes. No
-  production behavior changed.
+  `src/fixtures/evaluation/query-corpus-v1.json`, writing machine-readable
+  output. The Phase 2 corpus expands to 73 gold-labeled queries over python-v0_1,
+  typescript-v0_2, and a zero-family fixture, each tagged with a measurement
+  `intent` (`retrieval`/`abstention`/`context`) and, where relevant, a
+  `candidates_include` gold set; new coverage adds `path:line`/`path:start-end`
+  local-context locators, bare framework names, concept synonyms, natural-language
+  paraphrases (including TypeScript framework questions), ambiguous route/test
+  questions, unsupported-language questions, and unsafe typo inputs. The corpus
+  schema stays backward-compatible `product-eval-corpus.v1` (new optional fields);
+  the results schema bumps to `product-eval-results.v2`, adding retrieval metrics
+  (`hit_at_1`, `candidate_recall`, `mrr`, `correct_abstention_rate`,
+  `false_family_rate`, `unsupported_rejection_rate`, `ambiguity_precision`) with
+  audit-friendly numerator/denominator counts, per-intent totals, and per-query
+  `intent`/`reciprocal_rank` plus null-tolerant `hydrated_family_count` and
+  `retrieval_stage_count` placeholders for a later wave. The recorded baseline at
+  `docs/experiments/product-core-baseline.md` shows every exact
+  id/member/path/role/locator query and every abstention/context query matching
+  gold (47/73, zero false family selections, `hit@1` 17/43, `mrr` 0.395,
+  `candidate_recall` 10/13, correct abstention 24/24) while all retrieval-intent
+  natural-language and synonym questions abstain — the measured retrieval gap
+  this baseline freezes for Phase 2. No production behavior changed.
+- Added the deterministic metadata-retrieval substrate for term-based family
+  discovery, with no LLM, embedding, or network dependency. A new
+  `application::query_terms` module folds a raw target into a typed, bounded,
+  total `NormalizedQuery` (disjoint language/framework/concept/residue buckets)
+  using small committed vocabulary tables — a stopword set, a singular/plural
+  table, language aliases (including the `c#`/`c++` compound forms), framework
+  aliases, and a concept-alias table — every entry justified by a
+  `framework_role` the index can produce. A new source-free
+  `list_active_family_search_summaries` store projection (one bounded,
+  generation-consistent read of identity, language, code-unit kind, framework
+  role, prevalence classification, support count, prevalence, and bounded
+  repo-relative evidence-path components) backs `score_family_candidates`, which
+  ranks families with explainable additive integer weights, hard
+  language/framework exclusion, a deterministic total order, and a retained-K
+  cap. This substrate is fully tested and documented in
+  `docs/specifications/query-resolution.md` but is NOT yet routed into the
+  production fuzzy lookup path; wiring and abstention calibration land in the
+  next change. No production behavior changed.
 
 ### Fixed
 

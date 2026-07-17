@@ -234,3 +234,128 @@ Run the protocol above against any output directory and compare
 fields are stable for the pinned corpus and product commit. See
 [`docs/development/testing.md`](../development/testing.md) for how the harness
 fits the local gate.
+
+## Phase 2 corpus expansion baseline (2026-07-18)
+
+Phase 2 upgrades the measurement itself. The corpus grows from 26 to **73**
+gold-labeled queries, every query gains a measurement `intent`
+(`retrieval`/`abstention`/`context`), retrieval-recall queries gain an optional
+`candidates_include` gold set, and the harness (`product-eval-results.v2`)
+computes retrieval metrics. The corpus schema stays backward-compatible
+`product-eval-corpus.v1`: `intent` and `candidates_include` are new optional
+fields, so a legacy corpus without them still parses. Every exact target
+(paths, member/family ids, roles, and the new `path:line`/`path:start-end`
+locators) was verified by actually running the harness before its gold was
+fixed; natural-language and synonym targets need no existence check because
+their gold is product intent, not current output.
+
+### Corpus composition
+
+By intent: `retrieval` 43, `abstention` 24, `context` 6.
+
+By kind: `nl_pattern_question` 20, `local_context_locator` 7, `concept_synonym`
+7, `path_suffix` 5, `ambiguous` 4, `unsupported_concept` 4, `framework_name` 4,
+`typo_unsafe` 4, `exact_path` 4, `exact_family_id` 3, `exact_member_id` 2,
+`framework_role` 2, `partial_context_path` 2, `check_conformance` 2,
+`stale_family` 1, `explain_deviation` 1, `zero_family_repo` 1.
+
+New coverage added over the Phase 0 corpus, by group of new query ids:
+
+- Local-context locators (`local_context_locator`): `py-loc-line-model`,
+  `py-loc-byte-model`, `py-loc-line-alias`, `ts-loc-line-express`,
+  `ts-loc-byte-express` (single-family `path:line`/`path:start-end` → `ok`
+  retrieval); `py-loc-line-basic-context` (multi-family `path:line` →
+  `PARTIAL_CONTEXT`); `py-loc-byte-basic-abstain` (multi-family `path:start-end`
+  → correct `UNKNOWN`). Confirmed accepted locator forms: `path:line` (line) and
+  `path:start-end` (byte range).
+- Bare framework names (`framework_name`, abstention): `py-fw-fastapi`,
+  `py-fw-flask`, `ts-fw-express`, `ts-fw-prisma`. The deterministic resolver must
+  not guess a family from a short substring, so abstention is the correct
+  behavior and these match gold.
+- Concept synonyms (`concept_synonym`, retrieval gap): `py-syn-endpoint`,
+  `py-syn-http-handler`, `py-syn-db-model`, `py-syn-orm-model`,
+  `py-syn-unit-test`, `py-syn-test-case`, `py-syn-schema-validation`.
+- Natural-language paraphrases of the five baseline questions (retrieval gap):
+  `py-nl-para-rest-endpoints`, `py-nl-para-wire-routes`,
+  `py-nl-para-writing-tests`, `py-nl-para-setup-fixtures`,
+  `py-nl-para-db-sessions`, `py-nl-para-talk-to-db`,
+  `py-nl-para-validate-payloads`, `py-nl-para-request-schemas`,
+  `py-nl-para-repo-pattern`, `py-nl-para-data-access`.
+- Mixed-language TypeScript questions (retrieval gap): `ts-nl-express-routes`,
+  `ts-nl-fastify-routes`, `ts-nl-zod-schemas`, `ts-nl-prisma-repos`.
+- Ambiguous route/test questions and suffixes (abstention with
+  `candidates_include`): `py-amb-models`, `ts-amb-routes`, `ts-amb-tests`,
+  `py-amb-suffix-app`, `py-amb-suffix-routes`, `py-amb-suffix-models`,
+  `ts-amb-suffix-routes`.
+- Unsupported-language questions (`unsupported_concept`): `py-unsupported-go-di`,
+  `py-unsupported-k8s`, `ts-unsupported-graphql`.
+- Unsafe typo inputs (`typo_unsafe`): `py-typo-fastapi-rout`,
+  `py-typo-role-rout`, `py-typo-pytset`, `ts-typo-role-express`.
+- Partial-context multi-family path with candidates: `py-ctx-mixed-api`.
+
+`candidates_include` was also added to the retained `py-partial-context-app`,
+`py-explain-app`, and `py-stale-fastapi-family` queries, which surface candidate
+families in the current product. Existing query ids and their prior gold were
+kept stable; only the new optional fields were added.
+
+### Metric definitions
+
+Each rate is reported with its integer numerator/denominator; a rate over an
+empty denominator serializes as `null`.
+
+- `hit_at_1`: over retrieval-intent queries, fraction whose selected family
+  satisfies the family gold.
+- `candidate_recall`: over queries with `candidates_include`, fraction where
+  every listed prefix is matched by some actual candidate family.
+- `mrr`: over retrieval-intent queries, mean reciprocal rank of the first
+  gold-satisfying id (selected family is rank 1; a gold id in the candidate list
+  contributes `1/rank`; absence contributes `0`).
+- `correct_abstention_rate`: over abstention-intent queries, fraction whose
+  outcome is `unknown`.
+- `false_family_rate`: `false_family_selections` over the number of queries with
+  a declared family constraint (absolute count kept).
+- `unsupported_rejection_rate`: over `unsupported_concept` queries, fraction that
+  abstain.
+- `ambiguity_precision`: over abstention-intent `ambiguous`/`nl_pattern_question`
+  queries, fraction that abstain.
+
+### Headline metrics
+
+Recorded from a real local run at commit
+`32fe66b23cf6e2780a66c00b0f257eae14b61db2` with the Phase 2 harness and corpus
+applied, `platform os=macos arch=aarch64`, dev build, three repetitions. Verdict
+and metric counts are stable for the pinned corpus and product commit; latency
+is machine-dependent.
+
+- 73 queries, 47 match, 26 mismatch, `false_family_selections: 0`.
+- `hit_at_1` **17/43 = 0.395**; `mrr` **0.395** (no partial-rank contributions:
+  the product either selects the gold family at rank 1 or returns no candidate).
+- `candidate_recall` **10/13 = 0.769**; the 3 misses are the natural-language
+  ambiguous questions, which abstain with an empty candidate set.
+- `correct_abstention_rate` **24/24 = 1.000**; `false_family_rate`
+  **0/43 = 0.000**; `unsupported_rejection_rate` **4/4 = 1.000**;
+  `ambiguity_precision` **5/5 = 1.000**.
+- Per-intent `{matches/total}`: `retrieval` 17/43, `abstention` 24/24,
+  `context` 6/6.
+- Aggregate latency `p50 60 ms`, `p95 72 ms` (wall, dev build; machine-dependent,
+  not a performance claim).
+- Fixture versions (SHA-256 prefix), unchanged from Phase 0: `python-v0_1`
+  `37fec96f7c7b…`, `typescript-v0_2` `b8d116a702d9…`, `zero-family`
+  `242c9589f4fe…`.
+
+The 26 mismatches are exactly the retrieval-intent natural-language and synonym
+queries (20 `nl_pattern_question` retrieval + 7 `concept_synonym`, minus the one
+that resolves — i.e. all 5 original NL gaps, all 7 synonyms, all 10 NL
+paraphrases, and all 4 TypeScript NL questions). Every exact id/member/path/role
+query, every `path:line`/`path:start-end` locator over a single-family path,
+every correct abstention, and every partial-context query matches gold. All 26
+Phase 0 queries keep their prior verdicts (no regressions), and
+`false_family_selections` stays 0: the product still does not compensate for the
+natural-language gap by mis-selecting a family — it abstains. This is the frozen
+Phase 2 measurement baseline against which the query-resolution upgrade is
+judged.
+
+The per-query `hydrated_family_count` and `retrieval_stage_count` fields are
+`null` in this baseline: the current product `query_route` does not yet surface
+them. The harness reads them null-tolerantly so a later wave can populate them
+without a schema change.

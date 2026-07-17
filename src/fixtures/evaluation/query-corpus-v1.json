@@ -22,6 +22,7 @@
       "query_id": "py-family-fastapi-exact",
       "fixture_id": "python-v0_1",
       "kind": "exact_family_id",
+      "intent": "retrieval",
       "operation": "family",
       "target": "family:python:fastapi_route:framework_fastapi_route",
       "mode": "compact",
@@ -35,6 +36,7 @@
       "query_id": "py-family-sqlalchemy-repo-exact",
       "fixture_id": "python-v0_1",
       "kind": "exact_family_id",
+      "intent": "retrieval",
       "operation": "family",
       "target": "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
       "mode": "compact",
@@ -48,6 +50,7 @@
       "query_id": "py-member-fastapi-list-users",
       "fixture_id": "python-v0_1",
       "kind": "exact_member_id",
+      "intent": "retrieval",
       "operation": "member",
       "target": "unit:fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
       "mode": "compact",
@@ -61,6 +64,7 @@
       "query_id": "py-path-sqlalchemy-model",
       "fixture_id": "python-v0_1",
       "kind": "exact_path",
+      "intent": "retrieval",
       "operation": "find",
       "target": "sqlalchemy-model-strong-evidence/models.py",
       "mode": "compact",
@@ -74,6 +78,7 @@
       "query_id": "py-path-fastapi-alias",
       "fixture_id": "python-v0_1",
       "kind": "exact_path",
+      "intent": "retrieval",
       "operation": "find",
       "target": "fastapi-alias-strong-evidence/routes.py",
       "mode": "compact",
@@ -86,6 +91,7 @@
       "query_id": "py-path-suffix-partial",
       "fixture_id": "python-v0_1",
       "kind": "path_suffix",
+      "intent": "abstention",
       "operation": "find",
       "target": "basic/app.py",
       "mode": "compact",
@@ -97,6 +103,7 @@
       "query_id": "py-role-fastapi",
       "fixture_id": "python-v0_1",
       "kind": "framework_role",
+      "intent": "retrieval",
       "operation": "find",
       "target": "framework:fastapi.route",
       "mode": "compact",
@@ -110,6 +117,7 @@
       "query_id": "py-nl-fastapi-routes",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "retrieval",
       "operation": "find",
       "target": "How are FastAPI routes implemented?",
       "mode": "compact",
@@ -122,6 +130,7 @@
       "query_id": "py-nl-test-fixtures",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "retrieval",
       "operation": "find",
       "target": "How are test fixtures defined?",
       "mode": "compact",
@@ -134,6 +143,7 @@
       "query_id": "py-nl-db-transactions",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "retrieval",
       "operation": "find",
       "target": "How are database transactions handled?",
       "mode": "compact",
@@ -146,6 +156,7 @@
       "query_id": "py-nl-validation-models",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "retrieval",
       "operation": "find",
       "target": "How are validation models implemented?",
       "mode": "compact",
@@ -158,6 +169,7 @@
       "query_id": "py-nl-repository-methods",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "retrieval",
       "operation": "find",
       "target": "How are repository methods structured?",
       "mode": "compact",
@@ -170,6 +182,7 @@
       "query_id": "py-nl-api-routes-ambiguous",
       "fixture_id": "python-v0_1",
       "kind": "nl_pattern_question",
+      "intent": "abstention",
       "operation": "find",
       "target": "How are API routes implemented?",
       "mode": "compact",
@@ -181,6 +194,7 @@
       "query_id": "py-ambiguous-handler",
       "fixture_id": "python-v0_1",
       "kind": "ambiguous",
+      "intent": "abstention",
       "operation": "find",
       "target": "handler",
       "mode": "compact",
@@ -193,6 +207,7 @@
       "query_id": "py-unsupported-react-hooks",
       "fixture_id": "python-v0_1",
       "kind": "unsupported_concept",
+      "intent": "abstention",
       "operation": "find",
       "target": "How are React hooks memoized?",
       "mode": "compact",
@@ -204,6 +219,7 @@
       "query_id": "py-stale-fastapi-family",
       "fixture_id": "python-v0_1",
       "kind": "stale_family",
+      "intent": "abstention",
       "operation": "family",
       "target": "family:python:fastapi_route:framework_fastapi_route",
       "mode": "compact",
@@ -215,25 +231,32 @@
       "expected": {
         "outcome": "unknown",
         "unknown_reason": "StaleEvidence",
-        "route": "exact_lookup_unknown"
+        "route": "exact_lookup_unknown",
+        "candidates_include": ["family:python:fastapi_route"]
       }
     },
     {
       "query_id": "py-partial-context-app",
       "fixture_id": "python-v0_1",
       "kind": "partial_context_path",
+      "intent": "context",
       "operation": "find",
       "target": "fastapi-basic/app.py",
       "mode": "compact",
       "expected": {
         "outcome": "partial_context",
-        "route": "partial_context_read_plan"
+        "route": "partial_context_read_plan",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
       }
     },
     {
       "query_id": "py-check-sqlalchemy-model",
       "fixture_id": "python-v0_1",
       "kind": "check_conformance",
+      "intent": "retrieval",
       "operation": "check",
       "target": "sqlalchemy-model-strong-evidence/models.py",
       "mode": "compact",
@@ -246,18 +269,479 @@
       "query_id": "py-explain-app",
       "fixture_id": "python-v0_1",
       "kind": "explain_deviation",
+      "intent": "context",
       "operation": "explain",
       "target": "fastapi-basic/app.py",
       "mode": "compact",
       "expected": {
         "outcome": "partial_context",
-        "route": "partial_context_read_plan"
+        "route": "partial_context_read_plan",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "py-loc-line-model",
+      "fixture_id": "python-v0_1",
+      "kind": "local_context_locator",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "sqlalchemy-model-strong-evidence/models.py:3",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model",
+        "route": "discover_hydrate_compose"
+      }
+    },
+    {
+      "query_id": "py-loc-byte-model",
+      "fixture_id": "python-v0_1",
+      "kind": "local_context_locator",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "sqlalchemy-model-strong-evidence/models.py:1-200",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model",
+        "route": "discover_hydrate_compose"
+      }
+    },
+    {
+      "query_id": "py-loc-line-alias",
+      "fixture_id": "python-v0_1",
+      "kind": "local_context_locator",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "fastapi-alias-strong-evidence/routes.py:2",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "route": "discover_hydrate_compose"
+      }
+    },
+    {
+      "query_id": "py-loc-line-basic-context",
+      "fixture_id": "python-v0_1",
+      "kind": "local_context_locator",
+      "intent": "context",
+      "operation": "find",
+      "target": "fastapi-basic/app.py:5",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "route": "partial_context_read_plan",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "py-loc-byte-basic-abstain",
+      "fixture_id": "python-v0_1",
+      "kind": "local_context_locator",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "fastapi-basic/app.py:100-400",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "py-fw-fastapi",
+      "fixture_id": "python-v0_1",
+      "kind": "framework_name",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "fastapi",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-fw-flask",
+      "fixture_id": "python-v0_1",
+      "kind": "framework_name",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "flask",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-syn-endpoint",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "endpoint",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "py-syn-http-handler",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "http handler",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "py-syn-db-model",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "db model",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model"
+      }
+    },
+    {
+      "query_id": "py-syn-orm-model",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "orm model",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model"
+      }
+    },
+    {
+      "query_id": "py-syn-unit-test",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "unit test",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "py-syn-test-case",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "test case",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "py-syn-schema-validation",
+      "fixture_id": "python-v0_1",
+      "kind": "concept_synonym",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "schema validation",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pydantic_model"
+      }
+    },
+    {
+      "query_id": "py-nl-para-rest-endpoints",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Where do we define REST endpoints?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "py-nl-para-wire-routes",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Show me how HTTP routes are wired up",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "py-nl-para-writing-tests",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "What's the pattern for writing tests here?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "py-nl-para-setup-fixtures",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How do we set up test fixtures?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "py-nl-para-db-sessions",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Show me how DB sessions are used",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_repository_method"
+      }
+    },
+    {
+      "query_id": "py-nl-para-talk-to-db",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How do we talk to the database?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_repository_method"
+      }
+    },
+    {
+      "query_id": "py-nl-para-validate-payloads",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How do we validate request payloads?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pydantic_model"
+      }
+    },
+    {
+      "query_id": "py-nl-para-request-schemas",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Where are request schemas validated?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pydantic_model"
+      }
+    },
+    {
+      "query_id": "py-nl-para-repo-pattern",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How is the repository pattern used?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_repository_method"
+      }
+    },
+    {
+      "query_id": "py-nl-para-data-access",
+      "fixture_id": "python-v0_1",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Where is the data-access layer?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_repository_method"
+      }
+    },
+    {
+      "query_id": "py-amb-models",
+      "fixture_id": "python-v0_1",
+      "kind": "ambiguous",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How are models defined?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:python:sqlalchemy_model",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "py-amb-suffix-app",
+      "fixture_id": "python-v0_1",
+      "kind": "path_suffix",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "app.py",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "py-amb-suffix-routes",
+      "fixture_id": "python-v0_1",
+      "kind": "path_suffix",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "routes.py",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": ["family:python:fastapi_route"]
+      }
+    },
+    {
+      "query_id": "py-amb-suffix-models",
+      "fixture_id": "python-v0_1",
+      "kind": "path_suffix",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "models.py",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": ["family:python:sqlalchemy_model"]
+      }
+    },
+    {
+      "query_id": "py-unsupported-go-di",
+      "fixture_id": "python-v0_1",
+      "kind": "unsupported_concept",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How is Go dependency injection done?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-unsupported-k8s",
+      "fixture_id": "python-v0_1",
+      "kind": "unsupported_concept",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How are Kubernetes manifests structured?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-typo-fastapi-rout",
+      "fixture_id": "python-v0_1",
+      "kind": "typo_unsafe",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "fastapi_rout",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-typo-role-rout",
+      "fixture_id": "python-v0_1",
+      "kind": "typo_unsafe",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "framework:fastapi.rout",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-typo-pytset",
+      "fixture_id": "python-v0_1",
+      "kind": "typo_unsafe",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "pytset fixture",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "py-ctx-mixed-api",
+      "fixture_id": "python-v0_1",
+      "kind": "partial_context_path",
+      "intent": "context",
+      "operation": "find",
+      "target": "mixed-python/api.py",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "route": "partial_context_read_plan",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
       }
     },
     {
       "query_id": "ts-family-express-exact",
       "fixture_id": "typescript-v0_2",
       "kind": "exact_family_id",
+      "intent": "retrieval",
       "operation": "family",
       "target": "family:typescript:express_route:framework_express_route_handler",
       "mode": "compact",
@@ -271,6 +755,7 @@
       "query_id": "ts-member-express-get",
       "fixture_id": "typescript-v0_2",
       "kind": "exact_member_id",
+      "intent": "retrieval",
       "operation": "member",
       "target": "unit:express_exact_routes/app.ts#express_route:get:56-107:1",
       "mode": "compact",
@@ -284,6 +769,7 @@
       "query_id": "ts-path-express-app",
       "fixture_id": "typescript-v0_2",
       "kind": "exact_path",
+      "intent": "retrieval",
       "operation": "find",
       "target": "express_exact_routes/app.ts",
       "mode": "compact",
@@ -296,6 +782,7 @@
       "query_id": "ts-role-fastify",
       "fixture_id": "typescript-v0_2",
       "kind": "framework_role",
+      "intent": "retrieval",
       "operation": "find",
       "target": "framework:fastify.route_handler",
       "mode": "compact",
@@ -308,6 +795,7 @@
       "query_id": "ts-path-zod-schema",
       "fixture_id": "typescript-v0_2",
       "kind": "exact_path",
+      "intent": "retrieval",
       "operation": "find",
       "target": "zod_exact_schemas/src/schemas.ts",
       "mode": "compact",
@@ -317,9 +805,187 @@
       }
     },
     {
+      "query_id": "ts-loc-line-express",
+      "fixture_id": "typescript-v0_2",
+      "kind": "local_context_locator",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "express_exact_routes/app.ts:5",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:express_route",
+        "route": "discover_hydrate_compose"
+      }
+    },
+    {
+      "query_id": "ts-loc-byte-express",
+      "fixture_id": "typescript-v0_2",
+      "kind": "local_context_locator",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "express_exact_routes/app.ts:56-107",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:express_route",
+        "route": "discover_hydrate_compose"
+      }
+    },
+    {
+      "query_id": "ts-fw-express",
+      "fixture_id": "typescript-v0_2",
+      "kind": "framework_name",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "express",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "ts-fw-prisma",
+      "fixture_id": "typescript-v0_2",
+      "kind": "framework_name",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "prisma",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "ts-nl-express-routes",
+      "fixture_id": "typescript-v0_2",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How are Express routes registered?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:express_route"
+      }
+    },
+    {
+      "query_id": "ts-nl-fastify-routes",
+      "fixture_id": "typescript-v0_2",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "Where do we define Fastify routes?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:fastify_route"
+      }
+    },
+    {
+      "query_id": "ts-nl-zod-schemas",
+      "fixture_id": "typescript-v0_2",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How are Zod schemas structured?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:zod_schema"
+      }
+    },
+    {
+      "query_id": "ts-nl-prisma-repos",
+      "fixture_id": "typescript-v0_2",
+      "kind": "nl_pattern_question",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "How do Prisma repositories work?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:typescript:prisma_query"
+      }
+    },
+    {
+      "query_id": "ts-amb-routes",
+      "fixture_id": "typescript-v0_2",
+      "kind": "ambiguous",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How are routes defined?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:typescript:express_route",
+          "family:typescript:fastify_route",
+          "family:typescript:hono_route"
+        ]
+      }
+    },
+    {
+      "query_id": "ts-amb-tests",
+      "fixture_id": "typescript-v0_2",
+      "kind": "ambiguous",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How are tests written?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:typescript:test_case",
+          "family:typescript:test_suite"
+        ]
+      }
+    },
+    {
+      "query_id": "ts-amb-suffix-routes",
+      "fixture_id": "typescript-v0_2",
+      "kind": "path_suffix",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "routes.ts",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:typescript:fastify_route",
+          "family:typescript:hono_route"
+        ]
+      }
+    },
+    {
+      "query_id": "ts-unsupported-graphql",
+      "fixture_id": "typescript-v0_2",
+      "kind": "unsupported_concept",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "How is GraphQL schema stitching configured?",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
+      "query_id": "ts-typo-role-express",
+      "fixture_id": "typescript-v0_2",
+      "kind": "typo_unsafe",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "framework:expres.route_handler",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown"
+      }
+    },
+    {
       "query_id": "zero-find-geometry",
       "fixture_id": "zero-family",
       "kind": "zero_family_repo",
+      "intent": "context",
       "operation": "find",
       "target": "geometry.py",
       "mode": "compact",
@@ -332,6 +998,7 @@
       "query_id": "zero-check-strings",
       "fixture_id": "zero-family",
       "kind": "check_conformance",
+      "intent": "context",
       "operation": "check",
       "target": "strings.py",
       "mode": "compact",
