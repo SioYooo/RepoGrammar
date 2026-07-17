@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 REPOGRAMMAR_REPO="${REPOGRAMMAR_REPO:-SioYooo/RepoGrammar}"
 REPOGRAMMAR_VERSION="${REPOGRAMMAR_VERSION:-latest}"
-PREVIEW_VERSION_HINT="${REPOGRAMMAR_PREVIEW_VERSION_HINT:-v0.2.0-preview.0}"
+STABLE_VERSION_HINT="${REPOGRAMMAR_STABLE_VERSION_HINT:-v0.2.0}"
 REPOGRAMMAR_BIN="${REPOGRAMMAR_SOURCE_BINARY:-${REPO_ROOT}/target/release/repogrammar}"
 SOURCE_BINARY_PROVIDED=0
 if [[ -n "${REPOGRAMMAR_SOURCE_BINARY:-}" ]]; then
@@ -197,7 +197,7 @@ require_linux_glibc_floor() {
     *) die "unsupported Linux architecture for glibc floor" ;;
   esac
   if ! version_at_least "$version" "$minimum"; then
-    die "unsupported Linux glibc ${version}; ${arch} public-preview binaries require glibc ${minimum}+"
+    die "unsupported Linux glibc ${version}; ${arch} release binaries require glibc ${minimum}+"
   fi
 }
 
@@ -218,7 +218,7 @@ detect_linux_glibc() {
   if command -v ldd >/dev/null 2>&1; then
     libc_report="$(ldd --version 2>&1 || true)"
     case "$libc_report" in
-      *musl*) die "unsupported Linux runtime: musl; the public preview requires glibc" ;;
+      *musl*) die "unsupported Linux runtime: musl; the supported release runtime requires glibc" ;;
       *GLIBC*|*glibc*|*GNU\ C\ Library*)
         if [[ "$libc_report" =~ ([0-9]+\.[0-9]+) ]]; then
           require_linux_glibc_floor "$arch" "${BASH_REMATCH[1]}"
@@ -227,7 +227,7 @@ detect_linux_glibc() {
         ;;
     esac
   fi
-  die "unsupported Linux runtime: unable to confirm glibc; the public preview fails closed"
+  die "unsupported Linux runtime: unable to confirm glibc; release acquisition fails closed"
 }
 
 artifact_name() {
@@ -274,7 +274,7 @@ fetch_asset() {
 release_asset_not_found() {
   local url="$1"
   printf "error: release artifact was not found: %s\n" "$url" >&2
-  printf "For preview prereleases, rerun with --version <preview-tag> (for example: --version %s).\n" "$PREVIEW_VERSION_HINT" >&2
+  printf "For an exact release, rerun with --version <tag> (for example: --version %s).\n" "$STABLE_VERSION_HINT" >&2
   if has_source_checkout; then
     printf "This looks like a RepoGrammar source checkout; rerun with --from-source to build and install locally.\n" >&2
   fi

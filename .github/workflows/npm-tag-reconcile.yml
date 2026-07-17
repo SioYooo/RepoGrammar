@@ -1,28 +1,53 @@
-name: Verify npm preview tags
+name: Verify npm release tags
 
 on:
   workflow_call:
+    inputs:
+      channel:
+        description: Release channel whose public registry state must be verified
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel whose public registry state must be verified
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - preview
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    name: Verify npm preview dist-tags
+    name: Verify npm ${{ inputs.channel }} dist-tags
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Verify preview dist-tags against published versions
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
+      - name: Verify release dist-tags against published versions
+        env:
+          REQUESTED_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
+          test "$(npm --version)" = "11.18.0"
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
+          manifest_channel="$(cargo run --quiet --locked --bin repo-guard -- release-channel --version "${package_version}")"
+          if [ "${REQUESTED_CHANNEL}" != "${manifest_channel}" ]; then
+            echo "requested npm channel does not match the checked-out manifest" >&2
+            exit 1
+          fi
 
           classify_registry() {
             local attempt tags versions preview latest versions_json action
@@ -32,11 +57,12 @@ jobs:
                 && preview="$(node -e 'const tags=JSON.parse(process.argv[1]); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(typeof tags.preview === "string" ? tags.preview : "")' "${tags}")" \
                 && latest="$(node -e 'const tags=JSON.parse(process.argv[1]); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(typeof tags.latest === "string" ? tags.latest : "")' "${tags}")" \
                 && versions_json="$(node -e 'const value=JSON.parse(process.argv[1]); const versions=Array.isArray(value) ? value : [value]; process.stdout.write(JSON.stringify(versions))' "${versions}")" \
-                && action="$(cargo run --quiet --bin repo-guard -- \
-                  preview-dist-tag-action \
+                && action="$(cargo run --quiet --locked --bin repo-guard -- \
+                  release-dist-tag-action \
                   --version "${package_version}" \
                   --preview "${preview}" \
                   --latest "${latest}" \
+                  --tags-json "${tags}" \
                   --versions-json "${versions_json}")"; then
                 printf '%s' "${action}"
                 return 0
@@ -45,17 +71,20 @@ jobs:
                 sleep 2
               fi
             done
-            echo "npm preview registry state did not satisfy the release gate after bounded retries" >&2
+            echo "npm registry state did not satisfy the release gate after bounded retries" >&2
             return 1
           }
 
           final_action="$(classify_registry)"
-          case "${final_action}" in
-            no_latest|allow_prerelease_latest_without_stable|preserve_stable_latest)
+          case "${manifest_channel}:${final_action}" in
+            preview:no_latest|preview:allow_prerelease_latest_without_stable|preview:preserve_stable_latest)
               echo "npm preview dist-tags satisfy the bounded release policy: ${final_action}"
               ;;
+            stable:stable_latest_verified)
+              echo "npm stable latest and preserved preview tags satisfy the bounded release policy"
+              ;;
             *)
-              echo "repo-guard returned an unknown npm dist-tag action" >&2
+              echo "repo-guard returned an action inconsistent with the release channel" >&2
               exit 1
               ;;
           esac

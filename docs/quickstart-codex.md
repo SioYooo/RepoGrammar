@@ -2,8 +2,9 @@
 
 This flow uses the zero-friction setup orchestrator to wire Codex, initialize
 the current repository, build its index, start auto-sync, and run a product MCP
-self-test behind one reviewed plan. Use the general quickstart's exact-version
-availability gate; when either registry check fails, acquire from source.
+self-test behind one reviewed plan. Use the general quickstart's complete
+exact-version and channel-availability gate; when any check fails, acquire from
+source.
 
 ## Acquire RepoGrammar From Source
 
@@ -39,6 +40,28 @@ the current failed attempt created. A missing `codex` CLI leaves a usable
 repository index and returns one install-agent action rather than destroying
 the repository-only result.
 
+## Verify The Global Codex Pre-flight
+
+Setup refreshes a managed instruction block only when the existing Codex
+integration is safely owned **and** an explicit instruction-file override is
+configured for that setup path. First identify the actual global guide used by
+your Codex installation or local policy. RepoGrammar does not discover or guess
+that path. If you have verified that the common candidate below is your active
+guide, inspect or refresh it explicitly without reconfiguring MCP or touching
+repository state:
+
+```text
+repogrammar instructions status --file "$HOME/.codex/AGENTS.md" --json
+repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --dry-run
+repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --yes
+```
+
+Use the actual explicit path when `CODEX_HOME` or local policy places the guide
+elsewhere. Sync creates or appends the exact managed block when it is absent,
+refreshes only an exact known legacy block, preserves unrelated instructions,
+and refuses foreign or malformed marker content. It does not create
+`.repogrammar/`, run setup, or mirror `CLAUDE.md`.
+
 ## Use Codex And GPT-5.6
 
 Open Codex in the configured repository. Use `/mcp` to confirm the
@@ -54,12 +77,14 @@ Ask:
 How are API routes implemented in this repository?
 ```
 
-Codex should call the read-only `repogrammar_context` MCP tool before broad
-source reads when the question concerns implementation families, analogues,
-deviations, or conformance. RepoGrammar returns evidence, a read plan, and
+Codex should call the read-only `repogrammar_context` MCP tool before CodeGraph
+or broad source reads when an implementation, test, fix, refactor, or diagnosis
+requires repository-local contract/convention, repeated implementation,
+framework-role, or analogue evidence. This includes schema, protocol, API, and
+prompt-output contract drift. RepoGrammar returns evidence, a read plan, and
 typed uncertainty. `UNKNOWN`, fallback, stale evidence, or omitted spans mean
-Codex must use normal source reads for the affected files; they must never be
-upgraded into a confident family claim.
+Codex must state the reason and use normal source reads for the affected files;
+they must never be upgraded into a confident family claim.
 
 RepoGrammar does not run GPT-5.6 or call the OpenAI API itself. GPT-5.6 is the
 Codex development/demo reasoning surface, while RepoGrammar is the local MCP
@@ -92,11 +117,11 @@ References:
 
 ## Exact No-Build Path
 
-After the exact npm version and matching GitHub asset pass the availability
-gate in `quickstart.md`:
+After the exact npm version, complete npm channel mapping, and matching GitHub
+asset pass the availability gate in `quickstart.md`:
 
 ```text
-npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target codex
+npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target codex
 ```
 
-If either check fails, use the source acquisition path above.
+If any check fails, use the source acquisition path above.

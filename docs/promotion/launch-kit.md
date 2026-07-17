@@ -57,9 +57,10 @@ does not execute target-repository code, does not call an LLM or cloud API, and
 does not require an OpenAI API key. Source snippets are opt-in and remain
 bounded by hash and freshness checks.
 
-The project is pre-alpha. Python FastAPI, pytest, Pydantic, and SQLAlchemy are
-the primary bounded family path; TypeScript/JavaScript, Java/Spring, C#, C/C++,
-and internal Rust dogfood have narrower preview boundaries. Go, PHP, Ruby, and
+The project is pre-1.0 and its MCP API and bounded analyzers remain
+experimental. Python FastAPI, pytest, Pydantic, and SQLAlchemy are the primary
+bounded family path; TypeScript/JavaScript, Java/Spring, C#, C/C++, and
+internal Rust dogfood have narrower preview boundaries. Go, PHP, Ruby, and
 Swift are discovered-only and are not analysis-support claims.
 
 ## Short launch copy
@@ -157,8 +158,8 @@ passes its qualification gates.
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md>
 - Limitations:
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md>
-- Public preview release: **pending; add only after the tag and exact assets are
-  verified**
+- Stable-channel `0.2.0` release: **pending; add only after the immutable tag,
+  exact assets, npm version, provenance, and public smokes are verified**
 - Public YouTube demo: **pending recording, audio, upload, and signed-out access
   verification**
 - Codex `/feedback` Session ID: **pending verified submission receipt**
@@ -211,7 +212,7 @@ correctness-gated study defined by the repository dogfood protocol.
 Repository copy and the audited static terminal visual are ready. The following
 steps cannot be completed by a documentation commit:
 
-1. verify and publish the intended preview tag, GitHub artifacts, and npm
+1. verify and publish the exact stable `v0.2.0` tag, GitHub artifacts, and npm
    package;
 2. record the live 90–100 second demo with spoken audio;
 3. edit, caption, and upload the video to YouTube;

@@ -1,6 +1,6 @@
 {
   "name": "@sioyooo/repogrammar",
-  "version": "0.2.0-preview.0",
+  "version": "0.2.0",
   "description": "Local implementation-pattern context for coding agents",
   "license": "MIT",
   "repository": {

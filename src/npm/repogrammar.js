@@ -53,7 +53,7 @@ function platformTarget(
 ) {
   if (platform === "win32") {
     throw new Error(
-      "unsupported platform: win32; the public preview supports macOS and Linux only"
+      "unsupported platform: win32; RepoGrammar release binaries support macOS and Linux only"
     );
   }
   const archMap = new Map([
@@ -71,14 +71,14 @@ function platformTarget(
     if (linuxLibc !== "glibc") {
       const classification = linuxLibc === "musl" ? "musl" : "unknown libc";
       throw new Error(
-        `unsupported Linux runtime: ${classification}; the public preview requires glibc`
+        `unsupported Linux runtime: ${classification}; the supported release runtime requires glibc`
       );
     }
     const minimum = arch === "x64" ? "2.35" : "2.39";
     if (!versionAtLeast(glibcVersion, minimum)) {
       const detected = glibcVersion || "unknown";
       throw new Error(
-        `unsupported Linux glibc ${detected}; ${arch} public-preview binaries require glibc ${minimum}+`
+        `unsupported Linux glibc ${detected}; ${arch} release binaries require glibc ${minimum}+`
       );
     }
     return `${normalizedArch}-unknown-linux-gnu`;

@@ -33,6 +33,25 @@ repogrammar install --target claude-code --scope global --yes --no-telemetry
 `claude` is accepted as an alias by the CLI, but public docs should prefer the
 canonical target id `claude-code`.
 
+## Verify The Global Claude Code Pre-flight
+
+First identify the actual global guide used by your Claude Code installation or
+local policy. RepoGrammar does not discover or guess that path. If you have
+verified that the common candidate below is your active guide, inspect or
+refresh it independently of MCP wiring:
+
+```text
+repogrammar instructions status --file "$HOME/.claude/CLAUDE.md" --json
+repogrammar instructions sync --file "$HOME/.claude/CLAUDE.md" --dry-run
+repogrammar instructions sync --file "$HOME/.claude/CLAUDE.md" --yes
+```
+
+Use a different explicit path when local policy places the guide elsewhere.
+Sync creates or appends the exact managed block when it is absent, refreshes
+only an exact known legacy block, preserves unrelated instructions, and refuses
+foreign or malformed marker content. It does not create `.repogrammar/`, run
+setup, or mirror `AGENTS.md`.
+
 ## Initialize A Project
 
 Run this inside each repository where you want Claude Code to use RepoGrammar:
@@ -47,9 +66,23 @@ the first active index by default. Add `--autosync` when Claude Code should keep
 agent-written files available to later RepoGrammar queries.
 
 After initialization, Claude Code should use the `repogrammar_context` MCP tool
-for implementation-pattern analogues, family detail, deviations, and
-conformance checks. For find/check/explain operations, pass the repo-relative
-path, symbol/member id, framework role, or pattern question you already have;
-returned family ids are follow-up handles for exact `show_family` calls. If
-RepoGrammar returns `UNKNOWN`, fallback, stale evidence, or omitted spans, use
+before CodeGraph or broad source reads when implementation, test, fix,
+refactor, or diagnosis requires a repository-local contract/convention,
+repeated implementation, framework role, or analogue comparison. This includes
+schema, protocol, API, and prompt-output contract conformance or drift. For
+find/check/explain operations, pass the repo-relative path, symbol/member id,
+framework role, or code-work question you already have; returned family ids are
+follow-up handles for exact `show_family` calls. If RepoGrammar returns
+`UNKNOWN`, fallback, stale evidence, or omitted spans, state that reason and use
 normal source reads for the affected files.
+
+## Exact No-Build Path
+
+After the exact npm version, complete npm channel mapping, and matching GitHub
+asset pass the availability gate in `quickstart.md`:
+
+```text
+npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target claude-code
+```
+
+If any check fails, use the source acquisition path above.

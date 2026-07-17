@@ -21,16 +21,16 @@ jobs:
         with:
           node-version: 22
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
       - run: node src/workers/typescript/worker.test.js
       - run: node src/npm/repogrammar.test.js
       - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
       - run: python3 src/workers/python/worker.test.py
       - run: bash src/install/repogrammar-install.test.sh
-      - run: cargo run --quiet --bin repo-guard -- check
+      - run: cargo run --quiet --locked --bin repo-guard -- check
       - if: github.event_name == 'pull_request'
-        run: cargo run --quiet --bin repo-guard -- check-diff --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
+        run: cargo run --quiet --locked --bin repo-guard -- check-diff --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
 
   macos-product-smoke:
     name: macOS Rust and packaged product smoke
@@ -42,12 +42,12 @@ jobs:
         with:
           node-version: 22
       - name: Run Rust tests on macOS
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
       - name: Build and exercise packaged product lifecycle
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --bin repogrammar
+          cargo build --locked --release --bin repogrammar
           smoke_root="${RUNNER_TEMP}/repogrammar-macos-smoke"
           mkdir -p "${smoke_root}/package/workers/python" "${smoke_root}/unpacked"
           cp target/release/repogrammar "${smoke_root}/package/repogrammar"
@@ -55,7 +55,7 @@ jobs:
           tar -czf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/package" repogrammar workers
           tar -xzf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/unpacked"
           expected_version="$(node -p "require('./package.json').version")"
-          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+          cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact \
             --binary "${smoke_root}/unpacked/repogrammar" \
             --worker "${smoke_root}/unpacked/workers/python/worker.py" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --bin repogrammar
+          cargo build --locked --release --bin repogrammar
           smoke_root="${RUNNER_TEMP}/repogrammar-linux-smoke"
           mkdir -p "${smoke_root}/package/workers/python" "${smoke_root}/unpacked"
           cp target/release/repogrammar "${smoke_root}/package/repogrammar"
@@ -82,7 +82,7 @@ jobs:
           tar -czf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/package" repogrammar workers
           tar -xzf "${smoke_root}/repogrammar.tar.gz" -C "${smoke_root}/unpacked"
           expected_version="$(node -p "require('./package.json').version")"
-          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+          cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact \
             --binary "${smoke_root}/unpacked/repogrammar" \
             --worker "${smoke_root}/unpacked/workers/python/worker.py" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \

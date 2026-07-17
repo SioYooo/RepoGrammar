@@ -38,6 +38,7 @@ Agent integration:
 - `serve`
 - `install`
 - `uninstall`
+- `instructions`
 
 Metrics:
 
@@ -665,6 +666,63 @@ with a message that duration filtering is not implemented. Logs are diagnostic
 state, not telemetry. JSON output includes the selected `component` and the raw
 `component_filter` option value. `logs` redacts by default and
 machine-readable output must not include source snippets or absolute paths.
+
+## Managed instruction commands
+
+`repogrammar instructions` provides a separate explicit-file lifecycle for the
+short RepoGrammar pre-flight block:
+
+```text
+repogrammar instructions status --file <path> [--json]
+repogrammar instructions sync --file <path> [--dry-run] [--yes] [--json]
+repogrammar instructions remove --file <path> [--dry-run] [--yes] [--json]
+```
+
+`--file` is required. Relative paths resolve from the current directory; no
+agent-specific file path is guessed. `status` is read-only. Live `sync` and
+`remove` require `--yes`, while `--dry-run` reports the planned action without
+writes. The command must never create repository state, initialize an index,
+reconfigure native MCP integration, or mirror another instruction filename.
+Selecting `AGENTS.md` does not authorize a `CLAUDE.md` write, and vice versa.
+
+The content contract is versioned independently from the product version.
+Status reports `missing`, `current`, `outdated`, `foreign`, or `malformed`.
+The deployed unversioned global legacy block reports detected content version
+`0`; the exact later legacy body is classified as logical content version `1`
+even though it had no embedded version marker; current content reports `2`.
+Sync may create or append a missing block and may refresh either
+exact known legacy body. A complete marker pair containing modified or unknown
+content is `foreign`, not owned. Foreign, partial, duplicated, or malformed
+sections are preserved and refused for sync/remove. Remove strips only an exact recognized
+current or legacy block and preserves unrelated content.
+
+The block's trigger semantics are canonical in the installation and MCP
+specifications. In particular, schema/protocol/API/prompt-output or Meaning
+Contract conformance and drift work is RepoGrammar-first even when it names an
+exact file or YAML prompt; pure operational or single-fact inspection remains
+outside the gate when no repository contract or implementation comparison is
+required. `instructions sync` installs this shared contract but never executes
+the read-only pre-flight itself. After a successful live sync, human output
+recommends starting a new coding-agent session because an already-running
+session may retain an earlier instruction snapshot. JSON reports the same
+guidance through `session_restart_recommended`; status, dry-run, and refused
+operations report `false`.
+
+JSON output is low-cardinality and path-free. It includes command/operation,
+status, before/after state, detected and expected content versions, file-existed,
+dry-run/would-change/changed booleans, action, repairability, and a nullable
+refusal code, plus the low-cardinality `session_restart_recommended` boolean.
+Refusal codes are `confirmation_required`,
+`foreign_managed_section`, and `malformed_managed_section`. Filesystem failures
+use the sanitized `instruction_file_unavailable` reason without raw paths or OS
+details. Live replacement uses a uniquely created sibling temporary file,
+refuses preoccupied candidates without following or removing them, preserves
+the existing file mode, owner uid, and group gid, and checks the open temporary
+file's identity immediately before activation. Failure cleanup retains that
+open handle through a device/inode/link-count identity check and removes only
+the still-matching operation-owned pathname. This is not a cross-process
+compare-and-swap; the unsupported same-directory hostile pathname race is
+defined in the installation specification.
 
 ## Installer commands
 

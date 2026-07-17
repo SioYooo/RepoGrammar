@@ -456,6 +456,16 @@ allowed.
   or omitted span fallback guidance, missing variation/exception coverage
   reporting, JSON-RPC initialize/exact-one-tool tools/list/tools/call/shutdown
   handling, and absence of source snippets unless explicitly requested.
+- MCP initialize guidance unit tests assert that the one authoritative guidance
+  string shared with the installer-managed body contains the required positive
+  triggers, narrow exceptions, and authority-docs -> one
+  `find_analogues`/concrete-target/compact call -> returned `read_plan` -> typed
+  fallback or CodeGraph-detail ordering clauses. These are prose-contract tests,
+  not an executable agent classifier. Stable-release acceptance evidence must
+  separately use a fresh session to prove a schema/prompt/Meaning Contract task
+  follows that order and a deterministic `UNKNOWN`/fallback task reports the
+  reason before CodeGraph; it must also show that the identical call is not
+  repeated.
 - Installer tests must cover dry-run no `.repogrammar/` mutation, no receipt
   creation, no native configuration delegation, and native Codex/Claude Code
   MCP command-shape reporting for dry-run global installs, plus live-write
@@ -492,6 +502,27 @@ allowed.
   must keep newly configured targets separate from reconfigured pre-existing
   targets. Any real native-agent CLI integration test must be explicitly
   ignored or feature-gated outside default CI.
+- Managed-instruction tests must cover exact current content version `2`, the
+  exact unmarked legacy body classified as logical version `1`, exact
+  unversioned global legacy `0`, single-byte/body
+  drift becoming `foreign`, partial/duplicated
+  markers becoming `malformed`, foreign/malformed preservation, exact legacy
+  refresh, idempotent current content, atomic create/append/replace/remove, and
+  unrelated-content preservation. CLI coverage for `instructions
+  status|sync|remove --file` must prove path-free JSON, dry-run zero writes,
+  non-dry-run `--yes`, sanitized refusal/error codes, reversible removal, no
+  `.repogrammar/` creation, and no implicit AGENTS/CLAUDE mirroring. Atomic-write
+  coverage must preoccupy sibling candidates with both regular files and
+  symlinks, prove neither is followed or removed, prove operation-owned cleanup
+  after failure while the creating handle remains open, preserve a foreign
+  pathname replacement even when size and timestamps offer no distinction,
+  prove unlinking changes the creating handle's link-count identity, and
+  preserve an existing Unix mode such as `0600`, owner uid, and group gid
+  through sync and remove. The same-directory hostile concurrent
+  pathname-replacement boundary remains an explicit unsupported limitation,
+  not a claimed compare-and-swap guarantee.
+  Legacy classification inputs must come from independent fixed fixtures under
+  `src/fixtures/instructions/`, not from the classifier's own body constructors.
 - Setup tests must cover option parsing, exactly one live confirmation,
   noninteractive `--yes`, dry-run zero writes under a fresh temporary HOME,
   missing/no-live agents with repository-only success, existing repository and
@@ -521,9 +552,11 @@ allowed.
   backup/replacement with it, a directory command path still failing, missing-worker
   artifact rejection, non-regular-file (symlink/hardlink) release-member
   rejection, release-workflow tag/version-guard and artifact and
-  installer-script checksum contract checks, tag publication credential
-  preflight, explicit build-only workflow dispatch, staged GitHub-assets-before-
-  npm publication, and the exact packaged-artifact lifecycle gate. That gate
+  installer-script checksum contract checks, Cargo/npm/lockfile and exact
+  tag-at-current-`origin/main` publication authority, explicit build-only
+  rehearsal dispatch, tag-only candidate creation, refusal to replace an
+  existing draft, stage-only OIDC publication, the exact 11-asset draft
+  inventory, and the exact packaged-artifact lifecycle gate. That gate
   must unpack the candidate binary with its worker, use the committed Pydantic
   release fixture in an isolated HOME, and cover exact `version`, setup
   dry-run/live product-MCP self-test, explicit `resync`, unchanged incremental
@@ -547,7 +580,7 @@ allowed.
   and nonzero propagation when delegated `repogrammar install` fails.
 - Npm launcher tests must run without network access, without Rust/Cargo, and
   without real native-agent CLIs. They must use local fake release artifacts to
-  cover the full supported public-preview platform/artifact matrix,
+  cover the full supported stable/preview platform and artifact matrix,
   unsupported platform/arch rejection, explicit Windows rejection, checksum
   rejection, binary/worker cache installation, missing-worker artifact
   rejection, unexpected-entry rejection,
@@ -932,21 +965,29 @@ cmp -s AGENTS.md CLAUDE.md
 
 ## Release readiness smoke matrix
 
-Before cutting a public-preview tag or opening release-readiness changes,
+Before cutting a stable or preview tag or opening release-readiness changes,
 contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.
 
-Release-policy tests must also cover npm preview-tag classification: exact
-`preview` with no `latest` is read-only success; when no stable version exists,
-the registry-required `latest` may map to a published prerelease as bounded
-public-preview success; a stable `latest` is preserved; and mismatched,
-malformed, unpublished, or prerelease-valued `latest` state outside that
-preview-only exception fails closed. The
-dedicated manual reconciliation workflow must never publish a package; the tag
-release may finish only after the shared reconciliation workflow verifies the
-post-publication registry state. Tests and release smoke must still use an
-exact version or `@preview`; bounded acceptance of the registry state is not a
-stable-release claim.
+Release-policy tests must cover both npm channels. Preview requires the exact
+manifest prerelease under `preview`; before any stable exists, npm's required
+`latest` may point to that same exact prerelease as a bounded preview-only
+state. Stable requires exact `latest=0.2.0`, exact
+`preview=0.2.0-preview.0`, both immutable versions in the registry inventory,
+and a retained-candidate SRI match. Any other prerelease under `preview`, any
+prerelease-valued `latest` after stable, malformed inventories, or unpublished
+tag targets fail closed. Manual reconciliation remains read-only. Stable
+completion additionally requires immutable GitHub release verification, the
+exact 11-asset inventory including the public npm candidate manifest, every
+asset attestation and checksum, npm signature/provenance verification, and the
+exact tag-run id and successful run attempt. The finalizer must verify public
+npm pack metadata against the public manifest before executing a package or
+launcher, then run the downloaded public Linux archive, downloaded public shell
+installer, pinned live repository-only setup, unversioned live
+repository-only setup, and preview version smoke. Version/tag checks or a
+setup dry run alone are not a finalizer. Native-agent integration and fresh
+coding-agent instruction behavior remain separate isolated pre-release/manual
+evidence rather than automatic finalizer evidence.
 
 - Fresh checkout smoke: clone the current checkout into `/tmp` and run a small
   Cargo product smoke such as `cargo test --workspace --all-features

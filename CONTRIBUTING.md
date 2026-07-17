@@ -1,8 +1,9 @@
 # Contributing
 
-RepoGrammar is pre-alpha and conservative by design. Contributions are welcome
-when they preserve source-backed evidence, typed `UNKNOWN`, local-first
-privacy, and pattern-family-first CLI behavior.
+RepoGrammar is pre-1.0 and conservative by design. Its MCP API and bounded
+analyzers remain experimental. Contributions are welcome when they preserve
+source-backed evidence, typed `UNKNOWN`, local-first privacy, and
+pattern-family-first CLI behavior.
 
 ## Good First Contribution Categories
 

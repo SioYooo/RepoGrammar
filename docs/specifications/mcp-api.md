@@ -302,18 +302,38 @@ MCP tools.
 
 The MCP initialize response is the canonical runtime guidance for agents.
 Installer-written instruction-file content is optional, short, marker-fenced,
-and owned by the installation workflow.
-In initialized repositories, agents should call `repogrammar_context` before
-grep/find/manual reads for implementation-pattern analogues, family
-conformance, deviations, or repeated framework behavior. For `find_analogues`,
-`explain_deviation`, and `check_conformance`, they should pass the path,
-symbol/member id, framework role, or pattern question they already have and let
-RepoGrammar discover candidate families internally. Agents should use
-`show_family` only with exact family ids returned earlier; start with
-`mode: compact`; and leave `include_source_spans` unset unless bounded
-line-numbered source text is explicitly needed. Agents must use the returned
-`read_plan` before editing and fall back to normal Read/Grep when RepoGrammar
-returns `UNKNOWN`, `FALLBACK`, stale/omitted spans, or insufficient support.
+and owned by the installation workflow. Both surfaces use the same authoritative
+pre-flight text.
+
+After reading mandatory repository authority and instruction documents, the
+pre-flight is a gate in an initialized repository when implementation, fix,
+refactor, test, or diagnosis requires a repository-local contract or
+convention, repeated implementation, framework role, or analogue comparison.
+This explicitly includes root-cause repair and schema, protocol, API,
+prompt-output, or Meaning Contract qualification, conformance, or drift. A
+mixed contract task remains covered even when its immediate target is an exact
+file, YAML, configuration, or generated prompt.
+
+The first call for covered work is `repogrammar_context` with
+`operation: "find_analogues"`, `target: "<the repo-relative path, symbol/member
+id, framework role, or concrete code-work question from the task>"`, and
+`mode: "compact"`. It occurs before CodeGraph or source search/read. Agents must
+use the returned `read_plan` before editing and treat included line-numbered
+`source_spans` as already read. They may fall back when RepoGrammar is
+unavailable or explicitly returns `UNKNOWN`, `FALLBACK`, stale, omitted, or
+insufficient evidence, and must state that reason before doing so. CodeGraph may
+then provide exact source or call-path detail that RepoGrammar did not supply.
+Agents must not repeat an identical RepoGrammar call unless the target or
+indexed evidence changed. Agents use `show_family` only with exact family ids
+returned earlier and leave `include_source_spans` unset unless bounded source
+is explicitly needed.
+
+Pure prose documentation, operational release/Git/environment/credential
+inspection, syntax-only YAML/configuration validation, and exact one-symbol,
+file, or call-path lookup skip the gate only when they require no repository
+contract, convention, repeated implementation, framework-role, analogue,
+code-behavior, or implementation decision. The file type never overrides a
+covered conformance subtask.
 Agents must not run `repogrammar stats` in normal coding-agent loops; stats is a
 diagnostic inventory command, not a context lookup.
 When stats is used for readiness triage, agents must read the source-free

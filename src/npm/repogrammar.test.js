@@ -338,7 +338,7 @@ function testRejectsUnsafeReleaseTagsAndCachePaths() {
 }
 
 function testPlatformArtifactMatrixAndUnsupportedTargets() {
-  assert.equal(packageJson.version, "0.2.0-preview.0");
+  assert.equal(packageJson.version, "0.2.0");
   assert.deepEqual(packageJson.os, ["darwin", "linux"]);
   assert.deepEqual(packageJson.cpu, ["x64", "arm64"]);
   // npm applies a root `libc` restriction to Darwin too (where libc is
@@ -388,11 +388,11 @@ function testPlatformArtifactMatrixAndUnsupportedTargets() {
   );
   assert.throws(
     () => launcher.platformTarget("linux", "x64", "glibc", "2.34"),
-    /x64 public-preview binaries require glibc 2\.35\+/
+    /x64 release binaries require glibc 2\.35\+/
   );
   assert.throws(
     () => launcher.platformTarget("linux", "arm64", "glibc", "2.38"),
-    /arm64 public-preview binaries require glibc 2\.39\+/
+    /arm64 release binaries require glibc 2\.39\+/
   );
 }
 

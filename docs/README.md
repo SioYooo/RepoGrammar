@@ -17,8 +17,9 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The public-preview release
-  checklist is the canonical three-phase rollout gate.
+- `release/`: maintainer-owned release runbooks. The stable `0.2.0` checklist
+  is the canonical two-phase immutable publication gate; the public-preview
+  checklist remains historical evidence for the prerelease.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
@@ -53,27 +54,19 @@ context lives under `.agents/memories/`.
   2026 planning snapshot and defines the evidence required before a language
   can be described as supported; TypeScript is tracked separately as an extra.
   Go's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`, with
-  the still-incomplete evidence matrix and module review in
-  `reports/language-support/go-completion-review.md`.
+  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`.
   PHP's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`, with its
-  still-incomplete evidence matrix and review in
-  `reports/language-support/php-completion-review.md`; PHP is
+  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`; PHP is
   `discovered_only` and unsupported, and no parser/worker dependency or
   semantic runtime behavior is authorized.
   Swift's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`, with its
-  incomplete evidence matrix and module review in
-  `reports/language-support/swift-completion-review.md`; Swift is
+  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`; Swift is
   `discovered_only` and unsupported, and no parser/worker dependency or
   semantic runtime behavior is authorized. The exact pause checkpoint and
   paste-ready stage-3 resume goal are in
   `plans/swift-n1-qualification-handoff.md`.
   Ruby's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0022-ruby-prism-minitest-preflight.md`, with the incomplete
-  evidence matrix and module review in
-  `reports/language-support/ruby-completion-review.md`.
+  `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
 - v0.2 agent adoption and read displacement:
   `decisions/ADR-0013-agent-adoption-read-displacement.md`,
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,
@@ -82,8 +75,9 @@ context lives under `.agents/memories/`.
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,
   `specifications/indexing-pipeline.md`, `specifications/unknowns.md`,
   `specifications/cli.md`, and `specifications/mcp-api.md`.
-- v0.2 public-preview readiness: `reports/v0.2-public-preview-readiness.md`
-  and `experiments/v0.2-real-repo-dogfood.md`.
+- v0.2 public-preview readiness: `reports/public-preview-growth-readiness.md`,
+  `reports/public-preview-install-proof-matrix.md`, and
+  `experiments/v0.2-real-repo-dogfood.md`.
 - Public-preview growth readiness:
   `reports/public-preview-growth-readiness.md`, `quickstart.md`,
   `quickstart-codex.md`, `quickstart-claude.md`, `limitations.md`,
@@ -93,14 +87,13 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
+- Stable `0.2.0` two-phase immutable publication and instruction-adoption gate:
+  `release/stable-v0.2.0-release-checklist.md`.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
 - Build Week zero-friction onboarding authority and execution evidence:
   `decisions/ADR-0026-zero-friction-onboarding-orchestration.md`,
-  `plans/build-week-zero-friction-onboarding-plan.md`, and
-  `reports/build-week-usability-baseline.md`. The code-complete local verdict,
-  measurements, validation, and external-publication boundary are in
-  `reports/build-week-usability-completion.md` and its summary JSON. The ADR freezes new
+  `plans/build-week-zero-friction-onboarding-plan.md`. The ADR freezes new
   language/framework/provider scope and preserves install, repo-local state,
   MCP, telemetry, and abstention boundaries while one `setup` entrypoint
   composes them.
@@ -115,21 +108,14 @@ context lives under `.agents/memories/`.
 - Initialization progress: `specifications/initialization-progress.md`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - UNKNOWN governance: `specifications/unknowns.md` and
-  `specifications/domain-model.md`; fixture-level regression protocol:
-  `experiments/unknown-regression-benchmark.md`; cross-language SOTA resolution
-  analysis snapshot: `reports/unknown-resolution-sota-analysis.md`.
-- C# same-class xUnit data-link completion and four-part module review:
-  `reports/language-support/csharp-member-data-resolution-review.md`.
-- Java same-class JUnit/TestNG data-link completion and four-part module review:
-  `reports/language-support/java-test-data-resolution-review.md`.
+  `specifications/domain-model.md`.
 - Indexing pipeline: `specifications/indexing-pipeline.md`.
 - Storage boundaries: `specifications/storage.md`.
 - Repo-local state boundary: `decisions/ADR-0008-repo-local-state-boundary.md`
   and `specifications/storage.md`.
 - Concurrent filesystem confinement preflight:
-  `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md` and
-  the incomplete evidence ledger in
-  `reports/filesystem-confinement-completion-review.md`. The decision requires
+  `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md`.
+  The decision requires
   one no-follow handle-relative authority for discovery, source reads, and
   autosync fingerprinting; it adds no dependency or runtime fix by itself.
 - MCP tool intent: `specifications/mcp-api.md`.
@@ -165,18 +151,14 @@ context lives under `.agents/memories/`.
   `specifications/python-analysis.md`, `specifications/product.md`,
   `docs/roadmap.md`, and the relevant plan under `plans/`, including
   `plans/top-20-language-expansion-plan.md` for ranked-scope work. Go work must
-  also read `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`
-  and `reports/language-support/go-completion-review.md`.
+  also read `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`.
   PHP work must also read
-  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md` and
-  `reports/language-support/php-completion-review.md`.
+  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`.
   Swift work must also read
-  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md` and
-  `reports/language-support/swift-completion-review.md`; qualification work
+  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`; qualification work
   must additionally read `plans/swift-n1-qualification-handoff.md`.
   Ruby work must also read
-  `decisions/ADR-0022-ruby-prism-minitest-preflight.md` and
-  `reports/language-support/ruby-completion-review.md`.
+  `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
 - Optional graph/provider change: read
   `decisions/ADR-0010-optional-codegraph-provider.md`,
   `plans/codegraph-provider-plan.md`, `specifications/product.md`, and
@@ -189,7 +171,6 @@ context lives under `.agents/memories/`.
 - Repository discovery, source-store, autosync fingerprint, symlink/reparse, or
   filesystem-confinement change: read
   `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md`,
-  `reports/filesystem-confinement-completion-review.md`,
   `architecture/dependency-rules.md`, `specifications/indexing-pipeline.md`,
   `specifications/storage.md`, and `development/testing.md`.
 - Core model change: read `specifications/domain-model.md` and

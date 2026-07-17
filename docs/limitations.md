@@ -1,18 +1,22 @@
 # Limitations
 
-RepoGrammar is a pre-alpha public preview. It is designed to be conservative
-and local-first, not a sound general static analyzer.
+RepoGrammar `0.2.0` is the first non-prerelease pre-1.0 version. Its MCP API
+and bounded analyzers remain experimental. It is designed to be conservative
+and local-first, not a sound general static analyzer or a production-readiness
+claim.
 
 ## Release Availability
 
-- Public release artifacts are available only after a preview tag runs the
-  release workflow and the assets are verified.
-- The npm wrapper is available only after `@sioyooo/repogrammar` is published.
+- Stable artifacts are available only after the exact `v0.2.0` GitHub release
+  is public and immutable and npm `@sioyooo/repogrammar@0.2.0` is independently
+  verified.
+- The npm wrapper is available only after that exact immutable npm version is
+  approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood is the safe contributor path before release and npm
   publication exist.
-- The three-phase rollout gate (source dogfood, then verified prerelease
-  artifacts, then verified npm) is tracked in
-  `release/public-preview-release-checklist.md`.
+- The two-phase immutable rollout and recovery states are tracked in
+  `release/stable-v0.2.0-release-checklist.md`. The earlier preview record
+  remains in `release/public-preview-release-checklist.md`.
 
 ## Language And Framework Scope
 
@@ -119,7 +123,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   module inventories are project context. The incremental copy-forward path is
   reserved for deltas that pass that project-context gate.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in the v0.1 preview; a dedicated `ready`
+  signal reports at most `partial` in `0.2.0`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

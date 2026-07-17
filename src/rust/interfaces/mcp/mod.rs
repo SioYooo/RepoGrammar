@@ -1,5 +1,6 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
+use crate::application::install::AGENT_PREFLIGHT_GATE;
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
     family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
@@ -28,7 +29,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_MCP_LINE_BYTES: usize = 1_048_576;
 pub const MAX_MCP_TARGET_BYTES: usize = MAX_QUERY_TARGET_BYTES;
 pub const MAX_MCP_TOKEN_BUDGET: usize = MAX_QUERY_TOKEN_BUDGET;
-pub const MCP_AGENT_INSTRUCTIONS: &str = "RepoGrammar MCP is read-only. In initialized repositories, call repogrammar_context before grep/find/manual reads when you need implementation-pattern context, analogous examples, family conformance, deviation explanation, or an edit plan. For find_analogues, explain_deviation, and check_conformance, start from the repo-relative path, symbol/member id, framework role, or pattern question you actually have; RepoGrammar internally discovers candidate families, hydrates bounded evidence, and returns family ids only as follow-up handles. Use show_family only with an exact family id returned earlier. Start with compact mode; do not request include_source_spans by default. Use the returned read_plan before editing, and stop or fall back to normal Read/Grep when the result is UNKNOWN, FALLBACK, stale, omitted, or insufficient. Use repogrammar doctor --json readiness diagnostics to distinguish not_initialized, state_only_no_active_index, unhealthy active index, and ready active index with no family support; MCP may recommend commands but never runs them. Do not run repogrammar stats in normal coding-agent loops; stats is diagnostic inventory, not a context lookup. No silent setup: run repogrammar setup only when the user or project policy permits machine integration and repo-local analysis state.";
+pub const MCP_AGENT_INSTRUCTIONS: &str = AGENT_PREFLIGHT_GATE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpToolName {
@@ -1743,18 +1744,18 @@ mod tests {
         let instructions = initialize_response["result"]["instructions"]
             .as_str()
             .expect("initialize instructions");
-        assert!(instructions.contains("repogrammar setup"));
-        assert!(instructions.contains("start from the repo-relative path"));
-        assert!(instructions.contains("family ids only as follow-up handles"));
-        assert!(instructions.contains("Use show_family only with an exact family id"));
-        assert!(instructions.contains("Start with compact mode"));
-        assert!(instructions.contains("do not request include_source_spans by default"));
-        assert!(instructions.contains("UNKNOWN, FALLBACK, stale, omitted, or insufficient"));
-        assert!(instructions.contains("repogrammar doctor --json readiness diagnostics"));
-        assert!(instructions.contains("state_only_no_active_index"));
-        assert!(instructions.contains("MCP may recommend commands but never runs them"));
-        assert!(instructions.contains("Do not run repogrammar stats"));
-        assert!(instructions.contains("No silent setup"));
+        assert!(instructions.contains("pre-flight gate"));
+        assert!(instructions.contains("before any non-trivial code location"));
+        assert!(instructions.contains("operation: \"find_analogues\""));
+        assert!(instructions.contains("repo-relative path, symbol/member id"));
+        assert!(instructions.contains("mode: \"compact\""));
+        assert!(instructions.contains("CodeGraph"));
+        assert!(instructions.contains("State that fallback reason"));
+        assert!(instructions.contains("Do not repeat the same RepoGrammar call"));
+        assert!(instructions.contains("show_family"));
+        assert!(instructions.contains("include_source_spans"));
+        assert!(instructions.contains("repogrammar stats"));
+        assert!(instructions.contains("Never initialize"));
 
         let list = handle_json_rpc_value(
             &runtime,

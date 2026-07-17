@@ -1,0 +1,230 @@
+name: Finalize stable v0.2.0 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful v0.2.0 tag workflow run that created the exact draft and staged npm candidate
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful attempt of the v0.2.0 tag workflow run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stable-v0.2.0-finalize
+  cancel-in-progress: false
+
+jobs:
+  verify_public_release:
+    name: Verify immutable GitHub and npm release evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v0.2.0
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
+      - name: Collect immutable GitHub release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/github-assets
+          gh api repos/SioYooo/RepoGrammar/releases/tags/v0.2.0 \
+            > evidence/github-release.json
+          gh release verify v0.2.0 -R SioYooo/RepoGrammar --format json \
+            > evidence/github-release-attestation.json
+          gh release download v0.2.0 -R SioYooo/RepoGrammar \
+            --dir evidence/github-assets
+          for asset in \
+            install.sh \
+            install.sh.sha256 \
+            repogrammar-aarch64-apple-darwin.tar.gz \
+            repogrammar-aarch64-apple-darwin.tar.gz.sha256 \
+            repogrammar-aarch64-unknown-linux-gnu.tar.gz \
+            repogrammar-aarch64-unknown-linux-gnu.tar.gz.sha256 \
+            repogrammar-x86_64-apple-darwin.tar.gz \
+            repogrammar-x86_64-apple-darwin.tar.gz.sha256 \
+            repogrammar-x86_64-unknown-linux-gnu.tar.gz \
+            repogrammar-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+            npm-candidate-manifest.json
+          do
+            gh release verify-asset v0.2.0 "evidence/github-assets/${asset}" \
+              -R SioYooo/RepoGrammar --format json \
+              > "evidence/asset-attestation-${asset}.json"
+          done
+          test "$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
+          (
+            cd evidence/github-assets
+            sha256sum -c install.sh.sha256
+            sha256sum -c repogrammar-aarch64-apple-darwin.tar.gz.sha256
+            sha256sum -c repogrammar-aarch64-unknown-linux-gnu.tar.gz.sha256
+            sha256sum -c repogrammar-x86_64-apple-darwin.tar.gz.sha256
+            sha256sum -c repogrammar-x86_64-unknown-linux-gnu.tar.gz.sha256
+          )
+      - name: Collect tag-run attempt and retained npm manifest evidence
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${CANDIDATE_RUN_ID}" in
+            ''|*[!0-9]*) echo "candidate_run_id must be numeric" >&2; exit 1 ;;
+          esac
+          case "${CANDIDATE_RUN_ATTEMPT}" in
+            ''|*[!0-9]*) echo "candidate_run_attempt must be numeric" >&2; exit 1 ;;
+          esac
+          gh api "repos/SioYooo/RepoGrammar/actions/runs/${CANDIDATE_RUN_ID}/attempts/${CANDIDATE_RUN_ATTEMPT}" \
+            --jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}' \
+            > evidence/candidate-run.json
+          jq -e '
+            keys == ["conclusion", "event", "head_branch", "head_sha", "name", "path", "run_attempt", "run_id"] and
+            (.run_id | type == "number" and . > 0) and
+            (.run_attempt | type == "number" and . > 0) and
+            ([.name, .path, .event, .head_branch, .head_sha, .conclusion] |
+              all(.[]; type == "string" and length > 0))
+          ' evidence/candidate-run.json >/dev/null
+          git rev-parse HEAD > evidence/expected-head-sha.txt
+          cp evidence/github-assets/npm-candidate-manifest.json \
+            evidence/retained-candidate-manifest.json
+      - name: Verify public npm pack metadata before product execution
+        run: |
+          set -euo pipefail
+          test "$(npm --version)" = "11.18.0"
+          npm view @sioyooo/repogrammar dist-tags --json \
+            > evidence/npm-tags.json
+          npm view @sioyooo/repogrammar versions --json \
+            > evidence/npm-versions.json
+          npm view @sioyooo/repogrammar@0.2.0 dist.integrity \
+            > evidence/npm-registry-integrity.txt
+          mkdir -p public-npm
+          npm pack @sioyooo/repogrammar@0.2.0 --json --ignore-scripts \
+            --pack-destination public-npm \
+            > public-npm/npm-pack.json
+          cp public-npm/npm-pack.json evidence/public-npm-pack.json
+          cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
+            --pack-json public-npm/npm-pack.json \
+            --candidate-manifest evidence/retained-candidate-manifest.json \
+            --expected-version 0.2.0
+      - name: Smoke the verified public native archive
+        run: |
+          set -euo pipefail
+          native_root="${RUNNER_TEMP}/public-native-smoke"
+          mkdir -p "${native_root}/unpacked"
+          tar -xzf evidence/github-assets/repogrammar-x86_64-unknown-linux-gnu.tar.gz \
+            -C "${native_root}/unpacked"
+          cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact \
+            --binary "${native_root}/unpacked/repogrammar" \
+            --worker "${native_root}/unpacked/workers/python/worker.py" \
+            --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            --expected-version 0.2.0 \
+            > evidence/public-native-smoke.txt
+      - name: Smoke the verified public installer
+        run: |
+          set -euo pipefail
+          installer_root="${RUNNER_TEMP}/public-installer-smoke"
+          mkdir -p \
+            "${installer_root}/home" \
+            "${installer_root}/data" \
+            "${installer_root}/commands"
+          HOME="${installer_root}/home" \
+          USERPROFILE="${installer_root}/home" \
+          XDG_CONFIG_HOME="${installer_root}/home/.config" \
+          XDG_DATA_HOME="${installer_root}/home/.local/share" \
+          XDG_CACHE_HOME="${installer_root}/home/.cache" \
+          CODEX_HOME="${installer_root}/home/.codex" \
+          REPOGRAMMAR_INSTALL_DIR="${installer_root}/data" \
+          REPOGRAMMAR_COMMAND_DIR="${installer_root}/commands" \
+          REPOGRAMMAR_RELEASE_DIR="${GITHUB_WORKSPACE}/evidence/github-assets" \
+            bash evidence/github-assets/install.sh \
+              --version v0.2.0 \
+              --install-cli-only \
+              --yes
+          "${installer_root}/commands/repogrammar" version \
+            > evidence/public-installer-version.txt
+      - name: Collect public npm package and provenance evidence
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
+            --tarball public-npm/sioyooo-repogrammar-0.2.0.tgz \
+            --expected-version 0.2.0 \
+            > evidence/public-candidate-manifest.json
+          mkdir -p npm-audit-project
+          cd npm-audit-project
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund --save-exact \
+            @sioyooo/repogrammar@0.2.0
+          npm audit signatures --json --include-attestations \
+            > ../evidence/npm-audit-signatures.json
+      - name: Collect public npm launcher smoke evidence
+        run: |
+          set -euo pipefail
+          smoke_root="${RUNNER_TEMP}/public-release-smoke"
+          tool_bin="${smoke_root}/tool-bin"
+          mkdir -p \
+            "${tool_bin}" \
+            "${smoke_root}/pinned/home" \
+            "${smoke_root}/pinned/project" \
+            "${smoke_root}/latest/home" \
+            "${smoke_root}/latest/project" \
+            "${smoke_root}/preview/home"
+          for tool in node npm npx python3 sh bash tar gzip uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
+            tool_path="$(command -v "${tool}")"
+            ln -s "${tool_path}" "${tool_bin}/${tool}"
+          done
+          cp src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            "${smoke_root}/pinned/project/schemas.py"
+          cp src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+            "${smoke_root}/latest/project/schemas.py"
+          run_npx() {
+            local lane="$1"
+            shift
+            HOME="${smoke_root}/${lane}/home" \
+            USERPROFILE="${smoke_root}/${lane}/home" \
+            XDG_CONFIG_HOME="${smoke_root}/${lane}/home/.config" \
+            XDG_DATA_HOME="${smoke_root}/${lane}/home/.local/share" \
+            XDG_CACHE_HOME="${smoke_root}/${lane}/home/.cache" \
+            CODEX_HOME="${smoke_root}/${lane}/home/.codex" \
+            npm_config_cache="${smoke_root}/${lane}/npm-cache" \
+            REPOGRAMMAR_NPM_CACHE_DIR="${smoke_root}/${lane}/binary-cache" \
+            PATH="${tool_bin}" \
+            npx --yes "$@"
+          }
+          run_npx pinned --package @sioyooo/repogrammar@0.2.0 \
+            repogrammar version > evidence/pinned-version.txt
+          run_npx latest --package @sioyooo/repogrammar \
+            repogrammar version > evidence/latest-version.txt
+          run_npx preview --package @sioyooo/repogrammar@preview \
+            repogrammar version > evidence/preview-version.txt
+          run_npx pinned --package @sioyooo/repogrammar@0.2.0 repogrammar setup \
+            --project "${smoke_root}/pinned/project" \
+            --target auto \
+            --yes \
+            --no-autosync \
+            --json \
+            --progress never \
+            > evidence/pinned-setup.json
+          run_npx latest --package @sioyooo/repogrammar repogrammar setup \
+            --project "${smoke_root}/latest/project" \
+            --target auto \
+            --yes \
+            --no-autosync \
+            --json \
+            --progress never \
+            > evidence/latest-setup.json
+      - name: Verify all collected evidence and record final verdict
+        run: cargo run --quiet --locked --bin repo-guard -- verify-stable-release-evidence --evidence-dir evidence

@@ -410,7 +410,7 @@ least:
 ```json
 {
   "schema_version": 1,
-  "repogrammar_version": "0.2.0-preview.0",
+  "repogrammar_version": "0.2.0",
   "created_at": "2026-06-24T00:00:00Z",
   "last_indexed_at": "2026-06-24T00:00:00Z",
   "repository": {
@@ -703,7 +703,7 @@ yet. The lock must contain:
   "host": "workstation-name",
   "os": "darwin",
   "started_unix_seconds": 1782200000,
-  "repogrammar_version": "0.2.0-preview.0",
+  "repogrammar_version": "0.2.0",
   "token": "12345-1782200000000000000-1"
 }
 ```
