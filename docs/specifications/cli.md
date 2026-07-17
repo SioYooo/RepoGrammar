@@ -713,7 +713,9 @@ use the sanitized `instruction_file_unavailable` reason without raw paths or OS
 details. Live replacement uses a uniquely created sibling temporary file,
 refuses preoccupied candidates without following or removing them, preserves
 the existing file mode, owner uid, and group gid, and checks the open temporary
-file's identity immediately before activation. This is not a cross-process
+file's identity immediately before activation. Failure cleanup retains that
+open handle through a device/inode/link-count identity check and removes only
+the still-matching operation-owned pathname. This is not a cross-process
 compare-and-swap; the unsupported same-directory hostile pathname race is
 defined in the installation specification.
 

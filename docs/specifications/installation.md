@@ -515,6 +515,11 @@ operation:
   file to verify the managed section before reporting success;
 - on Unix it restores the pre-existing file mode, owner uid, and group gid on
   the open temporary handle before activation, or fails without activating it;
+- on Unix any failure cleanup keeps that creating handle open while comparing
+  the sibling pathname's device, inode, and link-count identity and unlinking
+  only the matching operation-owned temporary file. Unlinking the original
+  pathname changes the live handle's link count, while retaining the handle
+  prevents ordinary inode reuse until the cleanup decision is complete;
 - `uninstall` and rollback reverse exactly the recorded `instruction_action`:
   they remove the managed section and preserve unrelated user content; when
   RepoGrammar created the file (`instruction_action: "created"`) and stripping

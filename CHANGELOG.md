@@ -43,6 +43,12 @@ not prove that GitHub or npm publication completed.
 
 ### Fixed
 
+- Kept the creating Unix file handle alive and included its link count in the
+  identity used to validate and clean an operation-owned managed-instruction
+  temporary file. Unlinking changes the live handle's link-count identity, and
+  retaining that handle prevents ordinary inode reuse until cleanup completes.
+  The documented same-directory concurrent pathname race remains unsupported
+  rather than becoming a claimed compare-and-swap guarantee.
 - Corrected the npm dist-tag release gate for a package whose only published
   version is a prerelease. npm requires `latest` and may map it to that sole
   version even when publication used `--tag preview`; the gate now verifies the

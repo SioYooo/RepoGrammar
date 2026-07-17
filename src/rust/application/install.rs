@@ -2291,7 +2291,12 @@ fn instruction_temp_path(path: &Path, id: u64) -> PathBuf {
 }
 
 #[cfg(unix)]
-type InstructionTempIdentity = (u64, u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InstructionTempIdentity {
+    device: u64,
+    inode: u64,
+    link_count: u64,
+}
 
 #[cfg(not(unix))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2303,7 +2308,11 @@ fn instruction_temp_handle_identity(file: &File) -> Option<InstructionTempIdenti
         use std::os::unix::fs::MetadataExt;
 
         let metadata = file.metadata().ok()?;
-        Some((metadata.dev(), metadata.ino()))
+        Some(InstructionTempIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            link_count: metadata.nlink(),
+        })
     }
     #[cfg(not(unix))]
     {
@@ -2327,7 +2336,11 @@ fn instruction_temp_path_matches_identity(path: &Path, opened: &InstructionTempI
     {
         use std::os::unix::fs::MetadataExt;
 
-        (candidate.dev(), candidate.ino()) == *opened
+        InstructionTempIdentity {
+            device: candidate.dev(),
+            inode: candidate.ino(),
+            link_count: candidate.nlink(),
+        } == *opened
     }
     #[cfg(not(unix))]
     {
@@ -2336,7 +2349,15 @@ fn instruction_temp_path_matches_identity(path: &Path, opened: &InstructionTempI
     }
 }
 
-fn cleanup_owned_instruction_temp(path: &Path, opened: &InstructionTempIdentity) {
+fn cleanup_owned_instruction_temp(path: &Path, file: &File, opened: &InstructionTempIdentity) {
+    // Keep the creating handle alive through the pathname check and unlink.
+    // The link count is part of the identity as well as device/inode. Once the
+    // pathname has been unlinked, the live handle no longer matches the
+    // creation identity, while the open handle prevents ordinary inode reuse
+    // until the cleanup decision is complete.
+    if instruction_temp_handle_identity(file).as_ref() != Some(opened) {
+        return;
+    }
     if instruction_temp_path_matches_identity(path, opened) {
         let _ = fs::remove_file(path);
     }
@@ -2538,8 +2559,8 @@ where
         .and_then(|()| file.flush())
         .is_err()
     {
+        cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
         drop(file);
-        cleanup_owned_instruction_temp(&temporary, &opened_identity);
         return Err(RepoGrammarError::InvalidInput(
             "failed to write temporary instruction file".to_string(),
         ));
@@ -2549,42 +2570,43 @@ where
     {
         Ok(metadata) => metadata,
         Err(error) => {
+            cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
             drop(file);
-            cleanup_owned_instruction_temp(&temporary, &opened_identity);
             return Err(error);
         }
     };
     if let Some(destination_metadata) = destination_metadata {
         if let Err(error) = preserve_instruction_destination_metadata(&file, &destination_metadata)
         {
+            cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
             drop(file);
-            cleanup_owned_instruction_temp(&temporary, &opened_identity);
             return Err(error);
         }
     }
     if file.sync_all().is_err() {
+        cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
         drop(file);
-        cleanup_owned_instruction_temp(&temporary, &opened_identity);
         return Err(RepoGrammarError::InvalidInput(
             "failed to synchronize temporary instruction file".to_string(),
         ));
     }
     if !instruction_temp_path_matches_identity(&temporary, &opened_identity) {
+        cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
         drop(file);
-        cleanup_owned_instruction_temp(&temporary, &opened_identity);
         return Err(RepoGrammarError::InvalidInput(
             "temporary instruction file ownership changed before activation".to_string(),
         ));
     }
 
     let renamed = fs::rename(&temporary, path);
-    drop(file);
     if renamed.is_err() {
-        cleanup_owned_instruction_temp(&temporary, &opened_identity);
+        cleanup_owned_instruction_temp(&temporary, &file, &opened_identity);
+        drop(file);
         return Err(RepoGrammarError::InvalidInput(
             "failed to atomically write instruction file".to_string(),
         ));
     }
+    drop(file);
     Ok(())
 }
 
@@ -4551,11 +4573,15 @@ mod tests {
         let temp_id = u64::MAX - 197;
         let (temporary, file, identity) =
             create_unique_instruction_temp(&destination, [temp_id]).expect("create owned temp");
-        drop(file);
 
         fs::remove_file(&temporary).expect("replace owned temp path");
+        assert_ne!(
+            instruction_temp_handle_identity(&file),
+            Some(identity),
+            "unlinking the owned pathname must invalidate its cleanup identity"
+        );
         fs::write(&temporary, b"").expect("install foreign same-sized replacement");
-        cleanup_owned_instruction_temp(&temporary, &identity);
+        cleanup_owned_instruction_temp(&temporary, &file, &identity);
 
         assert!(
             temporary.exists(),

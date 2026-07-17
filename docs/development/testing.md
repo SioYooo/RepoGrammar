@@ -514,8 +514,11 @@ allowed.
   `.repogrammar/` creation, and no implicit AGENTS/CLAUDE mirroring. Atomic-write
   coverage must preoccupy sibling candidates with both regular files and
   symlinks, prove neither is followed or removed, prove operation-owned cleanup
-  after failure, and preserve an existing Unix mode such as `0600`, owner uid,
-  and group gid through sync and remove. The same-directory hostile concurrent
+  after failure while the creating handle remains open, preserve a foreign
+  pathname replacement even when size and timestamps offer no distinction,
+  prove unlinking changes the creating handle's link-count identity, and
+  preserve an existing Unix mode such as `0600`, owner uid, and group gid
+  through sync and remove. The same-directory hostile concurrent
   pathname-replacement boundary remains an explicit unsupported limitation,
   not a claimed compare-and-swap guarantee.
   Legacy classification inputs must come from independent fixed fixtures under
