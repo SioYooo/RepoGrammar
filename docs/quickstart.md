@@ -1,24 +1,27 @@
 # Quickstart
 
 This guide does not infer publication from its own version. Use the exact
-availability gate below; if either registry check fails, use source-checkout
-contributor dogfood.
+availability gate below; if any check fails, use source-checkout contributor
+dogfood.
 
 ## 1. Verify And Acquire Exact 0.2.0
 
 ```text
 npm view @sioyooo/repogrammar@0.2.0 version
+npm view @sioyooo/repogrammar dist-tags --json
 curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
 npx @sioyooo/repogrammar@0.2.0 version
 ```
 
-Continue with the no-build path only when both registry checks succeed. The npm
-launcher requires Node/npm for acquisition, but the installed product does not
-require Rust/Cargo, Docker, the SQLite CLI, a local model, an embedding model,
-an OpenAI API key, or a cloud API. The bounded Python analyzer requires Python
-3.10 or newer as `python3` at runtime.
+Continue with the no-build path only when the exact-version and GitHub checks
+succeed, the dist-tag object contains exactly `"latest":"0.2.0"` and
+`"preview":"0.2.0-preview.0"`, and the pinned launcher reports `0.2.0`. The
+npm launcher requires Node/npm for acquisition, but the installed product does
+not require Rust/Cargo, Docker, the SQLite CLI, a local model, an embedding
+model, an OpenAI API key, or a cloud API. The bounded Python analyzer requires
+Python 3.10 or newer as `python3` at runtime.
 
-If either registry check fails, use contributor source acquisition:
+If any check fails, use contributor source acquisition:
 
 ```text
 git clone https://github.com/SioYooo/RepoGrammar.git

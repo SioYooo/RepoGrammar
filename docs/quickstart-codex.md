@@ -2,8 +2,9 @@
 
 This flow uses the zero-friction setup orchestrator to wire Codex, initialize
 the current repository, build its index, start auto-sync, and run a product MCP
-self-test behind one reviewed plan. Use the general quickstart's exact-version
-availability gate; when either registry check fails, acquire from source.
+self-test behind one reviewed plan. Use the general quickstart's complete
+exact-version and channel-availability gate; when any check fails, acquire from
+source.
 
 ## Acquire RepoGrammar From Source
 
