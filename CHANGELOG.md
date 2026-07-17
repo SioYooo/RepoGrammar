@@ -13,6 +13,12 @@
   `repogrammar` bin, so the run failed before emitting `STABLE_RELEASE_READY`.
   The corrected workflow is dispatched from `main`, checks out the immutable
   `v0.2.2` source, and remains bound to candidate run `29586694524`, attempt 1.
+  Follow-up finalizer run `29589865164` again failed in the launcher step. A
+  matching isolated reproduction proved that the public version command worked
+  and setup then returned typed `repository_initialization_failed` because the
+  tool-only PATH omitted `git`, which repository initialization requires. The
+  finalizer now includes `git` in that bounded PATH without widening release
+  permissions or changing published artifacts.
 
 ## 0.2.2 — 2026-07-17 stable channel
 

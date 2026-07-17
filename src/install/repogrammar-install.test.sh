@@ -888,6 +888,9 @@ require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" \
 require_workflow_absence "$STABLE_FINALIZER_NPM_SMOKE" \
   'smoke_root="\$\{GITHUB_WORKSPACE\}/' \
   "stable finalization must not place public npm launcher work under the checkout"
+require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" \
+  '^.*for tool in .* git .*; do[[:space:]]*$' \
+  "stable finalization must make git available to repository setup in the tool-only PATH"
 for STABLE_NPM_LANE in pinned latest preview; do
   require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" \
     "\"\\\${smoke_root}/${STABLE_NPM_LANE}/work\"" \
