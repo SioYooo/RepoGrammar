@@ -406,9 +406,14 @@ and default runtime tracing are deferred.
 
 ## Result discipline
 
-RepoGrammar must distinguish `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, and
-`UNKNOWN`. Low confidence, competing families, incompatible targets, and dynamic
-runtime behavior must lead to abstention rather than certainty.
+RepoGrammar must distinguish the four prevalence classifications
+`DOMINANT_PATTERN`, `SUPPORTED_PATTERN`, `MINORITY_PATTERN`, and
+`UNKNOWN_PREVALENCE`. Minimum support only qualifies a family for emission; it
+does not imply dominance. Low confidence, competing families below minimum
+support, incompatible targets, and dynamic runtime behavior must lead to
+abstention (a typed `UNKNOWN`, never an emitted family) rather than certainty.
+See `domain-model.md` for the `FamilyPrevalence` record and classification
+rule.
 
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Language-native semantic facts take precedence over

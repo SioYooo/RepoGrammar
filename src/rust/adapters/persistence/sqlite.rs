@@ -3,7 +3,10 @@
 //! SQL, migrations, PRAGMAs, and generation filesystem layout stay in this
 //! adapter. Application code talks to it through storage ports.
 
-use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::core::model::{
+    ContentHash, FactCertainty, FamilyPrevalence, FamilyPrevalenceClass, IrEdgeLabel, IrNodeKind,
+    SemanticFactKind,
+};
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
@@ -117,6 +120,41 @@ impl SqliteIndexStore {
     fn ensure_layout(&self) -> Result<(), IndexStoreError> {
         ensure_real_dir(&self.state_dir, "state directory")?;
         ensure_real_dir(&self.tmp_dir(), "tmp directory")?;
+        Ok(())
+    }
+
+    /// Recreate the repo-local mutable database when its stored schema version is
+    /// older than the current build. Only the mutable SQLite file and its
+    /// WAL/SHM sidecars under `.repogrammar` are removed — nothing else. Reads
+    /// never call this; only the full-rebuild path does, so the existing active
+    /// generation is untouched until a rebuild is actually requested.
+    fn recreate_mutable_database_if_outdated(&self) -> Result<(), IndexStoreError> {
+        let outdated = match self.try_open_mutable_database_read_only()? {
+            Some(connection) => matches!(
+                stored_schema_version(&connection)?,
+                Some(version) if version < STORAGE_SCHEMA_VERSION
+            ),
+            None => false,
+        };
+        if outdated {
+            self.remove_mutable_database_files()?;
+        }
+        Ok(())
+    }
+
+    fn remove_mutable_database_files(&self) -> Result<(), IndexStoreError> {
+        for suffix in ["", "-wal", "-shm"] {
+            let path = self.state_dir.join(format!("{DATABASE_FILE}{suffix}"));
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err(unavailable(
+                        "failed to remove outdated repository index database",
+                    ))
+                }
+            }
+        }
         Ok(())
     }
 
@@ -623,6 +661,10 @@ fn canonical_database_path(state_dir: &Path) -> Result<PathBuf, IndexStoreError>
 impl IndexStore for SqliteIndexStore {
     fn prepare_next_generation(&self) -> Result<GenerationHandle, IndexStoreError> {
         self.ensure_layout()?;
+        // A full rebuild against a pre-current schema cannot upgrade in place
+        // (CREATE TABLE IF NOT EXISTS never adds columns), so recreate the
+        // repo-local mutable database before building the new generation.
+        self.recreate_mutable_database_if_outdated()?;
         let connection = self.open_mutable_database(MissingDatabase::Allowed)?;
         apply_migrations(&connection)?;
         let generation_id = self.next_generation_id(&connection)?;
@@ -1551,15 +1593,50 @@ fn record_family_sqlite(
 ) -> Result<(), IndexStoreError> {
     validate_index_text_field(&family.family_id, "family id")?;
     validate_family_classification(&family.classification)?;
+    let prevalence = &family.prevalence;
+    if prevalence.classification_reason.trim().is_empty() {
+        return Err(invalid_record(
+            "family classification reason must not be empty",
+        ));
+    }
+    let eligible_peer_count =
+        family_prevalence_count_param(prevalence.eligible_peer_count, "eligible peer count")?;
+    let supported_member_count =
+        family_prevalence_count_param(prevalence.supported_member_count, "supported member count")?;
+    let competing_ready_family_count = family_prevalence_count_param(
+        prevalence.competing_ready_family_count,
+        "competing ready family count",
+    )?;
+    let largest_competing_support = family_prevalence_count_param(
+        prevalence.largest_competing_support,
+        "largest competing support",
+    )?;
+    let blocked_peer_count =
+        family_prevalence_count_param(prevalence.blocked_peer_count, "blocked peer count")?;
+    let unsupported_peer_count =
+        family_prevalence_count_param(prevalence.unsupported_peer_count, "unsupported peer count")?;
     let connection = store.open_existing_generation(&generation.generation_id)?;
     require_building_generation(&connection, &generation.generation_id, "families")?;
     connection
         .execute(
-            "INSERT INTO families (generation_id, family_id, classification) VALUES (?1, ?2, ?3)",
+            "INSERT INTO families (\
+                 generation_id, family_id, classification, eligible_peer_count, \
+                 supported_member_count, coverage_ratio, competing_ready_family_count, \
+                 largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                 classification_reason) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 generation.generation_id,
                 family.family_id,
                 family.classification,
+                eligible_peer_count,
+                supported_member_count,
+                prevalence.coverage_ratio,
+                competing_ready_family_count,
+                largest_competing_support,
+                blocked_peer_count,
+                unsupported_peer_count,
+                prevalence.classification_reason,
             ],
         )
         .map_err(sql_unavailable)?;
@@ -1789,9 +1866,9 @@ fn record_derived_dependency(
 }
 
 fn validate_family_classification(classification: &str) -> Result<(), IndexStoreError> {
-    match classification {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(invalid_record("family classification is unsupported")),
+    match FamilyPrevalenceClass::parse_token(classification) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(invalid_record("family classification is unsupported")),
     }
 }
 
@@ -2168,7 +2245,11 @@ fn query_family_summaries(
 ) -> Result<Vec<IndexedFamilySummaryRecord>, IndexStoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT families.family_id, families.classification, count(family_members.code_unit_id) \
+            "SELECT families.family_id, families.classification, count(family_members.code_unit_id), \
+                    families.eligible_peer_count, families.supported_member_count, \
+                    families.coverage_ratio, families.competing_ready_family_count, \
+                    families.largest_competing_support, families.blocked_peer_count, \
+                    families.unsupported_peer_count, families.classification_reason \
              FROM families \
              LEFT JOIN family_members \
                ON family_members.generation_id = families.generation_id \
@@ -2184,20 +2265,51 @@ fn query_family_summaries(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, String>(10)?,
             ))
         })
         .map_err(sql_unavailable)?;
     let mut summaries = Vec::new();
     for row in rows {
-        let (family_id, classification, support) = row.map_err(sql_unavailable)?;
+        let (
+            family_id,
+            classification,
+            support,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+        ) = row.map_err(sql_unavailable)?;
         validate_stored_semantic_text_field("stored family id", &family_id)?;
         validate_stored_family_classification(&classification)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
         summaries.push(IndexedFamilySummaryRecord {
             family_id,
             classification,
             support: usize::try_from(support).map_err(|_| {
                 IndexStoreError::InvalidState("stored family support is invalid".to_string())
             })?,
+            prevalence,
         });
     }
     Ok(summaries)
@@ -2317,7 +2429,9 @@ fn query_families(
 ) -> Result<Vec<IndexedFamilyRecord>, IndexStoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT family_id, classification \
+            "SELECT family_id, classification, eligible_peer_count, supported_member_count, \
+                    coverage_ratio, competing_ready_family_count, largest_competing_support, \
+                    blocked_peer_count, unsupported_peer_count, classification_reason \
              FROM families \
              WHERE generation_id = ?1 \
              ORDER BY family_id COLLATE BINARY",
@@ -2325,17 +2439,50 @@ fn query_families(
         .map_err(sql_unavailable)?;
     let rows = statement
         .query_map(params![generation_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+            ))
         })
         .map_err(sql_unavailable)?;
     let mut families = Vec::new();
     for row in rows {
-        let (family_id, classification) = row.map_err(sql_unavailable)?;
+        let (
+            family_id,
+            classification,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+        ) = row.map_err(sql_unavailable)?;
         validate_stored_semantic_text_field("stored family id", &family_id)?;
         validate_stored_family_classification(&classification)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
         families.push(IndexedFamilyRecord {
             family_id,
             classification,
+            prevalence,
         });
     }
     Ok(families)
@@ -2348,22 +2495,60 @@ fn query_family(
 ) -> Result<Option<IndexedFamilyRecord>, IndexStoreError> {
     let record = connection
         .query_row(
-            "SELECT family_id, classification \
+            "SELECT family_id, classification, eligible_peer_count, supported_member_count, \
+                    coverage_ratio, competing_ready_family_count, largest_competing_support, \
+                    blocked_peer_count, unsupported_peer_count, classification_reason \
              FROM families \
              WHERE generation_id = ?1 AND family_id = ?2",
             params![generation_id, family_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            },
         )
         .optional()
         .map_err(sql_unavailable)?;
-    let Some((family_id, classification)) = record else {
+    let Some((
+        family_id,
+        classification,
+        eligible,
+        supported,
+        coverage,
+        competing,
+        largest,
+        blocked,
+        unsupported,
+        reason,
+    )) = record
+    else {
         return Ok(None);
     };
     validate_stored_semantic_text_field("stored family id", &family_id)?;
     validate_stored_family_classification(&classification)?;
+    let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+        eligible_peer_count: eligible,
+        supported_member_count: supported,
+        coverage_ratio: coverage,
+        competing_ready_family_count: competing,
+        largest_competing_support: largest,
+        blocked_peer_count: blocked,
+        unsupported_peer_count: unsupported,
+        classification_reason: reason,
+    })?;
     Ok(Some(IndexedFamilyRecord {
         family_id,
         classification,
+        prevalence,
     }))
 }
 
@@ -3070,7 +3255,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'read_path_indexes_v7', datetime('now'))",
+             VALUES (?1, 'family_prevalence_v8', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -3080,16 +3265,31 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     Ok(())
 }
 
+/// Read-path storage schema gate. A stored version older than the current build
+/// is an explicit, typed condition whose recovery is a full rebuild via
+/// `repogrammar resync`; the recovery guidance is attached in the application
+/// layer. A missing or newer version stays a generic unsupported-state error.
+fn schema_version_read_gate(stored: Option<u32>) -> Result<(), IndexStoreError> {
+    match stored {
+        Some(version) if version == STORAGE_SCHEMA_VERSION => Ok(()),
+        Some(version) if version < STORAGE_SCHEMA_VERSION => {
+            Err(IndexStoreError::SchemaVersionOutdated(
+                "repository index schema predates this repogrammar build and must be rebuilt"
+                    .to_string(),
+            ))
+        }
+        _ => Err(IndexStoreError::InvalidState(
+            "storage schema version is missing or unsupported".to_string(),
+        )),
+    }
+}
+
 fn validate_generation_for_read(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
     let inspection = inspect_connection(connection, Some(generation_id))?;
-    if inspection.schema_version != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(inspection.schema_version)?;
     if inspection.integrity_check.as_deref() != Some("ok") {
         return Err(IndexStoreError::InvalidState(
             "SQLite integrity check failed".to_string(),
@@ -3146,11 +3346,7 @@ fn validate_active_generation_for_read(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
-    if stored_schema_version(connection)? != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(stored_schema_version(connection)?)?;
     if !required_schema_is_present(connection)? {
         return Err(IndexStoreError::InvalidState(
             "required storage schema is missing or malformed".to_string(),
@@ -3191,11 +3387,7 @@ fn validate_active_generation_for_read_model(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
-    if stored_schema_version(connection)? != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(stored_schema_version(connection)?)?;
     if !required_schema_is_present(connection)? {
         return Err(IndexStoreError::InvalidState(
             "required storage schema is missing or malformed".to_string(),
@@ -3458,12 +3650,13 @@ fn family_evidence_violation_count(
             |row| row.get::<_, i64>(0),
         )
         .map_err(sql_unavailable)?;
+    // Every emitted family is backed by supported evidence, so evidence is
+    // required for all four prevalence classifications.
     let missing_evidence_count = connection
         .query_row(
             "SELECT count(*) \
              FROM families \
              WHERE families.generation_id = ?1 \
-               AND families.classification <> 'UNKNOWN' \
                AND NOT EXISTS (\
                    SELECT 1 \
                    FROM evidence \
@@ -3479,7 +3672,8 @@ fn family_evidence_violation_count(
             "SELECT count(*) \
              FROM families \
              WHERE generation_id = ?1 \
-               AND classification NOT IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')",
+               AND classification NOT IN \
+                   ('DOMINANT_PATTERN', 'SUPPORTED_PATTERN', 'MINORITY_PATTERN', 'UNKNOWN_PREVALENCE')",
             params![generation_id],
             |row| row.get::<_, i64>(0),
         )
@@ -4102,12 +4296,62 @@ fn validate_stored_semantic_text_field(
 }
 
 fn validate_stored_family_classification(classification: &str) -> Result<(), IndexStoreError> {
-    match classification {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(IndexStoreError::InvalidState(
+    match FamilyPrevalenceClass::parse_token(classification) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(IndexStoreError::InvalidState(
             "stored family classification is invalid".to_string(),
         )),
     }
+}
+
+/// Raw stored `families` prevalence columns, before range validation.
+struct StoredFamilyPrevalenceColumns {
+    eligible_peer_count: i64,
+    supported_member_count: i64,
+    coverage_ratio: Option<f64>,
+    competing_ready_family_count: i64,
+    largest_competing_support: i64,
+    blocked_peer_count: i64,
+    unsupported_peer_count: i64,
+    classification_reason: String,
+}
+
+/// Build a validated [`FamilyPrevalence`] from stored SQL column values.
+fn stored_family_prevalence(
+    columns: StoredFamilyPrevalenceColumns,
+) -> Result<FamilyPrevalence, IndexStoreError> {
+    let count = |value: i64, label: &str| {
+        usize::try_from(value)
+            .map_err(|_| IndexStoreError::InvalidState(format!("stored family {label} is invalid")))
+    };
+    if columns.classification_reason.trim().is_empty() {
+        return Err(IndexStoreError::InvalidState(
+            "stored family classification reason is empty".to_string(),
+        ));
+    }
+    Ok(FamilyPrevalence {
+        eligible_peer_count: count(columns.eligible_peer_count, "eligible peer count")?,
+        supported_member_count: count(columns.supported_member_count, "supported member count")?,
+        coverage_ratio: columns.coverage_ratio,
+        competing_ready_family_count: count(
+            columns.competing_ready_family_count,
+            "competing ready family count",
+        )?,
+        largest_competing_support: count(
+            columns.largest_competing_support,
+            "largest competing support",
+        )?,
+        blocked_peer_count: count(columns.blocked_peer_count, "blocked peer count")?,
+        unsupported_peer_count: count(columns.unsupported_peer_count, "unsupported peer count")?,
+        classification_reason: columns.classification_reason,
+    })
+}
+
+/// Bind the prevalence columns for a family INSERT.
+fn family_prevalence_count_param(value: usize, label: &str) -> Result<i64, IndexStoreError> {
+    i64::try_from(value).map_err(|_| {
+        IndexStoreError::InvalidRecord(format!("family {label} exceeds SQLite integer range"))
+    })
 }
 
 fn looks_like_embedded_absolute_path(value: &str) -> bool {
@@ -4140,6 +4384,9 @@ fn family_store_error(error: IndexStoreError) -> StoreError {
         IndexStoreError::Unavailable(message) => StoreError::Unavailable(message),
         IndexStoreError::InvalidState(message) => StoreError::InvalidState(message),
         IndexStoreError::InvalidRecord(message) => StoreError::InvalidRecord(message),
+        IndexStoreError::SchemaVersionOutdated(message) => {
+            StoreError::SchemaVersionOutdated(message)
+        }
     }
 }
 
@@ -4249,7 +4496,19 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
     },
     RequiredTableSchema {
         name: "families",
-        columns: &["generation_id", "family_id", "classification"],
+        columns: &[
+            "generation_id",
+            "family_id",
+            "classification",
+            "eligible_peer_count",
+            "supported_member_count",
+            "coverage_ratio",
+            "competing_ready_family_count",
+            "largest_competing_support",
+            "blocked_peer_count",
+            "unsupported_peer_count",
+            "classification_reason",
+        ],
         primary_key_columns: &["generation_id", "family_id"],
         minimum_foreign_key_rows: 1,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
@@ -4396,7 +4655,15 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
 CREATE TABLE IF NOT EXISTS families (
     generation_id TEXT NOT NULL,
     family_id TEXT NOT NULL,
-    classification TEXT NOT NULL CHECK (classification IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')),
+    classification TEXT NOT NULL CHECK (classification IN ('DOMINANT_PATTERN', 'SUPPORTED_PATTERN', 'MINORITY_PATTERN', 'UNKNOWN_PREVALENCE')),
+    eligible_peer_count INTEGER NOT NULL CHECK (eligible_peer_count >= 0),
+    supported_member_count INTEGER NOT NULL CHECK (supported_member_count >= 0),
+    coverage_ratio REAL,
+    competing_ready_family_count INTEGER NOT NULL CHECK (competing_ready_family_count >= 0),
+    largest_competing_support INTEGER NOT NULL CHECK (largest_competing_support >= 0),
+    blocked_peer_count INTEGER NOT NULL CHECK (blocked_peer_count >= 0),
+    unsupported_peer_count INTEGER NOT NULL CHECK (unsupported_peer_count >= 0),
+    classification_reason TEXT NOT NULL CHECK (classification_reason <> ''),
     PRIMARY KEY (generation_id, family_id),
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
 );
@@ -4554,6 +4821,7 @@ mod tests {
         IndexedFamilyRecord {
             family_id: "family:routes:read".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
+            prevalence: crate::test_support::sample_family_prevalence(),
         }
     }
 
@@ -4965,6 +5233,9 @@ mod tests {
             family().classification
         );
         assert_eq!(summaries.families[0].support, 2);
+        // Prevalence metadata round-trips through the summary and detail reads.
+        assert_eq!(summaries.families[0].prevalence, family().prevalence);
+        assert_eq!(families.families[0].prevalence, family().prevalence);
         assert_eq!(member_candidates.generation_id, generation.generation_id);
         assert_eq!(
             member_candidates.candidates[0].family_id,
@@ -4989,6 +5260,101 @@ mod tests {
         assert!(missing.is_none());
         assert!(!format!("{detail:?}").contains(&workspace.path().display().to_string()));
         assert!(!format!("{detail:?}").contains("const secret"));
+    }
+
+    /// Stamp the mutable database with an older schema version to simulate a
+    /// pre-current index. The read gate and rebuild recreate key on this
+    /// version, so a version downgrade exercises both migration paths.
+    fn stamp_previous_schema_version(store: &SqliteIndexStore) {
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        connection
+            .execute(
+                "UPDATE schema_migrations SET version = ?1",
+                params![STORAGE_SCHEMA_VERSION - 1],
+            )
+            .expect("downgrade stored schema version");
+    }
+
+    #[test]
+    fn outdated_schema_read_is_a_typed_resync_error_without_touching_active_generation() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-outdated-read-error");
+        stamp_previous_schema_version(&store);
+
+        let error = store
+            .list_active_family_summaries()
+            .expect_err("an outdated schema read must fail");
+        assert!(matches!(error, StoreError::SchemaVersionOutdated(_)));
+
+        // The read must not delete or rebuild: the active generation is intact.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION - 1)
+        );
+
+        // The application layer routes the typed error to the resync recovery
+        // guidance from the recovery classifier vocabulary.
+        let message = match crate::application::query::list_families(&store)
+            .expect_err("list_families must surface the outdated schema error")
+        {
+            crate::error::RepoGrammarError::InvalidInput(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("resync"),
+            "recovery guidance must recommend resync, got: {message}"
+        );
+    }
+
+    #[test]
+    fn outdated_schema_rebuild_recreates_a_working_current_state() {
+        let (_workspace, store, _generation) = store_with_active_family("sqlite-outdated-rebuild");
+        stamp_previous_schema_version(&store);
+
+        // A full rebuild recreates the mutable database at the current schema.
+        let generation = store
+            .prepare_next_generation()
+            .expect("rebuild recreates the mutable database");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate rebuilt generation");
+
+        let detail = store
+            .show_family(&family().family_id)
+            .expect("show family")
+            .expect("family exists after rebuild");
+        assert_eq!(detail.family, family());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION)
+        );
     }
 
     #[test]
@@ -5895,8 +6261,13 @@ mod tests {
 
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, ?2, 'UNKNOWN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, ?2, 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![generation.generation_id, family().family_id],
             )
             .expect("insert tamper family");

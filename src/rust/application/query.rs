@@ -15,8 +15,8 @@ use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
-    ClaimImpact, EstimatedPotentialTokenSavings, FactCertainty, ResolutionClass, SemanticFactKind,
-    SemanticObligation, UnknownClass, UnknownReasonCode,
+    ClaimImpact, EstimatedPotentialTokenSavings, FactCertainty, FamilyPrevalence, ResolutionClass,
+    SemanticFactKind, SemanticObligation, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
@@ -225,26 +225,30 @@ pub struct IndexedSemanticFactsReport {
     pub facts: Vec<IndexedSemanticFactRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Carries `FamilyPrevalence` (floating-point coverage ratio), so these reports
+// derive `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilySummary {
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyListReport {
     pub active_generation: String,
     pub families: Vec<FamilySummary>,
     pub unknowns: Vec<FamilyQueryUnknown>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyDetailReport {
     pub active_generation: String,
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
     pub members: Vec<IndexedFamilyMemberRecord>,
     pub variation_slots: Vec<IndexedVariationSlotRecord>,
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
@@ -284,7 +288,7 @@ pub struct FamilyPartialContextReport {
     pub unknowns: Vec<FamilyQueryUnknown>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FamilyLookupReport {
     Found(FamilyDetailReport),
     PartialContext(Box<FamilyPartialContextReport>),
@@ -2078,6 +2082,7 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
             family_id: family.family_id,
             classification: family.classification,
             support: family.support,
+            prevalence: family.prevalence,
         })
         .collect::<Vec<_>>();
     families.sort_by(|left, right| left.family_id.cmp(&right.family_id));
@@ -4009,6 +4014,10 @@ pub fn assess_semantic_fact_readiness(
 
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
+        IndexStoreError::SchemaVersionOutdated(message) => RepoGrammarError::InvalidInput(format!(
+            "{message}; {}",
+            recovery_guidance(RecoveryAction::Resync)
+        )),
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
         | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -4017,6 +4026,10 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 
 fn family_store_error(error: StoreError) -> RepoGrammarError {
     match error {
+        StoreError::SchemaVersionOutdated(message) => RepoGrammarError::InvalidInput(format!(
+            "{message}; {}",
+            recovery_guidance(RecoveryAction::Resync)
+        )),
         StoreError::Unavailable(message)
         | StoreError::InvalidState(message)
         | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -4055,6 +4068,7 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         family_id: family_id.clone(),
         classification: family.family.classification,
         support: family.members.len(),
+        prevalence: family.family.prevalence,
         members: family.members,
         variation_slots: family.variation_slots,
         evidence: family.evidence,
@@ -4601,6 +4615,7 @@ mod tests {
                 family: IndexedFamilyRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
+                    prevalence: crate::test_support::sample_family_prevalence(),
                 },
                 members: vec![IndexedFamilyMemberRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
@@ -4695,6 +4710,7 @@ mod tests {
                         family_id: family.family.family_id.clone(),
                         classification: family.family.classification.clone(),
                         support: family.members.len(),
+                        prevalence: family.family.prevalence.clone(),
                     })
                     .collect(),
             })
@@ -4997,6 +5013,7 @@ mod tests {
             family: IndexedFamilyRecord {
                 family_id: family_id.to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
             },
             members: vec![IndexedFamilyMemberRecord {
                 family_id: family_id.to_string(),
@@ -5026,6 +5043,7 @@ mod tests {
             family_id: "family:typescript:express_route:express".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
             support: evidence.len(),
+            prevalence: crate::test_support::sample_family_prevalence(),
             members: Vec::new(),
             variation_slots: Vec::new(),
             evidence,
@@ -5102,6 +5120,7 @@ mod tests {
             family: IndexedFamilyRecord {
                 family_id: family_id.clone(),
                 classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
             },
             members: Vec::new(),
             variation_slots: vec![

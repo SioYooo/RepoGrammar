@@ -1,6 +1,6 @@
 //! Persistence port for pattern-family records.
 
-use crate::core::model::ContentHash;
+use crate::core::model::{ContentHash, FamilyPrevalence};
 use crate::ports::index_store::GenerationHandle;
 
 pub const FAMILY_EVIDENCE_COVERED_CLAIMS: &[&str] =
@@ -10,10 +10,13 @@ pub fn family_evidence_covered_claim_is_supported(value: &str) -> bool {
     FAMILY_EVIDENCE_COVERED_CLAIMS.contains(&value)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// `FamilyPrevalence` carries a floating-point coverage ratio, so records that
+// embed it derive `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexedFamilyRecord {
     pub family_id: String,
     pub classification: String,
+    pub prevalence: FamilyPrevalence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,20 +46,21 @@ pub struct IndexedFamilyEvidenceRecord {
     pub note: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActiveFamilies {
     pub generation_id: String,
     pub families: Vec<IndexedFamilyRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexedFamilySummaryRecord {
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActiveFamilySummaries {
     pub generation_id: String,
     pub families: Vec<IndexedFamilySummaryRecord>,
@@ -74,7 +78,7 @@ pub struct ActiveFamilyCandidates {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActiveFamily {
     pub generation_id: String,
     pub family: IndexedFamilyRecord,
@@ -88,6 +92,10 @@ pub enum StoreError {
     Unavailable(String),
     InvalidState(String),
     InvalidRecord(String),
+    /// The stored index predates the current storage schema version. Recovery is
+    /// a full rebuild via `repogrammar resync`; the message carries that
+    /// guidance sourced from the recovery classifier vocabulary.
+    SchemaVersionOutdated(String),
 }
 
 pub trait FamilyStore {

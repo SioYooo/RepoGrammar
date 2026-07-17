@@ -1095,11 +1095,15 @@ resolves traits, or performs points-to analysis.
 
 ## Classification
 
-Classification must produce dominant pattern, variation, exception, or unknown
-with evidence and freshness checks. The current EC-MVFI-lite implementation can
-produce `DOMINANT_PATTERN` only for repeated compatible candidates backed by
-strong semantic/dataflow support; otherwise query output remains typed
-`UNKNOWN`.
+Classification must produce one of the four evidence-backed prevalence
+classifications — `DOMINANT_PATTERN`, `SUPPORTED_PATTERN`, `MINORITY_PATTERN`,
+or `UNKNOWN_PREVALENCE` — with evidence and freshness checks. Minimum support
+only qualifies a cluster for emission; the pipeline then computes a
+`FamilyPrevalence` record and classifies the family by its coverage of eligible
+peers and any competing ready families (see `domain-model.md`). The current
+EC-MVFI-lite implementation only emits a family for repeated compatible
+candidates backed by strong semantic/dataflow support; candidates that never
+reach minimum support remain typed `UNKNOWN` and are not emitted as families.
 FastAPI route decorator targets can become derived support only when they
 exact-match the canonical route-method table:
 `fastapi.FastAPI.{delete,get,head,options,patch,post,put}` and

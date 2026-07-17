@@ -4687,7 +4687,10 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
-        | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
+        | IndexStoreError::InvalidRecord(message)
+        | IndexStoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(message)
+        }
     }
 }
 
@@ -6439,8 +6442,13 @@ mod tests {
             .expect("seed legacy Go fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:go:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:go:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Go family");
@@ -6614,8 +6622,13 @@ mod tests {
             .expect("seed legacy Ruby fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:ruby:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:ruby:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Ruby family");
@@ -6813,8 +6826,13 @@ mod tests {
             .expect("seed legacy PHP config fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:php:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:php:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy PHP family");
@@ -7035,8 +7053,13 @@ mod tests {
             .expect("seed legacy Swift config fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:swift:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:swift:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Swift family");

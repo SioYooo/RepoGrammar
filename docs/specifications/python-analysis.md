@@ -820,9 +820,14 @@ multiple ready support-family clusters, the first cluster preserves the stable
 base family id and later clusters receive sanitized cluster suffixes; no suffix
 contains source text or absolute paths.
 
-Output remains one of `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or
-`UNKNOWN`. Syntax-only or framework-heuristic-only Python observations can rank
-candidates but cannot prove a family.
+Output is one of the four prevalence classifications `DOMINANT_PATTERN`,
+`SUPPORTED_PATTERN`, `MINORITY_PATTERN`, or `UNKNOWN_PREVALENCE`; when one coarse
+bucket splits into several ready support-family clusters, each cluster is
+classified by its own coverage of the shared eligible-peer denominator, so equal
+competing clusters are `SUPPORTED_PATTERN` rather than all `DOMINANT_PATTERN`.
+Syntax-only or framework-heuristic-only Python observations can rank candidates
+but cannot prove a family, and remain typed `UNKNOWN`s. See `domain-model.md`
+for the classification rule.
 
 ### Layer 9: Optional Runtime Trace Refinement
 

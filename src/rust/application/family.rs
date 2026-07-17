@@ -14,7 +14,8 @@ use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
 };
 use crate::core::model::{
-    ClaimImpact, FactCertainty, SemanticFact, SemanticFactKind, UnknownClass, UnknownReasonCode,
+    assess_family_prevalence, coverage_ratio, ClaimImpact, FactCertainty, FamilyPrevalence,
+    PrevalenceInputs, SemanticFact, SemanticFactKind, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::rust_self_dogfood::rust_family_eligible_kind;
 use crate::ports::family_store::{
@@ -55,11 +56,14 @@ pub struct FamilyCandidate {
     pub members: Vec<FamilyEvidence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Carries `FamilyPrevalence`, whose coverage ratio is floating point, so this
+// derives `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyClaim {
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
     pub language: String,
     pub code_unit_kind: String,
     pub framework_role: String,
@@ -131,7 +135,7 @@ pub enum ClaimReadiness {
     Unknown(ClaimUnknown),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyBuildReport {
     pub claims: Vec<FamilyClaim>,
     pub unknowns: Vec<ClaimUnknown>,
@@ -146,7 +150,7 @@ pub struct FamilyClaimInput<'a> {
     pub unknown_facts: Vec<SemanticFact>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyStorageRecords {
     pub family: IndexedFamilyRecord,
     pub members: Vec<IndexedFamilyMemberRecord>,
@@ -162,6 +166,15 @@ struct FamilyKey {
     code_unit_kind: String,
     framework_role: String,
     normalized_shape: String,
+}
+
+/// Per-key peers excluded from the prevalence denominator but tracked for
+/// reliability. Blocked peers had their support emptied by a blocking `UNKNOWN`;
+/// unsupported peers never had any role-compatible support facts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct KeyPeerCounters {
+    blocked: usize,
+    unsupported: usize,
 }
 
 impl<'a> FamilyClaimInput<'a> {
@@ -231,6 +244,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         &support_targets_by_unit,
     );
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
+    let mut peer_counters: BTreeMap<FamilyKey, KeyPeerCounters> = BTreeMap::new();
     let mut unknowns = blocking_unknowns
         .values()
         .flat_map(|unknowns| unknowns.iter().cloned())
@@ -258,22 +272,33 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             framework_role: framework_role.to_string(),
             normalized_shape: normalized_shape(&unit.kind, framework_role),
         };
+        // A blocking unknown empties this unit's support even if it had support
+        // facts; such units are recorded as blocked, never as unsupported.
+        let is_blocked = blocking_unknowns.contains_key(&unit.id)
+            || (unit.language == "rust" && has_rust_repository_blocking_unknown);
+        let support_targets: Vec<String> = if is_blocked {
+            Vec::new()
+        } else {
+            support_targets_by_unit
+                .get(&unit.id)
+                .map(|targets| targets.iter().cloned().collect())
+                .unwrap_or_default()
+        };
+        let counters = peer_counters.entry(key.clone()).or_default();
+        if is_blocked {
+            counters.blocked += 1;
+        } else if support_targets.is_empty() {
+            counters.unsupported += 1;
+        }
+        // Eligible peers (non-blocked with support facts) are counted through the
+        // supported-evidence denominator below.
         groups.entry(key).or_default().push(FamilyEvidence {
             code_unit_id: unit.id.clone(),
             path: unit.path.clone(),
             content_hash: unit.content_hash.clone(),
             start_byte: unit.start_byte,
             end_byte: unit.end_byte,
-            support_targets: if blocking_unknowns.contains_key(&unit.id)
-                || (unit.language == "rust" && has_rust_repository_blocking_unknown)
-            {
-                Vec::new()
-            } else {
-                support_targets_by_unit
-                    .get(&unit.id)
-                    .map(|targets| targets.iter().cloned().collect())
-                    .unwrap_or_default()
-            },
+            support_targets,
         });
     }
 
@@ -303,16 +328,24 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             )));
             continue;
         }
+        // Units of this key whose supported evidence survived the blocking
+        // filter form the prevalence denominator: they sit in this cluster, a
+        // competing cluster, or a sub-support cluster.
+        let eligible_peer_count = supported_evidence.len();
+        let peers = peer_counters.get(&key).copied().unwrap_or_default();
+        let min_support = min_family_support_for_key(&key);
         let clusters = complete_link_family_clusters(&key, supported_evidence, &features_by_unit);
-        let ready_cluster_count = clusters
+        let cluster_sizes: Vec<usize> = clusters.iter().map(Vec::len).collect();
+        let ready_flags: Vec<bool> = cluster_sizes
             .iter()
-            .filter(|cluster| cluster.len() >= min_family_support_for_key(&key))
-            .count();
+            .map(|size| *size >= min_support)
+            .collect();
+        let ready_cluster_count = ready_flags.iter().filter(|ready| **ready).count();
         let mut emitted_ready_clusters = 0usize;
-        for cluster in clusters {
+        for (index, cluster) in clusters.into_iter().enumerate() {
             let cluster_suffix = (ready_cluster_count > 1)
                 .then(|| family_cluster_signature(&key, &cluster, &features_by_unit));
-            if cluster.len() < min_family_support_for_key(&key) {
+            if cluster.len() < min_support {
                 unknowns.push(insufficient_support_unknown(family_affected_claim(
                     &key,
                     cluster_suffix.as_deref(),
@@ -325,6 +358,22 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
                 cluster_suffix.as_deref()
             };
             let normalized_shape = cluster_normalized_shape(&key, suffix);
+            // Competitors are the *other* ready clusters of the same key.
+            let largest_competing_support = cluster_sizes
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index && ready_flags[*other])
+                .map(|(_, size)| *size)
+                .max()
+                .unwrap_or(0);
+            let prevalence_inputs = PrevalenceInputs {
+                eligible_peer_count,
+                supported_member_count: cluster.len(),
+                competing_ready_family_count: ready_cluster_count - 1,
+                largest_competing_support,
+                blocked_peer_count: peers.blocked,
+                unsupported_peer_count: peers.unsupported,
+            };
             claims.push(family_claim_from_supported_evidence(
                 &key,
                 suffix,
@@ -332,6 +381,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
                 cluster,
                 &features_by_unit,
                 &non_blocking_unknowns,
+                &prevalence_inputs,
             ));
             emitted_ready_clusters += 1;
         }
@@ -361,6 +411,7 @@ fn family_claim_from_supported_evidence(
     supported_evidence: Vec<FamilyEvidence>,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
     non_blocking_unknowns_by_unit: &BTreeMap<String, Vec<ClaimUnknown>>,
+    prevalence_inputs: &PrevalenceInputs,
 ) -> FamilyClaim {
     let family_id = family_id(key, cluster_suffix);
     let runtime_unknown = ClaimUnknown {
@@ -420,10 +471,25 @@ fn family_claim_from_supported_evidence(
         features_by_unit,
     ));
     variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
+    let assessment = assess_family_prevalence(prevalence_inputs);
+    let prevalence = FamilyPrevalence {
+        eligible_peer_count: prevalence_inputs.eligible_peer_count,
+        supported_member_count: prevalence_inputs.supported_member_count,
+        coverage_ratio: coverage_ratio(
+            prevalence_inputs.eligible_peer_count,
+            prevalence_inputs.supported_member_count,
+        ),
+        competing_ready_family_count: prevalence_inputs.competing_ready_family_count,
+        largest_competing_support: prevalence_inputs.largest_competing_support,
+        blocked_peer_count: prevalence_inputs.blocked_peer_count,
+        unsupported_peer_count: prevalence_inputs.unsupported_peer_count,
+        classification_reason: assessment.reason,
+    };
     FamilyClaim {
         family_id,
-        classification: "DOMINANT_PATTERN".to_string(),
+        classification: assessment.class.as_token().to_string(),
         support: supported_evidence.len(),
+        prevalence,
         language: key.language.clone(),
         code_unit_kind: key.code_unit_kind.clone(),
         framework_role: key.framework_role.clone(),
@@ -919,6 +985,7 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
         family: IndexedFamilyRecord {
             family_id: claim.family_id.clone(),
             classification: claim.classification.clone(),
+            prevalence: claim.prevalence.clone(),
         },
         members,
         variation_slots,
@@ -5881,6 +5948,22 @@ mod tests {
 
         assert_eq!(report.claims.len(), 2);
         assert!(report.claims.iter().all(|claim| claim.support == 3));
+        // Two competing ready families of equal size split a six-peer key, so
+        // minimum support must not be reported as dominance: each covers only
+        // half its eligible peers and neither outnumbers the other.
+        for claim in &report.claims {
+            assert_eq!(
+                claim.classification, "SUPPORTED_PATTERN",
+                "a competing equal-size ready family must not be dominant"
+            );
+            assert_eq!(claim.prevalence.eligible_peer_count, 6);
+            assert_eq!(claim.prevalence.supported_member_count, 3);
+            assert_eq!(claim.prevalence.competing_ready_family_count, 1);
+            assert_eq!(claim.prevalence.largest_competing_support, 3);
+            assert_eq!(claim.prevalence.blocked_peer_count, 0);
+            assert_eq!(claim.prevalence.unsupported_peer_count, 0);
+            assert_eq!(claim.prevalence.coverage_ratio, Some(0.5));
+        }
         let ids = report
             .claims
             .iter()
@@ -6104,6 +6187,60 @@ mod tests {
         assert!(report.claims.is_empty());
         assert_unknown_reason(&report, UnknownReasonCode::DynamicImport);
         assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
+    }
+
+    #[test]
+    fn family_prevalence_counts_eligible_blocked_and_unsupported_peers() {
+        // Three eligible peers form the ready cluster; a blocking unknown empties
+        // one peer's support, and one peer never had support facts. Blocked and
+        // unsupported peers are excluded from the denominator but recorded.
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let blocked = python_unit("app/d.py", "fastapi_route", 3);
+        let unsupported = python_unit("app/e.py", "fastapi_route", 4);
+        let report = build_family_claims(
+            &[
+                first.clone(),
+                second.clone(),
+                third.clone(),
+                blocked.clone(),
+                unsupported.clone(),
+            ],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                role_fact(&blocked, "framework:fastapi.route"),
+                role_fact(&unsupported, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&blocked, "fastapi.APIRouter.get"),
+                python_unknown_fact(
+                    &blocked,
+                    UnknownReasonCode::DynamicImport,
+                    "python_import_resolution",
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        let prevalence = &report.claims[0].prevalence;
+        assert_eq!(prevalence.eligible_peer_count, 3);
+        assert_eq!(prevalence.supported_member_count, 3);
+        assert_eq!(prevalence.blocked_peer_count, 1);
+        assert_eq!(prevalence.unsupported_peer_count, 1);
+        assert_eq!(prevalence.competing_ready_family_count, 0);
+        assert_eq!(prevalence.largest_competing_support, 0);
+        assert_eq!(prevalence.coverage_ratio, Some(1.0));
+        // A reliable denominator (blocked <= eligible) at full coverage with no
+        // competitor is dominant.
+        assert_eq!(report.claims[0].classification, "DOMINANT_PATTERN");
+        assert_eq!(
+            prevalence.classification_reason,
+            "coverage 3/3 with no competing ready family"
+        );
     }
 
     #[test]

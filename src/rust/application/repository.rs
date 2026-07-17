@@ -2303,7 +2303,8 @@ fn index_store_error_message(error: crate::ports::index_store::IndexStoreError) 
     match error {
         crate::ports::index_store::IndexStoreError::Unavailable(message)
         | crate::ports::index_store::IndexStoreError::InvalidState(message)
-        | crate::ports::index_store::IndexStoreError::InvalidRecord(message) => message,
+        | crate::ports::index_store::IndexStoreError::InvalidRecord(message)
+        | crate::ports::index_store::IndexStoreError::SchemaVersionOutdated(message) => message,
     }
 }
 

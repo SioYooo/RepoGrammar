@@ -480,7 +480,17 @@ freshness gates and unavailable through CLI/MCP.
 Schema migrations are versioned by `schema_migrations`. Before writing a new
 generation, the adapter must refuse to open a database whose stored maximum
 schema version is newer than the running build supports, so an older binary
-cannot corrupt an index written by a newer one.
+cannot corrupt an index written by a newer one. A stored version *older* than
+the current build is handled explicitly rather than silently reused: read paths
+return a typed schema-outdated error whose recovery is `run repogrammar resync`
+(routed through the recovery classifier vocabulary, `RecoveryAction::Resync`),
+and the read leaves the active generation untouched. Because the DDL batch is
+`CREATE TABLE IF NOT EXISTS` and cannot add columns to an existing table, the
+full-rebuild path (`init`, `index`, `resync`) recreates the repo-local mutable
+database when the stored version is older than current: it deletes only the
+`repogrammar.sqlite` file and its `-wal`/`-shm` sidecars under `.repogrammar`,
+then rebuilds a fresh current-version database. Nothing outside the mutable
+database is removed.
 
 Required PRAGMAs:
 
@@ -548,8 +558,8 @@ adapter enforces foreign keys, repo-relative paths at the Rust port boundary,
 matching file/code-unit content hashes, code-unit byte ranges bounded by indexed
 file size, IR node references to same-generation code units, IR edge references
 to same-generation IR nodes, family/member/slot/evidence generation binding,
-family-evidence presence for non-`UNKNOWN` family classifications, and
-validation before activation.
+family-evidence presence for every emitted family (all four prevalence
+classifications are evidence-backed), and validation before activation.
 The lifecycle report's `dirty_records_cleared` count covers persisted dirty
 marker rows actually cleared in the building generation. Incremental
 generation-by-replacement omission of claim-bearing records is a copy-forward
@@ -564,9 +574,24 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `7`. Existing pre-release schema `1`,
-`2`, `3`, `4`, `5`, and `6` generation databases are treated as stale and must be
-rebuilt rather than silently upgraded in place.
+The current storage schema version is `8`. Existing pre-release schema `1`
+through `7` generation databases are treated as stale: reads refuse them with a
+typed schema-outdated error recommending `repogrammar resync`, and the
+full-rebuild path recreates the mutable database rather than upgrading it in
+place.
+Schema `8` replaces the legacy classification vocabulary with the four
+prevalence classifications and adds the `FamilyPrevalence` columns to the
+`families` table:
+
+- `classification` `CHECK` now accepts exactly `DOMINANT_PATTERN`,
+  `SUPPORTED_PATTERN`, `MINORITY_PATTERN`, and `UNKNOWN_PREVALENCE`.
+- `eligible_peer_count`, `supported_member_count`,
+  `competing_ready_family_count`, `largest_competing_support`,
+  `blocked_peer_count`, and `unsupported_peer_count` are `INTEGER NOT NULL`
+  (each `CHECK >= 0`).
+- `coverage_ratio` is a nullable `REAL`.
+- `classification_reason` is `TEXT NOT NULL` (`CHECK <> ''`).
+
 Schema `7` adds bounded read-path indexes for agent-loop queries:
 
 - `idx_evidence_generation_family_order` on

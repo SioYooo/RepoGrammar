@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- Separated family support from dominance. Minimum support no longer implies a
+  `DOMINANT_PATTERN` label: every emitted family now carries an evidence-backed
+  `FamilyPrevalence` record (eligible/blocked/unsupported peer counts, coverage
+  ratio, competing ready-family counts, and a deterministic reason) and is
+  classified with the four-token prevalence vocabulary `DOMINANT_PATTERN`,
+  `SUPPORTED_PATTERN`, `MINORITY_PATTERN`, and `UNKNOWN_PREVALENCE`, decided on
+  exact integer thresholds. The prevalence object is exposed on the families
+  list, family detail (CLI JSON, MCP, and human), and find/check payloads.
+- Bumped the storage schema to version `8`: the `families` table gains the
+  prevalence columns and its classification `CHECK` moves to the four-token
+  vocabulary. Reads against a pre-`8` database now fail with a typed
+  schema-outdated error whose recovery is `repogrammar resync`, and the
+  full-rebuild path recreates the repo-local mutable database (deleting only
+  `.repogrammar/repogrammar.sqlite` and its WAL/SHM sidecars) because the
+  create-if-not-exists DDL cannot add columns in place.
+
 ### Added
 
 - Committed the deterministic product-core evaluation harness: a report-only

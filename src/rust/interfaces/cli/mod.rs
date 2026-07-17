@@ -70,7 +70,7 @@ use crate::application::telemetry::{
     TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
     TelemetryUploadTransport, TestOutcome,
 };
-use crate::core::model::EstimatedPotentialTokenSavings;
+use crate::core::model::{EstimatedPotentialTokenSavings, FamilyPrevalence};
 use crate::error::RepoGrammarError;
 #[cfg(test)]
 use crate::ports::index_store::LegacyLayoutCleanupReport;
@@ -1790,8 +1790,11 @@ fn families_detailed_human(report: &FamilyListReport) -> String {
     );
     for family in &report.families {
         output.push_str(&format!(
-            "family: {}\tclassification: {}\tsupport: {}\n",
-            family.family_id, family.classification, family.support
+            "family: {}\tclassification: {}\tsupport: {}\tprevalence: {}\n",
+            family.family_id,
+            family.classification,
+            family.support,
+            family.prevalence.classification_reason
         ));
     }
     output
@@ -1842,6 +1845,20 @@ fn humanize_family_token(token: &str) -> String {
         .join(" ")
 }
 
+/// Metadata-only prevalence object shared by every family output surface.
+fn family_prevalence_json(prevalence: &FamilyPrevalence) -> serde_json::Value {
+    json!({
+        "eligible_peer_count": prevalence.eligible_peer_count,
+        "supported_member_count": prevalence.supported_member_count,
+        "coverage_ratio": prevalence.coverage_ratio,
+        "competing_ready_family_count": prevalence.competing_ready_family_count,
+        "largest_competing_support": prevalence.largest_competing_support,
+        "blocked_peer_count": prevalence.blocked_peer_count,
+        "unsupported_peer_count": prevalence.unsupported_peer_count,
+        "classification_reason": prevalence.classification_reason,
+    })
+}
+
 fn families_json(command: &str, report: &FamilyListReport) -> String {
     json_line(json!({
         "command": command,
@@ -1853,6 +1870,7 @@ fn families_json(command: &str, report: &FamilyListReport) -> String {
                 "family_id": family.family_id,
                 "classification": family.classification,
                 "support": family.support,
+                "prevalence": family_prevalence_json(&family.prevalence),
             })
         }).collect::<Vec<_>>(),
         "unknowns": unknowns_json(&report.unknowns),
@@ -1914,6 +1932,10 @@ fn family_lookup_human(
                     snippets
                 )
             };
+            output.push_str(&format!(
+                "prevalence: {}\n",
+                family.prevalence.classification_reason
+            ));
             push_query_route_human(&mut output, &route);
             output.push_str(&format!(
                 "evidence_selection: {}\n",
@@ -2307,6 +2329,7 @@ fn family_detail_json(
             "family_id": family.family_id,
             "classification": family.classification,
             "support": family.support,
+            "prevalence": family_prevalence_json(&family.prevalence),
         },
         "output": {
             "mode": selected_evidence.mode.as_str(),
@@ -9555,6 +9578,7 @@ mod tests {
                 family_id: "family:typescript:express_route:express".to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
                 support: 2,
+                prevalence: crate::test_support::sample_family_prevalence(),
                 members: vec![crate::ports::family_store::IndexedFamilyMemberRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
                     code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
@@ -9759,6 +9783,7 @@ mod tests {
                     family_id: "family:typescript:express_route:express".to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 2,
+                    prevalence: crate::test_support::sample_family_prevalence(),
                 }],
                 unknowns: Vec::new(),
             })
@@ -11632,12 +11657,14 @@ mod tests {
                         .to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 3,
+                    prevalence: crate::test_support::sample_family_prevalence(),
                 },
                 FamilySummary {
                     family_id: "family:python:route:framework_fastapi_route:cluster_beta"
                         .to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 4,
+                    prevalence: crate::test_support::sample_family_prevalence(),
                 },
             ],
             unknowns: Vec::new(),
@@ -11661,6 +11688,7 @@ mod tests {
                 family_id: "family:python:route:framework_fastapi_route:cluster_alpha".to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
                 support: 3,
+                prevalence: crate::test_support::sample_family_prevalence(),
             }],
             unknowns: Vec::new(),
         };
@@ -11676,6 +11704,19 @@ mod tests {
         );
         assert_eq!(value["families"][0]["classification"], "DOMINANT_PATTERN");
         assert_eq!(value["families"][0]["support"], 3);
+        // The list surface exposes the metadata-only prevalence object.
+        let prevalence = &value["families"][0]["prevalence"];
+        assert_eq!(prevalence["eligible_peer_count"], 2);
+        assert_eq!(prevalence["supported_member_count"], 2);
+        assert_eq!(prevalence["coverage_ratio"], 1.0);
+        assert_eq!(prevalence["competing_ready_family_count"], 0);
+        assert_eq!(prevalence["largest_competing_support"], 0);
+        assert_eq!(prevalence["blocked_peer_count"], 0);
+        assert_eq!(prevalence["unsupported_peer_count"], 0);
+        assert_eq!(
+            prevalence["classification_reason"],
+            "coverage 2/2 with no competing ready family"
+        );
     }
 
     #[test]
@@ -13127,6 +13168,13 @@ mod tests {
             value["family"]["family_id"],
             "family:typescript:express_route:express"
         );
+        // The detail surface exposes the metadata-only prevalence object.
+        assert_eq!(
+            value["family"]["prevalence"]["classification_reason"],
+            "coverage 2/2 with no competing ready family"
+        );
+        assert_eq!(value["family"]["prevalence"]["eligible_peer_count"], 2);
+        assert_eq!(value["family"]["prevalence"]["coverage_ratio"], 1.0);
         assert_eq!(value["output"]["mode"], "compact");
         assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
         assert!(

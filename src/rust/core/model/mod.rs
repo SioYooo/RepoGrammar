@@ -11,11 +11,12 @@ pub mod semantic;
 
 pub use code_unit::{CodeUnit, CodeUnitId, CodeUnitKind, Language, SourceRange};
 pub use evidence::Evidence;
-pub(crate) use family::{ClaimImpact, ResolutionClass};
 pub use family::{
-    FamilyId, PatternClassification, SemanticObligation, TypedUnknown, UnknownClass, UnknownReason,
-    UnknownReasonCode,
+    assess_family_prevalence, coverage_ratio, FamilyId, FamilyPrevalence,
+    FamilyPrevalenceAssessment, FamilyPrevalenceClass, PatternClassification, PrevalenceInputs,
+    SemanticObligation, TypedUnknown, UnknownClass, UnknownReason, UnknownReasonCode,
 };
+pub(crate) use family::{ClaimImpact, ResolutionClass};
 pub use ir::{IrEdge, IrEdgeLabel, IrNode, IrNodeId, IrNodeKind};
 pub use measurement::{EstimatedPotentialTokenSavings, MeasurementKind, MetricReport};
 pub use provenance::{ContentHash, Provenance, RepositoryRevision};

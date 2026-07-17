@@ -1,9 +1,25 @@
 //! Shared deterministic helpers for tests.
 
+use crate::core::model::FamilyPrevalence;
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+
+/// A deterministic dominant-shaped [`FamilyPrevalence`] for tests that need a
+/// prevalence value but do not exercise the classifier itself.
+pub fn sample_family_prevalence() -> FamilyPrevalence {
+    FamilyPrevalence {
+        eligible_peer_count: 2,
+        supported_member_count: 2,
+        coverage_ratio: Some(1.0),
+        competing_ready_family_count: 0,
+        largest_competing_support: 0,
+        blocked_peer_count: 0,
+        unsupported_peer_count: 0,
+        classification_reason: "coverage 2/2 with no competing ready family".to_string(),
+    }
+}
 
 #[derive(Debug)]
 pub struct TempWorkspace {

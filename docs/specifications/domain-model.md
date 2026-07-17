@@ -372,8 +372,65 @@ freshness are still deferred.
 
 ## Classification vocabulary
 
-- `DOMINANT_PATTERN`: a high-support family pattern with sufficient evidence.
-- `VARIATION`: a known allowed slot inside a family.
-- `EXCEPTION`: a source-backed deviation or counterexample.
-- `UNKNOWN`: insufficient evidence, competing families, dynamic behavior, or
-  unsupported target.
+Minimum support only qualifies a cluster for emission; it does not by itself
+prove dominance. Every emitted family carries an evidence-backed
+`FamilyPrevalence` record and is classified with one of four tokens:
+
+- `DOMINANT_PATTERN`: high coverage of eligible peers with a reliable
+  denominator and no competing ready family that rivals it.
+- `SUPPORTED_PATTERN`: meets minimum support but does not dominate its eligible
+  peers.
+- `MINORITY_PATTERN`: covers less than one third of eligible peers, or is
+  smaller than a competing ready family of the same key.
+- `UNKNOWN_PREVALENCE`: the denominator is unreliable because blocking unknowns
+  dominate the peer group.
+
+Insufficient support, competing families below minimum support, dynamic
+behavior, and unsupported targets remain typed `UNKNOWN`s that are never emitted
+as families. Variation slots and source-backed exceptions are recorded on the
+family record itself, not as separate top-level classification tokens.
+
+### `FamilyPrevalence` record
+
+Each emitted family stores metadata-only prevalence counters (never source
+text):
+
+- `eligible_peer_count`: the denominator — units of the same `FamilyKey` whose
+  supported evidence survived the blocking filter (this cluster, a competing
+  cluster, or a sub-support cluster).
+- `supported_member_count`: this cluster's support.
+- `coverage_ratio`: `supported_member_count / eligible_peer_count`, `None` only
+  when the denominator is zero (impossible for an emitted claim; kept for schema
+  honesty).
+- `competing_ready_family_count`: other ready clusters of the same key.
+- `largest_competing_support`: the largest support among those competitors, `0`
+  if none.
+- `blocked_peer_count`: peers whose support was emptied by a blocking `UNKNOWN`,
+  excluded from the denominator but recorded for reliability.
+- `unsupported_peer_count`: peers with no role-compatible support facts,
+  excluded from the denominator but recorded for reliability.
+- `classification_reason`: one deterministic sentence from a fixed template set.
+
+Denominator rule: only peers that could in principle claim membership count
+toward `eligible_peer_count`. Blocked and unsupported peers are excluded but
+recorded separately; difficult eligible peers are never dropped to inflate a
+family's coverage.
+
+### Classification rule
+
+Classification is decided on exact integers (cross-multiplied thresholds) so the
+edges are deterministic and float-free. Let `support = supported_member_count`,
+`eligible = eligible_peer_count`, and `competitor = largest_competing_support`:
+
+1. `UNKNOWN_PREVALENCE` when `blocked_peer_count > eligible` (unreliable
+   denominator).
+2. `MINORITY_PATTERN` when `3 * support < eligible` (coverage below one third)
+   or `support < competitor`.
+3. `DOMINANT_PATTERN` when `5 * support >= 3 * eligible` (coverage at least
+   0.6), `support >= 2 * competitor`, and `support >= 2`.
+4. `SUPPORTED_PATTERN` otherwise.
+
+Reason templates are fixed sentences such as `coverage 30/30 with no competing
+ready family`, `coverage 3/6 without dominant margin`, `support 3 below
+competing ready support 6`, `coverage 2/9 below one-third of eligible peers`, or
+`blocked peers 4 exceed eligible peers 3`.

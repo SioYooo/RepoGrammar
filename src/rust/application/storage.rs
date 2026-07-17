@@ -1,6 +1,9 @@
 //! Storage use-case boundary.
 
-use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::application::recovery::{recovery_guidance, RecoveryAction};
+use crate::core::model::{
+    FactCertainty, FamilyPrevalenceClass, IrEdgeLabel, IrNodeKind, SemanticFactKind,
+};
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
@@ -373,12 +376,17 @@ fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGr
 
 fn validate_family(family: &IndexedFamilyRecord) -> Result<(), RepoGrammarError> {
     validate_family_text_field("family id", &family.family_id)?;
-    match family.classification.as_str() {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(RepoGrammarError::InvalidInput(
+    if FamilyPrevalenceClass::parse_token(&family.classification).is_err() {
+        return Err(RepoGrammarError::InvalidInput(
             "family classification is unsupported".to_string(),
-        )),
+        ));
     }
+    if family.prevalence.classification_reason.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "family classification reason must not be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_family_member(member: &IndexedFamilyMemberRecord) -> Result<(), RepoGrammarError> {
@@ -515,8 +523,17 @@ fn validate_repo_relative_path(path: &str) -> Result<(), RepoGrammarError> {
     })
 }
 
+/// Combine an adapter schema-outdated message with the authoritative resync
+/// recovery guidance from the recovery classifier vocabulary.
+fn schema_outdated_message(message: &str) -> String {
+    format!("{message}; {}", recovery_guidance(RecoveryAction::Resync))
+}
+
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
+        IndexStoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(schema_outdated_message(&message))
+        }
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
         | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -525,6 +542,9 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 
 fn family_store_error(error: StoreError) -> RepoGrammarError {
     match error {
+        StoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(schema_outdated_message(&message))
+        }
         StoreError::Unavailable(message)
         | StoreError::InvalidState(message)
         | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -740,6 +760,7 @@ mod tests {
                     family_id: family().family_id,
                     classification: family().classification,
                     support: 1,
+                    prevalence: family().prevalence,
                 }],
             })
         }
@@ -869,6 +890,7 @@ mod tests {
         IndexedFamilyRecord {
             family_id: "family:routes:read".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
+            prevalence: crate::test_support::sample_family_prevalence(),
         }
     }
 

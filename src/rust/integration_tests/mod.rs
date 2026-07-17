@@ -275,6 +275,7 @@ fn benchmark_family(index: usize) -> IndexedFamilyRecord {
     IndexedFamilyRecord {
         family_id: format!("family:python:read_path_benchmark:family_{index:03}"),
         classification: "DOMINANT_PATTERN".to_string(),
+        prevalence: crate::test_support::sample_family_prevalence(),
     }
 }
 

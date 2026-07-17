@@ -21,6 +21,7 @@ use crate::application::telemetry::{
     FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
     FamilyQueryOutcomeRecord, FamilyQueryOutcomeStatus,
 };
+use crate::core::model::FamilyPrevalence;
 use crate::error::RepoGrammarError;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
@@ -820,6 +821,20 @@ fn fallback_value(
     })
 }
 
+/// Metadata-only prevalence object exposed on the MCP family detail payload.
+fn family_prevalence_value(prevalence: &FamilyPrevalence) -> Value {
+    json!({
+        "eligible_peer_count": prevalence.eligible_peer_count,
+        "supported_member_count": prevalence.supported_member_count,
+        "coverage_ratio": prevalence.coverage_ratio,
+        "competing_ready_family_count": prevalence.competing_ready_family_count,
+        "largest_competing_support": prevalence.largest_competing_support,
+        "blocked_peer_count": prevalence.blocked_peer_count,
+        "unsupported_peer_count": prevalence.unsupported_peer_count,
+        "classification_reason": prevalence.classification_reason,
+    })
+}
+
 fn family_detail_value(
     operation: McpOperation,
     family: &FamilyDetailReport,
@@ -851,6 +866,7 @@ fn family_detail_value(
             "family_id": family.family_id,
             "classification": family.classification,
             "support": family.support,
+            "prevalence": family_prevalence_value(&family.prevalence),
         },
         "output": {
             "mode": selected_evidence.mode.as_str(),
@@ -1483,6 +1499,16 @@ mod tests {
         let text = response.to_string();
 
         assert_eq!(response["status"], "ok");
+        // The MCP detail payload exposes the metadata-only prevalence object.
+        assert_eq!(
+            response["family"]["prevalence"]["classification_reason"],
+            "coverage 2/2 with no competing ready family"
+        );
+        assert_eq!(response["family"]["prevalence"]["coverage_ratio"], 1.0);
+        assert_eq!(
+            response["family"]["prevalence"]["supported_member_count"],
+            2
+        );
         assert_eq!(response["output"]["mode"], "evidence");
         assert_eq!(response["output"]["token_budget"], 1);
         assert_eq!(
@@ -2133,6 +2159,7 @@ mod tests {
             family_id: "family:typescript:express_route:express".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
             support: 2,
+            prevalence: crate::test_support::sample_family_prevalence(),
             members: vec![IndexedFamilyMemberRecord {
                 family_id: "family:typescript:express_route:express".to_string(),
                 code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
