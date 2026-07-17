@@ -8,7 +8,7 @@ use crate::application::install::{
     supported_concrete_targets, target_adapter, targets_for_display, AgentIntegrationInspection,
     AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
     ManagedInstructionOperation, ManagedInstructionOutcome, ManagedInstructionRefusal,
-    ManagedInstructionRequest, MANAGED_INSTRUCTION_VERSION,
+    ManagedInstructionRequest, ManagedInstructionState, MANAGED_INSTRUCTION_VERSION,
 };
 #[cfg(test)]
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
@@ -3665,6 +3665,13 @@ fn instruction_result_status(outcome: &ManagedInstructionOutcome) -> &'static st
     }
 }
 
+fn instruction_session_restart_recommended(outcome: &ManagedInstructionOutcome) -> bool {
+    outcome.operation == ManagedInstructionOperation::Sync
+        && !outcome.dry_run
+        && outcome.refusal.is_none()
+        && outcome.state_after == ManagedInstructionState::Current
+}
+
 fn instruction_outcome_json(outcome: &ManagedInstructionOutcome) -> String {
     json_line(json!({
         "command": format!("instructions {}", outcome.operation.as_str()),
@@ -3679,6 +3686,7 @@ fn instruction_outcome_json(outcome: &ManagedInstructionOutcome) -> String {
         "would_change": outcome.would_change,
         "changed": outcome.changed,
         "action": outcome.disposition.as_str(),
+        "session_restart_recommended": instruction_session_restart_recommended(outcome),
         "repairable": !matches!(
             outcome.state_before,
             crate::application::install::ManagedInstructionState::Foreign
@@ -3707,14 +3715,20 @@ fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
             refusal.as_str()
         );
     }
-    format!(
+    let mut rendered = format!(
         "instructions {}: state={} action={} expected_version={}{}\n",
         outcome.operation.as_str(),
         outcome.state_before.as_str(),
         outcome.disposition.as_str(),
         MANAGED_INSTRUCTION_VERSION,
         if outcome.dry_run { " dry_run=true" } else { "" }
-    )
+    );
+    if instruction_session_restart_recommended(outcome) {
+        rendered.push_str(
+            "next: start a new coding-agent session; running sessions may retain earlier instructions\n",
+        );
+    }
+    rendered
 }
 
 fn instruction_failure_output(operation: ManagedInstructionOperation, json: bool) -> CliOutput {
@@ -10569,6 +10583,7 @@ mod tests {
         assert_eq!(status_json["state_before"], "missing");
         assert_eq!(status_json["expected_content_version"], 2);
         assert_eq!(status_json["changed"], false);
+        assert_eq!(status_json["session_restart_recommended"], false);
         assert!(!status
             .stdout
             .contains(&workspace.path().display().to_string()));
@@ -10592,6 +10607,7 @@ mod tests {
         assert_eq!(dry_run_json["action"], "would_append");
         assert_eq!(dry_run_json["would_change"], true);
         assert_eq!(dry_run_json["changed"], false);
+        assert_eq!(dry_run_json["session_restart_recommended"], false);
         assert!(!fs::read_to_string(&instruction_file)
             .expect("dry-run preserved")
             .contains(MANAGED_INSTRUCTION_BEGIN));
@@ -10606,6 +10622,7 @@ mod tests {
             serde_json::from_str(unconfirmed.stderr.trim()).expect("refusal JSON");
         assert_eq!(unconfirmed_json["status"], "refused");
         assert_eq!(unconfirmed_json["refusal"], "confirmation_required");
+        assert_eq!(unconfirmed_json["session_restart_recommended"], false);
 
         let synced = run_with_context(
             [
@@ -10624,6 +10641,7 @@ mod tests {
         assert_eq!(synced_json["state_after"], "current");
         assert_eq!(synced_json["action"], "appended");
         assert_eq!(synced_json["changed"], true);
+        assert_eq!(synced_json["session_restart_recommended"], true);
         let with_gate = fs::read_to_string(&instruction_file).expect("synced guide");
         assert!(with_gate.contains("before any non-trivial code location"));
         assert!(with_gate.contains("operation: \"find_analogues\""));
@@ -10631,6 +10649,16 @@ mod tests {
         assert!(with_gate.contains("Do not repeat the same RepoGrammar call"));
         assert!(!workspace.path().join("CLAUDE.md").exists());
         assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
+
+        let synced_human = run_with_context(
+            ["instructions", "sync", "--file", "AGENTS.md", "--yes"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(synced_human.status, 0, "{}", synced_human.stderr);
+        assert!(synced_human.stdout.contains(
+            "next: start a new coding-agent session; running sessions may retain earlier instructions"
+        ));
 
         let remove_plan = run_with_context(
             [

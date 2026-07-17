@@ -32,6 +32,10 @@ not prove that GitHub or npm publication completed.
 
 ### Changed
 
+- Made successful live `instructions sync` output recommend a new coding-agent
+  session, with the same path-free guidance exposed as the
+  `session_restart_recommended` JSON boolean. This avoids implying that an
+  already-running agent hot-reloads newly synchronized instructions.
 - Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
   current install documentation on `0.2.0`. Historical
   `0.2.0-preview.0` evidence remains historical and the npm `preview` dist-tag

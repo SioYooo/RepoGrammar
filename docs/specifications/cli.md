@@ -702,12 +702,17 @@ Contract conformance and drift work is RepoGrammar-first even when it names an
 exact file or YAML prompt; pure operational or single-fact inspection remains
 outside the gate when no repository contract or implementation comparison is
 required. `instructions sync` installs this shared contract but never executes
-the read-only pre-flight itself.
+the read-only pre-flight itself. After a successful live sync, human output
+recommends starting a new coding-agent session because an already-running
+session may retain an earlier instruction snapshot. JSON reports the same
+guidance through `session_restart_recommended`; status, dry-run, and refused
+operations report `false`.
 
 JSON output is low-cardinality and path-free. It includes command/operation,
 status, before/after state, detected and expected content versions, file-existed,
 dry-run/would-change/changed booleans, action, repairability, and a nullable
-refusal code. Refusal codes are `confirmation_required`,
+refusal code, plus the low-cardinality `session_restart_recommended` boolean.
+Refusal codes are `confirmation_required`,
 `foreign_managed_section`, and `malformed_managed_section`. Filesystem failures
 use the sanitized `instruction_file_unavailable` reason without raw paths or OS
 details. Live replacement uses a uniquely created sibling temporary file,

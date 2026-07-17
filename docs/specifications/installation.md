@@ -480,6 +480,11 @@ proceeding and does not repeat an identical context call unless the target or
 indexed evidence changed. CodeGraph may then supply exact source or call-path
 detail not supplied by RepoGrammar.
 
+Instruction-file synchronization does not guarantee hot reload for agent
+sessions that are already running. After a successful live `repogrammar
+instructions sync`, the CLI recommends starting a new coding-agent session; an
+older session may retain the instruction snapshot it loaded at startup.
+
 The gate is skipped for pure prose documentation; operational release, Git,
 environment, or credential inspection; syntax-only YAML or configuration
 validation; and an exact one-symbol, file, or call-path lookup only when no
