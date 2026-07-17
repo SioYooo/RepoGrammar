@@ -10,7 +10,8 @@ use crate::core::model::{
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
-    ActiveFamilyCandidates, ActiveFamilySummaries, FamilyStore, IndexedFamilyCandidateRecord,
+    ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySummaries, FamilyStore,
+    IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
     IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
     IndexedFamilySummaryRecord, IndexedVariationSlotRecord, StoreError,
 };
@@ -1501,6 +1502,20 @@ impl FamilyStore for SqliteIndexStore {
         })
     }
 
+    fn list_active_family_evidence_projection(
+        &self,
+    ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        let rows = query_family_evidence_projection(&connection, &generation_id)
+            .map_err(family_store_error)?;
+        Ok(ActiveFamilyEvidenceProjection {
+            generation_id,
+            rows,
+        })
+    }
+
     fn find_active_families_by_member(
         &self,
         code_unit_id: &str,
@@ -2764,6 +2779,55 @@ fn query_family_evidence(
         });
     }
     Ok(evidence_records)
+}
+
+fn query_family_evidence_projection(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFamilyEvidenceProjectionRecord>, IndexStoreError> {
+    // Bounded projection: a single sorted scan of the active generation's family
+    // evidence, selecting only the three columns list-level freshness needs. The
+    // expected hash is read directly from the evidence row (the same value the
+    // single-family freshness check compares against), so no per-family joins or
+    // re-reads are required.
+    let mut statement = connection
+        .prepare(
+            "SELECT family_id, path, content_hash \
+             FROM evidence \
+             WHERE generation_id = ?1 AND family_id IS NOT NULL \
+             ORDER BY family_id COLLATE BINARY, path COLLATE BINARY, content_hash COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut projection = Vec::new();
+    for row in rows {
+        let (family_id, path, content_hash) = row.map_err(sql_unavailable)?;
+        let Some(family_id) = family_id else {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence is not linked to a family".to_string(),
+            ));
+        };
+        validate_stored_semantic_text_field("stored family evidence family id", &family_id)?;
+        validate_stored_repo_relative_path(&path, "stored family evidence path")?;
+        projection.push(IndexedFamilyEvidenceProjectionRecord {
+            family_id,
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored family evidence content hash is invalid".to_string(),
+                )
+            })?,
+        });
+    }
+    Ok(projection)
 }
 
 fn query_indexed_files(
@@ -5354,6 +5418,33 @@ mod tests {
             )
             .expect("read stored version"),
             Some(STORAGE_SCHEMA_VERSION)
+        );
+    }
+
+    #[test]
+    fn family_evidence_projection_lists_active_generation_rows() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-evidence-projection");
+
+        let projection = store
+            .list_active_family_evidence_projection()
+            .expect("list family evidence projection");
+
+        assert_eq!(projection.generation_id, generation.generation_id);
+        assert_eq!(
+            projection.rows,
+            vec![
+                IndexedFamilyEvidenceProjectionRecord {
+                    family_id: family().family_id,
+                    path: "src/a.ts".to_string(),
+                    content_hash: file("src/a.ts").content_hash,
+                },
+                IndexedFamilyEvidenceProjectionRecord {
+                    family_id: family().family_id,
+                    path: "src/b.ts".to_string(),
+                    content_hash: file("src/b.ts").content_hash,
+                },
+            ]
         );
     }
 

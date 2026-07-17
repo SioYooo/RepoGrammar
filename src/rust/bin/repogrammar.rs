@@ -4941,6 +4941,156 @@ mod tests {
         );
     }
 
+    #[test]
+    fn families_listing_verifies_evidence_freshness_per_family() {
+        let workspace = TempWorkspace::new("families-freshness-stale");
+        // Two independent framework families in one repository, each backed by
+        // its own single evidence file, so one file's mutation isolates to one
+        // family while the other stays verifiable.
+        copy_python_release_v0_2_fixture("django_exact_models", &workspace.path().join("alpha"));
+        copy_python_release_v0_2_fixture("flask_exact_routes", &workspace.path().join("beta"));
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // Freshly indexed: every family verifies fresh against the tree.
+        let fresh = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let fresh_json = parse_machine_output("families", &fresh, &workspace);
+        assert_eq!(fresh_json["status"], "ok");
+        let fresh_families = fresh_json["families"].as_array().expect("families array");
+        assert!(fresh_families.iter().any(|family| family["family_id"]
+            .as_str()
+            .is_some_and(|id| id.contains("django_model"))));
+        assert!(fresh_families.iter().any(|family| family["family_id"]
+            .as_str()
+            .is_some_and(|id| id.contains("flask_route"))));
+        assert!(fresh_families
+            .iter()
+            .all(|family| family["freshness"] == "fresh"));
+        assert_eq!(fresh_json["fresh_count"], fresh_families.len());
+        assert_eq!(fresh_json["stale_count"], 0);
+        assert_eq!(fresh_json["cannot_verify_count"], 0);
+
+        // Mutate only the django family's evidence file.
+        fs::write(
+            workspace.path().join("alpha").join("models.py"),
+            "from django.db import models\n\n\nclass Changed(models.Model):\n    name = models.CharField(max_length=1)\n",
+        )
+        .expect("mutate django evidence");
+
+        let stale = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("families", &stale, &workspace);
+        // The listing stays served (not turned into UNKNOWN) and qualifies the
+        // stale family while keeping the untouched family fresh.
+        assert_eq!(stale_json["status"], "ok");
+        assert_eq!(stale_json["stale_count"], 1);
+        let stale_families = stale_json["families"].as_array().expect("families array");
+        let django = stale_families
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("django_model"))
+            })
+            .expect("django family present");
+        let flask = stale_families
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("flask_route"))
+            })
+            .expect("flask family present");
+        assert_eq!(django["freshness"], "stale");
+        assert_eq!(flask["freshness"], "fresh");
+        assert_eq!(stale_json["unknowns"][0]["reason"], "StaleEvidence");
+        assert_eq!(
+            stale_json["unknowns"][0]["recovery"],
+            "run repogrammar resync"
+        );
+    }
+
+    #[test]
+    fn families_listing_ignores_non_evidence_file_changes() {
+        let workspace = TempWorkspace::new("families-freshness-unrelated");
+        copy_python_release_v0_2_fixture("django_exact_models", &workspace.path().join("alpha"));
+        copy_python_release_v0_2_fixture("flask_exact_routes", &workspace.path().join("beta"));
+        // An indexed-but-non-evidence module: plain functions form no family.
+        fs::write(
+            workspace.path().join("util.py"),
+            "def add(left, right):\n    return left + right\n\n\ndef sub(left, right):\n    return left - right\n",
+        )
+        .expect("write unrelated module");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // Change a file that is not any family's evidence.
+        fs::write(
+            workspace.path().join("util.py"),
+            "def add(left, right):\n    return left + right + 1\n",
+        )
+        .expect("mutate unrelated module");
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        let listed = families_json["families"]
+            .as_array()
+            .expect("families array");
+        assert!(listed.iter().all(|family| family["freshness"] == "fresh"));
+        assert_eq!(families_json["fresh_count"], listed.len());
+        assert_eq!(families_json["stale_count"], 0);
+        assert_eq!(families_json["cannot_verify_count"], 0);
+    }
+
     const PYTHON_V0_2_PREVIEW_SMOKE_CASES: &[PythonExactAnchorSmokeCase] = &[
         PythonExactAnchorSmokeCase {
             fixture: "django_exact_models",
@@ -8332,16 +8482,23 @@ mod tests {
                 run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
             let families_json = parse_machine_output("families", &families, workspace);
             assert_eq!(families_json["command"], "families");
+            // The listing stays served, but now qualifies the family as stale and
+            // carries the report-level stale-evidence signal instead of serving it
+            // as an unqualified usable claim.
             assert_eq!(families_json["status"], "ok");
-            assert!(families_json["families"]
+            let stale_family = families_json["families"]
                 .as_array()
                 .expect("families")
                 .iter()
-                .any(|family| family["family_id"] == case.family_id));
+                .find(|family| family["family_id"] == case.family_id)
+                .expect("stale family still listed");
+            assert_eq!(stale_family["freshness"], "stale");
+            assert_eq!(families_json["stale_count"], 1);
             assert!(families_json["unknowns"]
                 .as_array()
                 .expect("unknowns")
-                .is_empty());
+                .iter()
+                .any(|unknown| unknown["reason"] == "StaleEvidence"));
 
             for (command, target) in [
                 ("family", case.family_id),

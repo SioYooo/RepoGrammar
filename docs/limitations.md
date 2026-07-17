@@ -147,3 +147,10 @@ These are intentional current behaviors or tracked deferrals, not defects:
   ordinal. Consumers must resync and re-resolve handles rather than persist an id
   as a permanent membership reference; sync/resync JSON surfaces the change via
   `families_added`/`families_removed`.
+- **The `families` listing hash-verifies evidence at query time, not
+  continuously.** `families` reads one bounded projection of the active
+  generation's family evidence and hash-verifies each distinct evidence path once
+  per invocation, marking each family `fresh`, `stale`, or `cannot_verify`. It
+  does not re-mine, re-cluster, or repair anything: a `stale` family stays listed
+  with its verdict and a report-level `StaleEvidence` signal that recovers via
+  `run repogrammar resync`, rather than being recomputed in place.

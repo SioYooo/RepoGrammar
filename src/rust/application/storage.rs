@@ -558,9 +558,10 @@ mod tests {
     use super::*;
     use crate::core::model::ContentHash;
     use crate::ports::family_store::{
-        ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilySummaries,
-        IndexedFamilyCandidateRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
-        IndexedFamilyRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
+        ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
+        ActiveFamilySummaries, IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
+        IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+        IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -763,6 +764,20 @@ mod tests {
                     classification: family().classification,
                     support: 1,
                     prevalence: family().prevalence,
+                }],
+            })
+        }
+
+        fn list_active_family_evidence_projection(
+            &self,
+        ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+            let evidence = family_evidence();
+            Ok(ActiveFamilyEvidenceProjection {
+                generation_id: "gen-000001".to_string(),
+                rows: vec![IndexedFamilyEvidenceProjectionRecord {
+                    family_id: evidence.family_id,
+                    path: evidence.path,
+                    content_hash: evidence.content_hash,
                 }],
             })
         }

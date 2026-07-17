@@ -81,6 +81,22 @@ stored family with no evidence rows also cannot be proven
 fresh; the freshness check abstains rather than serving an evidence-less row as
 a confident match.
 
+The `families` listing applies the same evidence-freshness discipline across the
+whole active generation, but reports it as a per-family verdict rather than
+hiding the family. It reads one bounded projection of `(family_id, path,
+content_hash)` for the active generation, hash-verifies each distinct evidence
+path at most once, and assigns each family one of three states: `fresh` (every
+evidence path verified with a matching hash), `stale` (at least one evidence
+path is missing or its content hash changed), or `cannot_verify` (no stale path,
+but at least one path failed verification for a non-content reason — too large,
+non-UTF-8, or unavailable). A family with zero evidence rows abstains as
+`cannot_verify`, matching the single-family evidence-less rule above. Stale takes
+precedence over `cannot_verify`, which takes precedence over `fresh`. Stale and
+`cannot_verify` families stay listed with their verdict and are counted in the
+report's `fresh_count`/`stale_count`/`cannot_verify_count`; a stale listing also
+carries one low-cardinality report-level `StaleEvidence` unknown recovering via
+`run repogrammar resync`, and is never collapsed into a whole-listing `UNKNOWN`.
+
 Implementation paths that consume family-affecting `UNKNOWN`s must use one
 authoritative classifier for blocking, non-blocking, public family-effect, and
 compatibility-feature decisions. Callers may filter that classifier's result by

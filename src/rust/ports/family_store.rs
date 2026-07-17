@@ -87,6 +87,25 @@ pub struct ActiveFamily {
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
 }
 
+/// One row of the bounded active-generation family-evidence projection. Carries
+/// only the columns list-level freshness verification needs: which family the
+/// evidence belongs to, the evidence path, and the expected content hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedFamilyEvidenceProjectionRecord {
+    pub family_id: String,
+    pub path: String,
+    pub content_hash: ContentHash,
+}
+
+/// Bounded projection of every active-generation family-evidence row. A single
+/// store read backs list-level freshness so verification stays bounded by the
+/// number of distinct evidence paths rather than an unbounded per-family loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveFamilyEvidenceProjection {
+    pub generation_id: String,
+    pub rows: Vec<IndexedFamilyEvidenceProjectionRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     Unavailable(String),
@@ -126,6 +145,14 @@ pub trait FamilyStore {
     fn list_active_families(&self) -> Result<ActiveFamilies, StoreError>;
 
     fn list_active_family_summaries(&self) -> Result<ActiveFamilySummaries, StoreError>;
+
+    /// Returns one bounded projection of every active-generation family-evidence
+    /// row as `(family_id, path, content_hash)`. Callers verifying list-level
+    /// freshness use this single read to derive per-family verdicts, keeping the
+    /// number of source reads bounded by the distinct evidence paths.
+    fn list_active_family_evidence_projection(
+        &self,
+    ) -> Result<ActiveFamilyEvidenceProjection, StoreError>;
 
     fn find_active_families_by_member(
         &self,

@@ -54,6 +54,21 @@
 
 ### Fixed
 
+- The `families` listing now actually verifies evidence freshness. Previously
+  `families --json` accepted a freshness request and source store but ignored
+  both, serving the family inventory with zero freshness qualification even when
+  the same runtime's single-family lookups returned `StaleEvidence`. The listing
+  now reads one bounded projection of the active generation's family evidence and
+  hash-verifies each distinct evidence path at most once (never once per family),
+  so source reads stay bounded by the distinct evidence paths. Each family entry
+  gains a three-state `freshness` verdict — `fresh`, `stale`, or `cannot_verify`
+  (a family with zero evidence rows abstains as `cannot_verify`) — and the report
+  gains `fresh_count`/`stale_count`/`cannot_verify_count`. Stale and
+  `cannot_verify` families stay listed but are qualified distinctly (the human
+  surface leads with the counts; JSON carries the fields verbatim), and a stale
+  listing raises one low-cardinality report-level `StaleEvidence` unknown
+  recovering via `run repogrammar resync` without collapsing the whole listing
+  into `UNKNOWN`. The freshness-free `list_families` variant is unchanged.
 - Isolated every public npm launcher finalizer lane in its own external working
   directory. Post-public finalizer run `29587973589` verified the immutable
   GitHub release, public npm metadata and provenance, the packaged native

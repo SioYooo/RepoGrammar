@@ -1112,11 +1112,24 @@ hashes. Neither command may include source snippets or absolute paths.
 For active pattern-family commands, `families --json` returns `status: ok` and a
 `families` array when family rows exist; otherwise it returns `status: UNKNOWN`,
 `implemented: true`, and a typed `InsufficientSupport` unknown on stdout.
-`families --json` is a source-free family inventory: it must use summary rows
-and member counts, must not hydrate family evidence or source freshness, and
-must not imply any current-source claim beyond the existence of active family
-records. Freshness checks are reserved for family detail and target-specific
-claim outputs.
+`families --json` verifies evidence freshness before serving the listing. It
+reads one bounded projection of the active generation's family evidence, then
+hash-verifies each distinct evidence path at most once (never once per family),
+so the number of source reads is bounded by the distinct evidence paths rather
+than the sum over families. Each family entry carries a `freshness` field with
+one of three values — `fresh` (every evidence path verified with a matching
+hash), `stale` (at least one evidence path is missing or its hash changed), or
+`cannot_verify` (no stale path, but at least one path failed verification for a
+non-content reason, or the family has zero evidence rows). The report adds
+`fresh_count`, `stale_count`, and `cannot_verify_count`. Stale and
+`cannot_verify` families remain listed but must not read as unqualified usable
+claims: the human surface leads with the counts and qualifies them distinctly,
+and the JSON carries the `freshness` field and counts verbatim. When at least
+one family is stale, the report also carries one low-cardinality report-level
+`StaleEvidence` unknown with recovery `run repogrammar resync`; a partially
+stale listing is never turned into `status: UNKNOWN`. The freshness-free
+`list_families` variant (used by internal callers that explicitly do not want
+freshness) omits the `freshness` field and the counts.
 `family`, `member`, `find`, `explain`, and `check` accept the first positional
 operand as their target. `family <target>` is an exact family-id lookup.
 `member <target>` is an exact code-unit/member-id lookup. `find`, `explain`,
@@ -1222,8 +1235,10 @@ the active generation, public `family`, `member`, `find`, `explain`, and
 `check` output must refuse or omit the stale claim and return typed
 `StaleEvidence` `UNKNOWN` guidance instead of rendering stale family detail.
 Human and JSON output must preserve the stale reason, affected claim, and
-recovery guidance. `families` remains a source-free summary inventory and does
-not run evidence freshness checks.
+recovery guidance. `families` also verifies evidence freshness, but instead of
+refusing it keeps every family listed and qualifies each with a per-family
+`fresh`/`stale`/`cannot_verify` verdict plus report-level counts; a stale family
+additionally raises one low-cardinality report-level `StaleEvidence` unknown.
 
 ## Current implementation status
 
@@ -1314,8 +1329,9 @@ uses compact/evidence/deep output modes. Compact is the default and omits
 evidence records; all modes include a read plan; evidence and deep remain
 metadata-first, include default read-plan line ranges when hashes are fresh,
 and include source snippets only when `--include-source-spans` is explicitly
-requested. `families` uses the active family summary read model and does not
-hydrate family evidence. `stats --json` without `--unknowns` uses the active
+requested. `families` uses the active family summary read model plus one bounded
+family-evidence projection to hash-verify each distinct evidence path once for
+freshness; it does not hydrate full per-family evidence detail. `stats --json` without `--unknowns` uses the active
 repo-shape read model and does not load evidence, semantic facts, IR, full
 claim snapshots, or family detail. `stats` reports local pattern density,
 family support coverage, abstention rate,

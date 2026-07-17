@@ -18,12 +18,13 @@ use crate::application::query::{
     family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
     repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
     validate_query_token_budget, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
-    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
-    RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
-    SourceSpanRenderReport, TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
+    FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
+    FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation,
+    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission,
+    RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics, ResolvedQueryTarget,
+    SelectedFamilyEvidence, SourceSpanRenderReport, TokenSavingReadiness, UnknownInventoryBucket,
+    UnknownInventoryReport,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -1750,6 +1751,23 @@ fn families_human(report: &FamilyListReport, show_all: bool) -> String {
         report.families.len(),
         report.active_generation
     );
+    if let Some(counts) = &report.freshness_counts {
+        // Lead with the freshness rollup so stale/unverifiable families never
+        // read as unqualified usable claims.
+        output.push_str(&freshness_summary_line(counts));
+        if counts.stale_count > 0 {
+            output.push_str(&format!(
+                "stale evidence: {} group(s) reference changed or missing source; run repogrammar resync\n",
+                counts.stale_count
+            ));
+        }
+        if counts.cannot_verify_count > 0 {
+            output.push_str(&format!(
+                "unverified: {} group(s) could not be checked (source too large or unreadable)\n",
+                counts.cannot_verify_count
+            ));
+        }
+    }
     for ((language, role), (family_count, support)) in groups.iter().take(MAX_VISIBLE_GROUPS) {
         output.push_str(&format!(
             "- {language} · {role} — {family_count} group(s), {support} implementation(s)\n"
@@ -1788,14 +1806,34 @@ fn families_detailed_human(report: &FamilyListReport) -> String {
         report.active_generation,
         report.families.len()
     );
+    if let Some(counts) = &report.freshness_counts {
+        output.push_str(&freshness_summary_line(counts));
+    }
     for family in &report.families {
-        output.push_str(&format!(
-            "family: {}\tclassification: {}\tsupport: {}\tprevalence: {}\n",
-            family.family_id,
-            family.classification,
-            family.support,
-            family.prevalence.classification_reason
-        ));
+        match family.freshness {
+            Some(freshness) => output.push_str(&format!(
+                "family: {}\tclassification: {}\tsupport: {}\tfreshness: {}\tprevalence: {}\n",
+                family.family_id,
+                family.classification,
+                family.support,
+                freshness.as_str(),
+                family.prevalence.classification_reason
+            )),
+            None => output.push_str(&format!(
+                "family: {}\tclassification: {}\tsupport: {}\tprevalence: {}\n",
+                family.family_id,
+                family.classification,
+                family.support,
+                family.prevalence.classification_reason
+            )),
+        }
+    }
+    // Surface the report-level stale-evidence signal in the detailed view; the
+    // freshness-free variant renders no extra unknowns here, as before.
+    if report.freshness_counts.is_some() {
+        for unknown in &report.unknowns {
+            push_unknown_human(&mut output, unknown);
+        }
     }
     output
 }
@@ -1860,21 +1898,44 @@ fn family_prevalence_json(prevalence: &FamilyPrevalence) -> serde_json::Value {
 }
 
 fn families_json(command: &str, report: &FamilyListReport) -> String {
-    json_line(json!({
+    let mut value = json!({
         "command": command,
         "status": if report.families.is_empty() { "UNKNOWN" } else { "ok" },
         "implemented": true,
         "active_generation": report.active_generation,
         "families": report.families.iter().map(|family| {
-            json!({
+            let mut entry = json!({
                 "family_id": family.family_id,
                 "classification": family.classification,
                 "support": family.support,
                 "prevalence": family_prevalence_json(&family.prevalence),
-            })
+            });
+            // The freshness-verified listing carries a per-family verdict; the
+            // freshness-free variant omits the field entirely.
+            if let Some(freshness) = family.freshness {
+                entry["freshness"] = json!(freshness.as_str());
+            }
+            entry
         }).collect::<Vec<_>>(),
         "unknowns": unknowns_json(&report.unknowns),
-    }))
+    });
+    if let (Some(counts), Some(object)) = (&report.freshness_counts, value.as_object_mut()) {
+        object.insert("fresh_count".to_string(), json!(counts.fresh_count));
+        object.insert("stale_count".to_string(), json!(counts.stale_count));
+        object.insert(
+            "cannot_verify_count".to_string(),
+            json!(counts.cannot_verify_count),
+        );
+    }
+    json_line(value)
+}
+
+/// One-line freshness rollup shared by the compact and detailed human surfaces.
+fn freshness_summary_line(counts: &FamilyFreshnessCounts) -> String {
+    format!(
+        "freshness: {} fresh · {} stale · {} cannot verify\n",
+        counts.fresh_count, counts.stale_count, counts.cannot_verify_count
+    )
 }
 
 fn family_lookup_human(
@@ -8970,7 +9031,7 @@ mod tests {
     };
     use crate::application::query::{
         list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
-        FamilySummary,
+        FamilyFreshness, FamilySummary,
     };
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
@@ -9802,7 +9863,9 @@ mod tests {
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 2,
                     prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 }],
+                freshness_counts: None,
                 unknowns: Vec::new(),
             })
         }
@@ -11644,6 +11707,7 @@ mod tests {
         let report = FamilyListReport {
             active_generation: "gen-000001".to_string(),
             families: Vec::new(),
+            freshness_counts: None,
             unknowns: vec![FamilyQueryUnknown {
                 class: crate::core::model::UnknownClass::Blocking,
                 reason: crate::core::model::UnknownReasonCode::StaleEvidence,
@@ -11676,6 +11740,7 @@ mod tests {
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 3,
                     prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 },
                 FamilySummary {
                     family_id: "family:python:route:framework_fastapi_route:cluster_beta"
@@ -11683,8 +11748,10 @@ mod tests {
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 4,
                     prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 },
             ],
+            freshness_counts: None,
             unknowns: Vec::new(),
         };
 
@@ -11707,7 +11774,9 @@ mod tests {
                 classification: "DOMINANT_PATTERN".to_string(),
                 support: 3,
                 prevalence: crate::test_support::sample_family_prevalence(),
+                freshness: None,
             }],
+            freshness_counts: None,
             unknowns: Vec::new(),
         };
 
@@ -11735,6 +11804,64 @@ mod tests {
             prevalence["classification_reason"],
             "coverage 2/2 with no competing ready family"
         );
+    }
+
+    #[test]
+    fn families_freshness_fields_surface_in_json_and_human() {
+        let report = FamilyListReport {
+            active_generation: "gen-000001".to_string(),
+            families: vec![
+                FamilySummary {
+                    family_id: "family:python:route:framework_fastapi_route:cluster_fresh"
+                        .to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                    support: 3,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: Some(FamilyFreshness::Fresh),
+                },
+                FamilySummary {
+                    family_id: "family:python:route:framework_fastapi_route:cluster_stale"
+                        .to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                    support: 2,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: Some(FamilyFreshness::Stale),
+                },
+            ],
+            freshness_counts: Some(FamilyFreshnessCounts {
+                fresh_count: 1,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            }),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::StaleEvidence,
+                affected_claim: "repository pattern families:evidence_freshness".to_string(),
+                recovery: Some("run repogrammar resync".to_string()),
+            }],
+        };
+
+        // JSON carries the verbatim per-family field and the report-level counts.
+        let value: Value =
+            serde_json::from_str(families_json("families", &report).trim()).expect("families JSON");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["families"][0]["freshness"], "fresh");
+        assert_eq!(value["families"][1]["freshness"], "stale");
+        assert_eq!(value["fresh_count"], 1);
+        assert_eq!(value["stale_count"], 1);
+        assert_eq!(value["cannot_verify_count"], 0);
+        assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
+
+        // Compact human leads with the counts and the resync guidance.
+        let compact = families_human(&report, false);
+        assert!(compact.contains("freshness: 1 fresh · 1 stale · 0 cannot verify\n"));
+        assert!(compact.contains("run repogrammar resync"));
+
+        // Detailed human annotates each family and surfaces the stale unknown.
+        let detailed = families_human(&report, true);
+        assert!(detailed.contains("freshness: 1 fresh · 1 stale · 0 cannot verify\n"));
+        assert!(detailed.contains("\tfreshness: stale\t"));
+        assert!(detailed.contains("blocking_unknown:StaleEvidence"));
     }
 
     #[test]

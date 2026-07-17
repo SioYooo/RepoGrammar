@@ -15,8 +15,8 @@ use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
-    ClaimImpact, EstimatedPotentialTokenSavings, FactCertainty, FamilyPrevalence, ResolutionClass,
-    SemanticFactKind, SemanticObligation, UnknownClass, UnknownReasonCode,
+    ClaimImpact, ContentHash, EstimatedPotentialTokenSavings, FactCertainty, FamilyPrevalence,
+    ResolutionClass, SemanticFactKind, SemanticObligation, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
@@ -24,7 +24,8 @@ use crate::core::policy::freshness::{
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
     ActiveFamily, ActiveFamilyCandidates, FamilyStore, IndexedFamilyCandidateRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord, StoreError,
+    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     ActiveRepoShapeStats, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
@@ -225,6 +226,39 @@ pub struct IndexedSemanticFactsReport {
     pub facts: Vec<IndexedSemanticFactRecord>,
 }
 
+/// Per-family evidence-freshness verdict for the families listing. Derived from
+/// hash-checked reads of the family's distinct evidence paths at query time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyFreshness {
+    /// Every evidence path verified with a matching content hash.
+    Fresh,
+    /// At least one evidence path is missing or its content hash changed, so the
+    /// claim no longer reflects the working tree.
+    Stale,
+    /// No stale path, but at least one path could not be verified for a
+    /// non-content reason (too large, non-UTF-8, or otherwise unreadable). A
+    /// family with zero evidence rows is also `CannotVerify`.
+    CannotVerify,
+}
+
+impl FamilyFreshness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Freshness rollup for the families listing: one deterministic count per state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FamilyFreshnessCounts {
+    pub fresh_count: usize,
+    pub stale_count: usize,
+    pub cannot_verify_count: usize,
+}
+
 // Carries `FamilyPrevalence` (floating-point coverage ratio), so these reports
 // derive `PartialEq` but not `Eq`.
 #[derive(Debug, Clone, PartialEq)]
@@ -233,12 +267,18 @@ pub struct FamilySummary {
     pub classification: String,
     pub support: usize,
     pub prevalence: FamilyPrevalence,
+    /// `Some` only for the freshness-verified listing; `None` for the
+    /// freshness-free `list_families` variant, which does not evaluate evidence.
+    pub freshness: Option<FamilyFreshness>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FamilyListReport {
     pub active_generation: String,
     pub families: Vec<FamilySummary>,
+    /// `Some` only for the freshness-verified listing; carries the per-state
+    /// rollup. `None` for the freshness-free `list_families` variant.
+    pub freshness_counts: Option<FamilyFreshnessCounts>,
     pub unknowns: Vec<FamilyQueryUnknown>,
 }
 
@@ -2083,6 +2123,9 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
             classification: family.classification,
             support: family.support,
             prevalence: family.prevalence,
+            // The freshness-free variant does not read source; leave the
+            // per-family verdict unevaluated rather than asserting freshness.
+            freshness: None,
         })
         .collect::<Vec<_>>();
     families.sort_by(|left, right| left.family_id.cmp(&right.family_id));
@@ -2094,16 +2137,128 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
     Ok(FamilyListReport {
         active_generation: active.generation_id,
         families,
+        freshness_counts: None,
         unknowns,
     })
 }
 
+/// Deterministic, generic claim label for the report-level stale signal. Kept
+/// low-cardinality: one stale-evidence unknown covers the whole listing rather
+/// than one per stale family.
+const FAMILY_LIST_FRESHNESS_CLAIM: &str = "repository pattern families:evidence_freshness";
+
 pub fn list_families_with_freshness(
-    _request: FamilyEvidenceFreshnessRequest,
+    request: FamilyEvidenceFreshnessRequest,
     store: &impl FamilyStore,
-    _source_store: &impl SourceStore,
+    source_store: &impl SourceStore,
 ) -> Result<FamilyListReport, RepoGrammarError> {
-    list_families(store)
+    let base = list_families(store)?;
+    // Empty listings already carry the insufficient-support unknown and render
+    // through the existing empty path; there is nothing to verify.
+    if base.families.is_empty() {
+        return Ok(base);
+    }
+
+    // One bounded projection read of the active generation's family evidence.
+    let projection = store
+        .list_active_family_evidence_projection()
+        .map_err(family_store_error)?;
+    // The summaries and the evidence projection are two separate reads. If the
+    // active generation switched between them, the projected evidence could
+    // describe a different generation than the listed families.
+    if projection.generation_id != base.active_generation {
+        return Err(RepoGrammarError::InvalidInput(
+            "active inventory generation changed during family freshness read".to_string(),
+        ));
+    }
+
+    // Group evidence by family, preserving projection order per family.
+    let mut evidence_by_family: BTreeMap<String, Vec<IndexedFamilyEvidenceProjectionRecord>> =
+        BTreeMap::new();
+    for row in projection.rows {
+        evidence_by_family
+            .entry(row.family_id.clone())
+            .or_default()
+            .push(row);
+    }
+
+    // Verify each distinct (path, expected hash) at most once. Within a single
+    // generation every evidence row for a path carries that path's indexed hash,
+    // so the distinct pairs equal the distinct evidence paths: the number of
+    // source reads is bounded by the distinct paths, never the sum over families.
+    let mut path_verdicts: BTreeMap<(String, String), EvidencePathVerdict> = BTreeMap::new();
+    for rows in evidence_by_family.values() {
+        for row in rows {
+            let key = (row.path.clone(), row.content_hash.as_str().to_string());
+            if path_verdicts.contains_key(&key) {
+                continue;
+            }
+            let verdict =
+                verify_evidence_path(&request, source_store, &row.path, &row.content_hash)?;
+            path_verdicts.insert(key, verdict);
+        }
+    }
+
+    let mut counts = FamilyFreshnessCounts::default();
+    let families = base
+        .families
+        .into_iter()
+        .map(|summary| {
+            let freshness =
+                derive_family_freshness(evidence_by_family.get(&summary.family_id), &path_verdicts);
+            match freshness {
+                FamilyFreshness::Fresh => counts.fresh_count += 1,
+                FamilyFreshness::Stale => counts.stale_count += 1,
+                FamilyFreshness::CannotVerify => counts.cannot_verify_count += 1,
+            }
+            FamilySummary {
+                freshness: Some(freshness),
+                ..summary
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut unknowns = base.unknowns;
+    if counts.stale_count > 0 {
+        // Non-fatal, low-cardinality signal: the listing stays served, but a
+        // typed stale-evidence unknown with a resync recovery marks that at
+        // least one family's evidence no longer reflects the working tree.
+        unknowns.push(stale_evidence_unknown(FAMILY_LIST_FRESHNESS_CLAIM));
+    }
+
+    Ok(FamilyListReport {
+        active_generation: base.active_generation,
+        families,
+        freshness_counts: Some(counts),
+        unknowns,
+    })
+}
+
+/// Derives a family's freshness from the shared per-path verdicts. Stale takes
+/// precedence over cannot-verify, which takes precedence over fresh. A family
+/// with no evidence rows abstains as `CannotVerify`, matching the single-family
+/// evidence-less abstention in `family_evidence_is_fresh`.
+fn derive_family_freshness(
+    evidence: Option<&Vec<IndexedFamilyEvidenceProjectionRecord>>,
+    path_verdicts: &BTreeMap<(String, String), EvidencePathVerdict>,
+) -> FamilyFreshness {
+    let Some(evidence) = evidence.filter(|rows| !rows.is_empty()) else {
+        return FamilyFreshness::CannotVerify;
+    };
+    let mut cannot_verify = false;
+    for row in evidence {
+        let key = (row.path.clone(), row.content_hash.as_str().to_string());
+        match path_verdicts.get(&key) {
+            Some(EvidencePathVerdict::Stale) => return FamilyFreshness::Stale,
+            Some(EvidencePathVerdict::CannotVerify) | None => cannot_verify = true,
+            Some(EvidencePathVerdict::Fresh) => {}
+        }
+    }
+    if cannot_verify {
+        FamilyFreshness::CannotVerify
+    } else {
+        FamilyFreshness::Fresh
+    }
 }
 
 pub fn lookup_family(
@@ -4285,6 +4440,53 @@ fn token_saving_blocking_reasons(
     reasons
 }
 
+/// Per-evidence-path freshness verdict. `Stale` is content-based (the file is
+/// missing or its hash changed); `CannotVerify` is a non-content read failure
+/// (too large, non-UTF-8, unavailable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidencePathVerdict {
+    Fresh,
+    Stale,
+    CannotVerify,
+}
+
+/// The single authoritative per-path freshness check. Both the single-family
+/// gate (`family_evidence_is_fresh`) and the list-level rollup route their
+/// per-path decision through here, so the content-vs-read-failure rules live in
+/// exactly one place.
+fn verify_evidence_path(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    path: &str,
+    expected_content_hash: &ContentHash,
+) -> Result<EvidencePathVerdict, RepoGrammarError> {
+    let source = source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: path.to_string(),
+        expected_content_hash: expected_content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    });
+    match source {
+        Ok(source) if source.path == path && &source.content_hash == expected_content_hash => {
+            Ok(EvidencePathVerdict::Fresh)
+        }
+        Ok(_) => Err(RepoGrammarError::InvalidInput(
+            "source freshness response is invalid".to_string(),
+        )),
+        Err(SourceStoreError::InvalidRequest(_)) => Err(RepoGrammarError::InvalidInput(
+            "stored family evidence path is invalid".to_string(),
+        )),
+        // Missing or changed content means the claim no longer reflects the tree.
+        Err(SourceStoreError::Missing(_)) | Err(SourceStoreError::HashMismatch(_)) => {
+            Ok(EvidencePathVerdict::Stale)
+        }
+        // Non-content read failures cannot confirm staleness or freshness.
+        Err(SourceStoreError::TooLarge(_))
+        | Err(SourceStoreError::NonUtf8(_))
+        | Err(SourceStoreError::Unavailable(_)) => Ok(EvidencePathVerdict::CannotVerify),
+    }
+}
+
 fn family_evidence_is_fresh(
     request: &FamilyEvidenceFreshnessRequest,
     source_store: &impl SourceStore,
@@ -4297,27 +4499,16 @@ fn family_evidence_is_fresh(
         return Ok(false);
     }
     for evidence in &family.evidence {
-        let source = source_store.read_source(SourceReadRequest {
-            repository_root: request.repository_root.clone(),
-            path: evidence.path.clone(),
-            expected_content_hash: evidence.content_hash.clone(),
-            max_file_bytes: request.max_file_bytes,
-        });
-        match source {
-            Ok(source)
-                if source.path == evidence.path && source.content_hash == evidence.content_hash => {
-            }
-            Ok(_) => {
-                return Err(RepoGrammarError::InvalidInput(
-                    "source freshness response is invalid".to_string(),
-                ));
-            }
-            Err(SourceStoreError::InvalidRequest(_)) => {
-                return Err(RepoGrammarError::InvalidInput(
-                    "stored family evidence path is invalid".to_string(),
-                ));
-            }
-            Err(_) => return Ok(false),
+        // The single-family gate treats any non-`Fresh` verdict (stale or
+        // unverifiable) as not fresh, preserving its original behavior.
+        if verify_evidence_path(
+            request,
+            source_store,
+            &evidence.path,
+            &evidence.content_hash,
+        )? != EvidencePathVerdict::Fresh
+        {
+            return Ok(false);
         }
     }
     Ok(true)
@@ -4357,9 +4548,9 @@ mod tests {
         ContentHash, EstimatedPotentialTokenSavings, UnknownClass, UnknownReasonCode,
     };
     use crate::ports::family_store::{
-        ActiveFamilies, ActiveFamilyCandidates, ActiveFamilySummaries,
-        IndexedFamilyCandidateRecord, IndexedFamilyRecord, IndexedFamilySummaryRecord,
-        IndexedVariationSlotRecord,
+        ActiveFamilies, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
+        ActiveFamilySummaries, IndexedFamilyCandidateRecord, IndexedFamilyRecord,
+        IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -4713,6 +4904,25 @@ mod tests {
                         prevalence: family.family.prevalence.clone(),
                     })
                     .collect(),
+            })
+        }
+
+        fn list_active_family_evidence_projection(
+            &self,
+        ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+            let mut rows = Vec::new();
+            for family in &self.families {
+                for evidence in &family.evidence {
+                    rows.push(IndexedFamilyEvidenceProjectionRecord {
+                        family_id: family.family.family_id.clone(),
+                        path: evidence.path.clone(),
+                        content_hash: evidence.content_hash.clone(),
+                    });
+                }
+            }
+            Ok(ActiveFamilyEvidenceProjection {
+                generation_id: self.active.generation_id.clone(),
+                rows,
             })
         }
 
@@ -7610,11 +7820,276 @@ mod tests {
         };
         assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
 
+        // The families listing keeps the stale family visible but qualifies it:
+        // the entry carries a `Stale` verdict, the rollup counts it, and a
+        // low-cardinality stale-evidence unknown recovers via resync.
         let families =
             list_families_with_freshness(family_freshness_request(), &store, &source_store)
                 .expect("list families with freshness");
         assert_eq!(families.families.len(), 1);
-        assert!(families.unknowns.is_empty());
+        assert_eq!(families.families[0].freshness, Some(FamilyFreshness::Stale));
+        assert_eq!(
+            families.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(families.unknowns.len(), 1);
+        assert_eq!(
+            families.unknowns[0].reason,
+            UnknownReasonCode::StaleEvidence
+        );
+        assert_eq!(
+            families.unknowns[0].recovery.as_deref(),
+            Some("run repogrammar resync")
+        );
+    }
+
+    fn freshness_hash(nibble: char) -> ContentHash {
+        ContentHash::new(format!("sha256:{}", nibble.to_string().repeat(64)))
+            .expect("valid content hash")
+    }
+
+    fn family_with_evidence(family_id: &str, evidence: &[(&str, ContentHash)]) -> ActiveFamily {
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: format!("unit:{family_id}#member:0-1"),
+                role: "framework:fastapi.route".to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: evidence
+                .iter()
+                .enumerate()
+                .map(|(index, (path, hash))| IndexedFamilyEvidenceRecord {
+                    evidence_id: format!("family-evidence:{index:06}"),
+                    family_id: family_id.to_string(),
+                    code_unit_id: format!("unit:{path}#member:0-1"),
+                    covered_claims: vec!["canonical".to_string()],
+                    path: (*path).to_string(),
+                    content_hash: hash.clone(),
+                    start_byte: 0,
+                    end_byte: 1,
+                    note: "support evidence".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Source-store double that records every read and resolves each path to an
+    /// on-disk hash or an explicit read failure, mirroring the filesystem store's
+    /// contract (missing path, hash mismatch, and non-content read errors).
+    struct CountingSourceStore {
+        results: BTreeMap<String, Result<ContentHash, SourceStoreError>>,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl CountingSourceStore {
+        fn new(results: &[(&str, Result<ContentHash, SourceStoreError>)]) -> Self {
+            Self {
+                results: results
+                    .iter()
+                    .map(|(path, result)| ((*path).to_string(), result.clone()))
+                    .collect(),
+                reads: std::cell::Cell::new(0),
+            }
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.get()
+        }
+    }
+
+    impl SourceStore for CountingSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            self.reads.set(self.reads.get() + 1);
+            match self.results.get(&request.path) {
+                None => Err(SourceStoreError::Missing(format!(
+                    "source is missing: {}",
+                    request.path
+                ))),
+                Some(Err(error)) => Err(error.clone()),
+                Some(Ok(actual)) if actual == &request.expected_content_hash => Ok(SourceText {
+                    path: request.path,
+                    content_hash: actual.clone(),
+                    text: "source".to_string(),
+                }),
+                Some(Ok(_)) => Err(SourceStoreError::HashMismatch(format!(
+                    "source content changed after discovery: {}",
+                    request.path
+                ))),
+            }
+        }
+    }
+
+    #[test]
+    fn families_listing_marks_missing_evidence_family_stale() {
+        let store = FakeFamilyStore::with_families(vec![
+            family_with_evidence(
+                "family:python:fastapi_route:a",
+                &[("src/a.py", freshness_hash('a'))],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:b",
+                &[("src/b.py", freshness_hash('a'))],
+            ),
+        ]);
+        // src/a.py is gone from the tree; src/b.py still matches its indexed hash.
+        let source_store = CountingSourceStore::new(&[("src/b.py", Ok(freshness_hash('a')))]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(report.families.len(), 2);
+        assert_eq!(
+            report.families[0].family_id,
+            "family:python:fastapi_route:a"
+        );
+        assert_eq!(report.families[0].freshness, Some(FamilyFreshness::Stale));
+        assert_eq!(report.families[1].freshness, Some(FamilyFreshness::Fresh));
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 1,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(report.unknowns.len(), 1);
+        assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
+    }
+
+    #[test]
+    fn families_listing_marks_unreadable_evidence_cannot_verify() {
+        let store = FakeFamilyStore::with_families(vec![family_with_evidence(
+            "family:python:fastapi_route:big",
+            &[("src/big.py", freshness_hash('a'))],
+        )]);
+        // A non-content read failure cannot decide freshness or staleness.
+        let source_store = CountingSourceStore::new(&[(
+            "src/big.py",
+            Err(SourceStoreError::TooLarge("too large".to_string())),
+        )]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(
+            report.families[0].freshness,
+            Some(FamilyFreshness::CannotVerify)
+        );
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 0,
+                cannot_verify_count: 1,
+            })
+        );
+        // Cannot-verify is not stale, so no report-level stale signal is raised.
+        assert!(report.unknowns.is_empty());
+    }
+
+    #[test]
+    fn families_listing_abstains_for_evidence_less_family() {
+        let store = FakeFamilyStore::with_families(vec![family_with_evidence(
+            "family:python:fastapi_route:bare",
+            &[],
+        )]);
+        let source_store = CountingSourceStore::new(&[]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(
+            report.families[0].freshness,
+            Some(FamilyFreshness::CannotVerify)
+        );
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 0,
+                cannot_verify_count: 1,
+            })
+        );
+        // No evidence rows means no source reads.
+        assert_eq!(source_store.reads(), 0);
+    }
+
+    #[test]
+    fn families_listing_verifies_each_distinct_path_once() {
+        let hash = freshness_hash('a');
+        let store = FakeFamilyStore::with_families(vec![
+            family_with_evidence(
+                "family:python:fastapi_route:a",
+                &[("src/shared.py", hash.clone()), ("src/a.py", hash.clone())],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:b",
+                &[("src/shared.py", hash.clone()), ("src/b.py", hash.clone())],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:c",
+                &[("src/c.py", hash.clone())],
+            ),
+        ]);
+        // Every path resolves fresh. Distinct evidence paths: shared, a, b, c = 4.
+        // Sum over families would be 5; a bounded check must read exactly 4.
+        let source_store = CountingSourceStore::new(&[
+            ("src/shared.py", Ok(hash.clone())),
+            ("src/a.py", Ok(hash.clone())),
+            ("src/b.py", Ok(hash.clone())),
+            ("src/c.py", Ok(hash.clone())),
+        ]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert!(report
+            .families
+            .iter()
+            .all(|family| family.freshness == Some(FamilyFreshness::Fresh)));
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 3,
+                stale_count: 0,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(source_store.reads(), 4);
+    }
+
+    #[test]
+    fn families_listing_stays_empty_without_source_reads() {
+        let store = FakeFamilyStore::empty();
+        let source_store = CountingSourceStore::new(&[]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert!(report.families.is_empty());
+        assert!(report.freshness_counts.is_none());
+        assert_eq!(report.unknowns.len(), 1);
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+        assert_eq!(source_store.reads(), 0);
     }
 
     #[test]
