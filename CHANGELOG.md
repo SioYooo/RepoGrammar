@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- Committed the deterministic product-core evaluation harness: a report-only
+  `repo-guard product-eval` command that indexes committed fixtures in isolated
+  temporary workspaces and drives the product binary through
+  `src/fixtures/evaluation/query-corpus-v1.json` (26 gold-labeled queries over
+  python-v0_1, typescript-v0_2, and a new zero-family fixture), writing
+  machine-readable `product-eval-results.v1` output. The recorded baseline at
+  `docs/experiments/product-core-baseline.md` shows exact
+  id/member/path/role/abstention queries matching gold (21/26, zero false
+  family selections) while all five retrieval-intent natural-language pattern
+  questions abstain — the measured retrieval gap this baseline freezes. No
+  production behavior changed.
+
 ### Fixed
 
 - Isolated every public npm launcher finalizer lane in its own external working

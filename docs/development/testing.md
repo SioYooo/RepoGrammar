@@ -949,6 +949,46 @@ hash-checked reads, parent Git worktree ignore handling for subdirectory
 projects, index/sync/resync lock acquisition and doctor lock-state reporting, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
 
+## Product evaluation harness
+
+`repo-guard product-eval` is the committed, deterministic product-core
+evaluation harness. It measures what the product runtime actually returns for
+the pattern-family query surface (`find`, `family`, `member`, `explain`,
+`check`) against a fixed committed corpus. It is report-only measurement
+infrastructure and changes no production behavior.
+
+```text
+cargo run --quiet --bin repo-guard -- product-eval \
+  --corpus src/fixtures/evaluation/query-corpus-v1.json \
+  --out <output-dir> [--repetitions <n>] [--bin <path-to-repogrammar>]
+```
+
+For each corpus fixture the harness copies the committed fixture root into an
+isolated temporary workspace with an isolated `HOME`/XDG/`CODEX_HOME` and a
+tool-only `PATH`, runs `init` then `resync`, applies any per-query source
+mutation to that copy, and drives the product binary through the query. It
+never modifies the real repository and never enables auto-sync. Workspaces are
+removed on success and retained (path printed to stderr) on a harness error.
+When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
+next to `repo-guard`; both build into the same target directory.
+
+The run writes `<output-dir>/product-eval-results.json`
+(`schema_version: product-eval-results.v1`) with per-fixture `resync` latency
+and discovered/stored counts, per-query expected/actual/`match`/mismatch-field
+detail with all repetition latencies, and a summary of matches, per-kind
+counts, p50/p95 latency, and `false_family_selections`. Mismatches are baseline
+data, so the command exits `0` when the run completes; it exits nonzero only on
+a genuine harness error (missing binary, unparseable corpus, subprocess failure,
+or non-JSON query output). Corpus gold expectations encode product intent, not
+current output, so retrieval-intent natural-language questions over families
+that exist are recorded as mismatches rather than softened. Latency figures are
+machine-dependent; verdict, per-kind, and `false_family_selections` counts are
+stable for a pinned corpus and product commit. The current baseline reading is
+recorded in [`../experiments/product-core-baseline.md`](../experiments/product-core-baseline.md).
+Harness parsing, matching, hashing, and result-serialization logic is covered by
+unit tests in `src/rust/bin/repo_guard.rs` that do not depend on the product
+binary or the network.
+
 ## Required local gate
 
 Use the full gate before committing implementation changes:

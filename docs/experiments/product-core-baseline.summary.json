@@ -1,0 +1,124 @@
+{
+  "schema_version": "product-core-baseline.v1",
+  "evidence_date": "2026-07-18",
+  "verdict": "BASELINE_RECORDED",
+  "product": {
+    "commit": "33715e4a6a23c100d96446007550fdacebb1f340",
+    "host_os": "macos",
+    "host_arch": "aarch64",
+    "build_profile": "dev"
+  },
+  "pointers": {
+    "corpus_path": "src/fixtures/evaluation/query-corpus-v1.json",
+    "corpus_schema_version": "product-eval-corpus.v1",
+    "results_schema_version": "product-eval-results.v1",
+    "harness": "src/rust/bin/repo_guard.rs",
+    "harness_command": "repo-guard product-eval",
+    "zero_family_fixture": "src/fixtures/evaluation/zero-family-repo"
+  },
+  "privacy": {
+    "source_included": false,
+    "absolute_paths_included": false,
+    "raw_logs_included": false,
+    "credentials_included": false,
+    "telemetry_export_included": false
+  },
+  "harness_run": {
+    "repetitions": 3,
+    "total": 26,
+    "matches": 21,
+    "mismatches": 5,
+    "false_family_selections": 0,
+    "latency_status": "MACHINE_DEPENDENT",
+    "latency_ms_p50": 44,
+    "latency_ms_p95": 79,
+    "by_kind_matches": {
+      "exact_family_id": "3/3",
+      "exact_member_id": "2/2",
+      "exact_path": "4/4",
+      "path_suffix": "1/1",
+      "framework_role": "2/2",
+      "nl_pattern_question": "1/6",
+      "ambiguous": "1/1",
+      "unsupported_concept": "1/1",
+      "stale_family": "1/1",
+      "partial_context_path": "1/1",
+      "check_conformance": "2/2",
+      "explain_deviation": "1/1",
+      "zero_family_repo": "1/1"
+    },
+    "fixtures": [
+      {
+        "fixture_id": "python-v0_1",
+        "discovered_files": 34,
+        "stored_files": 34,
+        "resync_latency_status": "MACHINE_DEPENDENT"
+      },
+      {
+        "fixture_id": "typescript-v0_2",
+        "discovered_files": 59,
+        "stored_files": 59,
+        "resync_latency_status": "MACHINE_DEPENDENT"
+      },
+      {
+        "fixture_id": "zero-family",
+        "discovered_files": 2,
+        "stored_files": 2,
+        "resync_latency_status": "MACHINE_DEPENDENT"
+      }
+    ],
+    "nl_interface_gap_query_ids": [
+      "py-nl-fastapi-routes",
+      "py-nl-test-fixtures",
+      "py-nl-db-transactions",
+      "py-nl-validation-models",
+      "py-nl-repository-methods"
+    ]
+  },
+  "self_dogfood": {
+    "measurement_status": "MACHINE_DEPENDENT",
+    "quality_gates_passing": 11,
+    "indexed_files": 344,
+    "indexed_units": 18085,
+    "semantic_facts": 27074,
+    "families": 378,
+    "family_classification": "DOMINANT_PATTERN_ALL",
+    "prevalence_model": "absent",
+    "support_min": 2,
+    "support_max": 337,
+    "families_freshness_check": "absent",
+    "families_vs_hydration_trust": "INCONSISTENT",
+    "fresh_generation": "gen-000582",
+    "stale_generation": "gen-000544"
+  },
+  "telemetry_rollup": {
+    "schema": "family-query-outcomes.v1",
+    "events": 184,
+    "found": 2,
+    "partial_context": 18,
+    "unknown": 145,
+    "fallback": 19,
+    "reason_insufficient_support": 160
+  },
+  "contradictions": [
+    "DOMINANCE_WITHOUT_PREVALENCE",
+    "FRESHNESS_LESS_FAMILY_LISTING",
+    "NL_INTERFACE_GAP"
+  ],
+  "token_measurement": {
+    "status": "NOT_MEASURED",
+    "measurement_status": "no_paired_experiment",
+    "baseline_total_tokens": null,
+    "treatment_total_tokens": null,
+    "token_savings": null,
+    "token_savings_ratio": null,
+    "claim_validity": "unknown"
+  },
+  "limitations": [
+    "single_host_dev_build",
+    "latency_machine_dependent",
+    "self_dogfood_facts_single_repetition",
+    "no_paired_agent_token_measurement",
+    "no_remediation_in_this_checkpoint"
+  ]
+}

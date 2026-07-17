@@ -199,6 +199,11 @@ where
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "product-eval" => match product_eval_command(root, rest)
+        {
+            Ok(report) => CommandResult::ok(report),
+            Err(error) => CommandResult::err(format!("product evaluation failed: {error}\n")),
+        },
         [command] if command == "check" => run_check(root),
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
@@ -312,7 +317,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -2202,6 +2207,1107 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
     env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+const PRODUCT_EVAL_CORPUS_SCHEMA: &str = "product-eval-corpus.v1";
+const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalOutcome {
+    Ok,
+    PartialContext,
+    Unknown,
+    Fallback,
+}
+
+impl EvalOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalOutcome::Ok => "ok",
+            EvalOutcome::PartialContext => "partial_context",
+            EvalOutcome::Unknown => "unknown",
+            EvalOutcome::Fallback => "fallback",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "ok" => Ok(EvalOutcome::Ok),
+            "partial_context" => Ok(EvalOutcome::PartialContext),
+            "unknown" => Ok(EvalOutcome::Unknown),
+            "fallback" => Ok(EvalOutcome::Fallback),
+            other => Err(format!("unsupported expected outcome '{other}'")),
+        }
+    }
+
+    /// Maps a product query `status` string onto the coarse retrieval outcome.
+    /// `CONTEXT_ONLY` is the `check` operation's context-success status: a single
+    /// family was discovered and hydrated (route `discover_hydrate_compose`), so
+    /// it is treated as `ok` on the retrieval axis while conformance stays
+    /// advisory. Any unrecognized status is conservatively reported as fallback.
+    fn classify_status(status: &str) -> Self {
+        match status {
+            "ok" | "OK" | "CONTEXT_ONLY" => EvalOutcome::Ok,
+            "PARTIAL_CONTEXT" => EvalOutcome::PartialContext,
+            "UNKNOWN" => EvalOutcome::Unknown,
+            _ => EvalOutcome::Fallback,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalOperation {
+    Find,
+    Family,
+    Member,
+    Explain,
+    Check,
+}
+
+impl EvalOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalOperation::Find => "find",
+            EvalOperation::Family => "family",
+            EvalOperation::Member => "member",
+            EvalOperation::Explain => "explain",
+            EvalOperation::Check => "check",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "find" => Ok(EvalOperation::Find),
+            "family" => Ok(EvalOperation::Family),
+            "member" => Ok(EvalOperation::Member),
+            "explain" => Ok(EvalOperation::Explain),
+            "check" => Ok(EvalOperation::Check),
+            other => Err(format!("unsupported query operation '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EvalExpected {
+    outcome: Option<EvalOutcome>,
+    family: Option<String>,
+    family_prefix: Option<String>,
+    family_any_of: Option<Vec<String>>,
+    unknown_reason: Option<String>,
+    route: Option<String>,
+}
+
+impl EvalExpected {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "query expected must be an object".to_string())?;
+        let outcome = match object.get("outcome") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(token) => {
+                Some(EvalOutcome::from_token(token.as_str().ok_or_else(
+                    || "expected.outcome must be a string".to_string(),
+                )?)?)
+            }
+        };
+        let family_any_of = match object.get("family_any_of") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(array) => {
+                let array = array
+                    .as_array()
+                    .ok_or_else(|| "expected.family_any_of must be an array".to_string())?;
+                let mut prefixes = Vec::with_capacity(array.len());
+                for entry in array {
+                    prefixes.push(
+                        entry
+                            .as_str()
+                            .ok_or_else(|| {
+                                "expected.family_any_of entries must be strings".to_string()
+                            })?
+                            .to_string(),
+                    );
+                }
+                Some(prefixes)
+            }
+        };
+        Ok(Self {
+            outcome,
+            family: optional_object_string(object, "family")?,
+            family_prefix: optional_object_string(object, "family_prefix")?,
+            family_any_of,
+            unknown_reason: optional_object_string(object, "unknown_reason")?,
+            route: optional_object_string(object, "route")?,
+        })
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        if let Some(outcome) = self.outcome {
+            map.insert("outcome".to_string(), outcome.as_str().into());
+        }
+        if let Some(family) = &self.family {
+            map.insert("family".to_string(), family.clone().into());
+        }
+        if let Some(prefix) = &self.family_prefix {
+            map.insert("family_prefix".to_string(), prefix.clone().into());
+        }
+        if let Some(list) = &self.family_any_of {
+            map.insert("family_any_of".to_string(), list.clone().into());
+        }
+        if let Some(reason) = &self.unknown_reason {
+            map.insert("unknown_reason".to_string(), reason.clone().into());
+        }
+        if let Some(route) = &self.route {
+            map.insert("route".to_string(), route.clone().into());
+        }
+        serde_json::Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalActual {
+    outcome: EvalOutcome,
+    route: Option<String>,
+    selected_family: Option<String>,
+    candidate_family_count: usize,
+    candidate_families: Vec<String>,
+    unknown_reason: Option<String>,
+    active_generation: Option<String>,
+}
+
+impl EvalActual {
+    fn from_query_json(value: &serde_json::Value) -> Result<Self, String> {
+        let status = value
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "query output omitted status".to_string())?;
+        let query_route = value.get("query_route");
+        let route = query_route
+            .and_then(|route| route.get("route"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let selected_family = query_route
+            .and_then(|route| route.get("selected_family_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let candidate_families = query_route
+            .and_then(|route| route.get("candidate_family_ids"))
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let unknown_reason = value
+            .get("unknowns")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|unknowns| unknowns.first())
+            .and_then(|first| first.get("reason"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let active_generation = value
+            .get("active_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        Ok(Self {
+            outcome: EvalOutcome::classify_status(status),
+            route,
+            selected_family,
+            candidate_family_count: candidate_families.len(),
+            candidate_families,
+            unknown_reason,
+            active_generation,
+        })
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "outcome": self.outcome.as_str(),
+            "route": self.route,
+            "selected_family": self.selected_family,
+            "candidate_family_count": self.candidate_family_count,
+            "candidate_families": self.candidate_families,
+            "unknown_reason": self.unknown_reason,
+            "active_generation": self.active_generation,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvalMutation {
+    kind: String,
+    path: String,
+    line: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvalQuery {
+    query_id: String,
+    fixture_id: String,
+    kind: String,
+    operation: EvalOperation,
+    target: String,
+    mode: String,
+    mutation: Option<EvalMutation>,
+    expected: EvalExpected,
+}
+
+impl EvalQuery {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "corpus query must be an object".to_string())?;
+        let mutation = match object.get("mutation") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(mutation) => {
+                let mutation = mutation
+                    .as_object()
+                    .ok_or_else(|| "query mutation must be an object".to_string())?;
+                Some(EvalMutation {
+                    kind: required_object_string(mutation, "kind")?,
+                    path: required_object_string(mutation, "path")?,
+                    line: required_object_string(mutation, "line")?,
+                })
+            }
+        };
+        let expected = EvalExpected::from_value(
+            object
+                .get("expected")
+                .ok_or_else(|| "corpus query omitted expected".to_string())?,
+        )?;
+        Ok(Self {
+            query_id: required_object_string(object, "query_id")?,
+            fixture_id: required_object_string(object, "fixture_id")?,
+            kind: required_object_string(object, "kind")?,
+            operation: EvalOperation::from_token(&required_object_string(object, "operation")?)?,
+            target: required_object_string(object, "target")?,
+            mode: optional_object_string(object, "mode")?.unwrap_or_else(|| "compact".to_string()),
+            mutation,
+            expected,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvalCorpusFixture {
+    fixture_id: String,
+    root: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvalCorpus {
+    fixtures: Vec<EvalCorpusFixture>,
+    queries: Vec<EvalQuery>,
+}
+
+impl EvalCorpus {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "corpus must be a JSON object".to_string())?;
+        let schema = object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "corpus omitted schema_version".to_string())?;
+        if schema != PRODUCT_EVAL_CORPUS_SCHEMA {
+            return Err(format!("unsupported corpus schema_version '{schema}'"));
+        }
+        let fixtures_value = object
+            .get("fixtures")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "corpus omitted fixtures array".to_string())?;
+        let mut fixtures = Vec::with_capacity(fixtures_value.len());
+        for fixture in fixtures_value {
+            let fixture = fixture
+                .as_object()
+                .ok_or_else(|| "corpus fixture must be an object".to_string())?;
+            // `description` is validated as an optional string when present but is
+            // not retained: the results schema does not surface fixture prose.
+            let _ = optional_object_string(fixture, "description")?;
+            fixtures.push(EvalCorpusFixture {
+                fixture_id: required_object_string(fixture, "fixture_id")?,
+                root: required_object_string(fixture, "root")?,
+            });
+        }
+        let queries_value = object
+            .get("queries")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "corpus omitted queries array".to_string())?;
+        let mut queries = Vec::with_capacity(queries_value.len());
+        for query in queries_value {
+            queries.push(EvalQuery::from_value(query)?);
+        }
+        if queries.is_empty() {
+            return Err("corpus contains no queries".to_string());
+        }
+        for query in &queries {
+            if !fixtures
+                .iter()
+                .any(|fixture| fixture.fixture_id == query.fixture_id)
+            {
+                return Err(format!(
+                    "query '{}' references unknown fixture '{}'",
+                    query.query_id, query.fixture_id
+                ));
+            }
+        }
+        Ok(Self { fixtures, queries })
+    }
+}
+
+fn required_object_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, String> {
+    object
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("missing string field '{key}'"))
+}
+
+fn optional_object_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| format!("field '{key}' must be a string"))?
+                .to_string(),
+        )),
+    }
+}
+
+fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<String>) {
+    let mut mismatches = Vec::new();
+    if let Some(outcome) = expected.outcome {
+        if actual.outcome != outcome {
+            mismatches.push("outcome".to_string());
+        }
+    }
+    if let Some(family) = &expected.family {
+        if actual.selected_family.as_deref() != Some(family.as_str()) {
+            mismatches.push("family".to_string());
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        if !actual
+            .selected_family
+            .as_deref()
+            .is_some_and(|selected| selected.starts_with(prefix.as_str()))
+        {
+            mismatches.push("family_prefix".to_string());
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        if !actual.selected_family.as_deref().is_some_and(|selected| {
+            prefixes
+                .iter()
+                .any(|prefix| selected.starts_with(prefix.as_str()))
+        }) {
+            mismatches.push("family_any_of".to_string());
+        }
+    }
+    if let Some(reason) = &expected.unknown_reason {
+        if actual.unknown_reason.as_deref() != Some(reason.as_str()) {
+            mismatches.push("unknown_reason".to_string());
+        }
+    }
+    if let Some(route) = &expected.route {
+        if actual.route.as_deref() != Some(route.as_str()) {
+            mismatches.push("route".to_string());
+        }
+    }
+    (mismatches.is_empty(), mismatches)
+}
+
+/// True when a family was selected but the query's expected family/prefix
+/// constraints exclude it. Queries without a family constraint never count.
+fn is_false_family_selection(expected: &EvalExpected, actual: &EvalActual) -> bool {
+    let Some(selected) = actual.selected_family.as_deref() else {
+        return false;
+    };
+    let mut has_constraint = false;
+    let mut satisfied = true;
+    if let Some(family) = &expected.family {
+        has_constraint = true;
+        if selected != family.as_str() {
+            satisfied = false;
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        has_constraint = true;
+        if !selected.starts_with(prefix.as_str()) {
+            satisfied = false;
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        has_constraint = true;
+        if !prefixes
+            .iter()
+            .any(|prefix| selected.starts_with(prefix.as_str()))
+        {
+            satisfied = false;
+        }
+    }
+    has_constraint && !satisfied
+}
+
+fn percentile(values: &[u128], percentile: u8) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let rank = (percentile as usize * sorted.len()).div_ceil(100);
+    let index = rank.saturating_sub(1).min(sorted.len() - 1);
+    sorted[index]
+}
+
+fn unix_seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_position = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_position + 2) / 5 + 1) as u32;
+    let month = if month_position < 10 {
+        month_position + 3
+    } else {
+        month_position - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+fn rfc3339_utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let remainder = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = remainder / 3600;
+    let minute = (remainder % 3600) / 60;
+    let second = remainder % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn fixture_version_hash(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    collect_fixture_files(root, root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hasher = Sha256::new();
+    for (relative, absolute) in &files {
+        hasher.update((relative.len() as u64).to_le_bytes());
+        hasher.update(relative.as_bytes());
+        let contents = fs::read(absolute)
+            .map_err(|_| "could not read fixture file for hashing".to_string())?;
+        hasher.update((contents.len() as u64).to_le_bytes());
+        hasher.update(&contents);
+    }
+    Ok(hex_digest(hasher.finalize().as_slice()))
+}
+
+fn collect_fixture_files(
+    base: &Path,
+    current: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(current)
+        .map_err(|_| "could not read fixture directory for hashing".to_string())?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    entries.sort();
+    for entry in entries {
+        let metadata = fs::symlink_metadata(&entry)
+            .map_err(|_| "could not inspect fixture entry for hashing".to_string())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_fixture_files(base, &entry, out)?;
+        } else if metadata.is_file() {
+            let relative = entry
+                .strip_prefix(base)
+                .map_err(|_| "fixture path escaped the fixture root".to_string())?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| "fixture path was not UTF-8".to_string())?
+                .replace('\\', "/");
+            out.push((relative, entry));
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_sorted(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(src)
+        .map_err(|_| "could not read fixture directory".to_string())?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    entries.sort();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .ok_or_else(|| "fixture entry has no file name".to_string())?;
+        let target = dst.join(name);
+        let metadata = fs::symlink_metadata(&entry)
+            .map_err(|_| "could not inspect fixture entry".to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err("fixture contains a symlink, which is not supported".to_string());
+        }
+        if metadata.is_dir() {
+            fs::create_dir_all(&target)
+                .map_err(|_| "could not create fixture subdirectory".to_string())?;
+            copy_dir_sorted(&entry, &target)?;
+        } else if metadata.is_file() {
+            fs::copy(&entry, &target).map_err(|_| "could not copy fixture file".to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn unique_product_eval_root() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    env::temp_dir().join(format!(
+        "repogrammar-product-eval-{}-{nanos}-{sequence}",
+        std::process::id()
+    ))
+}
+
+struct ResyncStats {
+    latency_ms: u128,
+    discovered_files: Option<u64>,
+    stored_files: Option<u64>,
+}
+
+struct EvalWorkspace {
+    root: PathBuf,
+    home: PathBuf,
+    project: PathBuf,
+    tools: PathBuf,
+    binary: PathBuf,
+    python: PathBuf,
+    cleanup: std::cell::Cell<bool>,
+}
+
+impl EvalWorkspace {
+    fn new(binary: &Path, fixture_source: &Path) -> Result<Self, String> {
+        let root = unique_product_eval_root();
+        let home = root.join("home");
+        let project = root.join("project");
+        let tools = root.join("tools");
+        fs::create_dir_all(&home).map_err(|_| "could not create isolated eval HOME".to_string())?;
+        fs::create_dir_all(&project)
+            .map_err(|_| "could not create isolated eval project".to_string())?;
+        fs::create_dir_all(&tools)
+            .map_err(|_| "could not create isolated eval tool PATH".to_string())?;
+        let python = prepare_isolated_tool_path(&tools)?;
+        copy_dir_sorted(fixture_source, &project)?;
+        Ok(Self {
+            root,
+            home,
+            project,
+            tools,
+            binary: binary.to_path_buf(),
+            python,
+            cleanup: std::cell::Cell::new(true),
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_clear()
+            .current_dir(&self.project)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env("CODEX_HOME", self.home.join(".codex"))
+            .env("PATH", &self.tools)
+            .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python)
+            .env("REPOGRAMMAR_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1");
+        command
+    }
+
+    fn project_arg(&self) -> Result<String, String> {
+        self.project
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "isolated eval project path was not UTF-8".to_string())
+    }
+
+    fn init(&self) -> Result<(), String> {
+        let project = self.project_arg()?;
+        let output = self
+            .command()
+            .args([
+                "init",
+                "--project",
+                &project,
+                "--yes",
+                "--json",
+                "--progress",
+                "never",
+            ])
+            .output()
+            .map_err(|_| "eval init could not execute".to_string())?;
+        if !output.status.success() {
+            return Err("eval init returned a failure status".to_string());
+        }
+        Ok(())
+    }
+
+    fn resync(&self) -> Result<ResyncStats, String> {
+        let project = self.project_arg()?;
+        let started = std::time::Instant::now();
+        let output = self
+            .command()
+            .args([
+                "resync",
+                "--project",
+                &project,
+                "--json",
+                "--progress",
+                "never",
+            ])
+            .output()
+            .map_err(|_| "eval resync could not execute".to_string())?;
+        let latency_ms = started.elapsed().as_millis();
+        if !output.status.success() {
+            return Err("eval resync returned a failure status".to_string());
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "eval resync output was not UTF-8".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| "eval resync output was not JSON".to_string())?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("complete") {
+            return Err("eval resync did not complete".to_string());
+        }
+        Ok(ResyncStats {
+            latency_ms,
+            discovered_files: value
+                .get("discovered_files")
+                .and_then(serde_json::Value::as_u64),
+            stored_files: value
+                .get("stored_files")
+                .and_then(serde_json::Value::as_u64),
+        })
+    }
+
+    fn apply_mutation(&self, mutation: &EvalMutation) -> Result<(), String> {
+        if mutation.kind != "append_line" {
+            return Err(format!("unsupported mutation kind '{}'", mutation.kind));
+        }
+        let relative = Path::new(&mutation.path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err("mutation path must be a normalized relative path".to_string());
+        }
+        let target = self.project.join(relative);
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&target)
+            .map_err(|_| "could not open fixture file for mutation".to_string())?;
+        writeln!(file, "\n{}", mutation.line).map_err(|_| "could not apply mutation".to_string())
+    }
+
+    fn run_query(
+        &self,
+        query: &EvalQuery,
+        repetitions: usize,
+    ) -> Result<(EvalActual, Vec<u128>), String> {
+        let project = self.project_arg()?;
+        let mut latencies = Vec::with_capacity(repetitions);
+        let mut last_stdout = None;
+        for _ in 0..repetitions {
+            let started = std::time::Instant::now();
+            let output = self
+                .command()
+                .args([
+                    query.operation.as_str(),
+                    query.target.as_str(),
+                    "--project",
+                    &project,
+                    "--mode",
+                    query.mode.as_str(),
+                    "--json",
+                ])
+                .output()
+                .map_err(|_| format!("query '{}' could not execute", query.query_id))?;
+            latencies.push(started.elapsed().as_millis());
+            last_stdout = Some(
+                String::from_utf8(output.stdout)
+                    .map_err(|_| format!("query '{}' output was not UTF-8", query.query_id))?,
+            );
+        }
+        let stdout = last_stdout
+            .ok_or_else(|| format!("query '{}' produced no repetitions", query.query_id))?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| format!("query '{}' output was not JSON", query.query_id))?;
+        let actual = EvalActual::from_query_json(&value)?;
+        Ok((actual, latencies))
+    }
+
+    fn retain(&self) {
+        if self.cleanup.replace(false) {
+            eprintln!(
+                "product-eval workspace retained for inspection: {}",
+                self.root.display()
+            );
+        }
+    }
+}
+
+impl Drop for EvalWorkspace {
+    fn drop(&mut self) {
+        if self.cleanup.get() {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+fn retain_workspaces(workspaces: &[(String, EvalWorkspace)]) {
+    for (_, workspace) in workspaces {
+        workspace.retain();
+    }
+}
+
+fn resolve_product_binary(root: &Path, bin_override: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(explicit) = bin_override {
+        return regular_input_file(root, explicit, "repogrammar binary");
+    }
+    let current = env::current_exe()
+        .map_err(|_| "could not resolve the running executable path".to_string())?;
+    let directory = current
+        .parent()
+        .ok_or_else(|| "running executable has no parent directory".to_string())?;
+    let sibling = directory.join("repogrammar");
+    let metadata = fs::symlink_metadata(&sibling)
+        .map_err(|_| "sibling repogrammar binary not found; pass --bin <path>".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(
+            "sibling repogrammar binary is not a regular file; pass --bin <path>".to_string(),
+        );
+    }
+    fs::canonicalize(&sibling)
+        .map_err(|_| "sibling repogrammar binary is unavailable; pass --bin <path>".to_string())
+}
+
+fn corpus_relative_path(root: &Path, absolute: &Path, original: &str) -> String {
+    if let Ok(relative) = absolute.strip_prefix(root) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    if !Path::new(original).is_absolute() {
+        return original.replace('\\', "/");
+    }
+    original.to_string()
+}
+
+fn product_eval_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut corpus = None;
+    let mut out = None;
+    let mut repetitions = 3usize;
+    let mut bin = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--corpus" => corpus = Some(product_eval_take_value(args, &mut index, "--corpus")?),
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--repetitions" => {
+                let raw = product_eval_take_value(args, &mut index, "--repetitions")?;
+                repetitions = raw
+                    .parse::<usize>()
+                    .map_err(|_| "--repetitions must be a positive integer".to_string())?;
+            }
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            other => return Err(format!("unknown product-eval argument '{other}'")),
+        }
+        index += 1;
+    }
+    let corpus = corpus.ok_or_else(|| "--corpus <path> is required".to_string())?;
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    run_product_eval(root, &corpus, &out, repetitions, bin.as_deref())
+}
+
+fn product_eval_take_value(
+    args: &[String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<String, String> {
+    let value = args
+        .get(*index + 1)
+        .ok_or_else(|| format!("{flag} requires a value"))?
+        .clone();
+    *index += 1;
+    Ok(value)
+}
+
+fn run_product_eval(
+    root: &Path,
+    corpus_path: &str,
+    out_dir: &str,
+    repetitions: usize,
+    bin_override: Option<&str>,
+) -> Result<String, String> {
+    if repetitions == 0 {
+        return Err("--repetitions must be at least 1".to_string());
+    }
+    let binary = resolve_product_binary(root, bin_override)?;
+    let corpus_absolute = if Path::new(corpus_path).is_absolute() {
+        PathBuf::from(corpus_path)
+    } else {
+        root.join(corpus_path)
+    };
+    let corpus_text = fs::read_to_string(&corpus_absolute)
+        .map_err(|_| "corpus file is unavailable".to_string())?;
+    let corpus_value: serde_json::Value = serde_json::from_str(&corpus_text)
+        .map_err(|_| "corpus file was not valid JSON".to_string())?;
+    let corpus = EvalCorpus::from_value(&corpus_value)?;
+
+    let commit = resolve_git_commit(root, "HEAD").unwrap_or_else(|_| "unknown".to_string());
+    let started_at = rfc3339_utc(unix_seconds_now());
+
+    let mut base_workspaces: Vec<(String, EvalWorkspace)> = Vec::new();
+    let mut fixture_results: Vec<serde_json::Value> = Vec::new();
+    for fixture in &corpus.fixtures {
+        let source = fs::canonicalize(root.join(&fixture.root))
+            .map_err(|_| format!("fixture root '{}' is unavailable", fixture.root))?;
+        let fixture_version = match fixture_version_hash(&source) {
+            Ok(hash) => hash,
+            Err(error) => {
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        let workspace = match EvalWorkspace::new(&binary, &source) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        if let Err(error) = workspace.init() {
+            workspace.retain();
+            retain_workspaces(&base_workspaces);
+            return Err(error);
+        }
+        let resync = match workspace.resync() {
+            Ok(resync) => resync,
+            Err(error) => {
+                workspace.retain();
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        fixture_results.push(serde_json::json!({
+            "fixture_id": fixture.fixture_id,
+            "fixture_version": fixture_version,
+            "resync_latency_ms": resync.latency_ms,
+            "discovered_files": resync.discovered_files,
+            "stored_files": resync.stored_files,
+        }));
+        base_workspaces.push((fixture.fixture_id.clone(), workspace));
+    }
+
+    let mut query_results: Vec<serde_json::Value> = Vec::new();
+    let mut table_rows: Vec<(String, String, &'static str, u128)> = Vec::new();
+    let mut all_latencies: Vec<u128> = Vec::new();
+    let mut matches = 0usize;
+    let mut false_family_selections = 0usize;
+    let mut by_kind: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+
+    for query in &corpus.queries {
+        let base = base_workspaces
+            .iter()
+            .find(|(fixture_id, _)| fixture_id == &query.fixture_id)
+            .map(|(_, workspace)| workspace)
+            .ok_or_else(|| {
+                format!(
+                    "query '{}' references unindexed fixture '{}'",
+                    query.query_id, query.fixture_id
+                )
+            })?;
+
+        let outcome = if let Some(mutation) = &query.mutation {
+            let fixture = corpus
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.fixture_id == query.fixture_id)
+                .ok_or_else(|| "mutation query references an unknown fixture".to_string())?;
+            let source = fs::canonicalize(root.join(&fixture.root))
+                .map_err(|_| "fixture root is unavailable".to_string())?;
+            let mutation_workspace = match EvalWorkspace::new(&binary, &source) {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    retain_workspaces(&base_workspaces);
+                    return Err(error);
+                }
+            };
+            let run = (|| {
+                mutation_workspace.init()?;
+                mutation_workspace.resync()?;
+                mutation_workspace.apply_mutation(mutation)?;
+                mutation_workspace.run_query(query, repetitions)
+            })();
+            match run {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    mutation_workspace.retain();
+                    retain_workspaces(&base_workspaces);
+                    return Err(error);
+                }
+            }
+        } else {
+            match base.run_query(query, repetitions) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    retain_workspaces(&base_workspaces);
+                    return Err(error);
+                }
+            }
+        };
+        let (actual, latencies) = outcome;
+
+        let (is_match, mismatch_fields) = evaluate_match(&query.expected, &actual);
+        if is_match {
+            matches += 1;
+        }
+        if is_false_family_selection(&query.expected, &actual) {
+            false_family_selections += 1;
+        }
+        let counters = by_kind.entry(query.kind.clone()).or_insert((0, 0));
+        counters.0 += 1;
+        if is_match {
+            counters.1 += 1;
+        }
+        all_latencies.extend(latencies.iter().copied());
+        let query_p50 = percentile(&latencies, 50);
+        table_rows.push((
+            query.query_id.clone(),
+            query.kind.clone(),
+            if is_match { "match" } else { "mismatch" },
+            query_p50,
+        ));
+        query_results.push(serde_json::json!({
+            "query_id": query.query_id,
+            "fixture_id": query.fixture_id,
+            "kind": query.kind,
+            "operation": query.operation.as_str(),
+            "target": query.target,
+            "expected": query.expected.to_value(),
+            "actual": actual.to_value(),
+            "match": is_match,
+            "mismatch_fields": mismatch_fields,
+            "latency_ms_all_reps": latencies,
+            "latency_ms_p50": query_p50,
+        }));
+    }
+
+    let finished_at = rfc3339_utc(unix_seconds_now());
+    let total = corpus.queries.len();
+    let mismatches = total - matches;
+    let by_kind_value: serde_json::Map<String, serde_json::Value> = by_kind
+        .iter()
+        .map(|(kind, (kind_total, kind_matches))| {
+            (
+                kind.clone(),
+                serde_json::json!({ "total": kind_total, "matches": kind_matches }),
+            )
+        })
+        .collect();
+    let summary = serde_json::json!({
+        "total": total,
+        "matches": matches,
+        "mismatches": mismatches,
+        "by_kind": serde_json::Value::Object(by_kind_value),
+        "latency_ms_p50": percentile(&all_latencies, 50),
+        "latency_ms_p95": percentile(&all_latencies, 95),
+        "false_family_selections": false_family_selections,
+    });
+
+    let results = serde_json::json!({
+        "schema_version": PRODUCT_EVAL_RESULTS_SCHEMA,
+        "repogrammar_commit": commit,
+        "platform": { "os": env::consts::OS, "arch": env::consts::ARCH },
+        "corpus_schema_version": PRODUCT_EVAL_CORPUS_SCHEMA,
+        "corpus_path": corpus_relative_path(root, &corpus_absolute, corpus_path),
+        "repetitions": repetitions,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "fixtures": fixture_results,
+        "results": query_results,
+        "summary": summary,
+    });
+
+    let out_dir_absolute = if Path::new(out_dir).is_absolute() {
+        PathBuf::from(out_dir)
+    } else {
+        root.join(out_dir)
+    };
+    fs::create_dir_all(&out_dir_absolute)
+        .map_err(|_| "could not create output directory".to_string())?;
+    let out_file = out_dir_absolute.join("product-eval-results.json");
+    let serialized = serde_json::to_string_pretty(&results)
+        .map_err(|_| "could not serialize product-eval results".to_string())?;
+    fs::write(&out_file, format!("{serialized}\n"))
+        .map_err(|_| "could not write product-eval results file".to_string())?;
+
+    let mut report = String::new();
+    report.push_str(&format!(
+        "product-eval corpus {} at commit {} ({} repetitions)\n",
+        corpus_relative_path(root, &corpus_absolute, corpus_path),
+        commit,
+        repetitions
+    ));
+    report.push_str(&format!(
+        "{:<34}{:<22}{:<10}{:>8}\n",
+        "query_id", "kind", "verdict", "p50_ms"
+    ));
+    for (query_id, kind, verdict, query_p50) in &table_rows {
+        report.push_str(&format!(
+            "{query_id:<34}{kind:<22}{verdict:<10}{query_p50:>8}\n"
+        ));
+    }
+    report.push_str(&format!(
+        "summary: {total} queries, {matches} match, {mismatches} mismatch | p50 {}ms p95 {}ms | false_family_selections {false_family_selections}\n",
+        percentile(&all_latencies, 50),
+        percentile(&all_latencies, 95),
+    ));
+    Ok(report)
 }
 
 fn run_check(root: &Path) -> CommandResult {
@@ -5172,5 +6278,263 @@ verify-stable-release-evidence --evidence-dir evidence
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(path, contents).expect("write file");
+    }
+
+    #[test]
+    fn product_eval_corpus_parses_minimal_document() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "src/fixtures/x", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_family_id",
+                "operation": "family",
+                "target": "family:python:fastapi_route:framework_fastapi_route",
+                "mode": "compact",
+                "expected": {
+                    "outcome": "ok",
+                    "family": "family:python:fastapi_route:framework_fastapi_route"
+                }
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&value).expect("corpus parses");
+        assert_eq!(corpus.fixtures.len(), 1);
+        assert_eq!(corpus.queries.len(), 1);
+        assert_eq!(corpus.queries[0].operation, EvalOperation::Family);
+        assert_eq!(corpus.queries[0].expected.outcome, Some(EvalOutcome::Ok));
+        assert!(corpus.queries[0].mutation.is_none());
+    }
+
+    #[test]
+    fn product_eval_corpus_rejects_unknown_schema_version() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v2",
+            "fixtures": [],
+            "queries": []
+        });
+        assert!(EvalCorpus::from_value(&value).is_err());
+    }
+
+    #[test]
+    fn product_eval_corpus_rejects_query_for_unknown_fixture() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "missing",
+                "kind": "exact_path",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        assert!(EvalCorpus::from_value(&value).is_err());
+    }
+
+    #[test]
+    fn product_eval_status_classifier_is_deterministic() {
+        assert_eq!(EvalOutcome::classify_status("ok"), EvalOutcome::Ok);
+        assert_eq!(
+            EvalOutcome::classify_status("CONTEXT_ONLY"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("PARTIAL_CONTEXT"),
+            EvalOutcome::PartialContext
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("UNKNOWN"),
+            EvalOutcome::Unknown
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("SOMETHING_ELSE"),
+            EvalOutcome::Fallback
+        );
+    }
+
+    fn sample_found_actual() -> EvalActual {
+        EvalActual {
+            outcome: EvalOutcome::Ok,
+            route: Some("discover_hydrate_compose".to_string()),
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_count: 1,
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            unknown_reason: None,
+            active_generation: Some("gen-000002".to_string()),
+        }
+    }
+
+    #[test]
+    fn product_eval_matcher_accepts_found_expectation() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let (is_match, fields) = evaluate_match(&expected, &sample_found_actual());
+        assert!(is_match);
+        assert!(fields.is_empty());
+        assert!(!is_false_family_selection(
+            &expected,
+            &sample_found_actual()
+        ));
+    }
+
+    #[test]
+    fn product_eval_matcher_flags_wrong_family_as_false_selection() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let actual = EvalActual {
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let (is_match, fields) = evaluate_match(&expected, &actual);
+        assert!(!is_match);
+        assert_eq!(fields, vec!["family_prefix".to_string()]);
+        assert!(is_false_family_selection(&expected, &actual));
+    }
+
+    #[test]
+    fn product_eval_matcher_supports_any_of_and_unconstrained_fields() {
+        let actual = EvalActual {
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let any_of = EvalExpected {
+            family_any_of: Some(vec![
+                "family:python:sqlalchemy_model".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ]),
+            ..EvalExpected::default()
+        };
+        let (is_match, _) = evaluate_match(&any_of, &actual);
+        assert!(is_match);
+
+        let unconstrained = EvalExpected::default();
+        let (is_match, fields) = evaluate_match(&unconstrained, &actual);
+        assert!(is_match);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn product_eval_matcher_enforces_unknown_reason_constraint() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            unknown_reason: Some("StaleEvidence".to_string()),
+            route: Some("exact_lookup_unknown".to_string()),
+            ..EvalExpected::default()
+        };
+        let stale = EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("exact_lookup_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            unknown_reason: Some("StaleEvidence".to_string()),
+            active_generation: Some("gen-000002".to_string()),
+        };
+        let (is_match, _) = evaluate_match(&expected, &stale);
+        assert!(is_match);
+        assert!(!is_false_family_selection(&expected, &stale));
+
+        let wrong = EvalActual {
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            ..stale
+        };
+        let (is_match, fields) = evaluate_match(&expected, &wrong);
+        assert!(!is_match);
+        assert!(fields.contains(&"unknown_reason".to_string()));
+    }
+
+    #[test]
+    fn product_eval_fixture_hash_is_order_independent() {
+        let first = TempRoot::new("eval-hash-a");
+        write_file(first.path().join("sub/one.py"), b"alpha");
+        write_file(first.path().join("two.py"), b"beta");
+
+        let second = TempRoot::new("eval-hash-b");
+        write_file(second.path().join("two.py"), b"beta");
+        write_file(second.path().join("sub/one.py"), b"alpha");
+
+        let first_hash = fixture_version_hash(first.path()).expect("hash first");
+        let second_hash = fixture_version_hash(second.path()).expect("hash second");
+        assert_eq!(first_hash, second_hash);
+
+        write_file(second.path().join("two.py"), b"beta-changed");
+        let changed_hash = fixture_version_hash(second.path()).expect("hash changed");
+        assert_ne!(first_hash, changed_hash);
+    }
+
+    #[test]
+    fn product_eval_time_and_percentile_helpers_are_deterministic() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_utc(1_600_000_000), "2020-09-13T12:26:40Z");
+        assert_eq!(percentile(&[], 50), 0);
+        assert_eq!(percentile(&[5u128], 95), 5);
+        assert_eq!(percentile(&[10u128, 20, 30], 50), 20);
+        assert_eq!(percentile(&[10u128, 20, 30, 40], 95), 40);
+    }
+
+    #[test]
+    fn product_eval_result_entry_round_trips_required_fields() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let actual = EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("discovery_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            active_generation: Some("gen-000002".to_string()),
+        };
+        let (is_match, mismatch_fields) = evaluate_match(&expected, &actual);
+        let entry = serde_json::json!({
+            "query_id": "py-nl-fastapi-routes",
+            "fixture_id": "python-v0_1",
+            "kind": "nl_pattern_question",
+            "operation": "find",
+            "target": "How are FastAPI routes implemented?",
+            "expected": expected.to_value(),
+            "actual": actual.to_value(),
+            "match": is_match,
+            "mismatch_fields": mismatch_fields,
+            "latency_ms_all_reps": [10u128, 12, 11],
+            "latency_ms_p50": percentile(&[10u128, 12, 11], 50),
+        });
+        let serialized = serde_json::to_string(&entry).expect("serialize entry");
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse entry");
+        assert_eq!(parsed["match"], false);
+        assert_eq!(parsed["actual"]["outcome"], "unknown");
+        assert!(parsed["actual"]["selected_family"].is_null());
+        assert_eq!(parsed["actual"]["candidate_family_count"], 0);
+        assert_eq!(parsed["actual"]["unknown_reason"], "InsufficientSupport");
+        assert_eq!(
+            parsed["expected"]["family_prefix"],
+            "family:python:fastapi_route"
+        );
+        assert_eq!(parsed["latency_ms_p50"], 11);
+        assert!(parsed["mismatch_fields"]
+            .as_array()
+            .expect("mismatch fields array")
+            .iter()
+            .any(|field| field == "outcome"));
     }
 }

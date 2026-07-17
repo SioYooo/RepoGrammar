@@ -10,6 +10,7 @@ cargo run --quiet --bin repo-guard -- check
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
+cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>]
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
@@ -91,6 +92,22 @@ The diff command compares two Git revisions with `git diff --name-only`. If any
 `src/` path changes, at least one documentation or agent-material path must also
 change. This is a minimum gate, not proof that the documentation is semantically
 complete.
+
+## product-eval
+
+`product-eval` is the deterministic product-core evaluation harness. It is
+report-only measurement infrastructure separate from the release gates: it
+changes no production behavior and never modifies the real repository. Given a
+committed query corpus (`--corpus`) it indexes each fixture in an isolated
+temporary workspace, drives the product binary through the corpus queries, and
+writes `product-eval-results.json` under `--out`. `--repetitions` (default 3)
+sets per-query latency samples and `--bin` overrides the product binary
+(otherwise the sibling `repogrammar` next to `repo-guard` is used). Mismatches
+are baseline data, so the command exits `0` on completion and nonzero only on a
+harness error such as a missing binary, an unparseable corpus, a subprocess
+failure, or non-JSON query output. The corpus, result schema, and current
+baseline reading are documented in
+`docs/experiments/product-core-baseline.md`.
 
 ## smoke-packaged-artifact
 
