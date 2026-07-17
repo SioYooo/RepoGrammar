@@ -7,9 +7,9 @@ use crate::core::model::{
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily, FamilyStore,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedVariationSlotRecord, StoreError,
+    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
+    ActiveFamilySearchSummaries, FamilyStore, IndexedFamilyEvidenceRecord,
+    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     GenerationHandle, GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore,
@@ -141,6 +141,17 @@ pub fn list_active_families(
     store: &(impl FamilyStore + ?Sized),
 ) -> Result<ActiveFamilies, RepoGrammarError> {
     store.list_active_families().map_err(family_store_error)
+}
+
+/// Read the bounded, source-free searchable-metadata projection of every active
+/// family. Substrate for deterministic term-based retrieval; not yet routed into
+/// the production fuzzy lookup path.
+pub fn list_active_family_search_summaries(
+    store: &(impl FamilyStore + ?Sized),
+) -> Result<ActiveFamilySearchSummaries, RepoGrammarError> {
+    store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)
 }
 
 pub fn show_family(
@@ -559,8 +570,9 @@ mod tests {
     use crate::core::model::ContentHash;
     use crate::ports::family_store::{
         ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
-        ActiveFamilySummaries, IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
-        IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+        ActiveFamilySearchSummaries, ActiveFamilySummaries, IndexedFamilyCandidateRecord,
+        IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord,
+        IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedFamilySearchSummaryRecord,
         IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
     };
     use crate::ports::index_store::{
@@ -782,6 +794,24 @@ mod tests {
             })
         }
 
+        fn list_active_family_search_summaries(
+            &self,
+        ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+            Ok(ActiveFamilySearchSummaries {
+                generation_id: "gen-000001".to_string(),
+                families: vec![IndexedFamilySearchSummaryRecord {
+                    family_id: family().family_id,
+                    language: "typescript".to_string(),
+                    code_unit_kind: "module".to_string(),
+                    framework_role: family_member().role,
+                    classification: family().classification,
+                    support: 1,
+                    prevalence: family().prevalence,
+                    evidence_path_components: vec!["a.ts".to_string(), "src".to_string()],
+                }],
+            })
+        }
+
         fn find_active_families_by_member(
             &self,
             code_unit_id: &str,
@@ -982,6 +1012,25 @@ mod tests {
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
         assert_eq!(active_families.families, vec![family()]);
         assert_eq!(active_family.members, vec![family_member()]);
+    }
+
+    #[test]
+    fn family_search_summaries_delegate_through_storage_port() {
+        let store = FakeStore;
+        let summaries =
+            list_active_family_search_summaries(&store).expect("list family search summaries");
+
+        assert_eq!(summaries.generation_id, "gen-000001");
+        assert_eq!(summaries.families.len(), 1);
+        let summary = &summaries.families[0];
+        assert_eq!(summary.family_id, family().family_id);
+        assert_eq!(summary.language, "typescript");
+        assert_eq!(summary.framework_role, family_member().role);
+        assert_eq!(summary.support, 1);
+        assert_eq!(
+            summary.evidence_path_components,
+            vec!["a.ts".to_string(), "src".to_string()]
+        );
     }
 
     #[test]

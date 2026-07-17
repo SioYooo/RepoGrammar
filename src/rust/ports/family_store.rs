@@ -106,6 +106,42 @@ pub struct ActiveFamilyEvidenceProjection {
     pub rows: Vec<IndexedFamilyEvidenceProjectionRecord>,
 }
 
+/// Maximum distinct repo-relative path components retained per family in the
+/// searchable-metadata projection. Bounds the projection so a family with many
+/// evidence files cannot contribute an unbounded token set.
+pub const FAMILY_SEARCH_PATH_COMPONENT_CAP: usize = 16;
+
+/// One row of the bounded active-generation family searchable-metadata
+/// projection. Carries only source-free structural metadata a deterministic,
+/// dependency-free retrieval layer can rank on: identity, language, code-unit
+/// kind, framework role, prevalence classification, support count, prevalence,
+/// and a bounded set of repo-relative evidence-path components. It never carries
+/// source text, comments, snippets, raw queries, or absolute paths.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedFamilySearchSummaryRecord {
+    pub family_id: String,
+    pub language: String,
+    pub code_unit_kind: String,
+    pub framework_role: String,
+    pub classification: String,
+    pub support: usize,
+    pub prevalence: FamilyPrevalence,
+    /// Distinct repo-relative path segments (ancestor directory components and
+    /// basenames) drawn from this family's evidence paths, deterministically
+    /// ordered and capped at [`FAMILY_SEARCH_PATH_COMPONENT_CAP`].
+    pub evidence_path_components: Vec<String>,
+}
+
+/// Bounded projection of every active-generation family's searchable metadata. A
+/// single store read backs deterministic term-based retrieval so discovery stays
+/// bounded by the number of active families rather than an unbounded per-family
+/// hydration loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveFamilySearchSummaries {
+    pub generation_id: String,
+    pub families: Vec<IndexedFamilySearchSummaryRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     Unavailable(String),
@@ -153,6 +189,17 @@ pub trait FamilyStore {
     fn list_active_family_evidence_projection(
         &self,
     ) -> Result<ActiveFamilyEvidenceProjection, StoreError>;
+
+    /// Returns one bounded, source-free projection of every active-generation
+    /// family's searchable metadata: identity, language, code-unit kind,
+    /// framework role, prevalence classification, support count, prevalence, and
+    /// bounded repo-relative evidence-path components. Deterministic (`family_id`
+    /// byte order) and generation-consistent, mirroring the evidence projection.
+    /// Backs deterministic term-based family retrieval; it is not yet routed into
+    /// the production fuzzy lookup path.
+    fn list_active_family_search_summaries(
+        &self,
+    ) -> Result<ActiveFamilySearchSummaries, StoreError>;
 
     fn find_active_families_by_member(
         &self,

@@ -4515,8 +4515,9 @@ mod tests {
     };
     use crate::ports::family_store::{
         ActiveFamilies, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
-        ActiveFamilySummaries, IndexedFamilyCandidateRecord, IndexedFamilyRecord,
-        IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
+        ActiveFamilySearchSummaries, ActiveFamilySummaries, IndexedFamilyCandidateRecord,
+        IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
+        IndexedVariationSlotRecord, FAMILY_SEARCH_PATH_COMPONENT_CAP,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -4889,6 +4890,49 @@ mod tests {
             Ok(ActiveFamilyEvidenceProjection {
                 generation_id: self.active.generation_id.clone(),
                 rows,
+            })
+        }
+
+        fn list_active_family_search_summaries(
+            &self,
+        ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+            let families = self
+                .families
+                .iter()
+                .map(|family| {
+                    let mut components = BTreeSet::new();
+                    for evidence in &family.evidence {
+                        for segment in evidence.path.split('/') {
+                            if !segment.is_empty() {
+                                components.insert(segment.to_string());
+                            }
+                        }
+                    }
+                    IndexedFamilySearchSummaryRecord {
+                        family_id: family.family.family_id.clone(),
+                        // The read-only query fake carries no code-unit language
+                        // or kind; the search projection derives them from the
+                        // store adapter, so the fake leaves them empty.
+                        language: String::new(),
+                        code_unit_kind: String::new(),
+                        framework_role: family
+                            .members
+                            .first()
+                            .map(|member| member.role.clone())
+                            .unwrap_or_default(),
+                        classification: family.family.classification.clone(),
+                        support: family.members.len(),
+                        prevalence: family.family.prevalence.clone(),
+                        evidence_path_components: components
+                            .into_iter()
+                            .take(FAMILY_SEARCH_PATH_COMPONENT_CAP)
+                            .collect(),
+                    }
+                })
+                .collect();
+            Ok(ActiveFamilySearchSummaries {
+                generation_id: self.active.generation_id.clone(),
+                families,
             })
         }
 

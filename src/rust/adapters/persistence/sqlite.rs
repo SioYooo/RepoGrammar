@@ -10,10 +10,11 @@ use crate::core::model::{
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
-    ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySummaries, FamilyStore,
-    IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedFamilySummaryRecord, IndexedVariationSlotRecord, StoreError,
+    ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySearchSummaries,
+    ActiveFamilySummaries, FamilyStore, IndexedFamilyCandidateRecord,
+    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
+    IndexedVariationSlotRecord, StoreError, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -1516,6 +1517,20 @@ impl FamilyStore for SqliteIndexStore {
         })
     }
 
+    fn list_active_family_search_summaries(
+        &self,
+    ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        let families = query_family_search_summaries(&connection, &generation_id)
+            .map_err(family_store_error)?;
+        Ok(ActiveFamilySearchSummaries {
+            generation_id,
+            families,
+        })
+    }
+
     fn find_active_families_by_member(
         &self,
         code_unit_id: &str,
@@ -2828,6 +2843,154 @@ fn query_family_evidence_projection(
         });
     }
     Ok(projection)
+}
+
+fn query_family_search_summaries(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFamilySearchSummaryRecord>, IndexStoreError> {
+    // One bounded, source-free projection of every active family's searchable
+    // metadata. Language, code-unit kind, and framework role are uniform across a
+    // family's members by construction (they are part of the family key), so
+    // aggregating them with MIN yields their single deterministic value while the
+    // join stays a single statement. Support counts distinct members; a
+    // correlated subquery collects the family's distinct evidence paths joined by
+    // newlines (a separator no repo-relative path may contain) so in-memory
+    // shaping can split them without ambiguity.
+    let mut statement = connection
+        .prepare(
+            "SELECT families.family_id, families.classification, families.eligible_peer_count, \
+                    families.supported_member_count, families.coverage_ratio, \
+                    families.competing_ready_family_count, families.largest_competing_support, \
+                    families.blocked_peer_count, families.unsupported_peer_count, \
+                    families.classification_reason, \
+                    MIN(code_units.language), MIN(code_units.kind), MIN(family_members.role), \
+                    COUNT(DISTINCT family_members.code_unit_id), \
+                    ( \
+                        SELECT group_concat(component, char(10)) FROM ( \
+                            SELECT DISTINCT evidence.path AS component \
+                            FROM evidence \
+                            WHERE evidence.generation_id = ?1 \
+                              AND evidence.family_id = families.family_id \
+                            ORDER BY evidence.path COLLATE BINARY \
+                        ) \
+                    ) \
+             FROM families \
+             JOIN family_members \
+               ON family_members.generation_id = families.generation_id \
+              AND family_members.family_id = families.family_id \
+             JOIN code_units \
+               ON code_units.generation_id = family_members.generation_id \
+              AND code_units.code_unit_id = family_members.code_unit_id \
+             WHERE families.generation_id = ?1 \
+             GROUP BY families.family_id, families.classification, \
+                      families.eligible_peer_count, families.supported_member_count, \
+                      families.coverage_ratio, families.competing_ready_family_count, \
+                      families.largest_competing_support, families.blocked_peer_count, \
+                      families.unsupported_peer_count, families.classification_reason \
+             ORDER BY families.family_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, Option<String>>(14)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut summaries = Vec::new();
+    for row in rows {
+        let (
+            family_id,
+            classification,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+            language,
+            code_unit_kind,
+            framework_role,
+            support,
+            evidence_paths,
+        ) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored family id", &family_id)?;
+        validate_stored_family_classification(&classification)?;
+        validate_stored_semantic_text_field("stored family language", &language)?;
+        validate_stored_semantic_text_field("stored family code unit kind", &code_unit_kind)?;
+        validate_stored_semantic_text_field("stored family role", &framework_role)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
+        let support = usize::try_from(support).map_err(|_| {
+            IndexStoreError::InvalidState("stored family support is invalid".to_string())
+        })?;
+        let evidence_path_components =
+            stored_family_search_path_components(evidence_paths.as_deref())?;
+        summaries.push(IndexedFamilySearchSummaryRecord {
+            family_id,
+            language,
+            code_unit_kind,
+            framework_role,
+            classification,
+            support,
+            prevalence,
+            evidence_path_components,
+        });
+    }
+    Ok(summaries)
+}
+
+/// Shape the newline-joined distinct evidence paths of one family into a bounded,
+/// deterministically ordered set of repo-relative path segments (ancestor
+/// directory components and basenames). Never emits absolute paths or source
+/// text: every source path is validated as repo-relative before splitting.
+fn stored_family_search_path_components(
+    evidence_paths: Option<&str>,
+) -> Result<Vec<String>, IndexStoreError> {
+    let mut components = std::collections::BTreeSet::new();
+    for path in evidence_paths
+        .into_iter()
+        .flat_map(|joined| joined.split('\n'))
+    {
+        if path.is_empty() {
+            continue;
+        }
+        validate_stored_repo_relative_path(path, "stored family evidence path")?;
+        for segment in path.split('/') {
+            if !segment.is_empty() {
+                components.insert(segment.to_string());
+            }
+        }
+    }
+    Ok(components
+        .into_iter()
+        .take(FAMILY_SEARCH_PATH_COMPONENT_CAP)
+        .collect())
 }
 
 fn query_indexed_files(
@@ -5446,6 +5609,60 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn family_search_summaries_project_bounded_source_free_metadata() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-search-summaries");
+
+        let summaries = store
+            .list_active_family_search_summaries()
+            .expect("list family search summaries");
+
+        assert_eq!(summaries.generation_id, generation.generation_id);
+        assert_eq!(
+            summaries.families,
+            vec![IndexedFamilySearchSummaryRecord {
+                family_id: family().family_id,
+                language: "typescript".to_string(),
+                code_unit_kind: "module".to_string(),
+                framework_role: "member".to_string(),
+                classification: family().classification,
+                support: 2,
+                prevalence: family().prevalence,
+                // Distinct segments of "src/a.ts" and "src/b.ts", sorted.
+                evidence_path_components: vec![
+                    "a.ts".to_string(),
+                    "b.ts".to_string(),
+                    "src".to_string(),
+                ],
+            }]
+        );
+
+        // Source-freedom: no component may be absolute, a URL, or a source line.
+        for family in &summaries.families {
+            for component in &family.evidence_path_components {
+                assert!(
+                    !component.starts_with('/'),
+                    "absolute component: {component}"
+                );
+                assert!(!component.contains("://"), "url component: {component}");
+                assert!(
+                    !component.contains('/'),
+                    "unsplit path component: {component}"
+                );
+                assert!(
+                    !component.contains('{')
+                        && !component.contains('}')
+                        && !component.contains("=>")
+                        && !component.contains(';'),
+                    "source-like component: {component}"
+                );
+            }
+        }
+        let rendered = format!("{summaries:?}");
+        assert!(!rendered.contains("const secret"));
     }
 
     #[test]
