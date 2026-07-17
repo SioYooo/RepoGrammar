@@ -2,16 +2,29 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Fixed
+
+- Isolated every public npm launcher finalizer lane in its own external working
+  directory. Post-public finalizer run `29587973589` verified the immutable
+  GitHub release, public npm metadata and provenance, the packaged native
+  product, and the public installer, but its launcher step ran from the
+  checked-out repository root. npm treated that root's same-name
+  `package.json` as the current package without injecting the public package's
+  `repogrammar` bin, so the run failed before emitting `STABLE_RELEASE_READY`.
+  The corrected workflow is dispatched from `main`, checks out the immutable
+  `v0.2.2` source, and remains bound to candidate run `29586694524`, attempt 1.
 
 ## 0.2.2 — 2026-07-17 stable channel
 
-RepoGrammar `0.2.2` is the patch-forward stable-channel candidate intended to
-become the first published stable-channel pre-1.0 release. It makes no
+RepoGrammar `0.2.2` is the patch-forward first published stable-channel pre-1.0
+release. It makes no
 production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
 measured-token-savings, Windows-support, or expanded-language-support claim.
-Registry availability must be verified independently; this source record does
-not prove that GitHub or npm publication completed.
+This source record does not establish finalizer success by itself. Finalizer
+run `29587973589` verified the public GitHub/npm, provenance, packaged-native,
+and installer gates before the isolated npm launcher gate exposed the
+working-directory bug recorded under Unreleased; that attempt did not emit the
+final stable verdict.
 
 ### Changed
 

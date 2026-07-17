@@ -995,6 +995,24 @@ setup dry run alone are not a finalizer. Native-agent integration and fresh
 coding-agent instruction behavior remain separate isolated pre-release/manual
 evidence rather than automatic finalizer evidence.
 
+Public npm launcher smoke must create separate external `pinned`, `latest`, and
+`preview` work directories and enter the selected lane's work directory inside
+a child shell before invoking `npx`. Separate HOME/cache/PATH values alone are
+insufficient if the command still runs from the checked-out RepoGrammar root:
+the same-name root `package.json` can cause npm to skip injecting the requested
+public package's bin. The installer shell contract test locks the three work
+directories, the dynamic lane `cd`, and the child-shell boundary.
+It also locks the `${RUNNER_TEMP}` root and the workflow's visible rejection of
+verifier definitions dispatched from a ref other than `main`.
+
+The first post-public finalizer run, `29587973589`, was bound to candidate run
+`29586694524`, attempt 1. It passed immutable GitHub release, public npm
+metadata/provenance, packaged-native, and public-installer checks, then failed
+the launcher smoke with the root-working-directory behavior above and did not
+emit `STABLE_RELEASE_READY`. A corrected finalizer is dispatched from `main`
+while checking out immutable `v0.2.2`; this changes verifier orchestration only,
+not the release source, artifacts, or candidate-run identity.
+
 - Fresh checkout smoke: clone the current checkout into `/tmp` and run a small
   Cargo product smoke such as `cargo test --workspace --all-features
   version_succeeds`. Use `git clone --no-hardlinks` when the local filesystem

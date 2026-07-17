@@ -25,6 +25,11 @@ jobs:
     name: Verify immutable GitHub and npm release evidence
     runs-on: ubuntu-latest
     steps:
+      - name: Reject non-main verifier definitions
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "stable finalization must be dispatched from main" >&2
+          exit 1
       - uses: actions/checkout@v7
         with:
           ref: v0.2.2
@@ -179,9 +184,12 @@ jobs:
             "${tool_bin}" \
             "${smoke_root}/pinned/home" \
             "${smoke_root}/pinned/project" \
+            "${smoke_root}/pinned/work" \
             "${smoke_root}/latest/home" \
             "${smoke_root}/latest/project" \
-            "${smoke_root}/preview/home"
+            "${smoke_root}/latest/work" \
+            "${smoke_root}/preview/home" \
+            "${smoke_root}/preview/work"
           for tool in node npm npx python3 sh bash tar gzip uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
             tool_path="$(command -v "${tool}")"
             ln -s "${tool_path}" "${tool_bin}/${tool}"
@@ -193,16 +201,19 @@ jobs:
           run_npx() {
             local lane="$1"
             shift
-            HOME="${smoke_root}/${lane}/home" \
-            USERPROFILE="${smoke_root}/${lane}/home" \
-            XDG_CONFIG_HOME="${smoke_root}/${lane}/home/.config" \
-            XDG_DATA_HOME="${smoke_root}/${lane}/home/.local/share" \
-            XDG_CACHE_HOME="${smoke_root}/${lane}/home/.cache" \
-            CODEX_HOME="${smoke_root}/${lane}/home/.codex" \
-            npm_config_cache="${smoke_root}/${lane}/npm-cache" \
-            REPOGRAMMAR_NPM_CACHE_DIR="${smoke_root}/${lane}/binary-cache" \
-            PATH="${tool_bin}" \
-            npx --yes "$@"
+            (
+              cd "${smoke_root}/${lane}/work"
+              HOME="${smoke_root}/${lane}/home" \
+              USERPROFILE="${smoke_root}/${lane}/home" \
+              XDG_CONFIG_HOME="${smoke_root}/${lane}/home/.config" \
+              XDG_DATA_HOME="${smoke_root}/${lane}/home/.local/share" \
+              XDG_CACHE_HOME="${smoke_root}/${lane}/home/.cache" \
+              CODEX_HOME="${smoke_root}/${lane}/home/.codex" \
+              npm_config_cache="${smoke_root}/${lane}/npm-cache" \
+              REPOGRAMMAR_NPM_CACHE_DIR="${smoke_root}/${lane}/binary-cache" \
+              PATH="${tool_bin}" \
+              npx --yes "$@"
+            )
           }
           run_npx pinned --package @sioyooo/repogrammar@0.2.2 \
             repogrammar version > evidence/pinned-version.txt

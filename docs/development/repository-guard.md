@@ -139,6 +139,16 @@ native-smoke success line; and truthful pinned/latest live setup JSON.
 Historical optional setup dry-run evidence is accepted only when it remains
 truthful.
 
+Each public npm launcher lane (`pinned`, `latest`, and `preview`) must execute
+from its own external `${RUNNER_TEMP}` work directory, with its own HOME, npm
+cache, binary cache, and tool-only PATH. The launcher helper changes directory
+inside a child shell so one lane cannot change the workflow step's ambient
+directory. Running `npx --package` from the checked-out RepoGrammar root is not
+valid evidence: npm can treat the root's same-name `package.json` as the current
+package without injecting the fetched public package's `repogrammar` bin. The
+guard locks the `${RUNNER_TEMP}` root and rejects verifier definitions
+dispatched from a ref other than `main`.
+
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified
 `@sioyooo/repogrammar@0.2.2` entry from the exact registry and exactly one SLSA
@@ -238,8 +248,13 @@ compare it with the retained candidate, and either continue or reject it with
 Release immutability remains a maintainer preflight before tag creation. The
 read-only finalizer needs no long-lived admin token: the public release API plus
 `gh release verify` and every `gh release verify-asset` result are the release
-evidence. Expired retained artifacts, unavailable attestations, absent
-provenance, or a failed public smoke prevents `STABLE_RELEASE_READY`.
+evidence. The corrected post-public finalizer definition is dispatched from
+`main`, but its checkout remains pinned to immutable `v0.2.2` and its evidence
+remains bound to candidate run `29586694524`, attempt 1. Updating verifier
+orchestration therefore does not move the tag, rebuild release artifacts, or
+replace publication authority. Expired retained artifacts, unavailable
+attestations, absent provenance, or a failed public smoke prevents
+`STABLE_RELEASE_READY`.
 
 ## Exit codes
 
@@ -270,7 +285,8 @@ assets. The guard requires both the positive draft-collision query contract and
 the rejection of runner-incompatible `--slurp` plus `--jq` usage. The stable
 finalizer projects the selected run attempt into eight
 canonical fields, verifies the public npm pack before any public product
-execution, and delegates the final verdict to `repo-guard`. Manual verification
+execution, runs each public npm channel from a separate external lane working
+directory, and delegates the final verdict to `repo-guard`. Manual verification
 uses `release-dist-tag-action` against public tags and the complete inventory;
 stable requires exact
 `latest=0.2.2`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
