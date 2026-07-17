@@ -4,6 +4,24 @@
 
 ### Changed
 
+- Stabilized semantic family identity (pre-1.0 breaking change to the family-id
+  format for multi-cluster keys). A `FamilyKey` with two or more ready clusters
+  now gives every cluster a `v{hex}` suffix derived from the cluster's
+  characteristic profile (the feature values the role requires equal across
+  members), so no cluster holds the bare base id and adding a path-earlier file
+  can no longer silently re-point it; single-ready-cluster keys keep their bare
+  base id unchanged. Sibling clusters that share a characteristic profile are
+  distinguished by their shared support-family core, then by a deterministic
+  positional ordinal (recorded as classification-independent metadata) for
+  genuinely indistinguishable clusters, and lossy `stable_token` base-id
+  collisions across distinct keys are disambiguated deterministically with
+  uniqueness asserted at build time. The legacy membership-union `cluster_...`
+  suffix is replaced. Run `repogrammar resync` after upgrading so stored family
+  ids for multi-cluster keys are rewritten to the new format. Sync and resync
+  JSON now also report `families_added` and `families_removed` (bounded, sorted
+  samples plus counts) by diffing the base and new generations' family-id sets;
+  they are `null` when there is no base generation or the sync did not recompute
+  families.
 - Separated family support from dominance. Minimum support no longer implies a
   `DOMINANT_PATTERN` label: every emitted family now carries an evidence-backed
   `FamilyPrevalence` record (eligible/blocked/unsupported peer counts, coverage

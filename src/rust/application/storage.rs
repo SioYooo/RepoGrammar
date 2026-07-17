@@ -137,7 +137,9 @@ pub fn record_family_evidence(
         .map_err(family_store_error)
 }
 
-pub fn list_active_families(store: &impl FamilyStore) -> Result<ActiveFamilies, RepoGrammarError> {
+pub fn list_active_families(
+    store: &(impl FamilyStore + ?Sized),
+) -> Result<ActiveFamilies, RepoGrammarError> {
     store.list_active_families().map_err(family_store_error)
 }
 

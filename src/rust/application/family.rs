@@ -23,6 +23,7 @@ use crate::ports::family_store::{
     IndexedVariationSlotRecord,
 };
 use crate::ports::index_store::IndexedCodeUnitRecord;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
@@ -177,6 +178,31 @@ struct KeyPeerCounters {
     unsupported: usize,
 }
 
+/// The stable suffix pre-assigned to one cluster of a key. `token` is the
+/// cluster-suffix token (a characteristic-profile hash) or `None` when the key
+/// has at most one ready cluster and keeps the bare base id. `positional_ordinal`
+/// is set only when two ready clusters are genuinely indistinguishable and a
+/// deterministic positional discriminator was required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClusterSuffix {
+    token: Option<String>,
+    positional_ordinal: Option<usize>,
+}
+
+/// A fully clustered key held between suffix assignment and claim emission so
+/// cross-key base-id collisions can be resolved before any id is minted.
+struct KeyEmissionPlan {
+    key: FamilyKey,
+    clusters: Vec<Vec<FamilyEvidence>>,
+    cluster_sizes: Vec<usize>,
+    ready_flags: Vec<bool>,
+    ready_cluster_count: usize,
+    min_support: usize,
+    eligible_peer_count: usize,
+    peers: KeyPeerCounters,
+    suffixes: Vec<ClusterSuffix>,
+}
+
 impl<'a> FamilyClaimInput<'a> {
     pub fn from_facts(units: &'a [IndexedCodeUnitRecord], facts: &[SemanticFact]) -> Self {
         let mut role_facts = Vec::new();
@@ -302,7 +328,11 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         });
     }
 
-    let mut claims = Vec::new();
+    // Phase 1: cluster every key and pre-assign each cluster's stable suffix
+    // (a characteristic-profile hash) before any id is minted. Suffixes depend
+    // only on a cluster's own identity profile, never on emission order, so
+    // adding a member or an unrelated file cannot re-point an id.
+    let mut plans: Vec<KeyEmissionPlan> = Vec::new();
     for (key, mut evidence) in groups {
         evidence.sort_by(|left, right| {
             (
@@ -341,23 +371,64 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             .map(|size| *size >= min_support)
             .collect();
         let ready_cluster_count = ready_flags.iter().filter(|ready| **ready).count();
-        let mut emitted_ready_clusters = 0usize;
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features_by_unit);
+        plans.push(KeyEmissionPlan {
+            key,
+            clusters,
+            cluster_sizes,
+            ready_flags,
+            ready_cluster_count,
+            min_support,
+            eligible_peer_count,
+            peers,
+            suffixes,
+        });
+    }
+
+    // Phase 2: a lossy `stable_token` can map two distinct keys onto the same
+    // bare base id. Only keys with exactly one ready cluster ever mint a bare
+    // base id, so collisions are decided among those and disambiguated with a
+    // deterministic key hash rather than failing the build.
+    let disambiguators = bare_base_id_disambiguators(
+        &plans
+            .iter()
+            .filter(|plan| plan.ready_cluster_count == 1)
+            .map(|plan| &plan.key)
+            .collect::<Vec<_>>(),
+    );
+
+    // Phase 3: mint claims and sub-support unknowns from the finalized suffixes.
+    let mut claims = Vec::new();
+    for plan in plans {
+        let KeyEmissionPlan {
+            key,
+            clusters,
+            cluster_sizes,
+            ready_flags,
+            ready_cluster_count,
+            min_support,
+            eligible_peer_count,
+            peers,
+            suffixes,
+        } = plan;
+        let base_disambiguator = disambiguators.get(&key).cloned();
         for (index, cluster) in clusters.into_iter().enumerate() {
-            let cluster_suffix = (ready_cluster_count > 1)
-                .then(|| family_cluster_signature(&key, &cluster, &features_by_unit));
+            let suffix_meta = &suffixes[index];
+            // A bare base id is disambiguated only when a stable_token collision
+            // demands it; the common single-ready-cluster case stays unsuffixed.
+            let suffix_token = match suffix_meta.token.clone() {
+                Some(token) => Some(token),
+                None => base_disambiguator.clone(),
+            };
+            let cluster_suffix = suffix_token.as_deref();
             if cluster.len() < min_support {
                 unknowns.push(insufficient_support_unknown(family_affected_claim(
                     &key,
-                    cluster_suffix.as_deref(),
+                    cluster_suffix,
                 )));
                 continue;
             }
-            let suffix = if emitted_ready_clusters == 0 {
-                None
-            } else {
-                cluster_suffix.as_deref()
-            };
-            let normalized_shape = cluster_normalized_shape(&key, suffix);
+            let normalized_shape = cluster_normalized_shape(&key, cluster_suffix);
             // Competitors are the *other* ready clusters of the same key.
             let largest_competing_support = cluster_sizes
                 .iter()
@@ -374,18 +445,43 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
                 blocked_peer_count: peers.blocked,
                 unsupported_peer_count: peers.unsupported,
             };
-            claims.push(family_claim_from_supported_evidence(
+            let mut claim = family_claim_from_supported_evidence(
                 &key,
-                suffix,
+                cluster_suffix,
                 normalized_shape,
                 cluster,
                 &features_by_unit,
                 &non_blocking_unknowns,
                 &prevalence_inputs,
-            ));
-            emitted_ready_clusters += 1;
+            );
+            // Record the positional discriminator (used only when two clusters
+            // are genuinely indistinguishable) as classification-independent
+            // metadata so its use is observable, never silent.
+            if let Some(ordinal) = suffix_meta.positional_ordinal {
+                claim.variation_slots.push(VariationSlot {
+                    slot_id: "slot:family_positional_discriminator".to_string(),
+                    description: format!(
+                        "metadata:family_positional_discriminator:ordinal={ordinal} indistinguishable ready clusters share an identical characteristic and support-family profile"
+                    ),
+                });
+            }
+            claims.push(claim);
         }
     }
+
+    debug_assert!(
+        {
+            let mut ids = claims
+                .iter()
+                .map(|claim| claim.family_id.as_str())
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            let before = ids.len();
+            ids.dedup();
+            ids.len() == before
+        },
+        "family ids must be unique after collision disambiguation"
+    );
 
     claims.sort_by(|left, right| left.family_id.cmp(&right.family_id));
     unknowns.sort_by(|left, right| {
@@ -2854,236 +2950,398 @@ fn non_builtin_pytest_fixture_context(
         .collect()
 }
 
-fn family_cluster_signature(
+/// Pre-assign each cluster of a key its stable suffix before any family id is
+/// minted. A key with at most one ready cluster keeps the bare base id (every
+/// suffix is `None`). A key with two or more ready clusters gives EVERY cluster a
+/// characteristic-profile suffix, so no cluster holds the bare base id and adding
+/// a member (or an unrelated, path-earlier file) can never re-point an id.
+fn assign_cluster_suffixes(
     key: &FamilyKey,
-    cluster: &[FamilyEvidence],
+    clusters: &[Vec<FamilyEvidence>],
+    ready_flags: &[bool],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    if key.language == "python" {
-        return python_cluster_signature(cluster, features_by_unit);
+) -> Vec<ClusterSuffix> {
+    let ready_cluster_count = ready_flags.iter().filter(|ready| **ready).count();
+    if ready_cluster_count <= 1 {
+        return clusters
+            .iter()
+            .map(|_| ClusterSuffix {
+                token: None,
+                positional_ordinal: None,
+            })
+            .collect();
     }
-    if is_tsjs_language_name(&key.language) {
-        return tsjs_cluster_signature(cluster, features_by_unit);
+    // Characteristic profile and support-family core per cluster. Clusters are
+    // non-empty by construction (`complete_link_family_clusters` seeds each with
+    // one member), so `first` always resolves for a real cluster.
+    let profiles: Vec<BTreeSet<String>> = clusters
+        .iter()
+        .map(|cluster| {
+            cluster
+                .first()
+                .map(|representative| {
+                    cluster_characteristic_profile(key, representative, features_by_unit)
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    let cores: Vec<BTreeSet<String>> = clusters
+        .iter()
+        .map(|cluster| cluster_support_family_core(cluster, features_by_unit))
+        .collect();
+    let mut suffixes = Vec::with_capacity(clusters.len());
+    for index in 0..clusters.len() {
+        let profile_matches = profiles
+            .iter()
+            .filter(|profile| **profile == profiles[index])
+            .count();
+        if profile_matches == 1 {
+            // Unique characteristic profile: hash it directly.
+            suffixes.push(ClusterSuffix {
+                token: Some(cluster_suffix_token(key, &profiles[index], None, None)),
+                positional_ordinal: None,
+            });
+            continue;
+        }
+        // Tie on characteristic profile: extend the hashed input with the
+        // support-family core (the values shared by every cluster member).
+        let core_matches = (0..clusters.len())
+            .filter(|other| profiles[*other] == profiles[index] && cores[*other] == cores[index])
+            .count();
+        if core_matches == 1 {
+            suffixes.push(ClusterSuffix {
+                token: Some(cluster_suffix_token(
+                    key,
+                    &profiles[index],
+                    Some(&cores[index]),
+                    None,
+                )),
+                positional_ordinal: None,
+            });
+            continue;
+        }
+        // Genuinely indistinguishable clusters: an identical characteristic
+        // profile AND an identical support-family core. Two distinct clusters can
+        // only share a core when that shared core is empty (any common support
+        // family would make every cross-member pair compatible and merge them),
+        // so this positional fallback fires only for truly ambiguous clusters.
+        let ordinal = (0..index)
+            .filter(|other| profiles[*other] == profiles[index] && cores[*other] == cores[index])
+            .count();
+        suffixes.push(ClusterSuffix {
+            token: Some(cluster_suffix_token(
+                key,
+                &profiles[index],
+                Some(&cores[index]),
+                Some(ordinal),
+            )),
+            positional_ordinal: Some(ordinal),
+        });
     }
-    if key.language == "rust" {
-        return rust_cluster_signature(cluster, features_by_unit);
-    }
-    if key.language == "java" {
-        return java_cluster_signature(cluster, features_by_unit);
-    }
-    if key.language == "csharp" {
-        return csharp_cluster_signature(cluster, features_by_unit);
-    }
-    if is_c_cpp_language(&key.language) {
-        return cpp_cluster_signature(cluster, features_by_unit);
-    }
-    "family_cluster".to_string()
+    suffixes
 }
 
-fn python_cluster_signature(
-    cluster: &[FamilyEvidence],
+/// The cluster's characteristic profile: the full `prefix:value` feature strings
+/// that the role's compatibility rule forces to be equal across every member,
+/// read from a representative member. These values are identical across all
+/// members by construction, so the derived suffix is stable under member
+/// addition or removal as long as the profile itself is unchanged.
+fn cluster_characteristic_profile(
+    key: &FamilyKey,
+    representative: &FamilyEvidence,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "decorator_shape:",
-                "effect_shape:",
-                "call_shape_kind:",
-                "fixture_shape:",
-                "model_shape:",
-                "effect_marker:",
-                "call_shape:",
-                "fixture_context:",
-                "model_context:",
-                "class_base:",
-                "route_path_shape:",
-                "http_method:",
-                "django_field_count_shape:",
-                "django_meta_shape:",
-                "test_method_count_shape:",
-                "unittest_fixture_shape:",
-                "cli_param_count_shape:",
-                "celery_task_shape:",
-            ]
+) -> BTreeSet<String> {
+    let role_feature = prefixed_features(representative, features_by_unit, "framework_role:")
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    // pytest membership turns on the non-builtin fixture context rather than a
+    // raw feature prefix, so mirror that custom compatibility check here.
+    if key.language == "python"
+        && (role_feature == "framework_pytest_test" || role_feature == "framework_pytest_fixture")
+    {
+        return non_builtin_pytest_fixture_context(representative, features_by_unit)
             .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "python_family_cluster".to_string();
+            .map(|value| format!("fixture_context_nonbuiltin:{value}"))
+            .collect();
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    characteristic_profile_prefixes(&key.language, &role_feature)
+        .iter()
+        .flat_map(|prefix| {
+            prefixed_features(representative, features_by_unit, prefix)
+                .into_iter()
+                .map(move |value| format!("{prefix}{value}"))
+        })
+        .collect()
 }
 
-fn tsjs_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "framework_api_anchor:",
-                "route_method:",
-                "route_path_shape:",
-                "http_method:",
-                "handler_shape:",
-                "runner_kind:",
-                "test_shape:",
-                "async_shape:",
-                "zod_builder:",
-                "path_context:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "tsjs_family_cluster".to_string();
+/// The characteristic (identity-defining) feature prefixes for a framework role:
+/// exactly the prefixes whose values `evidence_pair_is_compatible` and its
+/// per-language refinements require to be equal across every member of a cluster
+/// (both the `equal_feature_profiles` and `required_equal_feature_profiles`
+/// prefixes). `framework_role` is the `framework_role:` feature value (the
+/// underscore form matched by those functions). This dispatch mirrors
+/// `evidence_pair_is_compatible`; keep the two in sync.
+fn characteristic_profile_prefixes(
+    language: &str,
+    framework_role: &str,
+) -> &'static [&'static str] {
+    if language == "python" {
+        return python_characteristic_prefixes(framework_role);
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    if is_tsjs_language_name(language) {
+        return tsjs_characteristic_prefixes(framework_role);
+    }
+    if language == "java" {
+        return java_characteristic_prefixes(framework_role);
+    }
+    if language == "csharp" {
+        return csharp_characteristic_prefixes(framework_role);
+    }
+    if is_c_cpp_language(language) {
+        return cpp_characteristic_prefixes(framework_role);
+    }
+    if language == "rust" {
+        return rust_characteristic_prefixes(framework_role);
+    }
+    &[]
 }
 
-fn rust_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "signature_shape:",
-                "visibility_shape:",
-                "arity_shape:",
-                "return_shape:",
-                "attribute_shape:",
-                "error_shape:",
-                "call_shape:",
-                "control_shape:",
-                "test_shape:",
-                "path_context:",
-                "framework_api_anchor:",
-                "serde_attr_shape:",
-                "error_message_shape:",
-                "clap_attr_shape:",
-                "http_method:",
-                "route_path_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "rust_family_cluster".to_string();
+fn python_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_fastapi_route" => &["decorator_shape:"],
+        "framework_pydantic_model" => &["class_base:"],
+        "framework_django_url_pattern" => &["route_path_shape:"],
+        "framework_flask_route" => &["http_method:", "route_path_shape:"],
+        // pytest is handled by `cluster_characteristic_profile` directly; the
+        // remaining roles (sqlalchemy, django/unittest models and tests, click,
+        // typer, celery) constrain only the universal preconditions, so they have
+        // no characteristic prefixes and lean on the support-family core tie-break.
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn java_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "spring_annotation:",
-                "http_method:",
-                "route_path_shape:",
-                "class_route_path_shape:",
-                "class_shape:",
-                "test_annotation:",
-                "test_data_shape:",
-                "jpa_namespace_root:",
-                "path_context:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "java_family_cluster".to_string();
+fn tsjs_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_express_route_handler" | "framework_fastify_route_handler" => {
+            &["handler_shape:"]
+        }
+        "framework_jest_vitest_suite" | "framework_jest_vitest_test" => {
+            &["runner_kind:", "test_shape:", "async_shape:"]
+        }
+        "framework_next_app_page" | "framework_next_app_layout" | "framework_next_pages_page" => {
+            &["component_shape:"]
+        }
+        "framework_next_route_handler" | "framework_next_pages_api_route" => &["response_shape:"],
+        "framework_prisma_query"
+        | "framework_prisma_transaction"
+        | "framework_drizzle_schema_table"
+        | "framework_drizzle_query"
+        | "framework_drizzle_transaction" => &["operation:"],
+        "framework_zod_schema" => &["zod_builder:"],
+        "framework_nestjs_route" | "framework_hono_route" => &["http_method:", "route_path_shape:"],
+        "framework_nestjs_controller"
+        | "framework_nestjs_injectable"
+        | "framework_nestjs_module" => &["support_family:"],
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn csharp_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "aspnet_attribute:",
-                "http_method:",
-                "route_template_shape:",
-                "test_attribute:",
-                "test_data_shape:",
-                "class_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "csharp_family_cluster".to_string();
+fn java_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_spring_mvc_route" => &[
+            "anchor_kind:",
+            "spring_annotation:",
+            "http_method:",
+            "route_path_shape:",
+        ],
+        "framework_spring_component" => &["spring_annotation:", "class_shape:"],
+        "framework_spring_boot_application" | "framework_spring_data_repository" => {
+            &["support_family:"]
+        }
+        "framework_junit5_test" | "framework_junit4_test" | "framework_testng_test" => {
+            &["anchor_kind:", "test_annotation:"]
+        }
+        "framework_jpa_entity" | "framework_jpa_mapped_superclass" | "framework_jpa_embeddable" => {
+            &["support_family:", "jpa_namespace_root:"]
+        }
+        "framework_jaxrs_resource" => &["support_family:", "class_route_path_shape:"],
+        "framework_jaxrs_resource_method" => &["anchor_kind:", "http_method:", "route_path_shape:"],
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn cpp_cluster_signature(
+fn csharp_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_aspnetcore_controller_action" => &[
+            "anchor_kind:",
+            "aspnet_attribute:",
+            "http_method:",
+            "route_template_shape:",
+        ],
+        "framework_aspnetcore_minimal_route" => &["http_method:", "route_template_shape:"],
+        "framework_aspnetcore_controller" => &["aspnet_attribute:", "class_shape:"],
+        "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
+            &["test_attribute:"]
+        }
+        "framework_efcore_db_context" | "framework_efcore_entity_set" => &["support_family:"],
+        _ => &[],
+    }
+}
+
+fn cpp_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_gtest_test"
+        | "framework_catch2_test"
+        | "framework_doctest_test"
+        | "framework_boost_test_test" => &["support_family:", "test_framework:", "test_macro:"],
+        "framework_gtest_fixture" | "framework_boost_test_suite" => &["support_family:"],
+        _ => &[],
+    }
+}
+
+fn rust_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_serde_model" => &["support_family:", "framework_api_anchor:"],
+        "framework_axum_route" => &["support_family:", "http_method:", "route_path_shape:"],
+        "framework_thiserror_error"
+        | "framework_clap_parser"
+        | "framework_tokio_entry"
+        | "framework_tokio_test" => &["support_family:"],
+        // Self-dogfood roles keep their structural-shape profile equality.
+        _ => &[
+            "anchor_kind:",
+            "signature_shape:",
+            "visibility_shape:",
+            "arity_shape:",
+            "return_shape:",
+            "attribute_shape:",
+            "error_shape:",
+            "test_shape:",
+        ],
+    }
+}
+
+/// The support-family values shared by every member of the cluster (the
+/// intersection of their `support_family:` features). Used only as a tie
+/// discriminator between sibling ready clusters that share an identical
+/// characteristic profile.
+fn cluster_support_family_core(
     cluster: &[FamilyEvidence],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "test_framework:",
-                "test_macro:",
-                "test_name_shape:",
-                "fixture_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "cpp_family_cluster".to_string();
+) -> BTreeSet<String> {
+    let mut members = cluster.iter();
+    let Some(first) = members.next() else {
+        return BTreeSet::new();
+    };
+    let mut core = prefixed_features(first, features_by_unit, "support_family:");
+    for member in members {
+        if core.is_empty() {
+            break;
+        }
+        let member_families = prefixed_features(member, features_by_unit, "support_family:");
+        core = core.intersection(&member_families).cloned().collect();
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    core
+}
+
+/// Deterministic cluster-suffix token, shaped `v<12 hex>` so it can never
+/// collide with the legacy `cluster_...` suffix space. The hashed input is a
+/// canonical serialization of the FamilyKey identity plus the cluster's
+/// characteristic profile, optionally extended with the support-family core and
+/// then a positional ordinal to break genuine ties. See
+/// `docs/specifications/domain-model.md` for the grammar.
+fn cluster_suffix_token(
+    key: &FamilyKey,
+    profile: &BTreeSet<String>,
+    support_family_core: Option<&BTreeSet<String>>,
+    positional_ordinal: Option<usize>,
+) -> String {
+    let mut input = String::new();
+    input.push_str("repogrammar.family-suffix.v1\n");
+    input.push_str("key=");
+    input.push_str(&key.language);
+    input.push(':');
+    input.push_str(&key.code_unit_kind);
+    input.push(':');
+    input.push_str(&key.framework_role);
+    input.push('\n');
+    for feature in profile {
+        input.push_str("profile=");
+        input.push_str(feature);
+        input.push('\n');
+    }
+    if let Some(core) = support_family_core {
+        for value in core {
+            input.push_str("support-family-core=");
+            input.push_str(value);
+            input.push('\n');
+        }
+    }
+    if let Some(ordinal) = positional_ordinal {
+        input.push_str("ordinal=");
+        input.push_str(&ordinal.to_string());
+        input.push('\n');
+    }
+    format!("v{}", short_hex_digest(&input))
+}
+
+/// A lossy `stable_token` can map two distinct keys onto the same bare base id.
+/// Only keys with exactly one ready cluster mint a bare base id, so collisions
+/// are resolved among those: every key inside a colliding group gets a
+/// deterministic key-profile suffix and non-colliding keys keep the bare base id.
+fn bare_base_id_disambiguators(keys: &[&FamilyKey]) -> BTreeMap<FamilyKey, String> {
+    let mut keys_by_base_id: BTreeMap<String, Vec<&FamilyKey>> = BTreeMap::new();
+    for key in keys {
+        keys_by_base_id
+            .entry(family_id(key, None))
+            .or_default()
+            .push(key);
+    }
+    let mut disambiguators = BTreeMap::new();
+    for group in keys_by_base_id.into_values() {
+        if group.len() < 2 {
+            continue;
+        }
+        for key in group {
+            disambiguators.insert((*key).clone(), family_key_disambiguator_token(key));
+        }
+    }
+    disambiguators
+}
+
+/// Deterministic `v<12 hex>` token derived from the full raw FamilyKey. Keys that
+/// only collide under `stable_token` still differ in their raw fields, so their
+/// tokens differ. A distinct domain tag keeps these tokens out of the
+/// characteristic-profile suffix space.
+fn family_key_disambiguator_token(key: &FamilyKey) -> String {
+    let mut input = String::new();
+    input.push_str("repogrammar.family-key.v1\n");
+    input.push_str("language=");
+    input.push_str(&key.language);
+    input.push('\n');
+    input.push_str("code_unit_kind=");
+    input.push_str(&key.code_unit_kind);
+    input.push('\n');
+    input.push_str("framework_role=");
+    input.push_str(&key.framework_role);
+    input.push('\n');
+    input.push_str("normalized_shape=");
+    input.push_str(&key.normalized_shape);
+    input.push('\n');
+    format!("v{}", short_hex_digest(&input))
+}
+
+/// First 12 lowercase hex characters (six bytes) of the SHA-256 digest of
+/// `input`. Family-id suffixes truncate the digest to keep ids short while
+/// preserving deterministic, collision-resistant identity.
+fn short_hex_digest(input: &str) -> String {
+    let digest = Sha256::digest(input.as_bytes());
+    let mut hex = String::with_capacity(12);
+    for &byte in digest.iter().take(6) {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 fn support_target_family(target: &str, framework_role: &str) -> String {
@@ -5970,12 +6228,48 @@ mod tests {
             .map(|claim| claim.family_id.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), 2);
-        assert!(ids.contains(
-            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method"
-        ));
-        assert!(ids.contains(
-            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:cluster_sqlalchemy_transaction_boundary"
-        ));
+        // Two ready clusters share a key, so neither holds the bare base id: each
+        // takes a support-family-core-derived suffix (the role has an empty
+        // characteristic profile), computed deterministically from its own
+        // profile rather than emission order.
+        let key = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "sqlalchemy_repository_method".to_string(),
+            framework_role: "framework:sqlalchemy.repository_method".to_string(),
+            normalized_shape: normalized_shape(
+                "sqlalchemy_repository_method",
+                "framework:sqlalchemy.repository_method",
+            ),
+        };
+        // Support-family feature values are `stable_token`-normalized, so the
+        // characteristic core uses the underscore form.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> =
+            ["sqlalchemy_query_call".to_string()].into_iter().collect();
+        let transaction_core: BTreeSet<String> = ["sqlalchemy_transaction_boundary".to_string()]
+            .into_iter()
+            .collect();
+        let query_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&query_core),
+                None,
+            )),
+        );
+        let transaction_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&transaction_core),
+                None,
+            )),
+        );
+        assert!(!ids.contains(family_id(&key, None).as_str()));
+        assert!(ids.contains(query_id.as_str()));
+        assert!(ids.contains(transaction_id.as_str()));
     }
 
     #[test]
@@ -7310,5 +7604,302 @@ mod tests {
             ],
         );
         assert_insufficient_support(&substring_report);
+    }
+
+    fn repository_method_key() -> FamilyKey {
+        FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "sqlalchemy_repository_method".to_string(),
+            framework_role: "framework:sqlalchemy.repository_method".to_string(),
+            normalized_shape: normalized_shape(
+                "sqlalchemy_repository_method",
+                "framework:sqlalchemy.repository_method",
+            ),
+        }
+    }
+
+    /// A synthetic cluster member with the given support families, registering
+    /// its role and support-family features into `features`. The role has an
+    /// empty characteristic profile, so suffix assignment exercises the
+    /// support-family-core and positional tie-break paths.
+    fn suffix_test_member(
+        id: &str,
+        support_families: &[&str],
+        features: &mut BTreeMap<String, BTreeSet<String>>,
+    ) -> FamilyEvidence {
+        let mut member_features: BTreeSet<String> = support_families
+            .iter()
+            .map(|family| format!("support_family:{family}"))
+            .collect();
+        member_features.insert("framework_role:framework_sqlalchemy_repository_method".to_string());
+        features.insert(id.to_string(), member_features);
+        FamilyEvidence {
+            code_unit_id: id.to_string(),
+            path: format!("src/{id}.py"),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_keeps_single_ready_cluster_bare() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["query"], &mut features),
+                suffix_test_member("b", &["query"], &mut features),
+                suffix_test_member("c", &["query"], &mut features),
+            ],
+            vec![suffix_test_member("d", &["txn"], &mut features)],
+        ];
+        let ready_flags = vec![true, false];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // At most one ready cluster: nobody is suffixed and the ready cluster
+        // keeps the bare base id.
+        assert!(suffixes
+            .iter()
+            .all(|suffix| suffix.token.is_none() && suffix.positional_ordinal.is_none()));
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_distinguishes_ready_clusters_by_support_family_core() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["query"], &mut features),
+                suffix_test_member("b", &["query"], &mut features),
+                suffix_test_member("c", &["query"], &mut features),
+            ],
+            vec![
+                suffix_test_member("d", &["txn"], &mut features),
+                suffix_test_member("e", &["txn"], &mut features),
+                suffix_test_member("f", &["txn"], &mut features),
+            ],
+        ];
+        let ready_flags = vec![true, true];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // Two ready clusters: both are suffixed (nobody holds the bare base id),
+        // distinguished by their support-family core, not a positional ordinal.
+        assert!(suffixes.iter().all(|suffix| suffix.token.is_some()));
+        assert!(suffixes
+            .iter()
+            .all(|suffix| suffix.positional_ordinal.is_none()));
+        let tokens: BTreeSet<&String> = suffixes
+            .iter()
+            .filter_map(|suffix| suffix.token.as_ref())
+            .collect();
+        assert_eq!(tokens.len(), 2);
+        // The suffix is the deterministic hash of the empty profile plus the
+        // cluster's support-family core.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> = ["query".to_string()].into_iter().collect();
+        assert_eq!(
+            suffixes[0].token.as_deref(),
+            Some(cluster_suffix_token(&key, &empty_profile, Some(&query_core), None).as_str())
+        );
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_positional_ordinal_only_for_indistinguishable_clusters() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        // Clusters 0 and 1 are 3-cycles: members pairwise share a support family
+        // but the global intersection is empty, so both have an empty core and an
+        // empty characteristic profile (genuinely indistinguishable). Cluster 2
+        // has a distinct non-empty core and must NOT take a positional ordinal.
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["x", "y"], &mut features),
+                suffix_test_member("b", &["y", "z"], &mut features),
+                suffix_test_member("c", &["x", "z"], &mut features),
+            ],
+            vec![
+                suffix_test_member("d", &["p", "q"], &mut features),
+                suffix_test_member("e", &["q", "r"], &mut features),
+                suffix_test_member("f", &["p", "r"], &mut features),
+            ],
+            vec![
+                suffix_test_member("g", &["w"], &mut features),
+                suffix_test_member("h", &["w"], &mut features),
+                suffix_test_member("i", &["w"], &mut features),
+            ],
+        ];
+        let ready_flags = vec![true, true, true];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // The tied clusters have empty cores, confirming they are genuinely
+        // indistinguishable, and only they receive positional ordinals.
+        assert!(cluster_support_family_core(&clusters[0], &features).is_empty());
+        assert!(cluster_support_family_core(&clusters[1], &features).is_empty());
+        assert_eq!(suffixes[0].positional_ordinal, Some(0));
+        assert_eq!(suffixes[1].positional_ordinal, Some(1));
+        assert_eq!(suffixes[2].positional_ordinal, None);
+        let tokens: BTreeSet<&String> = suffixes
+            .iter()
+            .filter_map(|suffix| suffix.token.as_ref())
+            .collect();
+        assert_eq!(
+            tokens.len(),
+            3,
+            "every ready cluster must keep a distinct id"
+        );
+    }
+
+    #[test]
+    fn bare_base_id_disambiguators_resolves_stable_token_collisions() {
+        // `framework:a.b` and `framework:a_b` are distinct roles that collide onto
+        // the same bare base id under the lossy `stable_token`.
+        let dotted = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "route".to_string(),
+            framework_role: "framework:a.b".to_string(),
+            normalized_shape: normalized_shape("route", "framework:a.b"),
+        };
+        let underscored = FamilyKey {
+            framework_role: "framework:a_b".to_string(),
+            normalized_shape: normalized_shape("route", "framework:a_b"),
+            ..dotted.clone()
+        };
+        let lone = FamilyKey {
+            framework_role: "framework:distinct".to_string(),
+            normalized_shape: normalized_shape("route", "framework:distinct"),
+            ..dotted.clone()
+        };
+        assert_eq!(family_id(&dotted, None), family_id(&underscored, None));
+        let disambiguators = bare_base_id_disambiguators(&[&dotted, &underscored, &lone]);
+        // Both colliding keys are disambiguated; the lone key keeps the bare id.
+        assert!(disambiguators.contains_key(&dotted));
+        assert!(disambiguators.contains_key(&underscored));
+        assert!(!disambiguators.contains_key(&lone));
+        // The disambiguated ids are distinct.
+        let dotted_id = family_id(&dotted, Some(&disambiguators[&dotted]));
+        let underscored_id = family_id(&underscored, Some(&disambiguators[&underscored]));
+        assert_ne!(dotted_id, underscored_id);
+    }
+
+    fn repository_method_units_and_facts(
+        query_paths: &[&str],
+        transaction_paths: &[&str],
+    ) -> (Vec<IndexedCodeUnitRecord>, Vec<SemanticFact>) {
+        let mut units = Vec::new();
+        let mut facts = Vec::new();
+        let mut index = 0;
+        for path in query_paths {
+            let unit = python_unit(path, "sqlalchemy_repository_method", index);
+            facts.push(role_fact(&unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                &unit,
+                "sqlalchemy.orm.Session.execute",
+            ));
+            units.push(unit);
+            index += 1;
+        }
+        for path in transaction_paths {
+            let unit = python_unit(path, "sqlalchemy_repository_method", index);
+            facts.push(role_fact(&unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                &unit,
+                "sqlalchemy.orm.Session.commit",
+            ));
+            units.push(unit);
+            index += 1;
+        }
+        (units, facts)
+    }
+
+    #[test]
+    fn family_id_split_and_merge_round_trip() {
+        let key = repository_method_key();
+        let base_id = family_id(&key, None);
+        // Support-family feature values are `stable_token`-normalized.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> =
+            ["sqlalchemy_query_call".to_string()].into_iter().collect();
+        let query_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&query_core),
+                None,
+            )),
+        );
+
+        // One ready cluster: the bare base id is used.
+        let (single_units, single_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &[],
+        );
+        let single = build_family_claims(&single_units, &single_facts);
+        assert_eq!(single.claims.len(), 1);
+        assert_eq!(single.claims[0].family_id, base_id);
+
+        // Split: adding a competing transaction cluster removes the bare base id
+        // and gives the surviving query cluster its characteristic-profile suffix.
+        let (split_units, split_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &["app/txn_0.py", "app/txn_1.py", "app/txn_2.py"],
+        );
+        let split = build_family_claims(&split_units, &split_facts);
+        let split_ids: BTreeSet<String> = split
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        assert_eq!(split_ids.len(), 2);
+        assert!(!split_ids.contains(&base_id));
+        assert!(split_ids.contains(&query_id));
+
+        // Merge: removing the competitor collapses the suffix back to the base id.
+        let (merged_units, merged_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &[],
+        );
+        let merged = build_family_claims(&merged_units, &merged_facts);
+        assert_eq!(merged.claims.len(), 1);
+        assert_eq!(merged.claims[0].family_id, base_id);
+    }
+
+    #[test]
+    fn family_id_add_file_does_not_rebind_existing_clusters() {
+        let (units, facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &["app/txn_0.py", "app/txn_1.py", "app/txn_2.py"],
+        );
+        let before = build_family_claims(&units, &facts);
+        let before_ids: BTreeSet<String> = before
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        assert_eq!(before_ids.len(), 2);
+
+        // Add a query member whose path sorts before every existing file. Under
+        // the old first-ready-cluster scheme this could re-point the bare base id;
+        // under the profile-hash scheme both existing ids must persist unchanged.
+        let mut units = units;
+        let mut facts = facts;
+        let early = python_unit("app/aaa_query.py", "sqlalchemy_repository_method", 99);
+        facts.push(role_fact(&early, "framework:sqlalchemy.repository_method"));
+        facts.push(semantic_support_fact_with_target(
+            &early,
+            "sqlalchemy.orm.Session.execute",
+        ));
+        units.push(early);
+        let after = build_family_claims(&units, &facts);
+        let after_ids: BTreeSet<String> = after
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        for id in &before_ids {
+            assert!(
+                after_ids.contains(id),
+                "family id {id} was re-pointed by an unrelated file insert"
+            );
+        }
     }
 }

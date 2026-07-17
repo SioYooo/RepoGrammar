@@ -434,3 +434,89 @@ Reason templates are fixed sentences such as `coverage 30/30 with no competing
 ready family`, `coverage 3/6 without dominant margin`, `support 3 below
 competing ready support 6`, `coverage 2/9 below one-third of eligible peers`, or
 `blocked peers 4 exceed eligible peers 3`.
+
+## Family identity
+
+A `FamilyKey` is `(language, code_unit_kind, framework_role, normalized_shape)`.
+A single key can produce several ready clusters after complete-link clustering,
+and each ready cluster is emitted as one family that needs a stable,
+human-auditable id.
+
+### Base id
+
+The base id is `family:{language}:{code_unit_kind}:{framework_role}`, where each
+segment is lowercased and every non-alphanumeric character is folded to `_`
+(`stable_token`).
+
+### Suffix rule
+
+- A key with at most one ready cluster keeps the bare base id. This is the
+  common, stable case and must never change for unrelated repository edits.
+- A key with two or more ready clusters gives every ready cluster a suffix, so
+  no cluster holds the bare base id. This removes base-id rebinding: adding a
+  file whose path sorts earlier can no longer silently re-point the base id at a
+  different cluster.
+
+Suffixed ids are `family:{language}:{code_unit_kind}:{framework_role}:v{hex}`.
+The `v` prefix plus twelve lowercase hex characters cannot collide with the
+legacy `cluster_...` suffix token space.
+
+### Suffix hash derivation
+
+`v{hex}` is the literal `v` followed by the first twelve lowercase hex
+characters (six bytes) of the SHA-256 digest of a canonical, newline-terminated
+serialization:
+
+```
+repogrammar.family-suffix.v1
+key={language}:{code_unit_kind}:{framework_role}
+profile={characteristic feature}   (one line per feature, sorted)
+support-family-core={value}        (only when a profile tie is broken; sorted)
+ordinal={n}                        (only for a positional tie)
+```
+
+The characteristic profile is exactly the feature values that the role's
+compatibility rule (`evidence_pair_is_compatible` and its per-language
+refinements) requires to be equal across every cluster member — for example
+`decorator_shape:` for FastAPI routes, `http_method:` plus `route_path_shape:`
+for Flask and axum routes, or `http_method:` plus `route_template_shape:` for
+ASP.NET Core routes. Those values are identical across members by construction,
+so the suffix is stable under member addition or removal as long as the
+cluster's characteristic profile is unchanged.
+
+### Tie handling
+
+Two sibling ready clusters of the same key can share an identical characteristic
+profile when the role is constrained only by the universal preconditions (a
+shared support family and an equal role). Ties are broken deterministically:
+
+1. Extend the hashed input with the cluster's support-family core — the
+   `support_family` values shared by every member. Two distinct clusters can
+   only share a non-empty core if they would already have merged, so this
+   distinguishes every pair whose cores differ.
+2. If two clusters still tie (identical profile and an identical, necessarily
+   empty, core), append a positional ordinal by emission order. The ordinal is
+   also recorded on the family as classification-independent metadata
+   (`slot:family_positional_discriminator`) so its use is observable rather than
+   silent. Positional fallback fires only for genuinely indistinguishable
+   clusters.
+
+### Collision disambiguation
+
+`stable_token` is lossy, so two distinct keys (for example the roles
+`framework:a.b` and `framework:a_b`) can fold onto the same bare base id. Only
+single-ready-cluster keys mint a bare base id, so after emission any such
+collision is resolved by giving every key in the colliding group a deterministic
+`v{hex}` suffix derived from the full raw `FamilyKey` (domain tag
+`repogrammar.family-key.v1`); non-colliding keys keep the bare base id. The
+build asserts that all emitted family ids are unique.
+
+### Cross-generation identity
+
+Family ids are deterministic for a fixed input set and stable under unrelated
+file changes, but they are follow-up handles, not permanent identities: a
+cluster re-clustered under a different characteristic profile appears as one
+removed id and one added id, not as an in-place rename. Sync and resync JSON
+report this as `families_added` and `families_removed` (see
+`specifications/cli.md`); consumers must resync and re-resolve family handles
+rather than assume an id refers to the same membership across generations.

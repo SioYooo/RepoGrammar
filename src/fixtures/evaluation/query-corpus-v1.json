@@ -36,11 +36,11 @@
       "fixture_id": "python-v0_1",
       "kind": "exact_family_id",
       "operation": "family",
-      "target": "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+      "target": "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
       "mode": "compact",
       "expected": {
         "outcome": "ok",
-        "family": "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method",
+        "family": "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
         "route": "exact_family_hydrate"
       }
     },

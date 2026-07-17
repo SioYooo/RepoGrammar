@@ -7997,8 +7997,15 @@ fn index_outcome_human(
         output.push('\n');
     }
     if let Some(sync_report) = &outcome.sync_report {
+        let (families_added, families_removed) = match &sync_report.family_identity_delta {
+            Some(delta) => (
+                delta.added_count.to_string(),
+                delta.removed_count.to_string(),
+            ),
+            None => ("none".to_string(), "none".to_string()),
+        };
         output.push_str(&format!(
-            "sync_mode: {}\nfallback_reason: {}\nbase_generation: {}\nadded_files: {}\nmodified_files: {}\nremoved_files: {}\nunchanged_files: {}\ncopied_forward_files: {}\nreparsed_files: {}\nfamilies_recomputed: {}\ndirty_records_cleared: {}\n",
+            "sync_mode: {}\nfallback_reason: {}\nbase_generation: {}\nadded_files: {}\nmodified_files: {}\nremoved_files: {}\nunchanged_files: {}\ncopied_forward_files: {}\nreparsed_files: {}\nfamilies_recomputed: {}\ndirty_records_cleared: {}\nfamilies_added: {}\nfamilies_removed: {}\n",
             sync_report.sync_mode.as_str(),
             sync_report.fallback_reason.as_deref().unwrap_or("none"),
             sync_report.base_generation.as_deref().unwrap_or("none"),
@@ -8010,6 +8017,8 @@ fn index_outcome_human(
             sync_report.reparsed_files,
             sync_report.families_recomputed,
             sync_report.dirty_records_cleared,
+            families_added,
+            families_removed,
         ));
     }
     output
@@ -8096,6 +8105,15 @@ fn index_outcome_value(
             "dirty_records_cleared".to_string(),
             json!(sync_report.dirty_records_cleared),
         );
+        let (families_added, families_removed) = match &sync_report.family_identity_delta {
+            Some(delta) => (
+                json!({ "count": delta.added_count, "sample": delta.added_sample }),
+                json!({ "count": delta.removed_count, "sample": delta.removed_sample }),
+            ),
+            None => (Value::Null, Value::Null),
+        };
+        object.insert("families_added".to_string(), families_added);
+        object.insert("families_removed".to_string(), families_removed);
     }
     value
 }
@@ -14900,6 +14918,16 @@ mod tests {
         assert_eq!(value["reparsed_files"], 0);
         assert_eq!(value["dirty_records_cleared"], 0);
         assert!(value["families_recomputed"].is_u64());
+        // The interactive `sync` path recomputes code units and framework roles
+        // but does not rebuild families (no family store), so the family-identity
+        // delta fields are always present yet null here, mirroring the zero
+        // `families_recomputed`. The populated delta is covered by the
+        // family-recomputing sync test in `application::indexing`.
+        let sync_object = value.as_object().expect("sync JSON object");
+        assert!(sync_object.contains_key("families_added"));
+        assert!(sync_object.contains_key("families_removed"));
+        assert_eq!(value["families_added"], Value::Null);
+        assert_eq!(value["families_removed"], Value::Null);
         assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 3);
         assert!(workspace
             .path()

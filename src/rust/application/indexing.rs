@@ -148,6 +148,43 @@ pub struct IndexingSyncReport {
     pub reparsed_files: usize,
     pub families_recomputed: usize,
     pub dirty_records_cleared: usize,
+    /// Cross-generation family-identity change versus the base generation, or
+    /// `None` when there is no base generation to diff against (first build).
+    pub family_identity_delta: Option<FamilyIdentityDelta>,
+}
+
+/// Family-id set difference between the base generation and the newly recorded
+/// generation. Ids are deterministic follow-up handles: a family that is
+/// re-clustered under a different characteristic profile appears as one removed
+/// and one added id, not as an in-place rename. Samples are sorted and bounded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyIdentityDelta {
+    pub added_count: usize,
+    pub removed_count: usize,
+    pub added_sample: Vec<String>,
+    pub removed_sample: Vec<String>,
+}
+
+/// Maximum family ids listed in each bounded `FamilyIdentityDelta` sample.
+const FAMILY_IDENTITY_DELTA_SAMPLE_CAP: usize = 20;
+
+impl FamilyIdentityDelta {
+    fn from_id_sets(base_ids: &BTreeSet<String>, new_ids: &BTreeSet<String>) -> Self {
+        let added: Vec<String> = new_ids.difference(base_ids).cloned().collect();
+        let removed: Vec<String> = base_ids.difference(new_ids).cloned().collect();
+        FamilyIdentityDelta {
+            added_count: added.len(),
+            removed_count: removed.len(),
+            added_sample: added
+                .into_iter()
+                .take(FAMILY_IDENTITY_DELTA_SAMPLE_CAP)
+                .collect(),
+            removed_sample: removed
+                .into_iter()
+                .take(FAMILY_IDENTITY_DELTA_SAMPLE_CAP)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -996,7 +1033,14 @@ where
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
-        let family_count = record_family_claims(
+        // Capture the base generation's family ids before the new generation is
+        // activated, but only when there is a base generation to diff against.
+        let base_family_ids = sync_report
+            .as_ref()
+            .filter(|report| report.base_generation.is_some())
+            .map(|_| base_generation_family_ids(family_store))
+            .transpose()?;
+        let (family_count, new_family_ids) = record_family_claims(
             family_store,
             &generation,
             &indexed_code_units,
@@ -1004,6 +1048,12 @@ where
         )?;
         if let Some(sync_report) = sync_report.as_mut() {
             sync_report.families_recomputed = family_count;
+            if let Some(base_family_ids) = &base_family_ids {
+                sync_report.family_identity_delta = Some(FamilyIdentityDelta::from_id_sets(
+                    base_family_ids,
+                    &new_family_ids,
+                ));
+            }
         }
         emit_progress(
             progress,
@@ -1260,6 +1310,7 @@ fn sync_fallback_report(
         reparsed_files: 0,
         families_recomputed: 0,
         dirty_records_cleared: 0,
+        family_identity_delta: None,
     }
 }
 
@@ -1626,6 +1677,7 @@ where
         reparsed_files: parser_attempted_files,
         families_recomputed: 0,
         dirty_records_cleared: 0,
+        family_identity_delta: None,
     };
 
     if let Some(family_store) = options.family_store {
@@ -1655,12 +1707,20 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
-        sync_report.families_recomputed = record_family_claims(
+        // The incremental path always resyncs from an active base generation, so
+        // its family ids are always available to diff against.
+        let base_family_ids = base_generation_family_ids(family_store)?;
+        let (family_count, new_family_ids) = record_family_claims(
             family_store,
             &generation,
             &indexed_code_units,
             &family_facts,
         )?;
+        sync_report.families_recomputed = family_count;
+        sync_report.family_identity_delta = Some(FamilyIdentityDelta::from_id_sets(
+            &base_family_ids,
+            &new_family_ids,
+        ));
         emit_progress(
             progress,
             ProgressStage::FamilyConstruction,
@@ -2368,13 +2428,17 @@ fn record_parse_report(
     })
 }
 
+/// Records the recomputed family claims and returns their count plus the sorted
+/// set of family ids recorded into `generation`, so callers can diff it against
+/// the base generation for cross-generation identity reporting.
 fn record_family_claims(
     store: &dyn FamilyStore,
     generation: &GenerationHandle,
     code_units: &[IndexedCodeUnitRecord],
     framework_role_facts: &[SemanticFact],
-) -> Result<usize, RepoGrammarError> {
+) -> Result<(usize, BTreeSet<String>), RepoGrammarError> {
     let report = build_family_claims(code_units, framework_role_facts);
+    let mut family_ids = BTreeSet::new();
     for claim in &report.claims {
         let records = family_storage_records(claim);
         crate::application::storage::record_family(store, generation, &records.family)?;
@@ -2387,8 +2451,23 @@ fn record_family_claims(
         for evidence in &records.evidence {
             crate::application::storage::record_family_evidence(store, generation, evidence)?;
         }
+        family_ids.insert(claim.family_id.clone());
     }
-    Ok(report.claims.len())
+    Ok((report.claims.len(), family_ids))
+}
+
+/// The active generation's family-id set, captured before a new generation is
+/// activated so it represents the base generation for identity diffing.
+fn base_generation_family_ids(
+    family_store: &dyn FamilyStore,
+) -> Result<BTreeSet<String>, RepoGrammarError> {
+    Ok(
+        crate::application::storage::list_active_families(family_store)?
+            .families
+            .into_iter()
+            .map(|family| family.family_id)
+            .collect(),
+    )
 }
 
 fn record_rust_provider_facts(
@@ -12116,6 +12195,17 @@ mod tests {
         let sync_report = outcome.sync_report.clone().expect("sync report");
         assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(sync_report.fallback_reason, None);
+        // A family-recomputing incremental sync with no file changes reproduces
+        // the base generation's family ids exactly, so the cross-generation
+        // identity delta is present and empty (not null, and not a rename).
+        let delta = sync_report
+            .family_identity_delta
+            .clone()
+            .expect("family identity delta present when families are recomputed against a base");
+        assert_eq!(delta.added_count, 0);
+        assert_eq!(delta.removed_count, 0);
+        assert!(delta.added_sample.is_empty());
+        assert!(delta.removed_sample.is_empty());
         assert_eq!(
             provider_resolved_tsjs_support_fact_count(&state, "gen-000002"),
             3

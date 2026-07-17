@@ -138,3 +138,12 @@ These are intentional current behaviors or tracked deferrals, not defects:
   `DO_NOT_TRACK`/`REPOGRAMMAR_TELEMETRY`/`CI` environment kill-switch, and the
   telemetry `queue/`, `sent/`, and daily-rollup directories are not yet capped.
   These paths write no PII; the gate and retention caps are tracked follow-ups.
+- **Family ids are follow-up handles, not durable identities.** A family id is
+  deterministic for a fixed input set and stable under unrelated file changes,
+  but a cluster that is re-clustered under a different characteristic profile is
+  reported as one removed and one added id, not an in-place rename. Multi-cluster
+  keys carry a `v{hex}` characteristic-profile suffix, and genuinely
+  indistinguishable sibling clusters fall back to a deterministic positional
+  ordinal. Consumers must resync and re-resolve handles rather than persist an id
+  as a permanent membership reference; sync/resync JSON surfaces the change via
+  `families_added`/`families_removed`.

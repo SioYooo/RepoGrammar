@@ -1261,9 +1261,18 @@ otherwise. Their JSON output includes `generation_id`, `active_generation`,
 `sync --json` also
 includes `sync_mode`, `fallback_reason`, `base_generation`, `added_files`,
 `modified_files`, `removed_files`, `unchanged_files`, `copied_forward_files`,
-`reparsed_files`, `families_recomputed`, and `dirty_records_cleared`.
+`reparsed_files`, `families_recomputed`, `dirty_records_cleared`,
+`families_added`, and `families_removed`.
 `reparsed_files` is the actual number of parser dispatches in the generation,
-not the number of changed or discovered inventory-only files. The
+not the number of changed or discovered inventory-only files.
+`families_added` and `families_removed` report the cross-generation family
+identity change: each is either `null` (when the sync had no base generation to
+diff against, or did not recompute families) or an object `{ "count": <n>,
+"sample": [<family id>, ...] }` whose bounded `sample` lists up to twenty sorted
+ids. They are computed by diffing the base generation's family-id set against
+the new generation's; family ids are deterministic follow-up handles, so a
+re-clustered family surfaces as one removed and one added id rather than a
+rename (see `specifications/domain-model.md`, "Family identity"). The
 `dirty_records_cleared` field counts persisted dirty-marker rows actually
 cleared while building the new generation. Claim-bearing records deliberately
 omitted during generation-by-replacement copy-forward, including legacy Go

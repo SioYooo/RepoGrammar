@@ -2402,6 +2402,7 @@ mod tests {
                 reparsed_files: 2,
                 families_recomputed: 0,
                 dirty_records_cleared: 0,
+                family_identity_delta: None,
             }),
             warnings: Vec::new(),
         };
@@ -2436,6 +2437,7 @@ mod tests {
                 reparsed_files: 0,
                 families_recomputed: 0,
                 dirty_records_cleared: 0,
+                family_identity_delta: None,
             }),
             warnings: vec!["parser skipped unsupported language token: go".to_string()],
         };
