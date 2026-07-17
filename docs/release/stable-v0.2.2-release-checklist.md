@@ -33,6 +33,29 @@ atomically, so the workflow must keep npm non-public until the exact GitHub
 artifacts are public and immutable. A green build-only workflow is not
 publication evidence.
 
+## Post-public finalizer execution record
+
+Candidate run `29586694524`, attempt 1, produced the immutable `v0.2.2`
+publication authority. Post-public finalizer run `29587973589` verified the
+public immutable GitHub release, npm package metadata and provenance, packaged
+native product, and public installer. It then failed before the final verdict
+because its `npx --package` launcher commands ran from the checked-out
+RepoGrammar root. npm treated the root's same-name `package.json` as the current
+package without injecting the requested public package's `repogrammar` bin, so
+the launcher command was unavailable. The run did not emit
+`STABLE_RELEASE_READY`; the already-public tag, assets, and npm version must not
+be changed or republished to conceal that verifier failure.
+
+The correction is a verifier-only patch on `main`. The fixed workflow is
+dispatched from `main`, creates an external work directory for each of the
+`pinned`, `latest`, and `preview` lanes, and changes into that lane directory in
+a child shell before invoking `npx`. The workflow fails visibly when its
+definition is dispatched from any ref other than `main`. Its checkout remains
+pinned to immutable `v0.2.2`, and the rerun remains explicitly bound to
+candidate run `29586694524`, attempt 1. This preserves release-source and
+candidate authority while allowing the read-only verifier orchestration to be
+corrected.
+
 ## Immutable identities
 
 - Cargo, Cargo lockfile, and npm manifest versions are exactly `0.2.2`.
@@ -194,7 +217,11 @@ Before creating the stable tag:
    that makes npm `0.2.2` public.
 7. Run the read-only finalizer with the tag-run id and successful run attempt.
    It fetches that immutable attempt record and requires all postconditions
-   below before emitting `STABLE_RELEASE_READY`.
+   below before emitting `STABLE_RELEASE_READY`. Dispatch the workflow
+   definition from `main`, but require its source checkout to remain
+   `v0.2.2` and its inputs to remain candidate run `29586694524`, attempt 1.
+   Each public npm launcher lane must execute from its own external working
+   directory; the repository root is not a valid `npx --package` smoke cwd.
 
 ## Final public postconditions
 

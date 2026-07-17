@@ -875,6 +875,31 @@ require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@0\.2\.2' \
   "stable finalization must smoke the exact stable npm version"
 require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@preview' \
   "stable finalization must preserve and smoke the preview channel"
+STABLE_FINALIZER_NPM_SMOKE="$(workflow_named_step "$STABLE_FINALIZER_JOB" "Collect public npm launcher smoke evidence")"
+if [[ -z "$STABLE_FINALIZER_NPM_SMOKE" ]]; then
+  echo "stable finalization must have a named public npm launcher smoke step" >&2
+  exit 1
+fi
+require_workflow_match "$STABLE_FINALIZER_JOB" "if: github\.ref != 'refs/heads/main'" \
+  "stable finalization must fail visibly when dispatched from a verifier definition outside main"
+require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" \
+  '^.*smoke_root="\$\{RUNNER_TEMP\}/public-release-smoke"[[:space:]]*$' \
+  "stable finalization must root public npm launcher work outside the checkout"
+require_workflow_absence "$STABLE_FINALIZER_NPM_SMOKE" \
+  'smoke_root="\$\{GITHUB_WORKSPACE\}/' \
+  "stable finalization must not place public npm launcher work under the checkout"
+for STABLE_NPM_LANE in pinned latest preview; do
+  require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" \
+    "\"\\\${smoke_root}/${STABLE_NPM_LANE}/work\"" \
+    "stable finalization must create an external work directory for the ${STABLE_NPM_LANE} npm lane"
+done
+require_workflow_count_exactly "$STABLE_FINALIZER_NPM_SMOKE" \
+  '^[[:space:]]+cd "\$\{smoke_root\}/\$\{lane\}/work"[[:space:]]*$' 1 \
+  "the npm launcher helper must enter the selected lane's external work directory exactly once"
+require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" '^[[:space:]]+\([[:space:]]*$' \
+  "the npm launcher helper must isolate its working-directory change in a child shell"
+require_workflow_match "$STABLE_FINALIZER_NPM_SMOKE" '^[[:space:]]+\)[[:space:]]*$' \
+  "the npm launcher helper must close its isolated child shell"
 require_workflow_absence "$STABLE_FINALIZER_BODY" 'npm[[:space:]]+(publish|stage|dist-tag)|NPM_TOKEN|NODE_AUTH_TOKEN|id-token:[[:space:]]+write|contents:[[:space:]]+write|actions:[[:space:]]+write' \
   "stable finalization must remain read-only"
 

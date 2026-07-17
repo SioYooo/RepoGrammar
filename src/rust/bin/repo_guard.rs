@@ -2625,6 +2625,7 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "workflow_dispatch:",
         "candidate_run_id:",
         "candidate_run_attempt:",
+        "if: github.ref != 'refs/heads/main'",
         "permissions:",
         "contents: read",
         "actions: read",
@@ -2649,6 +2650,8 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         .find("verify-npm-pack-evidence")
         .zip(finalizer.find("Smoke the verified public native archive"))
         .is_some_and(|(verification, execution)| verification < execution);
+    let npx_launcher_uses_isolated_workdirs =
+        stable_finalizer_has_isolated_npx_workdirs(&finalizer);
     if finalizer.contains("npm publish")
         || finalizer.contains("npm stage publish")
         || finalizer.contains("npm stage approve")
@@ -2657,6 +2660,7 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         || finalizer.contains("npm dist-tag rm")
         || finalizer.contains("id-token: write")
         || !pack_verification_precedes_execution
+        || !npx_launcher_uses_isolated_workdirs
         || stable_finalize_markers
             .iter()
             .any(|marker| !finalizer.contains(marker))
@@ -2664,9 +2668,46 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         violations.push(GuardViolation::new(
             ".github/workflows/stable-release-finalize.yml",
             "StableReleaseFinalizeContract",
-            "stable finalization must be manually dispatched, read-only, and verify immutable GitHub assets plus npm integrity, provenance, tags, and public smoke paths",
+            "stable finalization must be manually dispatched, read-only, and verify immutable GitHub assets plus npm integrity, provenance, tags, and checkout-independent public smoke paths",
         ));
     }
+}
+
+fn stable_finalizer_has_isolated_npx_workdirs(workflow: &str) -> bool {
+    const EXTERNAL_SMOKE_ROOT: &str = r#"smoke_root="${RUNNER_TEMP}/public-release-smoke""#;
+    const REQUIRED_WORKDIR_LINES: [&str; 3] = [
+        r#""${smoke_root}/pinned/work" \"#,
+        r#""${smoke_root}/latest/work" \"#,
+        r#""${smoke_root}/preview/work""#,
+    ];
+    const EXACT_RUN_NPX: [&str; 17] = [
+        "run_npx() {",
+        r#"local lane="$1""#,
+        "shift",
+        "(",
+        r#"cd "${smoke_root}/${lane}/work""#,
+        r#"HOME="${smoke_root}/${lane}/home" \"#,
+        r#"USERPROFILE="${smoke_root}/${lane}/home" \"#,
+        r#"XDG_CONFIG_HOME="${smoke_root}/${lane}/home/.config" \"#,
+        r#"XDG_DATA_HOME="${smoke_root}/${lane}/home/.local/share" \"#,
+        r#"XDG_CACHE_HOME="${smoke_root}/${lane}/home/.cache" \"#,
+        r#"CODEX_HOME="${smoke_root}/${lane}/home/.codex" \"#,
+        r#"npm_config_cache="${smoke_root}/${lane}/npm-cache" \"#,
+        r#"REPOGRAMMAR_NPM_CACHE_DIR="${smoke_root}/${lane}/binary-cache" \"#,
+        r#"PATH="${tool_bin}" \"#,
+        r#"npx --yes "$@""#,
+        ")",
+        "}",
+    ];
+
+    let lines = workflow.lines().map(str::trim).collect::<Vec<_>>();
+    lines.iter().any(|line| line == &EXTERNAL_SMOKE_ROOT)
+        && REQUIRED_WORKDIR_LINES
+            .iter()
+            .all(|required| lines.iter().any(|line| line == required))
+        && lines
+            .windows(EXACT_RUN_NPX.len())
+            .any(|window| window == EXACT_RUN_NPX)
 }
 
 fn release_workflow_combines_gh_api_slurp_with_jq(workflow: &str) -> bool {
@@ -3758,6 +3799,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn stable_release_finalizer_requires_checkout_independent_npx_workdirs() {
+        let root = TempRoot::new("stable-finalizer-npx-workdir");
+        write_valid_release_contract(root.path());
+
+        let mut violations = Vec::new();
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(violations.is_empty(), "{violations:?}");
+
+        let isolated_cd = r#"cd "${smoke_root}/${lane}/work""#;
+        let external_root = r#"smoke_root="${RUNNER_TEMP}/public-release-smoke""#;
+        let main_dispatch = "if: github.ref != 'refs/heads/main'";
+        for invalid in [
+            valid_stable_finalize_workflow().replace(isolated_cd, "removed"),
+            valid_stable_finalize_workflow()
+                .replace(isolated_cd, r#"cd "${smoke_root}/${lane}/project""#),
+            valid_stable_finalize_workflow().replace(
+                external_root,
+                r#"smoke_root="${GITHUB_WORKSPACE}/public-release-smoke""#,
+            ),
+            valid_stable_finalize_workflow().replace(main_dispatch, "removed"),
+        ] {
+            assert_ne!(invalid, valid_stable_finalize_workflow());
+            write_file(
+                root.path()
+                    .join(".github/workflows/stable-release-finalize.yml"),
+                invalid.as_bytes(),
+            );
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.rule == "StableReleaseFinalizeContract"),
+                "{violations:?}"
+            );
+        }
+    }
+
     fn valid_release_workflow() -> String {
         r#"workflow_dispatch:
   default: build-only
@@ -3857,6 +3937,29 @@ evidence/public-native-smoke.txt
 evidence/public-installer-version.txt
 evidence/pinned-setup.json
 evidence/latest-setup.json
+if: github.ref != 'refs/heads/main'
+smoke_root="${RUNNER_TEMP}/public-release-smoke"
+mkdir -p \
+  "${smoke_root}/pinned/work" \
+  "${smoke_root}/latest/work" \
+  "${smoke_root}/preview/work"
+run_npx() {
+  local lane="$1"
+  shift
+  (
+    cd "${smoke_root}/${lane}/work"
+    HOME="${smoke_root}/${lane}/home" \
+    USERPROFILE="${smoke_root}/${lane}/home" \
+    XDG_CONFIG_HOME="${smoke_root}/${lane}/home/.config" \
+    XDG_DATA_HOME="${smoke_root}/${lane}/home/.local/share" \
+    XDG_CACHE_HOME="${smoke_root}/${lane}/home/.cache" \
+    CODEX_HOME="${smoke_root}/${lane}/home/.codex" \
+    npm_config_cache="${smoke_root}/${lane}/npm-cache" \
+    REPOGRAMMAR_NPM_CACHE_DIR="${smoke_root}/${lane}/binary-cache" \
+    PATH="${tool_bin}" \
+    npx --yes "$@"
+  )
+}
 verify-stable-release-evidence --evidence-dir evidence
 "#
         .to_string()
