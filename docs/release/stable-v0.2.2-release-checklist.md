@@ -56,6 +56,16 @@ candidate run `29586694524`, attempt 1. This preserves release-source and
 candidate authority while allowing the read-only verifier orchestration to be
 corrected.
 
+Corrected finalizer run `29589865164` again failed in the public launcher step.
+Its redirected command output was not retained, so that run alone does not
+identify the exact failing invocation. A matching isolated reproduction using
+the public npm package showed that the version command passes, setup returns
+typed `repository_initialization_failed` when the deliberately bounded PATH
+omits `git`, and adding only `git` makes setup complete with a ready repository
+index and passing product self-test. The verifier tool allowlist therefore
+includes `git`; the release tag, artifacts, package, candidate identity, and
+permissions remain unchanged.
+
 ## Immutable identities
 
 - Cargo, Cargo lockfile, and npm manifest versions are exactly `0.2.2`.

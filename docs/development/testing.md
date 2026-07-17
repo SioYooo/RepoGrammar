@@ -1003,7 +1003,9 @@ the same-name root `package.json` can cause npm to skip injecting the requested
 public package's bin. The installer shell contract test locks the three work
 directories, the dynamic lane `cd`, and the child-shell boundary.
 It also locks the `${RUNNER_TEMP}` root and the workflow's visible rejection of
-verifier definitions dispatched from a ref other than `main`.
+verifier definitions dispatched from a ref other than `main`. The contract
+requires `git` in the tool-only PATH so the setup smoke can initialize its
+isolated fixture repository.
 
 The first post-public finalizer run, `29587973589`, was bound to candidate run
 `29586694524`, attempt 1. It passed immutable GitHub release, public npm
@@ -1012,6 +1014,13 @@ the launcher smoke with the root-working-directory behavior above and did not
 emit `STABLE_RELEASE_READY`. A corrected finalizer is dispatched from `main`
 while checking out immutable `v0.2.2`; this changes verifier orchestration only,
 not the release source, artifacts, or candidate-run identity.
+Follow-up run `29589865164` again failed in the public launcher step. Because
+the workflow redirected command output and uploaded no failure evidence, that
+run alone does not identify the exact invocation. An exact local reproduction
+from the same external-work-directory and tool-only-PATH shape showed that the
+version command passes, setup returns typed `repository_initialization_failed`,
+and adding only `git` makes the same public package complete setup. This is a
+verifier-environment correction, not a product or publication change.
 
 - Fresh checkout smoke: clone the current checkout into `/tmp` and run a small
   Cargo product smoke such as `cargo test --workspace --all-features

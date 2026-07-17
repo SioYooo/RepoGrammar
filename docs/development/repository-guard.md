@@ -141,13 +141,15 @@ truthful.
 
 Each public npm launcher lane (`pinned`, `latest`, and `preview`) must execute
 from its own external `${RUNNER_TEMP}` work directory, with its own HOME, npm
-cache, binary cache, and tool-only PATH. The launcher helper changes directory
-inside a child shell so one lane cannot change the workflow step's ambient
-directory. Running `npx --package` from the checked-out RepoGrammar root is not
-valid evidence: npm can treat the root's same-name `package.json` as the current
-package without injecting the fetched public package's `repogrammar` bin. The
-guard locks the `${RUNNER_TEMP}` root and rejects verifier definitions
-dispatched from a ref other than `main`.
+cache, binary cache, and tool-only PATH. That PATH must include `git` because
+the public setup smoke performs repository initialization. The launcher helper
+changes directory inside a child shell so one lane cannot change the workflow
+step's ambient directory. Running `npx --package` from the checked-out
+RepoGrammar root is not valid evidence: npm can treat the root's same-name
+`package.json` as the current package without injecting the fetched public
+package's `repogrammar` bin. The guard locks the `${RUNNER_TEMP}` root, rejects
+verifier definitions dispatched from a ref other than `main`, and rejects a
+launcher tool list that omits `git`.
 
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified

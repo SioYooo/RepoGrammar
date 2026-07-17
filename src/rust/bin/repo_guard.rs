@@ -2675,6 +2675,8 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
 
 fn stable_finalizer_has_isolated_npx_workdirs(workflow: &str) -> bool {
     const EXTERNAL_SMOKE_ROOT: &str = r#"smoke_root="${RUNNER_TEMP}/public-release-smoke""#;
+    const REQUIRED_TOOL_LOOP: &str =
+        "for tool in node npm npx python3 sh bash tar gzip git uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do";
     const REQUIRED_WORKDIR_LINES: [&str; 3] = [
         r#""${smoke_root}/pinned/work" \"#,
         r#""${smoke_root}/latest/work" \"#,
@@ -2702,6 +2704,7 @@ fn stable_finalizer_has_isolated_npx_workdirs(workflow: &str) -> bool {
 
     let lines = workflow.lines().map(str::trim).collect::<Vec<_>>();
     lines.iter().any(|line| line == &EXTERNAL_SMOKE_ROOT)
+        && lines.iter().any(|line| line == &REQUIRED_TOOL_LOOP)
         && REQUIRED_WORKDIR_LINES
             .iter()
             .all(|required| lines.iter().any(|line| line == required))
@@ -3811,6 +3814,7 @@ mod tests {
         let isolated_cd = r#"cd "${smoke_root}/${lane}/work""#;
         let external_root = r#"smoke_root="${RUNNER_TEMP}/public-release-smoke""#;
         let main_dispatch = "if: github.ref != 'refs/heads/main'";
+        let tool_loop = "for tool in node npm npx python3 sh bash tar gzip git uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do";
         for invalid in [
             valid_stable_finalize_workflow().replace(isolated_cd, "removed"),
             valid_stable_finalize_workflow()
@@ -3820,6 +3824,7 @@ mod tests {
                 r#"smoke_root="${GITHUB_WORKSPACE}/public-release-smoke""#,
             ),
             valid_stable_finalize_workflow().replace(main_dispatch, "removed"),
+            valid_stable_finalize_workflow().replace(tool_loop, &tool_loop.replace(" git", "")),
         ] {
             assert_ne!(invalid, valid_stable_finalize_workflow());
             write_file(
@@ -3939,6 +3944,8 @@ evidence/pinned-setup.json
 evidence/latest-setup.json
 if: github.ref != 'refs/heads/main'
 smoke_root="${RUNNER_TEMP}/public-release-smoke"
+for tool in node npm npx python3 sh bash tar gzip git uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
+done
 mkdir -p \
   "${smoke_root}/pinned/work" \
   "${smoke_root}/latest/work" \

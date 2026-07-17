@@ -190,7 +190,7 @@ jobs:
             "${smoke_root}/latest/work" \
             "${smoke_root}/preview/home" \
             "${smoke_root}/preview/work"
-          for tool in node npm npx python3 sh bash tar gzip uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
+          for tool in node npm npx python3 sh bash tar gzip git uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
             tool_path="$(command -v "${tool}")"
             ln -s "${tool_path}" "${tool_bin}/${tool}"
           done
