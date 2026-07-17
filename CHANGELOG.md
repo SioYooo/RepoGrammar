@@ -54,6 +54,25 @@
 
 ### Fixed
 
+- Aligned `UNKNOWN` recovery guidance with the optional-provider registry so it
+  never tells an agent to enable a provider that does not exist. A single
+  cross-check authority (`application::providers::provider_recovery_code`) now
+  decides every provider-related recovery code against the registry instead of
+  hard-coded mechanism lists in the query use case. Mechanisms an *integrated*
+  provider slot resolves recover via `enable_provider` (today the TypeScript
+  compiler slot's `typescript_module_resolver`, `typescript_paths_resolver`,
+  `typescript_package_entry_model`, and `typescript_export_graph`, which moved
+  off `resolve_import_graph`). Mechanisms a *registered-but-not-integrated* slot
+  would resolve (the python and rust slots) and framework/dependency-injection/
+  build models only a future provider could resolve now recover via the new
+  low-cardinality code `not_implemented_in_current_version` instead of an
+  unexecutable `enable_provider`. Genuine import-graph mechanisms in no provider
+  bucket keep `resolve_import_graph`. `stats --unknowns` and `unknowns` output
+  therefore shows `not_implemented_in_current_version` buckets where it
+  previously showed `enable_provider`; `resolve_dependency_metadata` stays a
+  reserved telemetry code but is no longer emitted. `run_sync` keeps its spelling
+  for metric-bucket continuity even though its operator action is
+  `repogrammar resync`.
 - The `families` listing now actually verifies evidence freshness. Previously
   `families --json` accepted a freshness request and source store but ignored
   both, serving the family inventory with zero freshness qualification even when

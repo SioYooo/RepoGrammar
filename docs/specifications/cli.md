@@ -829,9 +829,13 @@ snippets, query text, repository names, absolute paths, code-unit ids, or fact
 ids by default. `by_recovery_code` is a stable low-cardinality code bucket,
 never the free-text recovery guidance stored on individual facts. Recovery
 codes include `run_sync`, `add_project_config`, `enable_provider`,
-`resolve_import_graph`, `resolve_fixture_graph`,
-`resolve_dependency_metadata`, `runtime_trace_required`,
-`manual_review_required`, and `unknown`. `by_role_state` uses
+`not_implemented_in_current_version`, `resolve_import_graph`,
+`resolve_fixture_graph`, `resolve_dependency_metadata`,
+`runtime_trace_required`, `manual_review_required`, and `unknown`.
+`enable_provider` names only mechanisms an integrated optional provider (today
+the TypeScript compiler slot) can resolve; mechanisms a registered-but-not-
+integrated slot or a future provider would resolve report
+`not_implemented_in_current_version`. `by_role_state` uses
 `none`, `single`, or `ambiguous`; ambiguous framework roles are reported as
 support-risk because they block confident family-support interpretation.
 `by_language_detail` is a source-free readiness-scoped language rollup. It may

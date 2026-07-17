@@ -537,10 +537,25 @@ Metrics may count persisted semantic unknowns by language, framework role,
 framework-role state, adapter, reason, stage, required mechanism,
 support-blocking status, and stable recovery code. Recovery buckets must use
 low-cardinality codes such as `run_sync`, `add_project_config`,
-`enable_provider`, `resolve_import_graph`, `resolve_fixture_graph`,
-`resolve_dependency_metadata`, `runtime_trace_required`,
-`manual_review_required`, or reserved `unknown`; they must not use free-text
-recovery guidance, repository paths, code snippets, code-unit ids, or fact ids.
+`enable_provider`, `not_implemented_in_current_version`, `resolve_import_graph`,
+`resolve_fixture_graph`, `resolve_dependency_metadata`,
+`runtime_trace_required`, `manual_review_required`, or reserved `unknown`; they
+must not use free-text recovery guidance, repository paths, code snippets,
+code-unit ids, or fact ids. Provider-related codes must match the optional
+semantic provider registry so guidance never names a capability an agent cannot
+act on: `enable_provider` is emitted only for a mechanism an *integrated*
+provider slot resolves (today only the TypeScript compiler slot), because that
+provider exists and `doctor` shows how to configure it; a mechanism a
+*registered-but-not-integrated* slot would resolve (the python and rust slots),
+or a framework/dependency-injection/build model only a future provider could
+resolve, recovers via `not_implemented_in_current_version` rather than promising
+a provider. A single cross-check authority against the registry decides this;
+callers must not re-derive it from hard-coded mechanism lists.
+`resolve_dependency_metadata` is retained as a reserved historical code but no
+live mechanism emits it, because its mechanism is a python-provider-slot bucket
+that now recovers via `not_implemented_in_current_version`. The `run_sync`
+recovery code keeps that spelling for metric-bucket continuity even though its
+operator action is `repogrammar resync`.
 Mechanism buckets should be actionable analyzer/provider codes, for example
 `python_import_graph`, `pytest_fixture_graph`, `fastapi_dependency_graph`,
 `python_package_reexport_model`, `python_star_import_model`,

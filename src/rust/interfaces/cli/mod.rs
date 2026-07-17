@@ -9816,13 +9816,12 @@ mod tests {
                     },
                 ],
                 by_recovery_code: vec![
+                    // Both mechanisms (fastapi_dependency_graph, python_import_graph)
+                    // belong to the registered-but-not-integrated python provider
+                    // slot, so both recover via not_implemented_in_current_version.
                     UnknownInventoryBucket {
-                        key: "enable_provider".to_string(),
-                        count: 1,
-                    },
-                    UnknownInventoryBucket {
-                        key: "resolve_import_graph".to_string(),
-                        count: 1,
+                        key: "not_implemented_in_current_version".to_string(),
+                        count: 2,
                     },
                 ],
             }
@@ -12852,7 +12851,7 @@ mod tests {
         );
         assert_eq!(
             value["unknown_inventory"]["by_recovery_code"][0]["recovery_code"],
-            "enable_provider"
+            "not_implemented_in_current_version"
         );
         assert!(value["unknown_inventory"].get("by_recovery").is_none());
         assert!(!output
@@ -12894,8 +12893,12 @@ mod tests {
             "framework:fastapi.route"
         );
         assert_eq!(
-            value["unknown_inventory"]["by_recovery_code"][1]["recovery_code"],
-            "resolve_import_graph"
+            value["unknown_inventory"]["by_recovery_code"][0]["recovery_code"],
+            "not_implemented_in_current_version"
+        );
+        assert_eq!(
+            value["unknown_inventory"]["by_recovery_code"][0]["count"],
+            2
         );
         assert_eq!(value["by_language"][0]["blocking_unknowns"], 1);
         assert_eq!(

@@ -3,6 +3,7 @@
 use crate::application::family::{
     classify_unknown_family_effect, FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
 };
+use crate::application::providers::provider_recovery_code;
 use crate::application::recovery::{
     classify_recovery, recovery_guidance, RecoveryAction, RecoveryAgentState,
     RecoveryAutosyncState, RecoveryContext, RecoveryEvidenceState, RecoveryFreshness,
@@ -1365,7 +1366,7 @@ fn classify_unknown_disposition(context: UnknownPolicyContext<'_>) -> UnknownDis
         context.framework_role,
         context.assumptions,
     );
-    let registered_mechanism = registered_recovery_mechanism(&required_mechanism, context);
+    let registered_mechanism = registered_recovery_mechanism(&required_mechanism);
     let resolution_class = classify_resolution_class(context, registered_mechanism);
     let recovery_code = unknown_recovery_code(
         resolution_class,
@@ -1842,10 +1843,7 @@ fn tsjs_import_resolution_mechanism(assumptions: &[String]) -> Option<&'static s
     }
 }
 
-fn registered_recovery_mechanism(
-    mechanism: &str,
-    context: UnknownPolicyContext<'_>,
-) -> Option<RegisteredRecoveryMechanism> {
+fn registered_recovery_mechanism(mechanism: &str) -> Option<RegisteredRecoveryMechanism> {
     let recoverable = |recovery_code| RegisteredRecoveryMechanism {
         resolution_class: ResolutionClass::Recoverable,
         recovery_code,
@@ -1854,59 +1852,27 @@ fn registered_recovery_mechanism(
         resolution_class: ResolutionClass::Irreducible,
         recovery_code,
     };
+    // Provider-resolvable mechanisms are decided by the single cross-check
+    // authority against the optional-provider registry so recovery guidance never
+    // names a provider that is not integrated. This runs before the arms below so
+    // a registry-bucket or future-provider mechanism (e.g. typescript_module_
+    // resolver, python_import_graph, framework_semantic_provider, spring_di_model)
+    // can never fall through to a hard-coded provider code. Provider mechanisms
+    // remain recoverable: they are resolvable in principle, just not by an
+    // integrated provider in this version.
+    if let Some(recovery_code) = provider_recovery_code(mechanism) {
+        return Some(recoverable(recovery_code));
+    }
     match mechanism {
         "source_refresh" => Some(recoverable("run_sync")),
         "project_config_reader" => Some(recoverable("add_project_config")),
-        "resolve_dependency_metadata" => Some(recoverable("resolve_dependency_metadata")),
         "pytest_fixture_graph" => Some(recoverable("resolve_fixture_graph")),
-        "python_import_graph"
-        | "typescript_paths_resolver"
-        | "typescript_rootdirs_model"
-        | "typescript_module_resolver"
-        | "typescript_export_graph"
-        | "typescript_package_entry_model"
+        "typescript_rootdirs_model"
         | "typescript_commonjs_alias_model"
-        | "rust_module_graph"
         | "java_project_graph"
         | "csharp_project_model" => Some(recoverable("resolve_import_graph")),
-        "fastapi_dependency_graph"
-        | "sqlalchemy_session_model"
-        | "sqlalchemy_model_graph"
-        | "pydantic_validator_model"
-        | "django_project_model"
-        | "django_settings_model"
-        | "flask_app_model"
-        | "fastify_receiver_model"
-        | "prisma_client_model"
-        | "drizzle_db_model"
-        | "nestjs_di_model"
-        | "hono_receiver_model"
-        | "rust_trait_dispatch_model"
-        | "axum_route_model"
-        | "java_spring_route_literal_model"
-        | "spring_component_scan_model"
-        | "spring_di_model"
-        | "spring_data_repository_model"
-        | "java_test_annotation_model"
-        | "jpa_entity_model"
-        | "jaxrs_resource_model"
-        | "csharp_di_model"
-        | "aspnet_route_literal_model"
-        | "cpp_test_framework_model"
-        | "cpp_compile_commands_model" => Some(recoverable("enable_provider")),
         "rust_macro_boundary" | "cpp_macro_boundary" => Some(recoverable("manual_review_required")),
-        "framework_semantic_provider"
-            if context.language == "python"
-                && matches!(
-                    context.affected_claim,
-                    "python_call_target" | "python_framework_identity"
-                ) =>
-        {
-            Some(recoverable("manual_review_required"))
-        }
-        "dependency_injection_model" => Some(recoverable("enable_provider")),
-        "cargo_feature_cfg_model"
-        | "csharp_build_variant_model"
+        "csharp_build_variant_model"
         | "cpp_build_variant_model"
         | "build_variant_model"
         | "conflict_resolution"
@@ -5752,11 +5718,21 @@ mod tests {
         assert_eq!(bucket_count(&report.by_role_state, "single"), 2);
         assert_eq!(blocks_support_count(&report.by_blocks_support, true), 1);
         assert_eq!(blocks_support_count(&report.by_blocks_support, false), 1);
+        // Both mechanisms belong to the python provider slot, which is registered
+        // but not integrated, so their recovery is not_implemented_in_current_
+        // version rather than resolve_import_graph or enable_provider.
+        assert_eq!(
+            bucket_count(
+                &report.by_recovery_code,
+                "not_implemented_in_current_version"
+            ),
+            2
+        );
         assert_eq!(
             bucket_count(&report.by_recovery_code, "resolve_import_graph"),
-            1
+            0
         );
-        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 1);
+        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 0);
         let python = language_unknown_summary(&report, "python");
         assert_eq!(python.total_unknowns, 2);
         assert_eq!(python.blocking_unknowns, 1);
@@ -6024,7 +6000,10 @@ mod tests {
         assert_eq!(metric.reason_code, "DynamicImport");
         assert_eq!(metric.required_mechanism, "python_import_graph");
         assert_eq!(metric.obligation, "symbol_binding");
-        assert_eq!(metric.recovery_code, "resolve_import_graph");
+        // python_import_graph is a python-provider-slot bucket mechanism, so the
+        // recoverable legacy projection now recovers via not_implemented rather
+        // than resolve_import_graph.
+        assert_eq!(metric.recovery_code, "not_implemented_in_current_version");
     }
 
     #[test]
@@ -6155,7 +6134,12 @@ mod tests {
             dynamic_import.resolution_class,
             ResolutionClass::Irreducible
         );
-        assert_eq!(static_import.recovery_code, "resolve_import_graph");
+        // python_import_graph is a python-provider-slot bucket mechanism: its
+        // recoverable path now recovers via not_implemented_in_current_version.
+        assert_eq!(
+            static_import.recovery_code,
+            "not_implemented_in_current_version"
+        );
         assert_eq!(dynamic_import.recovery_code, "runtime_trace_required");
         // Public class remains the legacy claim-impact projection for both.
         assert_eq!(static_import.legacy_class, UnknownClass::Blocking);
@@ -6323,9 +6307,15 @@ mod tests {
             "an absent runtime-boundary assumption leaves static provider recovery available"
         );
 
+        // A genuinely unregistered mechanism (import_resolution_provider for an
+        // unknown language) must default to the safe Irreducible/manual_review
+        // outcome, never to an invented provider capability. FrameworkMagic can no
+        // longer be used here: for an unknown language it derives
+        // framework_semantic_provider, which is now a recognized python-provider
+        // slot bucket that recovers via not_implemented_in_current_version.
         let unregistered = disposition(
             "unknown",
-            UnknownReasonCode::FrameworkMagic,
+            UnknownReasonCode::UnresolvedImport,
             "future_unknown_claim",
             "unknown",
             &[],
@@ -6354,15 +6344,143 @@ mod tests {
         let report = unknown_inventory(&store).expect("unknown inventory");
         let recovery_debug = format!("{:?}", report.by_recovery_code);
 
-        assert_eq!(
-            bucket_count(&report.by_recovery_code, "resolve_import_graph"),
-            1
-        );
+        // typescript_module_resolver belongs to the integrated TypeScript compiler
+        // slot, so its recovery moved from resolve_import_graph to enable_provider.
+        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 1);
         assert!(!recovery_debug.contains("/Users/example"));
         assert!(!recovery_debug.contains("src/app.ts"));
         assert!(!recovery_debug.contains("code_unit_id"));
         assert!(!recovery_debug.contains("fact_id"));
         assert!(!recovery_debug.contains("fn handler"));
+    }
+
+    #[test]
+    fn integrated_typescript_provider_mechanisms_recover_via_enable_provider() {
+        // The integrated TypeScript compiler slot's resolvable mechanisms guide
+        // toward enabling that present provider (executable via doctor), not the
+        // generic resolve_import_graph they used before this alignment.
+        for mechanism in [
+            "typescript_module_resolver",
+            "typescript_paths_resolver",
+            "typescript_package_entry_model",
+            "typescript_export_graph",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism),
+                Some(RegisteredRecoveryMechanism {
+                    resolution_class: ResolutionClass::Recoverable,
+                    recovery_code: "enable_provider",
+                }),
+                "{mechanism} should recover via enable_provider"
+            );
+        }
+    }
+
+    #[test]
+    fn unintegrated_provider_mechanisms_recover_via_not_implemented() {
+        // Registered-but-not-integrated slot buckets (python, rust) and future-
+        // provider framework/DI/build models resolve nothing here, so they recover
+        // via not_implemented_in_current_version instead of promising a provider.
+        for mechanism in [
+            "python_import_graph",
+            "fastapi_dependency_graph",
+            "framework_semantic_provider",
+            "resolve_dependency_metadata",
+            "rust_module_graph",
+            "rust_trait_dispatch_model",
+            "cargo_feature_cfg_model",
+            "spring_di_model",
+            "dependency_injection_model",
+            "sqlalchemy_session_model",
+            "cpp_compile_commands_model",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism),
+                Some(RegisteredRecoveryMechanism {
+                    resolution_class: ResolutionClass::Recoverable,
+                    recovery_code: "not_implemented_in_current_version",
+                }),
+                "{mechanism} should recover via not_implemented_in_current_version"
+            );
+        }
+    }
+
+    #[test]
+    fn non_provider_import_graph_mechanisms_keep_resolve_import_graph() {
+        // Genuine import-graph mechanisms that no provider slot resolves keep the
+        // executable resolve_import_graph recovery.
+        for mechanism in [
+            "typescript_rootdirs_model",
+            "typescript_commonjs_alias_model",
+            "java_project_graph",
+            "csharp_project_model",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism).map(|entry| entry.recovery_code),
+                Some("resolve_import_graph"),
+                "{mechanism} should keep resolve_import_graph"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_recovery_code_vocabulary_is_fixed_and_low_cardinality() {
+        // The complete set of recovery codes registered_recovery_mechanism can emit
+        // across the mechanism vocabulary is this fixed, low-cardinality list.
+        // resolve_dependency_metadata is intentionally absent: its only mechanism
+        // is a python-provider-slot bucket that now recovers via not_implemented.
+        let representative_mechanisms = [
+            "source_refresh",
+            "project_config_reader",
+            "pytest_fixture_graph",
+            "typescript_module_resolver",
+            "typescript_paths_resolver",
+            "typescript_package_entry_model",
+            "typescript_export_graph",
+            "typescript_rootdirs_model",
+            "typescript_commonjs_alias_model",
+            "python_import_graph",
+            "fastapi_dependency_graph",
+            "framework_semantic_provider",
+            "resolve_dependency_metadata",
+            "rust_module_graph",
+            "rust_trait_dispatch_model",
+            "cargo_feature_cfg_model",
+            "java_project_graph",
+            "csharp_project_model",
+            "spring_di_model",
+            "dependency_injection_model",
+            "sqlalchemy_session_model",
+            "rust_macro_boundary",
+            "cpp_macro_boundary",
+            "build_variant_model",
+            "conflict_resolution",
+            "compatible_support_evidence",
+            "runtime_trace_required",
+            "spring_proxy_model",
+            "java_mockito_runtime_mock_model",
+        ];
+        let emitted: BTreeSet<&str> = representative_mechanisms
+            .into_iter()
+            .filter_map(|mechanism| {
+                registered_recovery_mechanism(mechanism).map(|entry| entry.recovery_code)
+            })
+            .collect();
+        assert_eq!(
+            emitted,
+            BTreeSet::from([
+                "run_sync",
+                "add_project_config",
+                "resolve_fixture_graph",
+                "resolve_import_graph",
+                "enable_provider",
+                "not_implemented_in_current_version",
+                "manual_review_required",
+                "runtime_trace_required",
+            ])
+        );
+        // No live mechanism emits resolve_dependency_metadata anymore.
+        assert!(!emitted.contains("resolve_dependency_metadata"));
     }
 
     #[test]

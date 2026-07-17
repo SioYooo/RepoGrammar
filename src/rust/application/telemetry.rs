@@ -108,8 +108,11 @@ const FAMILY_QUERY_RECOVERY_CODE_KEYS: &[&str] = &[
     "run_sync",
     "add_project_config",
     "enable_provider",
+    "not_implemented_in_current_version",
     "resolve_import_graph",
     "resolve_fixture_graph",
+    // Retained for historical rollups: no live mechanism emits it since
+    // provider-bucket mechanisms recover via not_implemented_in_current_version.
     "resolve_dependency_metadata",
     "runtime_trace_required",
     "manual_review_required",
