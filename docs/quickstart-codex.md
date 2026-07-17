@@ -39,6 +39,26 @@ the current failed attempt created. A missing `codex` CLI leaves a usable
 repository index and returns one install-agent action rather than destroying
 the repository-only result.
 
+## Verify The Global Codex Pre-flight
+
+Setup refreshes a managed instruction block only when the existing Codex
+integration is safely owned **and** an explicit instruction-file override is
+configured for that setup path. To inspect or refresh the default global guide
+without reconfiguring MCP or touching repository state, select that file
+explicitly:
+
+```text
+repogrammar instructions status --file "$HOME/.codex/AGENTS.md" --json
+repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --dry-run
+repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --yes
+```
+
+Use a different explicit path when `CODEX_HOME` or local policy places the
+guide elsewhere. The command updates only an exact current or known legacy
+RepoGrammar marker block, preserves unrelated instructions, and refuses foreign
+or malformed marker content. It does not create `.repogrammar/`, run setup, or
+mirror `CLAUDE.md`.
+
 ## Use Codex And GPT-5.6
 
 Open Codex in the configured repository. Use `/mcp` to confirm the
@@ -54,12 +74,14 @@ Ask:
 How are API routes implemented in this repository?
 ```
 
-Codex should call the read-only `repogrammar_context` MCP tool before broad
-source reads when the question concerns implementation families, analogues,
-deviations, or conformance. RepoGrammar returns evidence, a read plan, and
+Codex should call the read-only `repogrammar_context` MCP tool before CodeGraph
+or broad source reads when an implementation, test, fix, refactor, or diagnosis
+requires repository-local contract/convention, repeated implementation,
+framework-role, or analogue evidence. This includes schema, protocol, API, and
+prompt-output contract drift. RepoGrammar returns evidence, a read plan, and
 typed uncertainty. `UNKNOWN`, fallback, stale evidence, or omitted spans mean
-Codex must use normal source reads for the affected files; they must never be
-upgraded into a confident family claim.
+Codex must state the reason and use normal source reads for the affected files;
+they must never be upgraded into a confident family claim.
 
 RepoGrammar does not run GPT-5.6 or call the OpenAI API itself. GPT-5.6 is the
 Codex development/demo reasoning surface, while RepoGrammar is the local MCP
@@ -96,7 +118,7 @@ After the exact npm version and matching GitHub asset pass the availability
 gate in `quickstart.md`:
 
 ```text
-npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target codex
+npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target codex
 ```
 
 If either check fails, use the source acquisition path above.

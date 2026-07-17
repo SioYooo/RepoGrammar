@@ -58,7 +58,7 @@ and repository state is preserved. Setup never enables telemetry.
 End users must not need Rust, Cargo, Node.js, npm, Docker, the SQLite CLI, a
 local LLM, an embedding model, or cloud API keys to install and run the
 RepoGrammar CLI. Rust/Cargo remains a contributor and source-build dependency
-only. The current Python preview still requires a Python 3.10 or newer `python3` interpreter at
+only. The bounded Python analyzer still requires a Python 3.10 or newer `python3` interpreter at
 indexing time because RepoGrammar uses a bundled CPython AST worker asset; it
 must not require a Python virtualenv or project dependency installation. Node.js
 is needed only for TypeScript worker test development.
@@ -86,7 +86,7 @@ orchestrator. It resolves targets through a registry, plans global versus
 project-local scope, prints target MCP snippets on request, and delegates live
 writes only to adapters with an implemented reversible ownership contract.
 
-Public-preview release artifacts use these platform targets:
+Stable and preview release artifacts use these platform targets:
 
 - `repogrammar-aarch64-apple-darwin.tar.gz`;
 - `repogrammar-x86_64-apple-darwin.tar.gz`;
@@ -98,11 +98,11 @@ arm64 requires glibc 2.39 or newer. The npm launcher and shell installer must
 prove the matching runtime family and minimum version before download; musl,
 older glibc, and unknown libc fail closed. The x86_64 builder is pinned to
 Ubuntu 22.04 and the arm64 builder to Ubuntu 24.04, and each build records the
-highest imported GLIBC symbol version. Native build-only artifacts still
-require post-build ABI inspection before publication evidence is complete.
+highest imported GLIBC symbol version. Every native build exercises post-build
+ABI inspection, but only the tag-run build can become publication evidence.
 
-These four macOS/Linux archives are the complete preview platform set. Windows
-is not a public-preview release or npm platform while its local index lifecycle
+These four macOS/Linux archives are the complete stable and preview platform
+set. Windows is not a release or npm platform while its local index lifecycle
 remains unsupported; the workflow must not build, smoke, upload, or imply a
 Windows archive.
 
@@ -110,31 +110,44 @@ Every release artifact must include the `repogrammar` executable and the
 bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
 The release build must unpack and execute each exact archive on its native
-runner before upload. The packaged binary smoke enforces Python 3.10+ and runs `version`, isolated
-`setup --dry-run --json`, isolated live setup through the product MCP self-test,
-and `find` plus advisory `check` against a deterministic pytest family. The
-`check` result must remain `CONTEXT_ONLY` with `advisory_status: UNKNOWN` rather
-than being promoted to runtime proof. Exercising only a source-tree binary is
+runner before upload. The packaged binary smoke enforces Python 3.10+ and runs
+`version`, isolated `setup --dry-run --json`, isolated live setup through the
+product MCP self-test, full and incremental sync of the committed Pydantic
+release fixture, and its bounded `find` plus advisory `check` path. The `check`
+result must remain `CONTEXT_ONLY` with `advisory_status: UNKNOWN` rather than
+being promoted to runtime proof. Exercising only a source-tree binary is
 insufficient. The published `install.sh` asset must also have a matching
-`.sha256` checksum asset. `install.ps1` is not published for this preview.
+`.sha256` checksum asset. `install.ps1` is not published for either channel.
 Installers must fail instead of silently installing an artifact that omits the
 bundled Python worker.
 Manual release-workflow dispatch is build-only and cannot publish, even when a
-tag is selected as its ref. Only a pushed tag is a publication event. Before
-publication, complete Git history must prove the tag commit is contained in
-`origin/main`. A pushed tag run
-must fail during preflight when npm publication credentials are absent, before
-GitHub assets are uploaded. GitHub prerelease assets are an explicit staged
-prerequisite for npm publication; because the two registries cannot publish
-atomically, an npm failure after GitHub staging must leave the workflow visibly
-failed and the release classified as partial until registry and `npx` smokes
+tag is selected as its ref. It is a rehearsal only: its artifacts are not
+publication candidates. Only a pushed tag is a publication event and the tag
+run is the sole source of candidate bytes. Before candidate creation, complete
+Git history must prove the tag is the exact version tag at the current
+`origin/main` commit and Cargo, Cargo lockfile, and npm manifest versions must
+match. Preview and stable tags both use the same stage-only npm Trusted
+Publisher, protected `npm-release` GitHub environment, and one exact package
+tarball produced and smoked in that tag run. They do not use a traditional npm
+write token. The tag run uploads a private GitHub draft and privately stages
+npm; a human reviews those exact candidates before making either registry
+public. The GitHub draft contains exactly four archives, their four checksums,
+`install.sh`, its checksum, and `npm-candidate-manifest.json` (11 assets). A
+full tag-run rerun refuses any existing release or draft instead of replacing
+candidate files; rerunning only failed staging jobs remains available. Stable
+publication then publishes the complete GitHub draft as an immutable normal
+release, requires human 2FA to approve the npm stage, and runs a separate
+read-only finalizer with the exact tag-run id and attempt. Because the two
+registries cannot publish atomically, any failure must remain visibly partial
+until GitHub immutability, npm integrity/provenance, and public product smokes
 are independently verified. Workflow success or local packaging never proves
-that GitHub or npm publication occurred.
-Public preview documentation must use an explicit preview tag such as
-`v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect, because
-preview releases may be marked prerelease. When a `latest` or explicit artifact
+that either registry publication occurred.
+Preview documentation must use an explicit preview tag such as
+`v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
+documentation should pin `v0.2.0` for reproducible acquisition even after the
+normal release becomes GitHub `latest`. When a `latest` or explicit artifact
 lookup fails, installers must report that the release artifact was not found,
-suggest `--version <preview-tag>`, and mention
+suggest the exact `--version <release-tag>`, and mention
 `REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
 Installers must validate archive entry names before extraction: absolute paths,
 Windows absolute paths, traversal components, URI-like names, backslashes, and
@@ -222,7 +235,7 @@ wrappers after the user invokes install/update; it does not relax
 unrelated foreign paths.
 
 Windows source checkouts retain `src/install/install.ps1` only as a contributor
-and local-dogfood path. It is not a tagged public-preview asset and contains no
+and local-dogfood path. It is not a tagged release asset and contains no
 release-download installation path. Every CLI install action must fail before
 network access or filesystem writes unless the user passes `-FromSource`
 explicitly from a RepoGrammar source checkout. `-FromSource` may build or copy
@@ -254,7 +267,7 @@ authority before download. The manifest also carries canonical
 repository, homepage, and issue URLs because the packed README links to
 unbundled project documentation through absolute GitHub URLs. The npm launcher
 must reject every Windows
-architecture with an explicit macOS/Linux-only preview boundary before using a
+architecture with an explicit macOS/Linux-only release boundary before using a
 release artifact or a local binary override. On Linux it must also reject musl,
 an unknown libc, or glibc below the architecture-specific minimum before using
 an override or downloading an artifact.
@@ -271,7 +284,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.2.0-preview.0.tgz`;
+  `npm install -g ./sioyooo-repogrammar-0.2.0.tgz`;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
@@ -282,13 +295,35 @@ The deterministic package gate must create the real `.tgz` in a temporary
 directory, inspect its exact file set and metadata, install it into an isolated
 prefix offline, and execute the installed `repogrammar` wrapper against local
 fake release assets. Temporary tarballs must never remain in the repository.
-Preview publication must use npm dist-tag `preview`, never publish by relying
-on the default `latest`. npm requires a `latest` dist-tag; while the package has
-no stable published version, the registry may map `latest` to a published
-prerelease. That bounded preview-only state does not promote the package to
-stable or authorize unversioned installation. Public-preview instructions must
-pin the exact prerelease or `@preview`. Once a stable version exists, a
-prerelease-valued `latest` is not this bounded exception and must fail closed.
+Preview publication stages the exact already-smoked tarball through the same
+OIDC trusted-publisher and 2FA approval boundary as stable publication, with npm
+dist-tag `preview`; it never uses a traditional write token or relies on the
+default `latest`. npm requires a `latest` dist-tag; while the package has
+no stable published version, the registry may map `latest` to the exact bounded
+preview version. That preview-only state does not promote the package to stable
+or authorize unversioned installation. Preview instructions must pin the exact
+prerelease or `@preview`. Stable publication stages the exact already-smoked
+tarball with dist-tag `latest`, preserves `preview=0.2.0-preview.0`, and requires
+the public finalizer to prove both tags. Once a stable version exists, any
+prerelease-valued `latest` fails closed.
+
+The npm Trusted Publisher identity is exact: owner `SioYooo`, repository
+`RepoGrammar`, workflow `release.yml`, and GitHub environment `npm-release`.
+That environment has a required human reviewer and a deployment-branch rule
+restricted to tags matching `v*`; the npm publisher permits staged publication
+only (`--allow-stage-publish`). The workflow records raw stage output only in
+the protected job log. Maintainers record the tag-run id, successful run
+attempt, and npm stage id in the private release record without claiming those
+values are a public artifact.
+
+The stable finalizer treats the public
+`npm-candidate-manifest.json` GitHub asset as candidate authority. Before
+running any public npm package or launcher it compares the registry-fetched pack
+metadata and SRI with that manifest. It then verifies the public Linux archive,
+the public shell installer, pinned and unversioned live repository-only setup,
+and the preserved preview version. Native coding-agent integration and a fresh
+agent's instruction behavior require separate isolated pre-release/manual
+evidence; the read-only finalizer does not claim to exercise either one.
 
 Contributor release-readiness smoke may run `repogrammar install --target all
 --scope global --dry-run` and `repogrammar uninstall --target all --scope
@@ -322,7 +357,7 @@ and `--print-config` output:
 - `kiro`.
 
 It also accepts `auto`, `all`, `none`, and comma-separated concrete target
-lists such as `codex,claude-code`. In the current public preview, live writes
+lists such as `codex,claude-code`. In the current stable/preview product, live writes
 are implemented only for global Codex and global Claude Code. Other registry
 targets are configuration-preview/deferred targets until their idempotent
 writer, ownership receipt, uninstall inverse, and tests are implemented.
@@ -423,19 +458,47 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
+The current managed content version is `2`. The block and MCP initialize
+guidance share one authoritative pre-flight contract. After mandatory
+repository authority and instruction documents have been read, the gate applies
+when `.repogrammar/` exists and an implementation, fix, refactor, test, or
+diagnosis requires a repository-local contract or convention, repeated
+implementation, framework role, or analogue comparison. Covered work explicitly
+includes root-cause repair and schema, protocol, API, prompt-output, or Meaning
+Contract qualification, conformance, or drift. File type and an exact target do
+not exempt a mixed task, such as a YAML-generated prompt that must conform to a
+repeated Meaning Contract.
+
+For covered work the agent calls `repogrammar_context` exactly once before
+CodeGraph or source search/read, with `operation: "find_analogues"`, a target
+built from the concrete repo-relative path, symbol/member id, framework role,
+or code-work question in the task, and `mode: "compact"`. It consumes the
+returned `read_plan` and may fall back when the tool is unavailable or the
+result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or
+insufficient evidence. The agent records that fallback reason before
+proceeding and does not repeat an identical context call unless the target or
+indexed evidence changed. CodeGraph may then supply exact source or call-path
+detail not supplied by RepoGrammar.
+
+The gate is skipped for pure prose documentation; operational release, Git,
+environment, or credential inspection; syntax-only YAML or configuration
+validation; and an exact one-symbol, file, or call-path lookup only when no
+repository contract, convention, repeated implementation, framework role,
+analogue comparison, code-behavior diagnosis, or implementation decision is
+involved. These exceptions do not override a covered contract-conformance
+subtask.
+
 The installer must not overwrite unrelated user instructions. `uninstall`
 reverses only RepoGrammar's own managed write. If a file has a malformed or
 incomplete managed section, the installer must stop and direct the user to a
-repair workflow such as `repogrammar doctor --repair-instructions`.
-The managed block must tell agents to pass the repo-relative path, symbol/member
-id, framework role, or pattern question they already have for find/check/explain
-operations; let RepoGrammar discover candidate families internally; treat
-returned family ids as follow-up handles; use `show_family` only with an exact
-family id returned earlier; use compact mode first; avoid `include_source_spans`
-by default; stop or fall back on
-`UNKNOWN`/`FALLBACK`/stale/omitted/insufficient results; avoid
-`repogrammar stats` in normal agent loops; and never silently initialize a
-repository without user or project-policy permission.
+manual repair workflow. A complete marker pair alone is not proof of ownership:
+only the exact current content or an exact previously shipped legacy body is
+recognized. A modified or unknown body inside the reserved markers is
+`foreign`; it is preserved and refused for automatic refresh or removal. The
+managed block also treats returned family ids as follow-up handles, uses
+`show_family` only with an exact returned id, avoids `include_source_spans` and
+`repogrammar stats` by default, and never silently initializes, resyncs, or
+starts autosync.
 
 The managed instruction writer is implemented as a reversible, idempotent
 operation:
@@ -443,17 +506,28 @@ operation:
 - it creates the file with the managed section when the file is absent;
 - it appends the managed section, preserving prior content, when the file exists
   without markers;
-- it replaces the section in place when a single complete managed section exists;
+- it replaces the section in place only when the body is an exact known older
+  RepoGrammar content version;
 - it reports an unchanged result when the section is already byte-equivalent;
-- it refuses to modify a file with malformed, partial, or duplicated markers;
+- it refuses to modify a file with malformed, partial, duplicated, modified, or
+  foreign marker content;
 - it writes atomically through a sibling temp file plus rename and re-reads the
   file to verify the managed section before reporting success;
+- on Unix it restores the pre-existing file mode, owner uid, and group gid on
+  the open temporary handle before activation, or fails without activating it;
 - `uninstall` and rollback reverse exactly the recorded `instruction_action`:
   they remove the managed section and preserve unrelated user content; when
   RepoGrammar created the file (`instruction_action: "created"`) and stripping
   the section leaves it empty, they also delete the file so no empty artifact is
   left behind, but a file that pre-existed the install or gained user content
   after creation keeps its remaining content and is never deleted.
+
+This is crash-safe replacement, not a cross-process compare-and-swap. A hostile
+or independently authorized same-directory process can still replace the
+destination or sibling temporary pathname between validation and rename. That
+concurrent-mutation scenario is unsupported; callers must not run competing
+instruction writers, and a release must not claim stronger confinement without
+the native evidence required by ADR-0023.
 
 Because real Codex/Claude global instruction-file locations are not yet verified,
 live instruction writing is deferred by default. The installer resolves a
@@ -464,6 +538,28 @@ path. When no path is resolved, the receipt records `instruction_action:
 "deferred"` and no file is written. RepoGrammar never guesses an instruction-file
 path.
 
+Users may inspect or refresh instruction guidance independently from native MCP
+registration with:
+
+```text
+repogrammar instructions status --file <explicit-path> [--json]
+repogrammar instructions sync --file <explicit-path> [--dry-run] [--yes] [--json]
+repogrammar instructions remove --file <explicit-path> [--dry-run] [--yes] [--json]
+```
+
+The path is mandatory and may be relative to the current directory or absolute;
+the command never guesses a target-specific location. `status` is read-only and
+reports `missing`, `current`, `outdated`, `foreign`, or `malformed`. A live
+`sync` or `remove` requires `--yes`; `--dry-run` reports the exact
+low-cardinality action without writing. JSON reports expected and detected
+content versions, before/after state, action, refusal class, and change booleans
+without echoing the file path. Sync creates/appends a missing block or refreshes
+only an exact known legacy version. Remove strips only an exact known current or
+legacy section and preserves all other content. Foreign or malformed sections
+are preserved and fail closed. These commands do not create `.repogrammar/`,
+run indexing, or require consuming repositories to mirror `AGENTS.md` and
+`CLAUDE.md`; each file must be selected separately and explicitly.
+
 Consuming repositories must not be forced to mirror RepoGrammar's own
 `AGENTS.md` and `CLAUDE.md` policy.
 
@@ -472,7 +568,7 @@ Consuming repositories must not be forced to mirror RepoGrammar's own
 The current implementation supports deterministic dry-run planning,
 noninteractive live writes, and a dependency-light text wizard:
 
-- public-preview release packaging is defined by the release workflow for
+- stable and preview release packaging is defined by the release workflow for
   macOS arm64/x86_64, glibc 2.35+ Linux x86_64, and glibc 2.39+ Linux arm64
   only, each with a bundled Python worker asset and `.sha256` checksum. Docs
   decide availability through exact-version GitHub/npm checks rather than a
@@ -487,7 +583,7 @@ noninteractive live writes, and a dependency-light text wizard:
   its noninteractive `--from-source` mode supports dogfood before release
   artifacts exist;
 - `src/install/install.ps1` is a Windows contributor/source-dogfood wrapper,
-  not a public-preview release asset. It has no release-download branch and
+  not a stable or preview release asset. It has no release-download branch and
   fails install actions unless `-FromSource` was passed explicitly. Its
   interactive and noninteractive source modes support contributor dogfood. Its
   `-Verify` switch is a read-only report that compares, by SHA256, the
@@ -602,9 +698,13 @@ noninteractive live writes, and a dependency-light text wizard:
   sections, and command files newly created by that install run, while restoring
   any pre-existing owned target that was being refreshed from its snapshot;
 - the managed instruction-file writer (create/append/replace/idempotent/remove,
-  atomic temp+rename with re-read verification, malformed-marker refusal) is
-  implemented and tested, but live instruction writes stay deferred unless
-  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path;
+  atomic temp+rename with re-read verification, version/content drift
+  classification, and malformed/foreign refusal) is implemented and tested.
+  Live install-time instruction writes stay deferred unless
+  `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` resolves to an absolute path; the
+  independent explicit-file `instructions status|sync|remove` path provides
+  dry-run, path-free JSON, confirmation, and reversible removal without native
+  agent reconfiguration;
 - if any selected agent install or receipt write fails, receipts created during
   that run are removed and native entries configured during that run are
   removed in reverse order;

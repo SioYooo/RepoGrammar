@@ -2,8 +2,12 @@
 
 use crate::error::RepoGrammarError;
 use serde_json::json;
-use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::fs::{self, File, Permissions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MCP_SERVER_NAME: &str = "repogrammar";
@@ -1936,6 +1940,157 @@ fn unix_seconds() -> u64 {
 pub const MANAGED_INSTRUCTION_BEGIN: &str = "<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->";
 /// Exact end marker for the RepoGrammar managed instruction section.
 pub const MANAGED_INSTRUCTION_END: &str = "<!-- END REPOGRAMMAR MANAGED SECTION -->";
+/// Exact content revision for the current managed instruction section. Version
+/// 2 is the first branch-local candidate with an explicit version marker; the
+/// previously installed unversioned and v1 bodies are allowlisted below.
+pub const MANAGED_INSTRUCTION_VERSION: u32 = 2;
+const MANAGED_INSTRUCTION_VERSION_MARKER: &str = "<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 2 -->";
+
+/// Canonical agent pre-flight contract shared by managed instruction files and
+/// the MCP initialize response. It is deliberately repository-agnostic and
+/// cannot authorize repository initialization or other writes.
+pub const AGENT_PREFLIGHT_GATE: &str = "\
+## RepoGrammar pre-flight gate
+
+RepoGrammar MCP is read-only. Read mandatory repository authority and instruction documents first. Then, when `.repogrammar/` exists, use this gate when planning or executing an implementation, fix, refactor, test, or diagnosis that requires a repository-local contract or convention, repeated implementation, framework role, or analogue comparison. For a covered task, run it before any non-trivial code location is sought and before any code-search or source-reading tool.
+
+Covered cases include root-cause diagnosis or repair and schema, protocol, API, prompt-output, or Meaning Contract qualification, conformance, or drift. A YAML prompt or qualification output checked against a repeated Meaning Contract is covered; neither its file type nor an exact file target exempts mixed work.
+
+1. Call `repogrammar_context` once with `operation: \"find_analogues\"`, `target: \"<the concrete repo-relative path, symbol/member id, framework role, or code-work question from the task>\"`, and `mode: \"compact\"`.
+2. Consume the returned `read_plan`; line-numbered `source_spans` included in the result are already read.
+3. If the tool is unavailable or the result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or insufficient evidence, stop. State that fallback reason before proceeding, then use CodeGraph for exact source or call-path detail; use ordinary search/read only when CodeGraph is unavailable or still insufficient.
+4. Otherwise, consume the supported `read_plan` first, then use CodeGraph only for exact source or call-path detail that RepoGrammar did not supply.
+
+Never use CodeGraph first for covered work merely because exact source or call-path detail will be needed later. Do not repeat the same RepoGrammar call unless the target or indexed evidence changed. Treat returned family ids as follow-up handles and use `show_family` only with an exact id returned earlier. Do not request `include_source_spans` by default and do not run `repogrammar stats` in normal agent loops.
+
+Skip this gate for pure documentation or prose; operational release, git, environment, or credential inspection; syntax-only YAML or configuration validation; and an exact one-symbol, file, or call-path lookup, but only when no repository contract, convention, repeated implementation, framework role, analogue comparison, code-behavior diagnosis, or implementation decision is involved. Never initialize, resync, or start autosync silently; those writes require user or project-policy permission. If `.repogrammar/` does not exist, skip RepoGrammar for that repository.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedInstructionState {
+    Missing,
+    Current,
+    OutdatedV1,
+    OutdatedGlobalV0,
+    Foreign,
+    Malformed,
+}
+
+impl ManagedInstructionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Current => "current",
+            Self::OutdatedV1 | Self::OutdatedGlobalV0 => "outdated",
+            Self::Foreign => "foreign",
+            Self::Malformed => "malformed",
+        }
+    }
+
+    pub fn content_version(self) -> Option<u32> {
+        match self {
+            Self::Current => Some(MANAGED_INSTRUCTION_VERSION),
+            Self::OutdatedV1 => Some(1),
+            Self::OutdatedGlobalV0 => Some(0),
+            Self::Missing | Self::Foreign | Self::Malformed => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedInstructionOperation {
+    Status,
+    Sync,
+    Remove,
+}
+
+impl ManagedInstructionOperation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Sync => "sync",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedInstructionDisposition {
+    Inspected,
+    Unchanged,
+    WouldCreate,
+    WouldAppend,
+    WouldReplace,
+    WouldRemove,
+    Created,
+    Appended,
+    Replaced,
+    Removed,
+    NotPresent,
+    Refused,
+}
+
+impl ManagedInstructionDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inspected => "inspected",
+            Self::Unchanged => "unchanged",
+            Self::WouldCreate => "would_create",
+            Self::WouldAppend => "would_append",
+            Self::WouldReplace => "would_replace",
+            Self::WouldRemove => "would_remove",
+            Self::Created => "created",
+            Self::Appended => "appended",
+            Self::Replaced => "replaced",
+            Self::Removed => "removed",
+            Self::NotPresent => "not_present",
+            Self::Refused => "refused",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedInstructionRefusal {
+    ConfirmationRequired,
+    ForeignSection,
+    MalformedSection,
+}
+
+impl ManagedInstructionRefusal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConfirmationRequired => "confirmation_required",
+            Self::ForeignSection => "foreign_managed_section",
+            Self::MalformedSection => "malformed_managed_section",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedInstructionRequest {
+    pub path: PathBuf,
+    pub operation: ManagedInstructionOperation,
+    pub dry_run: bool,
+    pub assume_yes: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedInstructionInspection {
+    pub state: ManagedInstructionState,
+    pub file_exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedInstructionOutcome {
+    pub operation: ManagedInstructionOperation,
+    pub state_before: ManagedInstructionState,
+    pub state_after: ManagedInstructionState,
+    pub file_existed: bool,
+    pub dry_run: bool,
+    pub would_change: bool,
+    pub changed: bool,
+    pub disposition: ManagedInstructionDisposition,
+    pub refusal: Option<ManagedInstructionRefusal>,
+}
 
 /// Outcome of a managed instruction-section write or removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1989,12 +2144,37 @@ impl InstructionAction {
 /// short and conditional, and never embeds repository-specific facts.
 pub fn managed_instruction_block() -> String {
     format!(
+        "{MANAGED_INSTRUCTION_BEGIN}\n{MANAGED_INSTRUCTION_VERSION_MARKER}\n{AGENT_PREFLIGHT_GATE}\n{MANAGED_INSTRUCTION_END}"
+    )
+}
+
+/// Exact previously shipped managed block. Only this known legacy body is
+/// eligible for automatic refresh; an arbitrary body between RepoGrammar's
+/// markers is treated as foreign drift and preserved.
+fn legacy_managed_instruction_block_v1() -> String {
+    format!(
         "{MANAGED_INSTRUCTION_BEGIN}\n\
 ## RepoGrammar\n\
 \n\
 In repositories initialized with RepoGrammar (`.repogrammar/` exists), call the MCP tool `repogrammar_context` before grep/find/Read when you need implementation-pattern context, analogous examples, family conformance, deviation explanation, or an edit plan. For find/check/explain operations, pass the repo-relative path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use the returned `read_plan`; if line-numbered `source_spans` are included, treat those spans as already read. Read files directly only for spans marked missing, stale, UNKNOWN, omitted, or required before editing outside the shown range.\n\
 \n\
 Use `show_family` only with an exact family id returned earlier; use compact mode first and do not request `include_source_spans` by default. Stop and fall back to normal Read/Grep on UNKNOWN, FALLBACK, stale, omitted, or insufficient results. Do not run `repogrammar stats` in normal agent loops. Do not silently initialize repositories; run init/resync/autosync only when user or project policy permits repo-local analysis state.\n\
+\n\
+If no `.repogrammar/` exists, skip RepoGrammar for that repository.\n\
+{MANAGED_INSTRUCTION_END}"
+    )
+}
+
+/// Exact unversioned block shipped by the earlier global Codex/Claude
+/// integration path. It is allowlisted separately from the later v1 body so
+/// real RepoGrammar-owned installations can be refreshed without treating an
+/// arbitrary marker body as owned.
+fn legacy_managed_instruction_block_global_v0() -> String {
+    format!(
+        "{MANAGED_INSTRUCTION_BEGIN}\n\
+## RepoGrammar\n\
+\n\
+In repositories initialized with RepoGrammar (`.repogrammar/` exists), call the MCP tool `repogrammar_context` before CodeGraph, grep/find, or manual Read when a task involves implementation patterns, framework roles, family membership, conformance/deviation, analogous examples, or an edit plan for repeated behavior. Use CodeGraph afterward only for exact source/call-path detail or when RepoGrammar returns `UNKNOWN`, stale, omitted, or insufficient support. Use the returned `read_plan`; if line-numbered `source_spans` are included, treat those spans as already read. Read files directly only for spans marked missing, stale, UNKNOWN, omitted, or required before editing outside the shown range.\n\
 \n\
 If no `.repogrammar/` exists, skip RepoGrammar for that repository.\n\
 {MANAGED_INSTRUCTION_END}"
@@ -2035,6 +2215,13 @@ fn malformed_managed_section_error() -> RepoGrammarError {
     )
 }
 
+fn foreign_managed_section_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "instruction file has an unrecognized RepoGrammar managed section; refusing to modify"
+            .to_string(),
+    )
+}
+
 /// Locate the byte span of a complete managed section, refusing malformed or
 /// partial markers. Returns `Ok(None)` when no markers exist, `Ok(Some(span))`
 /// for a single well-ordered section, and an error for any other arrangement.
@@ -2068,37 +2255,352 @@ fn managed_instruction_span(contents: &str) -> Result<Option<(usize, usize)>, Re
     }
 }
 
-fn instruction_temp_path(path: &Path) -> PathBuf {
+fn classify_managed_instruction_contents(contents: &str) -> ManagedInstructionState {
+    let Some((start, end)) = (match managed_instruction_span(contents) {
+        Ok(span) => span,
+        Err(_) => return ManagedInstructionState::Malformed,
+    }) else {
+        return ManagedInstructionState::Missing;
+    };
+    let section = contents[start..end].trim_end_matches('\n');
+    if section == managed_instruction_block() {
+        ManagedInstructionState::Current
+    } else if section == legacy_managed_instruction_block_v1() {
+        ManagedInstructionState::OutdatedV1
+    } else if section == legacy_managed_instruction_block_global_v0() {
+        ManagedInstructionState::OutdatedGlobalV0
+    } else {
+        ManagedInstructionState::Foreign
+    }
+}
+
+const MAX_INSTRUCTION_TEMP_ATTEMPTS: u64 = 64;
+static NEXT_INSTRUCTION_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(any(unix, test))]
+fn instruction_temp_path(path: &Path, id: u64) -> PathBuf {
     let mut name = path
         .file_name()
         .map(|name| name.to_os_string())
         .unwrap_or_default();
-    name.push(".repogrammar-managed.tmp");
+    name.push(format!(
+        ".repogrammar-managed.{}.{id}.tmp",
+        std::process::id()
+    ));
     path.with_file_name(name)
 }
 
-fn atomic_write_instruction(path: &Path, contents: &str) -> Result<(), RepoGrammarError> {
+#[cfg(unix)]
+type InstructionTempIdentity = (u64, u64);
+
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InstructionTempIdentity;
+
+fn instruction_temp_handle_identity(file: &File) -> Option<InstructionTempIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = file.metadata().ok()?;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        // Stable Windows MetadataExt does not currently expose the volume
+        // serial number and file index. Other non-Unix platforms likewise
+        // have no stable std file identity. Fail closed instead of using weak
+        // length, timestamp, or permission comparisons.
+        let _ = file;
+        None
+    }
+}
+
+fn instruction_temp_path_matches_identity(path: &Path, opened: &InstructionTempIdentity) -> bool {
+    let Ok(candidate) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !candidate.is_file() || candidate.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        (candidate.dev(), candidate.ino()) == *opened
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = opened;
+        false
+    }
+}
+
+fn cleanup_owned_instruction_temp(path: &Path, opened: &InstructionTempIdentity) {
+    if instruction_temp_path_matches_identity(path, opened) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+struct InstructionDestinationMetadata {
+    permissions: Permissions,
+    #[cfg(unix)]
+    uid: u32,
+    #[cfg(unix)]
+    gid: u32,
+}
+
+#[cfg(unix)]
+fn create_unique_instruction_temp<I>(
+    path: &Path,
+    ids: I,
+) -> Result<(PathBuf, File, InstructionTempIdentity), RepoGrammarError>
+where
+    I: IntoIterator<Item = u64>,
+{
+    for id in ids {
+        let candidate = instruction_temp_path(path, id);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                let Some(identity) = instruction_temp_handle_identity(&file) else {
+                    // Without a stable identity obtained from the open handle,
+                    // removing `candidate` by name could delete an attacker
+                    // replacement. Leave this unidentifiable file in place and
+                    // fail closed instead of performing unsafe cleanup.
+                    drop(file);
+                    return Err(RepoGrammarError::InvalidInput(
+                        "failed to identify newly created temporary instruction file".to_string(),
+                    ));
+                };
+                return Ok((candidate, file, identity));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err(RepoGrammarError::InvalidInput(
+                    "failed to create temporary instruction file safely".to_string(),
+                ))
+            }
+        }
+    }
+    Err(RepoGrammarError::InvalidInput(
+        "no unique temporary instruction file name was available".to_string(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn create_unique_instruction_temp<I>(
+    path: &Path,
+    ids: I,
+) -> Result<(PathBuf, File, InstructionTempIdentity), RepoGrammarError>
+where
+    I: IntoIterator<Item = u64>,
+{
+    let _ = (path, ids);
+    Err(RepoGrammarError::InvalidInput(
+        "managed instruction updates are unavailable on this platform".to_string(),
+    ))
+}
+
+fn destination_permissions_before_replace(
+    path: &Path,
+    expected_previous: Option<&str>,
+) -> Result<Option<InstructionDestinationMetadata>, RepoGrammarError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return Err(RepoGrammarError::InvalidInput(
+                "instruction file changed during managed update; refusing to overwrite".to_string(),
+            ))
+        }
+    };
+    match (expected_previous, metadata) {
+        (None, None) => Ok(None),
+        (Some(expected), Some(metadata))
+            if metadata.is_file() && !metadata.file_type().is_symlink() =>
+        {
+            let current = fs::read_to_string(path).map_err(|_| {
+                RepoGrammarError::InvalidInput(
+                    "instruction file changed during managed update; refusing to overwrite"
+                        .to_string(),
+                )
+            })?;
+            if current != expected {
+                return Err(RepoGrammarError::InvalidInput(
+                    "instruction file changed during managed update; refusing to overwrite"
+                        .to_string(),
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+
+                Ok(Some(InstructionDestinationMetadata {
+                    permissions: metadata.permissions(),
+                    uid: metadata.uid(),
+                    gid: metadata.gid(),
+                }))
+            }
+            #[cfg(not(unix))]
+            {
+                Ok(Some(InstructionDestinationMetadata {
+                    permissions: metadata.permissions(),
+                }))
+            }
+        }
+        _ => Err(RepoGrammarError::InvalidInput(
+            "instruction file changed during managed update; refusing to overwrite".to_string(),
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn preserve_instruction_destination_metadata_with<F>(
+    file: &File,
+    destination: &InstructionDestinationMetadata,
+    set_owner: F,
+) -> Result<(), RepoGrammarError>
+where
+    F: FnOnce(&File, u32, u32) -> std::io::Result<()>,
+{
+    use std::os::unix::fs::MetadataExt;
+
+    let temporary = file.metadata().map_err(|_| {
+        RepoGrammarError::InvalidInput(
+            "failed to inspect temporary instruction file ownership".to_string(),
+        )
+    })?;
+    if (temporary.uid() != destination.uid || temporary.gid() != destination.gid)
+        && set_owner(file, destination.uid, destination.gid).is_err()
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to preserve instruction file ownership".to_string(),
+        ));
+    }
+    file.set_permissions(destination.permissions.clone())
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput(
+                "failed to preserve instruction file permissions".to_string(),
+            )
+        })
+}
+
+#[cfg(unix)]
+fn preserve_instruction_destination_metadata(
+    file: &File,
+    destination: &InstructionDestinationMetadata,
+) -> Result<(), RepoGrammarError> {
+    use std::os::unix::fs::fchown;
+
+    preserve_instruction_destination_metadata_with(file, destination, |file, uid, gid| {
+        fchown(file, Some(uid), Some(gid))
+    })
+}
+
+#[cfg(not(unix))]
+fn preserve_instruction_destination_metadata(
+    file: &File,
+    destination: &InstructionDestinationMetadata,
+) -> Result<(), RepoGrammarError> {
+    file.set_permissions(destination.permissions.clone())
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput(
+                "failed to preserve instruction file permissions".to_string(),
+            )
+        })
+}
+
+fn atomic_write_instruction_with_ids<I>(
+    path: &Path,
+    contents: &str,
+    expected_previous: Option<&str>,
+    ids: I,
+) -> Result<(), RepoGrammarError>
+where
+    I: IntoIterator<Item = u64>,
+{
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|error| {
-                RepoGrammarError::InvalidInput(format!(
-                    "failed to create instruction file directory: {error}"
-                ))
+            fs::create_dir_all(parent).map_err(|_| {
+                RepoGrammarError::InvalidInput(
+                    "failed to create instruction file directory".to_string(),
+                )
             })?;
         }
     }
-    let temporary = instruction_temp_path(path);
-    fs::write(&temporary, contents).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!(
-            "failed to write temporary instruction file: {error}"
-        ))
-    })?;
-    fs::rename(&temporary, path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        RepoGrammarError::InvalidInput(format!(
-            "failed to atomically write instruction file: {error}"
-        ))
-    })
+    let (temporary, mut file, opened_identity) = create_unique_instruction_temp(path, ids)?;
+    if file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.flush())
+        .is_err()
+    {
+        drop(file);
+        cleanup_owned_instruction_temp(&temporary, &opened_identity);
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to write temporary instruction file".to_string(),
+        ));
+    }
+
+    let destination_metadata = match destination_permissions_before_replace(path, expected_previous)
+    {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            drop(file);
+            cleanup_owned_instruction_temp(&temporary, &opened_identity);
+            return Err(error);
+        }
+    };
+    if let Some(destination_metadata) = destination_metadata {
+        if let Err(error) = preserve_instruction_destination_metadata(&file, &destination_metadata)
+        {
+            drop(file);
+            cleanup_owned_instruction_temp(&temporary, &opened_identity);
+            return Err(error);
+        }
+    }
+    if file.sync_all().is_err() {
+        drop(file);
+        cleanup_owned_instruction_temp(&temporary, &opened_identity);
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to synchronize temporary instruction file".to_string(),
+        ));
+    }
+    if !instruction_temp_path_matches_identity(&temporary, &opened_identity) {
+        drop(file);
+        cleanup_owned_instruction_temp(&temporary, &opened_identity);
+        return Err(RepoGrammarError::InvalidInput(
+            "temporary instruction file ownership changed before activation".to_string(),
+        ));
+    }
+
+    let renamed = fs::rename(&temporary, path);
+    drop(file);
+    if renamed.is_err() {
+        cleanup_owned_instruction_temp(&temporary, &opened_identity);
+        return Err(RepoGrammarError::InvalidInput(
+            "failed to atomically write instruction file".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn atomic_write_instruction(
+    path: &Path,
+    contents: &str,
+    expected_previous: Option<&str>,
+) -> Result<(), RepoGrammarError> {
+    let first =
+        NEXT_INSTRUCTION_TEMP_ID.fetch_add(MAX_INSTRUCTION_TEMP_ATTEMPTS, Ordering::Relaxed);
+    atomic_write_instruction_with_ids(
+        path,
+        contents,
+        expected_previous,
+        (0..MAX_INSTRUCTION_TEMP_ATTEMPTS).map(|offset| first.wrapping_add(offset)),
+    )
 }
 
 fn require_regular_instruction_file(path: &Path) -> Result<(), RepoGrammarError> {
@@ -2110,6 +2612,217 @@ fn require_regular_instruction_file(path: &Path) -> Result<(), RepoGrammarError>
         }
     }
     Ok(())
+}
+
+/// Inspect one explicitly selected instruction file without mutating it. A
+/// complete but unrecognized body inside the reserved markers is `Foreign`;
+/// malformed/duplicated markers are `Malformed`. Neither state is repairable
+/// automatically.
+pub fn inspect_managed_instruction_file(
+    path: &Path,
+) -> Result<ManagedInstructionInspection, RepoGrammarError> {
+    require_regular_instruction_file(path)?;
+    if !path.exists() {
+        return Ok(ManagedInstructionInspection {
+            state: ManagedInstructionState::Missing,
+            file_exists: false,
+        });
+    }
+    let contents = fs::read_to_string(path).map_err(|_| {
+        RepoGrammarError::InvalidInput("instruction file could not be read safely".to_string())
+    })?;
+    Ok(ManagedInstructionInspection {
+        state: classify_managed_instruction_contents(&contents),
+        file_exists: true,
+    })
+}
+
+fn managed_instruction_refusal(
+    state: ManagedInstructionState,
+) -> Option<ManagedInstructionRefusal> {
+    match state {
+        ManagedInstructionState::Foreign => Some(ManagedInstructionRefusal::ForeignSection),
+        ManagedInstructionState::Malformed => Some(ManagedInstructionRefusal::MalformedSection),
+        ManagedInstructionState::Missing
+        | ManagedInstructionState::Current
+        | ManagedInstructionState::OutdatedV1
+        | ManagedInstructionState::OutdatedGlobalV0 => None,
+    }
+}
+
+fn refused_instruction_outcome(
+    request: &ManagedInstructionRequest,
+    inspection: ManagedInstructionInspection,
+    refusal: ManagedInstructionRefusal,
+) -> ManagedInstructionOutcome {
+    ManagedInstructionOutcome {
+        operation: request.operation,
+        state_before: inspection.state,
+        state_after: inspection.state,
+        file_existed: inspection.file_exists,
+        dry_run: request.dry_run,
+        would_change: false,
+        changed: false,
+        disposition: ManagedInstructionDisposition::Refused,
+        refusal: Some(refusal),
+    }
+}
+
+/// Inspect, dry-run, synchronize, or remove the managed section in one
+/// explicitly selected instruction file. Mutating operations require
+/// `assume_yes`; no path is inferred and no repository state is initialized.
+pub fn manage_instruction_file(
+    request: &ManagedInstructionRequest,
+) -> Result<ManagedInstructionOutcome, RepoGrammarError> {
+    let inspection = inspect_managed_instruction_file(&request.path)?;
+    if request.operation == ManagedInstructionOperation::Status {
+        return Ok(ManagedInstructionOutcome {
+            operation: request.operation,
+            state_before: inspection.state,
+            state_after: inspection.state,
+            file_existed: inspection.file_exists,
+            dry_run: false,
+            would_change: false,
+            changed: false,
+            disposition: ManagedInstructionDisposition::Inspected,
+            refusal: None,
+        });
+    }
+    if let Some(refusal) = managed_instruction_refusal(inspection.state) {
+        return Ok(refused_instruction_outcome(request, inspection, refusal));
+    }
+    if !request.dry_run && !request.assume_yes {
+        return Ok(refused_instruction_outcome(
+            request,
+            inspection,
+            ManagedInstructionRefusal::ConfirmationRequired,
+        ));
+    }
+
+    match request.operation {
+        ManagedInstructionOperation::Status => unreachable!("status returned above"),
+        ManagedInstructionOperation::Sync => {
+            if inspection.state == ManagedInstructionState::Current {
+                return Ok(ManagedInstructionOutcome {
+                    operation: request.operation,
+                    state_before: inspection.state,
+                    state_after: inspection.state,
+                    file_existed: inspection.file_exists,
+                    dry_run: request.dry_run,
+                    would_change: false,
+                    changed: false,
+                    disposition: ManagedInstructionDisposition::Unchanged,
+                    refusal: None,
+                });
+            }
+            if request.dry_run {
+                let disposition = match (inspection.state, inspection.file_exists) {
+                    (
+                        ManagedInstructionState::OutdatedV1
+                        | ManagedInstructionState::OutdatedGlobalV0,
+                        _,
+                    ) => ManagedInstructionDisposition::WouldReplace,
+                    (ManagedInstructionState::Missing, false) => {
+                        ManagedInstructionDisposition::WouldCreate
+                    }
+                    (ManagedInstructionState::Missing, true) => {
+                        ManagedInstructionDisposition::WouldAppend
+                    }
+                    _ => unreachable!("foreign and malformed states returned above"),
+                };
+                return Ok(ManagedInstructionOutcome {
+                    operation: request.operation,
+                    state_before: inspection.state,
+                    state_after: inspection.state,
+                    file_existed: inspection.file_exists,
+                    dry_run: true,
+                    would_change: true,
+                    changed: false,
+                    disposition,
+                    refusal: None,
+                });
+            }
+
+            let action = write_managed_instruction_section(&request.path)?;
+            let disposition = match action {
+                InstructionAction::Created => ManagedInstructionDisposition::Created,
+                InstructionAction::Appended => ManagedInstructionDisposition::Appended,
+                InstructionAction::Replaced => ManagedInstructionDisposition::Replaced,
+                InstructionAction::Unchanged => ManagedInstructionDisposition::Unchanged,
+                InstructionAction::Deferred
+                | InstructionAction::Removed
+                | InstructionAction::NotPresent => {
+                    return Err(RepoGrammarError::InvalidInput(
+                        "instruction synchronization returned an invalid action".to_string(),
+                    ))
+                }
+            };
+            Ok(ManagedInstructionOutcome {
+                operation: request.operation,
+                state_before: inspection.state,
+                state_after: ManagedInstructionState::Current,
+                file_existed: inspection.file_exists,
+                dry_run: false,
+                would_change: action != InstructionAction::Unchanged,
+                changed: action != InstructionAction::Unchanged,
+                disposition,
+                refusal: None,
+            })
+        }
+        ManagedInstructionOperation::Remove => {
+            if inspection.state == ManagedInstructionState::Missing {
+                return Ok(ManagedInstructionOutcome {
+                    operation: request.operation,
+                    state_before: inspection.state,
+                    state_after: inspection.state,
+                    file_existed: inspection.file_exists,
+                    dry_run: request.dry_run,
+                    would_change: false,
+                    changed: false,
+                    disposition: ManagedInstructionDisposition::NotPresent,
+                    refusal: None,
+                });
+            }
+            if request.dry_run {
+                return Ok(ManagedInstructionOutcome {
+                    operation: request.operation,
+                    state_before: inspection.state,
+                    state_after: inspection.state,
+                    file_existed: inspection.file_exists,
+                    dry_run: true,
+                    would_change: true,
+                    changed: false,
+                    disposition: ManagedInstructionDisposition::WouldRemove,
+                    refusal: None,
+                });
+            }
+            let action = remove_managed_instruction_section(&request.path)?;
+            let disposition = match action {
+                InstructionAction::Removed => ManagedInstructionDisposition::Removed,
+                InstructionAction::NotPresent => ManagedInstructionDisposition::NotPresent,
+                InstructionAction::Deferred
+                | InstructionAction::Created
+                | InstructionAction::Appended
+                | InstructionAction::Replaced
+                | InstructionAction::Unchanged => {
+                    return Err(RepoGrammarError::InvalidInput(
+                        "instruction removal returned an invalid action".to_string(),
+                    ))
+                }
+            };
+            Ok(ManagedInstructionOutcome {
+                operation: request.operation,
+                state_before: inspection.state,
+                state_after: ManagedInstructionState::Missing,
+                file_existed: inspection.file_exists,
+                dry_run: false,
+                would_change: action == InstructionAction::Removed,
+                changed: action == InstructionAction::Removed,
+                disposition,
+                refusal: None,
+            })
+        }
+    }
 }
 
 /// Idempotently write the managed instruction section into `path` using atomic
@@ -2128,19 +2841,20 @@ pub fn write_managed_instruction_section(
         String::new()
     };
     let block = managed_instruction_block();
-    let (next, action) = match managed_instruction_span(&existing)? {
-        Some((start, end)) => {
+    let state = classify_managed_instruction_contents(&existing);
+    let (next, action) = match state {
+        ManagedInstructionState::Current => return Ok(InstructionAction::Unchanged),
+        ManagedInstructionState::OutdatedV1 | ManagedInstructionState::OutdatedGlobalV0 => {
+            let (start, end) =
+                managed_instruction_span(&existing)?.ok_or_else(malformed_managed_section_error)?;
             let mut next = String::with_capacity(existing.len());
             next.push_str(&existing[..start]);
             next.push_str(&block);
             next.push('\n');
             next.push_str(&existing[end..]);
-            if next == existing {
-                return Ok(InstructionAction::Unchanged);
-            }
             (next, InstructionAction::Replaced)
         }
-        None => {
+        ManagedInstructionState::Missing => {
             if !existed {
                 (format!("{block}\n"), InstructionAction::Created)
             } else if existing.is_empty() {
@@ -2156,8 +2870,10 @@ pub fn write_managed_instruction_section(
                 (next, InstructionAction::Appended)
             }
         }
+        ManagedInstructionState::Foreign => return Err(foreign_managed_section_error()),
+        ManagedInstructionState::Malformed => return Err(malformed_managed_section_error()),
     };
-    atomic_write_instruction(path, &next)?;
+    atomic_write_instruction(path, &next, if existed { Some(&existing) } else { None })?;
     verify_managed_instruction_present(path, &block)?;
     Ok(action)
 }
@@ -2201,14 +2917,22 @@ pub fn remove_managed_instruction_section(
     let existing = fs::read_to_string(path).map_err(|error| {
         RepoGrammarError::InvalidInput(format!("failed to read instruction file: {error}"))
     })?;
-    let Some((start, end)) = managed_instruction_span(&existing)? else {
-        return Ok(InstructionAction::NotPresent);
+    let state = classify_managed_instruction_contents(&existing);
+    let (start, end) = match state {
+        ManagedInstructionState::Missing => return Ok(InstructionAction::NotPresent),
+        ManagedInstructionState::Current
+        | ManagedInstructionState::OutdatedV1
+        | ManagedInstructionState::OutdatedGlobalV0 => {
+            managed_instruction_span(&existing)?.ok_or_else(malformed_managed_section_error)?
+        }
+        ManagedInstructionState::Foreign => return Err(foreign_managed_section_error()),
+        ManagedInstructionState::Malformed => return Err(malformed_managed_section_error()),
     };
     let mut next = String::with_capacity(existing.len());
     next.push_str(&existing[..start]);
     next.push_str(&existing[end..]);
     let cleaned = tidy_after_removal(&next);
-    atomic_write_instruction(path, &cleaned)?;
+    atomic_write_instruction(path, &cleaned, Some(&existing))?;
     let written = fs::read_to_string(path).map_err(|error| {
         RepoGrammarError::InvalidInput(format!(
             "failed to re-read instruction file for verification: {error}"
@@ -3611,11 +4335,14 @@ mod tests {
         assert!(created.starts_with(MANAGED_INSTRUCTION_BEGIN));
         assert!(created.ends_with(&format!("{MANAGED_INSTRUCTION_END}\n")));
         assert!(created.contains("repogrammar_context"));
-        assert!(created.contains("compact mode first"));
+        assert!(created.contains("operation: \"find_analogues\""));
+        assert!(created.contains("mode: \"compact\""));
         assert!(created.contains("include_source_spans"));
-        assert!(created.contains("UNKNOWN, FALLBACK, stale, omitted, or insufficient"));
+        assert!(created.contains("State that fallback reason"));
+        assert!(created.contains("CodeGraph"));
         assert!(created.contains("repogrammar stats"));
-        assert!(created.contains("Do not silently initialize"));
+        assert!(created.contains("Never initialize"));
+        assert!(created.lines().count() <= 30);
 
         assert_eq!(
             write_managed_instruction_section(&create_path).expect("idempotent"),
@@ -3639,7 +4366,8 @@ mod tests {
 
         let replace_path = dir.file("REPLACE.md");
         let seeded = format!(
-            "# Top\n\n{MANAGED_INSTRUCTION_BEGIN}\nstale managed body\n{MANAGED_INSTRUCTION_END}\n\n# Bottom\n"
+            "# Top\n\n{}\n\n# Bottom\n",
+            legacy_managed_instruction_block_v1()
         );
         fs::write(&replace_path, &seeded).expect("seed replace content");
         assert_eq!(
@@ -3650,11 +4378,277 @@ mod tests {
         assert!(replaced.contains("# Top"));
         assert!(replaced.contains("# Bottom"));
         assert!(replaced.contains("repogrammar_context"));
-        assert!(replaced.contains("compact mode first"));
-        assert!(!replaced.contains("stale managed body"));
+        assert!(replaced.contains("mode: \"compact\""));
+        assert!(replaced.contains(MANAGED_INSTRUCTION_VERSION_MARKER));
         assert_eq!(
             write_managed_instruction_section(&replace_path).expect("replace idempotent"),
             InstructionAction::Unchanged
+        );
+    }
+
+    #[test]
+    fn managed_instruction_preflight_covers_contract_diagnosis_before_codegraph() {
+        let gate = AGENT_PREFLIGHT_GATE;
+        assert!(gate.contains(
+            "planning or executing an implementation, fix, refactor, test, or diagnosis"
+        ));
+        assert!(gate.contains("root-cause diagnosis or repair"));
+        assert!(gate.contains(
+            "schema, protocol, API, prompt-output, or Meaning Contract qualification, conformance, or drift"
+        ));
+        assert!(gate.contains(
+            "A YAML prompt or qualification output checked against a repeated Meaning Contract is covered"
+        ));
+        assert!(gate.contains("neither its file type nor an exact file target exempts mixed work"));
+        assert!(gate.contains(
+            "Skip this gate for pure documentation or prose; operational release, git, environment, or credential inspection; syntax-only YAML or configuration validation"
+        ));
+        assert!(gate.contains(
+            "an exact one-symbol, file, or call-path lookup, but only when no repository contract"
+        ));
+
+        let authority = gate
+            .find("Read mandatory repository authority and instruction documents first")
+            .expect("authority discovery requirement");
+        let context_call = gate
+            .find("Call `repogrammar_context` once")
+            .expect("RepoGrammar call requirement");
+        let read_plan = gate
+            .find("Consume the returned `read_plan`")
+            .expect("read plan requirement");
+        let codegraph = gate.find("CodeGraph").expect("CodeGraph fallback");
+        assert!(
+            authority < context_call && context_call < read_plan && read_plan < codegraph,
+            "authority discovery, RepoGrammar, and its read plan must precede CodeGraph"
+        );
+        assert!(gate.contains("Never use CodeGraph first for covered work"));
+        assert!(!gate.contains("use CodeGraph first and skip RepoGrammar"));
+        assert!(managed_instruction_block().contains(gate));
+        assert_eq!(crate::interfaces::mcp::MCP_AGENT_INSTRUCTIONS, gate);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_instruction_write_never_follows_precreated_temp_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new("instruction-temp-symlink");
+        let destination = dir.file("AGENTS.md");
+        let sentinel = dir.file("outside-sentinel");
+        fs::write(&destination, "old contents\n").expect("seed destination");
+        fs::write(&sentinel, "foreign sentinel\n").expect("seed sentinel");
+        let occupied_id = u64::MAX - 100;
+        let available_id = u64::MAX - 99;
+        let occupied = instruction_temp_path(&destination, occupied_id);
+        let available = instruction_temp_path(&destination, available_id);
+        symlink(&sentinel, &occupied).expect("precreate temp symlink");
+
+        atomic_write_instruction_with_ids(
+            &destination,
+            "new contents\n",
+            Some("old contents\n"),
+            [occupied_id, available_id],
+        )
+        .expect("skip occupied symlink and use unique temp");
+
+        assert_eq!(
+            fs::read_to_string(&destination).expect("destination replaced"),
+            "new contents\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&sentinel).expect("sentinel preserved"),
+            "foreign sentinel\n"
+        );
+        assert!(
+            fs::symlink_metadata(&occupied)
+                .expect("occupied symlink preserved")
+                .file_type()
+                .is_symlink(),
+            "create_new must not follow or remove a pre-existing symlink"
+        );
+        assert!(!available.exists(), "owned activated temp must not remain");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_instruction_write_preserves_preoccupied_candidates_and_cleans_own_failure() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new("instruction-temp-preoccupied");
+        let destination = dir.file("AGENTS.md");
+        let sentinel = dir.file("outside-sentinel");
+        fs::write(&destination, "current contents\n").expect("seed destination");
+        fs::write(&sentinel, "foreign sentinel\n").expect("seed sentinel");
+        let regular_id = u64::MAX - 200;
+        let symlink_id = u64::MAX - 199;
+        let regular = instruction_temp_path(&destination, regular_id);
+        let symlink_path = instruction_temp_path(&destination, symlink_id);
+        fs::write(&regular, "foreign occupied temp\n").expect("occupy regular candidate");
+        symlink(&sentinel, &symlink_path).expect("occupy symlink candidate");
+
+        let error = atomic_write_instruction_with_ids(
+            &destination,
+            "replacement\n",
+            Some("current contents\n"),
+            [regular_id, symlink_id],
+        )
+        .expect_err("all preoccupied candidates must fail closed");
+        assert!(error.to_string().contains("no unique temporary"));
+        assert_eq!(
+            fs::read_to_string(&destination).expect("destination preserved"),
+            "current contents\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&regular).expect("foreign temp preserved"),
+            "foreign occupied temp\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&sentinel).expect("sentinel preserved"),
+            "foreign sentinel\n"
+        );
+        assert!(fs::symlink_metadata(&symlink_path)
+            .expect("foreign symlink preserved")
+            .file_type()
+            .is_symlink());
+
+        let owned_id = u64::MAX - 198;
+        let owned = instruction_temp_path(&destination, owned_id);
+        let error = atomic_write_instruction_with_ids(
+            &destination,
+            "replacement\n",
+            Some("stale expected contents\n"),
+            [owned_id],
+        )
+        .expect_err("concurrent destination drift must fail closed");
+        assert!(error.to_string().contains("changed during managed update"));
+        assert!(!owned.exists(), "owned temp must be cleaned after failure");
+        assert_eq!(
+            fs::read_to_string(&destination).expect("drift refusal preserved destination"),
+            "current contents\n"
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn unsupported_instruction_temp_creation_fails_without_debris() {
+        let dir = TempDir::new("instruction-temp-unsupported");
+        let destination = dir.file("AGENTS.md");
+        let temp_id = u64::MAX - 197;
+        let temporary = instruction_temp_path(&destination, temp_id);
+
+        let error = create_unique_instruction_temp(&destination, [temp_id])
+            .expect_err("unsupported platform must fail before creating a temp");
+
+        assert!(error.to_string().contains("unavailable on this platform"));
+        assert!(!temporary.exists(), "unsupported path must leave no debris");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instruction_temp_cleanup_preserves_path_replacement() {
+        let dir = TempDir::new("instruction-temp-replacement");
+        let destination = dir.file("AGENTS.md");
+        let temp_id = u64::MAX - 197;
+        let (temporary, file, identity) =
+            create_unique_instruction_temp(&destination, [temp_id]).expect("create owned temp");
+        drop(file);
+
+        fs::remove_file(&temporary).expect("replace owned temp path");
+        fs::write(&temporary, b"").expect("install foreign same-sized replacement");
+        cleanup_owned_instruction_temp(&temporary, &identity);
+
+        assert!(
+            temporary.exists(),
+            "cleanup must preserve a foreign replacement even when simple metadata matches"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_instruction_sync_and_remove_preserve_unix_metadata() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = TempDir::new("instruction-mode");
+        let path = dir.file("AGENTS.md");
+        fs::write(&path, "# Private user guide\n").expect("seed private guide");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("set private mode");
+        let original_metadata = fs::metadata(&path).expect("original metadata");
+
+        assert_eq!(
+            write_managed_instruction_section(&path).expect("sync managed section"),
+            InstructionAction::Appended
+        );
+        let synced_metadata = fs::metadata(&path).expect("synced metadata");
+        assert_eq!(
+            synced_metadata.permissions().mode() & 0o7777,
+            0o600,
+            "sync must preserve the exact existing Unix mode"
+        );
+        assert_eq!(synced_metadata.uid(), original_metadata.uid());
+        assert_eq!(synced_metadata.gid(), original_metadata.gid());
+
+        assert_eq!(
+            remove_managed_instruction_section(&path).expect("remove managed section"),
+            InstructionAction::Removed
+        );
+        let removed_metadata = fs::metadata(&path).expect("removed metadata");
+        assert_eq!(
+            removed_metadata.permissions().mode() & 0o7777,
+            0o600,
+            "remove must preserve the exact existing Unix mode"
+        );
+        assert_eq!(removed_metadata.uid(), original_metadata.uid());
+        assert_eq!(removed_metadata.gid(), original_metadata.gid());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instruction_metadata_preservation_fails_closed_when_owner_cannot_be_restored() {
+        use std::cell::Cell;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = TempDir::new("instruction-owner-failure");
+        let temporary = dir.file("temporary");
+        fs::write(&temporary, "managed replacement\n").expect("seed temporary file");
+        let file = File::options()
+            .write(true)
+            .open(&temporary)
+            .expect("open temporary file");
+        let current = file.metadata().expect("temporary metadata");
+        let requested_uid = current.uid().wrapping_add(1);
+        assert_ne!(requested_uid, current.uid());
+        let destination = InstructionDestinationMetadata {
+            permissions: fs::Permissions::from_mode(0o600),
+            uid: requested_uid,
+            gid: current.gid(),
+        };
+        let called = Cell::new(false);
+
+        let error = preserve_instruction_destination_metadata_with(
+            &file,
+            &destination,
+            |_file, uid, gid| {
+                called.set(true);
+                assert_eq!(uid, requested_uid);
+                assert_eq!(gid, current.gid());
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "synthetic ownership refusal",
+                ))
+            },
+        )
+        .expect_err("ownership failure must refuse activation metadata");
+
+        assert!(
+            called.get(),
+            "different ownership must invoke fchown boundary"
+        );
+        assert!(error
+            .to_string()
+            .contains("preserve instruction file ownership"));
+        assert_eq!(
+            fs::read_to_string(&temporary).expect("temporary content preserved"),
+            "managed replacement\n"
         );
     }
 
@@ -3693,6 +4687,231 @@ mod tests {
             .expect_err("duplicate begin")
             .to_string()
             .contains("malformed"));
+
+        let duplicate_end = dir.file("DUPLICATE-END.md");
+        fs::write(
+            &duplicate_end,
+            format!(
+                "{MANAGED_INSTRUCTION_BEGIN}\nbody\n{MANAGED_INSTRUCTION_END}\n{MANAGED_INSTRUCTION_END}\n"
+            ),
+        )
+        .expect("seed duplicate end");
+        assert!(write_managed_instruction_section(&duplicate_end)
+            .expect_err("duplicate end")
+            .to_string()
+            .contains("malformed"));
+
+        let inverted = dir.file("INVERTED.md");
+        fs::write(
+            &inverted,
+            format!("{MANAGED_INSTRUCTION_END}\nbody\n{MANAGED_INSTRUCTION_BEGIN}\n"),
+        )
+        .expect("seed inverted markers");
+        assert!(write_managed_instruction_section(&inverted)
+            .expect_err("inverted markers")
+            .to_string()
+            .contains("malformed"));
+
+        let foreign = dir.file("FOREIGN.md");
+        let foreign_contents = format!(
+            "# Guide\n{MANAGED_INSTRUCTION_BEGIN}\nforeign managed body\n{MANAGED_INSTRUCTION_END}\n"
+        );
+        fs::write(&foreign, &foreign_contents).expect("seed foreign section");
+        assert!(write_managed_instruction_section(&foreign)
+            .expect_err("foreign section")
+            .to_string()
+            .contains("unrecognized"));
+        assert!(remove_managed_instruction_section(&foreign)
+            .expect_err("foreign removal")
+            .to_string()
+            .contains("unrecognized"));
+        assert_eq!(
+            fs::read_to_string(&foreign).expect("foreign preserved"),
+            foreign_contents
+        );
+    }
+
+    #[test]
+    fn managed_instruction_inspection_detects_version_and_content_drift() {
+        let dir = TempDir::new("instruction-inspection");
+        let deployed_global_v0 = include_str!("../../fixtures/instructions/managed-global-v0.md");
+        let legacy_v1 = include_str!("../../fixtures/instructions/managed-legacy-v1.md");
+        assert!(managed_instruction_block().contains(MANAGED_INSTRUCTION_VERSION_MARKER));
+        assert!(!legacy_managed_instruction_block_v1().contains(MANAGED_INSTRUCTION_VERSION_MARKER));
+        assert!(!legacy_managed_instruction_block_global_v0()
+            .contains(MANAGED_INSTRUCTION_VERSION_MARKER));
+
+        let missing = dir.file("MISSING.md");
+        assert_eq!(
+            inspect_managed_instruction_file(&missing).expect("inspect missing"),
+            ManagedInstructionInspection {
+                state: ManagedInstructionState::Missing,
+                file_exists: false,
+            }
+        );
+
+        let current = dir.file("CURRENT.md");
+        fs::write(&current, format!("{}\n", managed_instruction_block())).expect("seed current");
+        assert_eq!(
+            inspect_managed_instruction_file(&current)
+                .expect("inspect current")
+                .state,
+            ManagedInstructionState::Current
+        );
+
+        let outdated = dir.file("OUTDATED.md");
+        fs::write(&outdated, legacy_v1).expect("seed independent legacy v1 fixture");
+        let outdated_inspection =
+            inspect_managed_instruction_file(&outdated).expect("inspect outdated");
+        assert_eq!(
+            outdated_inspection.state,
+            ManagedInstructionState::OutdatedV1
+        );
+        assert_eq!(outdated_inspection.state.content_version(), Some(1));
+
+        let deployed_global = dir.file("DEPLOYED-GLOBAL.md");
+        fs::write(&deployed_global, deployed_global_v0)
+            .expect("seed independently captured deployed global legacy");
+        assert_eq!(
+            inspect_managed_instruction_file(&deployed_global)
+                .expect("inspect deployed global legacy")
+                .state,
+            ManagedInstructionState::OutdatedGlobalV0
+        );
+        assert_eq!(
+            inspect_managed_instruction_file(&deployed_global)
+                .expect("inspect deployed global version")
+                .state
+                .content_version(),
+            Some(0)
+        );
+        assert_eq!(
+            write_managed_instruction_section(&deployed_global)
+                .expect("refresh deployed global legacy"),
+            InstructionAction::Replaced
+        );
+        assert_eq!(
+            inspect_managed_instruction_file(&deployed_global)
+                .expect("inspect refreshed deployed global legacy")
+                .state,
+            ManagedInstructionState::Current
+        );
+
+        let deployed_global_drift = dir.file("DEPLOYED-GLOBAL-DRIFT.md");
+        fs::write(
+            &deployed_global_drift,
+            deployed_global_v0.replacen("before CodeGraph", "after CodeGraph", 1),
+        )
+        .expect("seed one-phrase deployed global drift");
+        assert_eq!(
+            inspect_managed_instruction_file(&deployed_global_drift)
+                .expect("inspect deployed global drift")
+                .state,
+            ManagedInstructionState::Foreign
+        );
+
+        let drifted = dir.file("DRIFTED.md");
+        fs::write(
+            &drifted,
+            format!("{}\n", managed_instruction_block())
+                .replace("State that fallback reason", "Silently use any fallback"),
+        )
+        .expect("seed drifted");
+        assert_eq!(
+            inspect_managed_instruction_file(&drifted)
+                .expect("inspect drifted")
+                .state,
+            ManagedInstructionState::Foreign
+        );
+
+        let malformed = dir.file("MALFORMED.md");
+        fs::write(
+            &malformed,
+            format!("{MANAGED_INSTRUCTION_BEGIN}\nmissing end\n"),
+        )
+        .expect("seed malformed");
+        assert_eq!(
+            inspect_managed_instruction_file(&malformed)
+                .expect("inspect malformed")
+                .state,
+            ManagedInstructionState::Malformed
+        );
+    }
+
+    #[test]
+    fn managed_instruction_management_is_explicit_dry_run_and_reversible() {
+        let dir = TempDir::new("instruction-management");
+        let path = dir.file("AGENTS.md");
+        fs::write(&path, "# User guide\n\nkeep me\n").expect("seed user guide");
+
+        let dry_run = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Sync,
+            dry_run: true,
+            assume_yes: false,
+        })
+        .expect("dry-run sync");
+        assert_eq!(
+            dry_run.disposition,
+            ManagedInstructionDisposition::WouldAppend
+        );
+        assert!(dry_run.would_change);
+        assert!(!dry_run.changed);
+        assert!(!fs::read_to_string(&path)
+            .expect("dry-run preserved")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+
+        let unconfirmed = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Sync,
+            dry_run: false,
+            assume_yes: false,
+        })
+        .expect("unconfirmed sync");
+        assert_eq!(
+            unconfirmed.refusal,
+            Some(ManagedInstructionRefusal::ConfirmationRequired)
+        );
+        assert!(!unconfirmed.changed);
+
+        let synced = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Sync,
+            dry_run: false,
+            assume_yes: true,
+        })
+        .expect("confirmed sync");
+        assert_eq!(synced.state_after, ManagedInstructionState::Current);
+        assert_eq!(synced.disposition, ManagedInstructionDisposition::Appended);
+        assert!(synced.changed);
+
+        let remove_plan = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Remove,
+            dry_run: true,
+            assume_yes: false,
+        })
+        .expect("dry-run remove");
+        assert_eq!(
+            remove_plan.disposition,
+            ManagedInstructionDisposition::WouldRemove
+        );
+        assert!(fs::read_to_string(&path)
+            .expect("remove plan preserved")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+
+        let removed = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Remove,
+            dry_run: false,
+            assume_yes: true,
+        })
+        .expect("confirmed remove");
+        assert_eq!(removed.state_after, ManagedInstructionState::Missing);
+        assert_eq!(removed.disposition, ManagedInstructionDisposition::Removed);
+        let after = fs::read_to_string(&path).expect("user guide remains");
+        assert!(after.contains("keep me"));
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
     }
 
     #[test]
@@ -3744,7 +4963,7 @@ mod tests {
         assert!(written.contains(MANAGED_INSTRUCTION_BEGIN));
         assert!(written.contains(MANAGED_INSTRUCTION_END));
         assert!(written.contains("repogrammar_context"));
-        assert!(written.contains("compact mode first"));
+        assert!(written.contains("mode: \"compact\""));
         assert!(written.contains("repogrammar stats"));
         let receipt = fs::read_to_string(&outcome.receipt_paths[0]).expect("receipt");
         let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");

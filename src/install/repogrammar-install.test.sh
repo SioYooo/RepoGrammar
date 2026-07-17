@@ -180,7 +180,7 @@ for LIBC_CASE in musl unknown glibc-low; do
     echo "${LIBC_CASE} Linux release install unexpectedly succeeded" >&2
     exit 1
   fi
-  grep -q "public preview requires glibc\|unable to confirm glibc\|require glibc 2.35+" "${LIBC_ROOT}/err"
+  grep -q "requires glibc\|release binaries require glibc\|unable to confirm glibc\|require glibc 2.35+" "${LIBC_ROOT}/err"
   if [[ -e "$LIBC_CURL_MARKER" || -e "${LIBC_ROOT}/bin/repogrammar" || -e "${LIBC_ROOT}/data/bin/repogrammar" ]]; then
     echo "${LIBC_CASE} rejection must occur before download or managed-path writes" >&2
     exit 1
@@ -560,7 +560,7 @@ if [[ "$NO_RELEASE_STATUS" -eq 0 ]]; then
   exit 1
 fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
-grep -q -- "--version v0.2.0-preview.0" "$NO_RELEASE_ERR"
+grep -q -- "--version v0.2.0" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
 
@@ -663,8 +663,8 @@ CARGO_VERSION="$(awk -F' *= *' '
   /^\[/ { section = $0 }
   section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
 ' "${SCRIPT_DIR}/../../Cargo.toml")"
-if [[ "$PACKAGE_VERSION" != "0.2.0-preview.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
-  echo "public-preview manifests must agree on 0.2.0-preview.0" >&2
+if [[ "$PACKAGE_VERSION" != "0.2.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "stable manifests must agree on 0.2.0" >&2
   exit 1
 fi
 PACKAGE_MANIFEST="${SCRIPT_DIR}/../../package.json"
@@ -672,9 +672,9 @@ README_FILE="${SCRIPT_DIR}/../../README.md"
 grep -q '"repository"' "$PACKAGE_MANIFEST"
 grep -q '"homepage"' "$PACKAGE_MANIFEST"
 grep -q '"bugs"' "$PACKAGE_MANIFEST"
-grep -q 'npm view @sioyooo/repogrammar@0.2.0-preview.0 version' "$README_FILE"
-grep -q 'releases/download/v0.2.0-preview.0/install.sh.sha256' "$README_FILE"
-grep -q 'npx @sioyooo/repogrammar@0.2.0-preview.0 setup' "$README_FILE"
+grep -q 'npm view @sioyooo/repogrammar@0.2.0 version' "$README_FILE"
+grep -q 'releases/download/v0.2.0/install.sh.sha256' "$README_FILE"
+grep -q 'npx @sioyooo/repogrammar@0.2.0 setup' "$README_FILE"
 if grep -Eq '\]\((docs/|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|LICENSE\))' "$README_FILE"; then
   echo "packed README must not contain relative links to unpackaged repository files" >&2
   exit 1
@@ -685,13 +685,17 @@ WORKFLOW_DISPATCH_TRIGGER="$(awk '
   in_dispatch { print }
 ' "$RELEASE_WORKFLOW")"
 VERIFY_JOB="$(workflow_job "$RELEASE_WORKFLOW" verify)"
+CLASSIFY_JOB="$(workflow_job "$RELEASE_WORKFLOW" classify)"
+PACKAGE_NPM_JOB="$(workflow_job "$RELEASE_WORKFLOW" package_npm)"
+PACKAGE_INSTALLER_JOB="$(workflow_job "$RELEASE_WORKFLOW" package_installer)"
 BUILD_JOB="$(workflow_job "$RELEASE_WORKFLOW" build)"
-PUBLISH_RELEASE_JOB="$(workflow_job "$RELEASE_WORKFLOW" publish_release)"
-PUBLISH_NPM_JOB="$(workflow_job "$RELEASE_WORKFLOW" publish_npm)"
-TAG_VERSION_STEP="$(workflow_named_step "$VERIFY_JOB" "Verify tag and version agreement")"
+PREPARE_RELEASE_JOB="$(workflow_job "$RELEASE_WORKFLOW" prepare_github_release)"
+STAGE_PREVIEW_JOB="$(workflow_job "$RELEASE_WORKFLOW" stage_npm_preview)"
+STAGE_STABLE_JOB="$(workflow_job "$RELEASE_WORKFLOW" stage_npm_stable)"
+TAG_VERSION_STEP="$(workflow_named_step "$CLASSIFY_JOB" "Verify release source")"
 
-if [[ -z "$VERIFY_JOB" || -z "$BUILD_JOB" || -z "$PUBLISH_RELEASE_JOB" || -z "$PUBLISH_NPM_JOB" ]]; then
-  echo "release workflow is missing the verify/build/publish_release/publish_npm staged jobs" >&2
+if [[ -z "$CLASSIFY_JOB" || -z "$VERIFY_JOB" || -z "$PACKAGE_NPM_JOB" || -z "$PACKAGE_INSTALLER_JOB" || -z "$BUILD_JOB" || -z "$PREPARE_RELEASE_JOB" || -z "$STAGE_PREVIEW_JOB" || -z "$STAGE_STABLE_JOB" ]]; then
+  echo "release workflow is missing a classified build/package/draft/stage job" >&2
   exit 1
 fi
 
@@ -703,8 +707,18 @@ require_workflow_match "$WORKFLOW_DISPATCH_TRIGGER" '^([[:space:]]*)-[[:space:]]
   "workflow_dispatch must not offer an ambiguous publication mode"
 require_workflow_match "$TAG_VERSION_STEP" 'EVENT_NAME:[[:space:]]+\$\{\{[[:space:]]*github\.event_name' \
   "tag/version validation must receive the triggering event type"
-require_workflow_match "$TAG_VERSION_STEP" 'EVENT_NAME.*=[[:space:]]*"push".*REF_TYPE.*=[[:space:]]*"tag"' \
-  "manual dispatch from a tag ref must remain build-only during version validation"
+require_workflow_match "$TAG_VERSION_STEP" 'PUSH_REF_NAME:[[:space:]]+\$\{\{[[:space:]]*github\.ref_name' \
+  "tag/version validation must receive the triggering ref name"
+require_workflow_match "$TAG_VERSION_STEP" 'repo-guard[[:space:]]+--[[:space:]]+release-source' \
+  "release source and channel classification must delegate to repo-guard"
+require_workflow_match "$TAG_VERSION_STEP" '--event-name[[:space:]]+"\$\{EVENT_NAME\}"' \
+  "release-source must receive the event name explicitly"
+require_workflow_match "$TAG_VERSION_STEP" '--ref-name[[:space:]]+"\$\{PUSH_REF_NAME\}"' \
+  "release-source must receive the ref name explicitly"
+require_workflow_match "$CLASSIFY_JOB" 'git[[:space:]]+fetch[[:space:]]+--no-tags[[:space:]]+origin[[:space:]]+main:refs/remotes/origin/main' \
+  "tag authority verification must fetch origin/main"
+require_workflow_match "$CLASSIFY_JOB" 'fetch-depth:[[:space:]]+0' \
+  "release classification must check out complete history for exact main/tag authority"
 
 require_workflow_match "$BUILD_JOB" 'needs:[[:space:]]+verify' \
   "release builds must depend on the release verification gate"
@@ -717,77 +731,150 @@ require_workflow_match "$BUILD_JOB" 'repogrammar-x86_64-apple-darwin\.tar\.gz' \
 require_workflow_match "$BUILD_JOB" 'repogrammar-aarch64-apple-darwin\.tar\.gz' \
   "release build matrix is missing macOS arm64"
 require_workflow_count_exactly "$BUILD_JOB" '^[[:space:]]+target:[[:space:]]+' 4 \
-  "public-preview release matrix must contain exactly four supported targets"
+  "release matrix must contain exactly four supported targets"
 require_workflow_absence "$BUILD_JOB" 'windows|Windows|pc-windows|\.zip|pwsh|PowerShell|Compress-Archive' \
-  "public-preview release builds must not claim or package Windows support"
+  "release builds must not claim or package Windows support"
 require_workflow_match "$BUILD_JOB" 'src/workers/python/worker\.py' \
   "release artifacts must package the Python worker"
 require_workflow_match "$BUILD_JOB" '\.sha256' \
   "every release archive must have a checksum artifact"
 
-# Tag publication credentials are a prerequisite, not an optional npm step.
-# The check must happen in `verify`, before either publication job can write
-# external state. workflow_dispatch remains build-only because only tag refs
-# can reach the two staged publication jobs.
-CREDENTIAL_PREFLIGHT="$(workflow_named_step "$VERIFY_JOB" "Require npm credentials before tag publication")"
-TAG_AUTHORITY="$(workflow_named_step "$VERIFY_JOB" "Verify publication tag authority")"
-if [[ -z "$CREDENTIAL_PREFLIGHT" ]]; then
-  echo "release verification must include a named tag publication credential preflight" >&2
+# Build-only and tag runs retain the installer and one exact npm candidate.
+require_workflow_match "$PACKAGE_INSTALLER_JOB" 'needs:[[:space:]]+verify' \
+  "installer packaging must follow the verification gate"
+require_workflow_match "$PACKAGE_INSTALLER_JOB" 'src/install/repogrammar-install\.sh' \
+  "installer packaging must retain the documented source installer"
+require_workflow_match "$PACKAGE_INSTALLER_JOB" 'install\.sh\.sha256' \
+  "installer packaging must retain its exact checksum"
+require_workflow_match "$PACKAGE_INSTALLER_JOB" 'name:[[:space:]]+repogrammar-installer' \
+  "installer packaging must upload a stable artifact name"
+
+require_workflow_match "$PACKAGE_NPM_JOB" 'needs:[[:space:]]+\[classify,[[:space:]]*verify\]' \
+  "npm candidate packaging must follow classification and verification"
+require_workflow_count_exactly "$PACKAGE_NPM_JOB" '^[[:space:]]+npm pack --json --ignore-scripts --pack-destination npm-candidate' 1 \
+  "npm candidate must be packed exactly once"
+require_workflow_match "$PACKAGE_NPM_JOB" 'smoke-npm-package' \
+  "the exact npm candidate must pass the offline package smoke"
+require_workflow_match "$PACKAGE_NPM_JOB" 'verify-npm-pack-evidence' \
+  "npm pack metadata and SRI must be checked by repo-guard"
+require_workflow_match "$PACKAGE_NPM_JOB" 'name:[[:space:]]+npm-package-\$\{\{[[:space:]]*needs\.classify\.outputs\.version' \
+  "the exact npm candidate must be retained as a versioned artifact"
+
+require_workflow_match "$PREPARE_RELEASE_JOB" 'needs:[[:space:]]+\[classify,[[:space:]]*build,[[:space:]]*package_installer,[[:space:]]*package_npm\]' \
+  "the draft release must wait for every retained candidate"
+require_workflow_match "$PREPARE_RELEASE_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
+  "manual dispatch must not create a GitHub release"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'name:[[:space:]]+repogrammar-installer' \
+  "the draft release must consume the retained installer artifact"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'npm-candidate-manifest\.json' \
+  "the draft release must retain the exact npm candidate manifest as a public asset"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'find release-assets.*=[[:space:]]*"11"' \
+  "the draft release must contain exactly eleven supported assets"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'overwrite_files:[[:space:]]+false' \
+  "a rerun must never overwrite an existing draft candidate"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'fail_on_unmatched_files:[[:space:]]+true' \
+  "missing candidate assets must fail release preparation"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228' \
+  "the privileged GitHub release action must be pinned to the reviewed commit"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'draft:[[:space:]]+true' \
+  "both release channels must remain draft-only before npm staging"
+require_workflow_match "$PREPARE_RELEASE_JOB" 'prerelease:[[:space:]]+\$\{\{[[:space:]]*needs\.classify\.outputs\.channel[[:space:]]*==[[:space:]]*.*preview' \
+  "GitHub prerelease truth must follow the typed release channel"
+require_workflow_absence "$PREPARE_RELEASE_JOB" 'install\.ps1|windows|Windows' \
+  "GitHub release assets must not publish unsupported Windows files"
+
+for STAGE_JOB in "$STAGE_PREVIEW_JOB" "$STAGE_STABLE_JOB"; do
+  require_workflow_match "$STAGE_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
+    "npm staging must require a pushed tag"
+  require_workflow_match "$STAGE_JOB" 'environment:[[:space:]]+npm-release' \
+    "npm staging must use the protected trusted-publisher environment"
+  require_workflow_match "$STAGE_JOB" 'id-token:[[:space:]]+write' \
+    "npm staging must request short-lived OIDC authority"
+  require_workflow_match "$STAGE_JOB" 'actions/download-artifact' \
+    "npm staging must download the retained candidate"
+  require_workflow_match "$STAGE_JOB" 'name:[[:space:]]+npm-package-\$\{\{[[:space:]]*needs\.classify\.outputs\.version' \
+    "npm staging must consume the versioned candidate artifact"
+  require_workflow_match "$STAGE_JOB" 'verify-npm-pack-evidence' \
+    "npm staging must re-verify candidate SRI without repacking"
+  require_workflow_absence "$STAGE_JOB" '^[[:space:]]+npm pack|npm[[:space:]]+publish|NPM_TOKEN|NODE_AUTH_TOKEN' \
+    "npm staging must not repack, directly publish, or use a traditional token"
+done
+require_workflow_match "$STAGE_PREVIEW_JOB" '^[[:space:]]+npm stage publish.*--tag[[:space:]]+preview.*--provenance' \
+  "preview must stage the retained package with preview and provenance"
+require_workflow_match "$STAGE_STABLE_JOB" '^[[:space:]]+npm stage publish npm-candidate/sioyooo-repogrammar-0\.2\.0\.tgz --access public --tag latest --provenance' \
+  "stable must use the one exact registered staging command"
+require_workflow_absence "$RELEASE_WORKFLOW" 'NPM_TOKEN|NODE_AUTH_TOKEN|npm[[:space:]]+publish|npm[[:space:]]+stage[[:space:]]+(approve|reject)|npm[[:space:]]+dist-tag' \
+  "release automation must remain token-free, stage-only, and unable to approve or mutate tags"
+
+NPM_TAG_WORKFLOW="${SCRIPT_DIR}/../../.github/workflows/npm-tag-reconcile.yml"
+STABLE_FINALIZER="${SCRIPT_DIR}/../../.github/workflows/stable-release-finalize.yml"
+NPM_TAG_WORKFLOW_BODY="$(<"$NPM_TAG_WORKFLOW")"
+STABLE_FINALIZER_BODY="$(<"$STABLE_FINALIZER")"
+NPM_TAG_VERIFY_JOB="$(workflow_job "$NPM_TAG_WORKFLOW" verify)"
+STABLE_FINALIZER_JOB="$(workflow_job "$STABLE_FINALIZER" verify_public_release)"
+if [[ -z "$NPM_TAG_VERIFY_JOB" || -z "$STABLE_FINALIZER_JOB" ]]; then
+  echo "release verification workflows are missing their read-only jobs" >&2
   exit 1
 fi
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'NODE_AUTH_TOKEN:[[:space:]]+\$\{\{[[:space:]]*secrets\.NPM_TOKEN[[:space:]]*\}\}' \
-  "the pre-publication verify job must receive NPM_TOKEN"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'github\.ref_type.*tag' \
-  "the npm credential preflight must be scoped to tag publication"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'github\.event_name.*push' \
-  "manual dispatch must never run the npm credential preflight, even from a tag ref"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'NODE_AUTH_TOKEN' \
-  "the tag publication credential preflight must inspect NODE_AUTH_TOKEN"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'if[[:space:]].*-z.*NODE_AUTH_TOKEN' \
-  "the tag publication credential preflight must classify an absent token"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+1' \
-  "missing npm publication credentials must fail the tag release gate"
-require_workflow_match "$CREDENTIAL_PREFLIGHT" 'npm[[:space:]]+whoami' \
-  "tag publication preflight must verify that npm accepts the configured token"
-require_workflow_absence "$CREDENTIAL_PREFLIGHT" 'exit[[:space:]]+0|NPM_TOKEN.*skipp|skipp.*NPM_TOKEN' \
-  "the tag release gate must not describe missing npm credentials as skippable"
+require_workflow_match "$NPM_TAG_WORKFLOW_BODY" 'workflow_dispatch:' \
+  "npm tag verification must remain manually dispatchable"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" 'release-dist-tag-action' \
+  "npm tag verification must delegate exact channel policy to repo-guard"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" 'stable:stable_latest_verified' \
+  "stable verification must require the exact registered dist-tag state"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" '--preview[[:space:]]+"\$\{preview\}"' \
+  "npm tag verification must pass the observed preview tag to repo-guard"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" '--latest[[:space:]]+"\$\{latest\}"' \
+  "npm tag verification must pass the observed latest tag to repo-guard"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" '--tags-json[[:space:]]+"\$\{tags\}"' \
+  "npm tag verification must pass the complete dist-tag object to repo-guard"
+require_workflow_match "$NPM_TAG_VERIFY_JOB" '--versions-json[[:space:]]+"\$\{versions_json\}"' \
+  "npm tag verification must pass the complete version inventory to repo-guard"
+require_workflow_absence "$NPM_TAG_WORKFLOW_BODY" 'npm[[:space:]]+(publish|stage|dist-tag)|NPM_TOKEN|NODE_AUTH_TOKEN|id-token:[[:space:]]+write' \
+  "npm tag verification must be read-only"
 
-if [[ -z "$TAG_AUTHORITY" ]]; then
-  echo "release verification must prove the pushed tag commit belongs to origin/main" >&2
-  exit 1
-fi
-require_workflow_match "$TAG_AUTHORITY" 'github\.event_name.*push' \
-  "tag authority verification must run only for pushed publication tags"
-require_workflow_match "$TAG_AUTHORITY" 'github\.ref_type.*tag' \
-  "tag authority verification must require a tag ref"
-require_workflow_match "$TAG_AUTHORITY" 'git[[:space:]]+fetch.*origin[[:space:]]+main:refs/remotes/origin/main' \
-  "tag authority verification must fetch origin/main"
-require_workflow_match "$TAG_AUTHORITY" 'git[[:space:]]+merge-base[[:space:]]+--is-ancestor[[:space:]]+HEAD[[:space:]]+origin/main' \
-  "tag authority verification must require the tag commit to be contained in origin/main"
-require_workflow_match "$VERIFY_JOB" 'fetch-depth:[[:space:]]+0' \
-  "release verification must check out complete history for the tag ancestry gate"
-
-require_workflow_match "$PUBLISH_RELEASE_JOB" 'needs:[[:space:]]+build' \
-  "GitHub prerelease assets must be staged after verified artifact builds"
-require_workflow_match "$PUBLISH_RELEASE_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
-  "GitHub prerelease publication must require a pushed tag, never manual dispatch"
-require_workflow_match "$PUBLISH_RELEASE_JOB" 'softprops/action-gh-release' \
-  "publish_release must create the GitHub prerelease"
-require_workflow_match "$PUBLISH_RELEASE_JOB" 'install\.sh' \
-  "GitHub prerelease assets must include install.sh"
-require_workflow_absence "$PUBLISH_RELEASE_JOB" 'install\.ps1|windows|Windows' \
-  "GitHub prerelease assets must not publish the unsupported Windows installer"
-require_workflow_match "$PUBLISH_RELEASE_JOB" '\.sha256' \
-  "GitHub prerelease assets must include installer checksums"
-
-require_workflow_match "$PUBLISH_NPM_JOB" 'needs:[[:space:]]+publish_release' \
-  "npm publication must explicitly follow GitHub prerelease asset publication"
-require_workflow_match "$PUBLISH_NPM_JOB" "if:[[:space:]]+github\.event_name[[:space:]]*==[[:space:]]*'push'.*github\.ref_type[[:space:]]*==[[:space:]]*'tag'" \
-  "npm publication must require a pushed tag so workflow_dispatch is always build-only"
-require_workflow_match "$PUBLISH_NPM_JOB" 'npm publish --access public --tag preview' \
-  "publish_npm must publish the launcher instead of reporting a skipped success"
-require_workflow_absence "$PUBLISH_NPM_JOB" 'exit[[:space:]]+0|skipping npm publish' \
-  "publish_npm must not turn absent credentials into a green skipped publication"
+require_workflow_match "$STABLE_FINALIZER_BODY" 'candidate_run_id:' \
+  "stable finalization must bind the candidate tag workflow run"
+require_workflow_match "$STABLE_FINALIZER_BODY" 'candidate_run_attempt:' \
+  "stable finalization must bind an exact immutable workflow attempt"
+require_workflow_match "$STABLE_FINALIZER_BODY" 'contents:[[:space:]]+read' \
+  "stable finalization must have read-only repository authority"
+require_workflow_match "$STABLE_FINALIZER_BODY" 'actions:[[:space:]]+read' \
+  "stable finalization must have read-only artifact authority"
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify v0\.2\.0' \
+  "stable finalization must verify the immutable release attestation"
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify-asset v0\.2\.0' \
+  "stable finalization must verify every downloaded release asset"
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+npm audit signatures --json --include-attestations' \
+  "stable finalization must collect registry signature and provenance evidence"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'actions/runs/\$\{CANDIDATE_RUN_ID\}/attempts/\$\{CANDIDATE_RUN_ATTEMPT\}' \
+  "stable finalization must collect the exact candidate workflow attempt"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'git rev-parse HEAD.*expected-head-sha\.txt' \
+  "stable finalization must bind the candidate run to the checked-out tag commit"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'github-assets/npm-candidate-manifest\.json' \
+  "stable finalization must consume the immutable npm manifest from the public release"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'retained-candidate-manifest\.json' \
+  "stable finalization must preserve the public candidate manifest as release evidence"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'public-npm-pack\.json' \
+  "stable finalization must preserve public pack/SRI evidence"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'verify-npm-pack-evidence' \
+  "stable finalization must verify public npm bytes before executing them"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'public-native-smoke\.txt' \
+  "stable finalization must smoke the verified public native artifact"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'public-installer-version\.txt' \
+  "stable finalization must smoke the verified public installer"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'npm-tags\.json' \
+  "stable finalization must collect public dist-tag evidence"
+require_workflow_match "$STABLE_FINALIZER_JOB" 'npm-versions\.json' \
+  "stable finalization must collect the complete published-version inventory"
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+run:[[:space:]]+cargo run --quiet --locked --bin repo-guard -- verify-stable-release-evidence --evidence-dir evidence' \
+  "stable finalization must delegate the final verdict to repo-guard"
+require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@0\.2\.0' \
+  "stable finalization must smoke the exact stable npm version"
+require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@preview' \
+  "stable finalization must preserve and smoke the preview channel"
+require_workflow_absence "$STABLE_FINALIZER_BODY" 'npm[[:space:]]+(publish|stage|dist-tag)|NPM_TOKEN|NODE_AUTH_TOKEN|id-token:[[:space:]]+write|contents:[[:space:]]+write|actions:[[:space:]]+write' \
+  "stable finalization must remain read-only"
 
 # The release matrix must smoke the exact archive it uploads. Source-tree
 # binaries do not prove that an archive is executable or contains the runtime
@@ -808,7 +895,7 @@ require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'sys\.version_info[[:space:]]*
   "packaged smoke must enforce the Python 3.10+ runtime contract"
 require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'expected_version=.*package\.json' \
   "packaged smoke must derive the expected version from the release manifest"
-require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'cargo run --quiet --bin repo-guard -- smoke-packaged-artifact' \
+require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" 'cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact' \
   "packaged smoke must delegate product lifecycle assertions to repo-guard"
 require_workflow_match "$PACKAGED_ARTIFACT_SMOKE" '--binary.*binary' \
   "packaged smoke must pass the extracted binary to repo-guard"
@@ -844,7 +931,7 @@ if [[ -z "$MACOS_SMOKE_JOB" ]]; then
 fi
 require_workflow_match "$MACOS_SMOKE_JOB" 'runs-on:[[:space:]]+macos-' \
   "macOS product smoke must run on a macOS runner"
-require_workflow_match "$MACOS_SMOKE_JOB" 'cargo test --workspace --all-features' \
+require_workflow_match "$MACOS_SMOKE_JOB" 'cargo test --locked --workspace --all-features' \
   "macOS coverage must exercise the Rust workspace rather than compilation only"
 require_workflow_match "$MACOS_SMOKE_JOB" 'tar[[:space:]].*-x' \
   "macOS coverage must extract its candidate package"
@@ -882,12 +969,12 @@ require_workflow_absence "$WINDOWS_SOURCE_JOB" 'upload-artifact|release|repogram
   "Windows source-only CI must not imply a release artifact or publication claim"
 
 WINDOWS_INSTALLER="${SCRIPT_DIR}/install.ps1"
-# Windows remains a source-checkout contributor path, not a public-preview
+# Windows remains a source-checkout contributor path, not a supported release
 # release artifact or npm platform claim.
 grep -q "FromSource" "$WINDOWS_INSTALLER"
 grep -q "REPOGRAMMAR_SOURCE_BINARY" "$WINDOWS_INSTALLER"
 grep -q "cargo build --release" "$WINDOWS_INSTALLER"
-grep -q "Windows is not supported by the public preview" "$WINDOWS_INSTALLER"
+grep -q "Windows has no supported RepoGrammar release artifact" "$WINDOWS_INSTALLER"
 grep -q "installation requires explicit -FromSource" "$WINDOWS_INSTALLER"
 if grep -Eq 'repogrammar-x86_64-pc-windows-msvc|Install-CliFromRelease|Get-WindowsArtifactName|Invoke-WebRequest' "$WINDOWS_INSTALLER"; then
   echo "Windows contributor installer still contains a release-download path" >&2

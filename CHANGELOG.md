@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.2.0 — 2026-07-17 stable channel
+
+RepoGrammar `0.2.0` is the first non-prerelease pre-1.0 release. It makes no
+production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
+measured-token-savings, Windows-support, or expanded-language-support claim.
+Registry availability must be verified independently; this source record does
+not prove that GitHub or npm publication completed.
+
+### Added
+
+- Added a marker-fenced RepoGrammar instruction preflight contract and a safe,
+  explicit refresh path. After authority docs, initialized-repository work that
+  needs a local contract/convention, repeated implementation, framework role,
+  or analogue comparison attempts compact `repogrammar_context`, consumes its
+  read plan, and records the typed reason before falling back on unavailable,
+  `UNKNOWN`, `FALLBACK`, stale, omitted, or insufficient evidence. Root-cause
+  repair and schema/protocol/API/prompt-output or Meaning Contract conformance
+  and drift are explicitly covered, even with exact YAML or file targets; pure
+  operational or single-fact inspection remains outside the gate. Instruction
+  writes remain consent-gated, reversible, and fail closed for malformed or
+  duplicated managed markers.
+- Added a stable-release proof matrix covering the exact npm tarball, native
+  packaged artifacts, isolated setup/index/autosync/Pydantic smoke, GitHub
+  immutable releases, npm Trusted Publisher OIDC, non-public staged
+  publication, human 2FA approval, provenance, and final public verification.
+
+### Changed
+
+- Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
+  current install documentation on `0.2.0`. Historical
+  `0.2.0-preview.0` evidence remains historical and the npm `preview` dist-tag
+  must stay on that immutable prerelease.
+- Generalized the release policy from preview-only to fail-closed preview and
+  stable channels. Preview remains a GitHub prerelease plus npm `preview`;
+  stable is a normal GitHub release plus npm `latest`, with manual workflow
+  dispatch remaining build-only.
+
 ### Fixed
 
 - Corrected the npm dist-tag release gate for a package whose only published

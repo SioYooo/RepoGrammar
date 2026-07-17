@@ -35,7 +35,7 @@ function Invoke-InstallerWithPath([string]$PathValue, [scriptblock]$Body) {
 try {
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
 
-    # Windows public-preview acquisition is intentionally source-only. A
+    # Windows release acquisition is intentionally source-only. A
     # default install must fail before reading a local fake release directory,
     # downloading anything, or creating command/install state.
     $UnsupportedCommandDir = Join-Path $TempRoot "unsupported-bin"
@@ -62,7 +62,7 @@ try {
     if ($UnsupportedStatus -eq 0) {
         throw "Windows default release install unexpectedly succeeded"
     }
-    Assert-Contains $UnsupportedOut "Windows is not supported by the public preview"
+    Assert-Contains $UnsupportedOut "Windows has no supported RepoGrammar release artifact"
     Assert-Contains $UnsupportedOut "installation requires explicit -FromSource"
     if ((Test-Path $UnsupportedCommandDir) -or (Test-Path $UnsupportedInstallDir)) {
         throw "refused Windows release install created command or install state"

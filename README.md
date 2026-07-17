@@ -17,32 +17,30 @@ reproducible from this checkout.
 
 ## Install
 
-### Public-preview path — verify the exact version
+### Stable channel — verify the exact version
 
-Availability is decided by the exact `0.2.0-preview.0` publication, not by the
+Availability is decided by the exact `0.2.0` publication, not by the
 contents of this README. Verify both registries before using the no-build path:
 
 ```bash
-npm view @sioyooo/repogrammar@0.2.0-preview.0 version
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh.sha256
+npm view @sioyooo/repogrammar@0.2.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
 ```
 
-Only when both commands succeed, run the pinned preview:
+Only when both commands succeed, run the pinned stable-channel release:
 
 ```bash
-npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
+npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target auto
 ```
 
-Always include `@0.2.0-preview.0` or `@preview`. npm requires a `latest`
-dist-tag, and because this prerelease is currently the package's only published
-version, `latest` also resolves to it. That registry state does not make the
-release stable: unversioned `npm install`/`npx` reaches preview software, while
-the exact-version and `@preview` paths are the supported public-preview
-contract.
+After both checks succeed, unversioned `npx @sioyooo/repogrammar` resolves the
+same `0.2.0` package through npm `latest`. Use the exact version for
+reproducible automation. The separate `@preview` dist-tag remains on
+`0.2.0-preview.0`; publishing stable must not rewrite that historical package.
 
 If either check fails, use the contributor/dogfood path, which builds once from
 source. The complete publication gate is in the
-[release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/public-preview-release-checklist.md).
+[stable release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.2.0-release-checklist.md).
 
 ```bash
 git clone https://github.com/SioYooo/RepoGrammar.git
@@ -52,8 +50,9 @@ bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
 
-The installed command needs Python 3.10 or newer (`python3`) for the current Python preview. It does
-not need Node.js, npm, Docker, a local model, an OpenAI API key, or a cloud API.
+The installed command needs Python 3.10 or newer (`python3`) for the bounded
+Python analyzer. It does not need Node.js, npm, Docker, a local model, an
+OpenAI API key, or a cloud API.
 
 ## From setup to trustworthy context
 
@@ -119,8 +118,10 @@ The Rust implementation follows a dependency-inverted
 | **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
 | **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
 
-RepoGrammar is pre-alpha. It is not a sound static analyzer and does not replace
-source inspection. `estimated_potential_token_savings` is an **estimated** local
+RepoGrammar `0.2.0` is the first non-prerelease pre-1.0 version. Its MCP API
+and non-Python analyzers remain experimental; this is not a 1.0 API-stability
+or production-readiness claim. RepoGrammar is not a sound static analyzer and
+does not replace source inspection. `estimated_potential_token_savings` is an **estimated** local
 read-displacement diagnostic—not measured savings or a causal claim. Measured
 savings require a controlled before/after study; the current
 [limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) keep that boundary explicit.

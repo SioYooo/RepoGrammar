@@ -46,7 +46,7 @@ uninit on -Project (the .repogrammar state), and deletes every repogrammar
 binary, worker asset, and the managed data directory. Add -Yes to skip the
 confirmation prompt.
 
-The public preview does not publish or support a Windows release artifact.
+RepoGrammar does not publish or support a Windows release artifact.
 Installation is fail-closed unless -FromSource is passed explicitly from a
 RepoGrammar source checkout. -FromSource builds or copies a local
 target\release\repogrammar.exe before optional agent setup. -SourceBinary or
@@ -218,7 +218,7 @@ function Install-CliFromSource {
 
 function Assert-WindowsSourceInstallEnabled {
     if (!$FromSource) {
-        throw "Windows is not supported by the public preview and no Windows release artifact is published; installation requires explicit -FromSource from a RepoGrammar source checkout"
+        throw "Windows has no supported RepoGrammar release artifact; installation requires explicit -FromSource from a RepoGrammar source checkout"
     }
 }
 

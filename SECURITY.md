@@ -2,8 +2,9 @@
 
 ## Supported Versions
 
-RepoGrammar is currently in public preview / active development. Security fixes
-are applied to the main branch and the latest preview release when applicable.
+RepoGrammar is a pre-1.0 project in active development. Security fixes target
+the main branch and, once independently published, the latest stable-channel
+release; preview releases are updated when applicable.
 
 ## Reporting a Vulnerability
 

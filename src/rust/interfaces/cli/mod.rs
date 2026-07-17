@@ -3,11 +3,15 @@
 use crate::application::autosync::{AutosyncReport, AutosyncSettings};
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    binary_name, known_agent_targets, normalize_concrete_targets, normalized_lexical_path,
-    owned_install_receipt_exists, plan_install, resolve_instruction_file,
+    binary_name, known_agent_targets, manage_instruction_file, normalize_concrete_targets,
+    normalized_lexical_path, owned_install_receipt_exists, plan_install, resolve_instruction_file,
     supported_concrete_targets, target_adapter, targets_for_display, AgentIntegrationInspection,
     AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
+    ManagedInstructionOperation, ManagedInstructionOutcome, ManagedInstructionRefusal,
+    ManagedInstructionRequest, MANAGED_INSTRUCTION_VERSION,
 };
+#[cfg(test)]
+use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
@@ -517,6 +521,9 @@ where
             runtime,
             install_prompt,
         ),
+        [command, rest @ ..] if command == "instructions" => {
+            handle_instructions(rest, current_dir)
+        }
         [command, rest @ ..] if is_project_lifecycle_command(command) => {
             handle_project_lifecycle(command, rest, current_dir, env_lookup, runtime)
         }
@@ -643,6 +650,8 @@ fn full_usage() -> String {
         "      Configure RepoGrammar as a read-only MCP server for agents.",
         "  uninstall [--target <agent[,agent]>] [--scope global|project-local] --yes",
         "      Remove only RepoGrammar-owned agent integration receipts.",
+        "  instructions <status|sync|remove> --file <path> [--dry-run] [--yes] [--json]",
+        "      Inspect or explicitly refresh one marker-fenced agent instruction file.",
         "",
         "Agent-safe repository bootstrap:",
         "  repogrammar setup",
@@ -881,6 +890,24 @@ pub fn command_usage(command: &str) -> Option<String> {
         ])),
         "install" => Some(install_usage("install", "Configure RepoGrammar as a read-only MCP server for coding agents.")),
         "uninstall" => Some(install_usage("uninstall", "Remove RepoGrammar-owned agent integration receipts and managed entries.")),
+        "instructions" => Some(help_text(&[
+            "Usage: repogrammar instructions <status|sync|remove> --file <path> [--dry-run] [--yes] [--json]",
+            "",
+            "Inspects, refreshes, or removes RepoGrammar's marker-fenced pre-flight gate in one explicitly selected instruction file.",
+            "No file is guessed, no AGENTS.md/CLAUDE.md mirroring is imposed, and repository state is never initialized.",
+            "Malformed, duplicated, or unrecognized managed sections are preserved and refused for writes.",
+            "",
+            "Subcommands:",
+            "  status                            Report missing/current/outdated/foreign/malformed state without writes.",
+            "  sync                              Create, append, or refresh an exact known managed section.",
+            "  remove                            Remove only an exact known managed section.",
+            "",
+            "Options:",
+            "  --file <path>                     Required explicit instruction file. Relative paths use the current directory.",
+            "  --dry-run                         Report the planned sync/remove without writes.",
+            "  --yes                             Required for a non-dry-run sync or remove.",
+            "  --json                            Emit a low-cardinality machine-readable result without the file path.",
+        ])),
         "unknowns" => Some(help_text(&[
             "Usage: repogrammar unknowns [--project <path>] [--json] [--quiet|--verbose]",
             "",
@@ -1026,6 +1053,7 @@ fn contains_help_flag(rest: &[String]) -> bool {
 
 fn is_known_cli_command(command: &str) -> bool {
     command == "setup"
+        || command == "instructions"
         || is_project_lifecycle_command(command)
         || is_query_command(command)
         || is_installer_command(command)
@@ -3559,6 +3587,185 @@ fn comma_list_or_none(values: &[&str]) -> String {
         "none".to_string()
     } else {
         values.join(", ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstructionCliOptions {
+    operation: ManagedInstructionOperation,
+    file: String,
+    dry_run: bool,
+    assume_yes: bool,
+    json: bool,
+}
+
+fn parse_instruction_options(rest: &[String]) -> Result<InstructionCliOptions, String> {
+    let Some(subcommand) = rest.first() else {
+        return Err("instructions requires status, sync, or remove plus --file <path>".to_string());
+    };
+    let operation = match subcommand.as_str() {
+        "status" => ManagedInstructionOperation::Status,
+        "sync" => ManagedInstructionOperation::Sync,
+        "remove" => ManagedInstructionOperation::Remove,
+        _ => return Err("instructions subcommand must be status, sync, or remove".to_string()),
+    };
+    let mut file = None;
+    let mut dry_run = false;
+    let mut assume_yes = false;
+    let mut json = false;
+    let mut index = 1;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--file" => {
+                index += 1;
+                let value = rest
+                    .get(index)
+                    .ok_or_else(|| "--file requires a path".to_string())?;
+                if file.is_some() {
+                    return Err("--file may be supplied only once".to_string());
+                }
+                if value.trim().is_empty() || value.chars().any(char::is_control) {
+                    return Err(
+                        "--file requires a non-blank path without control characters".to_string(),
+                    );
+                }
+                file = Some(value.clone());
+            }
+            "--dry-run" => dry_run = true,
+            "--yes" => assume_yes = true,
+            "--json" => json = true,
+            option => return Err(format!("unknown instructions option: {option}")),
+        }
+        index += 1;
+    }
+    if operation == ManagedInstructionOperation::Status && dry_run {
+        return Err(
+            "instructions status is already read-only and does not accept --dry-run".to_string(),
+        );
+    }
+    if operation == ManagedInstructionOperation::Status && assume_yes {
+        return Err("instructions status does not accept --yes".to_string());
+    }
+    Ok(InstructionCliOptions {
+        operation,
+        file: file.ok_or_else(|| "instructions requires --file <path>".to_string())?,
+        dry_run,
+        assume_yes,
+        json,
+    })
+}
+
+fn instruction_result_status(outcome: &ManagedInstructionOutcome) -> &'static str {
+    if outcome.refusal.is_some() {
+        "refused"
+    } else if outcome.dry_run {
+        "dry_run"
+    } else {
+        "ok"
+    }
+}
+
+fn instruction_outcome_json(outcome: &ManagedInstructionOutcome) -> String {
+    json_line(json!({
+        "command": format!("instructions {}", outcome.operation.as_str()),
+        "status": instruction_result_status(outcome),
+        "operation": outcome.operation.as_str(),
+        "state_before": outcome.state_before.as_str(),
+        "state_after": outcome.state_after.as_str(),
+        "detected_content_version": outcome.state_before.content_version(),
+        "expected_content_version": MANAGED_INSTRUCTION_VERSION,
+        "file_existed": outcome.file_existed,
+        "dry_run": outcome.dry_run,
+        "would_change": outcome.would_change,
+        "changed": outcome.changed,
+        "action": outcome.disposition.as_str(),
+        "repairable": !matches!(
+            outcome.state_before,
+            crate::application::install::ManagedInstructionState::Foreign
+                | crate::application::install::ManagedInstructionState::Malformed
+        ),
+        "refusal": outcome.refusal.map(ManagedInstructionRefusal::as_str),
+    }))
+}
+
+fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
+    if let Some(refusal) = outcome.refusal {
+        let guidance = match refusal {
+            ManagedInstructionRefusal::ConfirmationRequired => {
+                "rerun with --dry-run to inspect or --yes to authorize this one file"
+            }
+            ManagedInstructionRefusal::ForeignSection => {
+                "the unrecognized managed section was preserved; review it manually"
+            }
+            ManagedInstructionRefusal::MalformedSection => {
+                "the malformed or duplicated markers were preserved; repair them manually"
+            }
+        };
+        return format!(
+            "instructions {}: refused ({})\nnext: {guidance}\n",
+            outcome.operation.as_str(),
+            refusal.as_str()
+        );
+    }
+    format!(
+        "instructions {}: state={} action={} expected_version={}{}\n",
+        outcome.operation.as_str(),
+        outcome.state_before.as_str(),
+        outcome.disposition.as_str(),
+        MANAGED_INSTRUCTION_VERSION,
+        if outcome.dry_run { " dry_run=true" } else { "" }
+    )
+}
+
+fn instruction_failure_output(operation: ManagedInstructionOperation, json: bool) -> CliOutput {
+    if json {
+        CliOutput::failure(
+            2,
+            json_line(json!({
+                "command": format!("instructions {}", operation.as_str()),
+                "status": "error",
+                "reason": "instruction_file_unavailable",
+                "expected_content_version": MANAGED_INSTRUCTION_VERSION,
+            })),
+        )
+    } else {
+        CliOutput::failure(
+            2,
+            "instruction file operation failed safely; the selected file was preserved\n",
+        )
+    }
+}
+
+fn handle_instructions(rest: &[String], current_dir: &Path) -> CliOutput {
+    let options = match parse_instruction_options(rest) {
+        Ok(options) => options,
+        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+    };
+    let supplied = PathBuf::from(&options.file);
+    let path = if supplied.is_absolute() {
+        supplied
+    } else {
+        current_dir.join(supplied)
+    };
+    let outcome = match manage_instruction_file(&ManagedInstructionRequest {
+        path,
+        operation: options.operation,
+        dry_run: options.dry_run,
+        assume_yes: options.assume_yes,
+    }) {
+        Ok(outcome) => outcome,
+        Err(_) => return instruction_failure_output(options.operation, options.json),
+    };
+    let refused = outcome.refusal.is_some();
+    let output = if options.json {
+        instruction_outcome_json(&outcome)
+    } else {
+        instruction_outcome_human(&outcome)
+    };
+    if refused {
+        CliOutput::failure(2, output)
+    } else {
+        CliOutput::success(output)
     }
 }
 
@@ -10338,9 +10545,168 @@ mod tests {
             "storage clean [--project <path>]",
             "resync [--project <path>]",
             "install [--target <agent[,agent]>]",
+            "instructions <status|sync|remove> --file <path>",
             "telemetry <status|on|off|export|upload|purge|research-*|experiment-*>",
         ] {
             assert!(output.stdout.contains(command), "missing {command}");
+        }
+    }
+
+    #[test]
+    fn instructions_sync_is_explicit_json_dry_run_and_reversible() {
+        let workspace = TempWorkspace::new("cli-instructions-sync");
+        let instruction_file = workspace.path().join("AGENTS.md");
+        fs::write(&instruction_file, "# User guide\n\nkeep me\n").expect("seed guide");
+        let env = |_: &str| None;
+
+        let status = run_with_context(
+            ["instructions", "status", "--file", "AGENTS.md", "--json"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(status.status, 0, "{}", status.stderr);
+        let status_json: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
+        assert_eq!(status_json["state_before"], "missing");
+        assert_eq!(status_json["expected_content_version"], 2);
+        assert_eq!(status_json["changed"], false);
+        assert!(!status
+            .stdout
+            .contains(&workspace.path().display().to_string()));
+
+        let dry_run = run_with_context(
+            [
+                "instructions",
+                "sync",
+                "--file",
+                "AGENTS.md",
+                "--dry-run",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(dry_run.status, 0, "{}", dry_run.stderr);
+        let dry_run_json: Value =
+            serde_json::from_str(dry_run.stdout.trim()).expect("dry-run JSON");
+        assert_eq!(dry_run_json["status"], "dry_run");
+        assert_eq!(dry_run_json["action"], "would_append");
+        assert_eq!(dry_run_json["would_change"], true);
+        assert_eq!(dry_run_json["changed"], false);
+        assert!(!fs::read_to_string(&instruction_file)
+            .expect("dry-run preserved")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+
+        let unconfirmed = run_with_context(
+            ["instructions", "sync", "--file", "AGENTS.md", "--json"],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(unconfirmed.status, 2);
+        let unconfirmed_json: Value =
+            serde_json::from_str(unconfirmed.stderr.trim()).expect("refusal JSON");
+        assert_eq!(unconfirmed_json["status"], "refused");
+        assert_eq!(unconfirmed_json["refusal"], "confirmation_required");
+
+        let synced = run_with_context(
+            [
+                "instructions",
+                "sync",
+                "--file",
+                "AGENTS.md",
+                "--yes",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(synced.status, 0, "{}", synced.stderr);
+        let synced_json: Value = serde_json::from_str(synced.stdout.trim()).expect("sync JSON");
+        assert_eq!(synced_json["state_after"], "current");
+        assert_eq!(synced_json["action"], "appended");
+        assert_eq!(synced_json["changed"], true);
+        let with_gate = fs::read_to_string(&instruction_file).expect("synced guide");
+        assert!(with_gate.contains("before any non-trivial code location"));
+        assert!(with_gate.contains("operation: \"find_analogues\""));
+        assert!(with_gate.contains("State that fallback reason"));
+        assert!(with_gate.contains("Do not repeat the same RepoGrammar call"));
+        assert!(!workspace.path().join("CLAUDE.md").exists());
+        assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
+
+        let remove_plan = run_with_context(
+            [
+                "instructions",
+                "remove",
+                "--file",
+                "AGENTS.md",
+                "--dry-run",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(remove_plan.status, 0, "{}", remove_plan.stderr);
+        assert!(fs::read_to_string(&instruction_file)
+            .expect("remove dry-run preserved")
+            .contains(MANAGED_INSTRUCTION_BEGIN));
+
+        let removed = run_with_context(
+            [
+                "instructions",
+                "remove",
+                "--file",
+                "AGENTS.md",
+                "--yes",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(removed.status, 0, "{}", removed.stderr);
+        let after = fs::read_to_string(&instruction_file).expect("removed guide");
+        assert!(after.contains("keep me"));
+        assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
+    }
+
+    #[test]
+    fn instructions_sync_preserves_foreign_and_malformed_sections() {
+        let workspace = TempWorkspace::new("cli-instructions-refusal");
+        let env = |_: &str| None;
+        for (name, contents, expected_state, expected_refusal) in [
+            (
+                "FOREIGN.md",
+                format!("{MANAGED_INSTRUCTION_BEGIN}\nforeign body\n{MANAGED_INSTRUCTION_END}\n"),
+                "foreign",
+                "foreign_managed_section",
+            ),
+            (
+                "MALFORMED.md",
+                format!("{MANAGED_INSTRUCTION_BEGIN}\nmissing end\n"),
+                "malformed",
+                "malformed_managed_section",
+            ),
+        ] {
+            let path = workspace.path().join(name);
+            fs::write(&path, &contents).expect("seed refused guide");
+            let status = run_with_context(
+                ["instructions", "status", "--file", name, "--json"],
+                workspace.path(),
+                &env,
+            );
+            assert_eq!(status.status, 0, "{name}: {}", status.stderr);
+            let status_json: Value =
+                serde_json::from_str(status.stdout.trim()).expect("status JSON");
+            assert_eq!(status_json["state_before"], expected_state);
+            assert_eq!(status_json["repairable"], false);
+
+            let sync = run_with_context(
+                ["instructions", "sync", "--file", name, "--yes", "--json"],
+                workspace.path(),
+                &env,
+            );
+            assert_eq!(sync.status, 2, "{name}");
+            let sync_json: Value = serde_json::from_str(sync.stderr.trim()).expect("refusal JSON");
+            assert_eq!(sync_json["refusal"], expected_refusal);
+            assert_eq!(fs::read_to_string(&path).expect("preserved"), contents);
         }
     }
 

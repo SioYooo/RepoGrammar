@@ -1,8 +1,13 @@
 # Public-preview release checklist
 
-This is the canonical maintainer gate for the first downloadable RepoGrammar
-preview. It prepares `v0.2.0-preview.0` for long-term developer use; it is not
-proof that a GitHub Release or npm package already exists.
+This records the historical gate and observed evidence for the already-published
+`v0.2.0-preview.0`. It is not reusable publication authority. Future preview
+releases use the current `release.yml` contract: one retained npm candidate, a
+tag-run-only private GitHub draft carrying the public candidate manifest, OIDC
+`npm stage publish --tag preview`, maintainer 2FA approval, and read-only
+post-publication verification. Manual build-only runs are rehearsal only. The
+token-based steps below are retained only to explain what was actually run for
+this historical preview; they must not be followed for a future release.
 
 ## Fixed release boundary
 
@@ -75,6 +80,10 @@ proof that a GitHub Release or npm package already exists.
    run proves build and smoke only; it proves no public availability.
 
 ## Phase 2: tag publication gate
+
+> Historical evidence only. Current preview publication uses the protected
+> `npm-release` environment and stage-only OIDC trusted publishing; it never
+> reads `NPM_TOKEN` or calls direct `npm publish`.
 
 1. Confirm GitHub authentication and repository write authority without
    exposing credentials.

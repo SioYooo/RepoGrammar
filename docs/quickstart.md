@@ -4,7 +4,21 @@ This guide does not infer publication from its own version. Use the exact
 availability gate below; if either registry check fails, use source-checkout
 contributor dogfood.
 
-## 1. Acquire The Command From Source
+## 1. Verify And Acquire Exact 0.2.0
+
+```text
+npm view @sioyooo/repogrammar@0.2.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
+npx @sioyooo/repogrammar@0.2.0 version
+```
+
+Continue with the no-build path only when both registry checks succeed. The npm
+launcher requires Node/npm for acquisition, but the installed product does not
+require Rust/Cargo, Docker, the SQLite CLI, a local model, an embedding model,
+an OpenAI API key, or a cloud API. The bounded Python analyzer requires Python
+3.10 or newer as `python3` at runtime.
+
+If either registry check fails, use contributor source acquisition:
 
 ```text
 git clone https://github.com/SioYooo/RepoGrammar.git
@@ -13,12 +27,6 @@ cargo build --release
 bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
-
-This acquisition step requires Rust/Cargo because it builds from source. The
-installed end-user command itself does not require Node.js, npm, Docker, the
-SQLite CLI, a local model, an embedding model, an OpenAI API key, or a cloud
-API. The current Python preview requires Python 3.10 or newer as `python3` at
-runtime.
 
 ## 2. Run One Setup Command
 
@@ -37,7 +45,8 @@ Setup presents one plan and requests one confirmation. It then:
 4. builds the active index;
 5. starts auto-sync unless `--no-autosync` is present;
 6. runs a read-only product MCP self-test; and
-7. prints readiness, one limitation or recovery action, and one question to ask.
+7. prints each current limitation or recovery action, and prints a coding-agent
+   question only when at least one native agent integration is verified ready.
 
 No detected Codex or Claude Code CLI is not fatal: setup still completes the
 repository-only path and tells you how to add a supported agent later. Setup
@@ -88,14 +97,14 @@ source search for unsupported evidence.
 
 ## Supported Platforms
 
-The public-preview binary matrix is:
+The stable `0.2.0` binary matrix is:
 
 - macOS arm64 and x86_64;
 - glibc 2.35+ Linux x86_64; and
 - glibc 2.39+ Linux arm64.
 
 Musl-based Linux, older glibc, and Linux systems where glibc cannot be confirmed
-fail closed before download. Windows is not in the preview matrix. Live agent writers currently cover
+fail closed before download. Windows is not in the stable matrix. Live agent writers currently cover
 global Codex and global Claude Code only. Source-checkout installation has been
 tested locally on Unix-like paths; Windows source acquisition uses
 `src/install/install.ps1` and remains subject to the Windows proof recorded in
@@ -117,22 +126,27 @@ For a safe product smoke, build the binary, use an isolated temporary HOME and
 target repository, and run `setup --dry-run --json --progress never`. Verify
 that stdout is one JSON value, stderr is empty, `.repogrammar/` is absent, and
 the temporary HOME remains empty. The complete release gate is in the
-[public-preview release checklist](release/public-preview-release-checklist.md).
+[stable release checklist](release/stable-v0.2.0-release-checklist.md).
 
 ## Exact Published-Version Gate
 
 First verify the exact npm version and matching GitHub asset:
 
 ```text
-npm view @sioyooo/repogrammar@0.2.0-preview.0 version
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0-preview.0/install.sh.sha256
+npm view @sioyooo/repogrammar@0.2.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
 ```
 
 If both commands succeed, the pinned no-build path is:
 
 ```text
-npx @sioyooo/repogrammar@0.2.0-preview.0 setup --project /path/to/your/repo --target auto
+npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target auto
 ```
+
+After publication verification, unversioned `npx @sioyooo/repogrammar` uses
+npm `latest` and must resolve the same `0.2.0`. The separate `@preview` tag
+continues to resolve immutable `0.2.0-preview.0`; use the exact stable version
+for reproducible automation.
 
 If either check fails, stay on the source path above. The npm wrapper is a thin
 downloader/launcher for checksummed release binaries; it does not compile

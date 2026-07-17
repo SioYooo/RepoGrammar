@@ -107,6 +107,10 @@ machine-level agent integration rather than repository-local index state.
 reconciling an internally consistent owned integration from an obsolete managed
 executable to the current authority; setup delegates that refresh and rolls
 back only targets it newly created.
+The install application also owns the exact versioned, marker-fenced agent
+pre-flight text. Optional instruction-file writes and the read-only MCP
+initialize response consume that same constant so contract-evidence routing
+cannot drift between machine integration and runtime guidance.
 
 ## Composition root
 

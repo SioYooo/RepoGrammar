@@ -17,9 +17,35 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  classify:
+    name: Classify release channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch publication authority
+        if: github.event_name == 'push'
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - name: Verify release source
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_REF_NAME: ${{ github.ref_name }}
+        run: cargo run --quiet --locked --bin repo-guard -- release-source --event-name "${EVENT_NAME}" --ref-name "${PUSH_REF_NAME}"
+
   verify:
     name: Verify release gate
+    needs: classify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,72 +56,77 @@ jobs:
           components: rustfmt, clippy
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Verify tag and version agreement
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          package_version="$(node -p "require('./package.json').version")"
-          cargo_version="$(awk -F' *= *' '
-            /^\[/ { section = $0 }
-            section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
-          ' Cargo.toml)"
-          echo "package.json version: ${package_version}"
-          echo "Cargo.toml version:   ${cargo_version}"
-          if [ -z "${package_version}" ] || [ -z "${cargo_version}" ]; then
-            echo "could not resolve package.json and Cargo.toml versions" >&2
-            exit 1
-          fi
-          if [ "${package_version}" != "${cargo_version}" ]; then
-            echo "version mismatch: package.json=${package_version} Cargo.toml=${cargo_version}" >&2
-            exit 1
-          fi
-          # Only a pushed tag is a publication event. A manual dispatch remains
-          # build-only even when its selected ref happens to be a tag.
-          if [ "${EVENT_NAME}" = "push" ] && [ "${REF_TYPE}" = "tag" ]; then
-            if [ "${REF_NAME}" != "v${package_version}" ]; then
-              echo "tag ${REF_NAME} does not match v${package_version}" >&2
-              exit 1
-            fi
-            echo "tag ${REF_NAME} matches v${package_version}"
-          else
-            echo "ref_type=${REF_TYPE} is not a tag; skipping tag/version equality (verify/build only)"
-          fi
-      - name: Verify publication tag authority
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor HEAD origin/main; then
-            echo "publication tag commit is not contained in origin/main" >&2
-            exit 1
-          fi
-          echo "publication tag commit is contained in origin/main"
-      - name: Require npm credentials before tag publication
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is required before publishing any tag assets" >&2
-            exit 1
-          fi
-          npm whoami --registry https://registry.npmjs.org >/dev/null
-          echo "tag publication credentials are present and accepted by npm"
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
       - run: node src/workers/typescript/worker.test.js
       - run: node src/npm/repogrammar.test.js
       - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
       - run: python3 src/workers/python/worker.test.py
       - run: bash src/install/repogrammar-install.test.sh
-      - run: cargo run --quiet --bin repo-guard -- check
+      - run: cargo run --quiet --locked --bin repo-guard -- check
+      - run: git diff --exit-code
+
+  package_npm:
+    name: Build and smoke the exact npm candidate
+    needs: [classify, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
+      - name: Pack once and verify the exact candidate
+        env:
+          RELEASE_VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(npm --version)" = "11.18.0"
+          mkdir -p npm-candidate
+          npm pack --json --ignore-scripts --pack-destination npm-candidate > npm-candidate/npm-pack.json
+          package_file="sioyooo-repogrammar-${RELEASE_VERSION}.tgz"
+          test -f "npm-candidate/${package_file}"
+          cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
+            --tarball "npm-candidate/${package_file}" \
+            --expected-version "${RELEASE_VERSION}" \
+            > npm-candidate/candidate-manifest.json
+          cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
+            --pack-json npm-candidate/npm-pack.json \
+            --candidate-manifest npm-candidate/candidate-manifest.json \
+            --expected-version "${RELEASE_VERSION}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package-${{ needs.classify.outputs.version }}
+          path: npm-candidate/
+          if-no-files-found: error
+
+  package_installer:
+    name: Retain exact installer candidate
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package installer and checksum
+        run: |
+          set -euo pipefail
+          mkdir -p installer-candidate
+          cp src/install/repogrammar-install.sh installer-candidate/install.sh
+          cd installer-candidate
+          sha256sum install.sh > install.sh.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repogrammar-installer
+          path: installer-candidate/
+          if-no-files-found: error
 
   build:
     name: Build ${{ matrix.target }}
@@ -124,9 +155,10 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
       - name: Build release binary
-        run: cargo build --release --bin repogrammar --target "${{ matrix.target }}"
+        run: cargo build --locked --release --bin repogrammar --target "${{ matrix.target }}"
       - name: Inspect Linux glibc ABI floor
         if: contains(matrix.target, 'unknown-linux-gnu')
         shell: bash
@@ -172,7 +204,7 @@ jobs:
           test -f "${worker}"
           python3 -c 'import sys; assert sys.version_info >= (3, 10), "RepoGrammar requires Python 3.10+"'
           expected_version="$(node -p "require('./package.json').version")"
-          cargo run --quiet --bin repo-guard -- smoke-packaged-artifact \
+          cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact \
             --binary "${binary}" \
             --worker "${worker}" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
@@ -185,9 +217,9 @@ jobs:
             ${{ matrix.archive }}.sha256
           if-no-files-found: error
 
-  publish_release:
-    name: Publish staged GitHub release assets
-    needs: build
+  prepare_github_release:
+    name: Prepare GitHub release assets
+    needs: [classify, build, package_installer, package_npm]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -197,45 +229,142 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: release-assets
+          pattern: repogrammar-*.tar.gz
           merge-multiple: true
-      - name: Add installer scripts
-        run: |
-          cp src/install/repogrammar-install.sh release-assets/install.sh
-          cd release-assets
-          sha256sum install.sh > install.sh.sha256
-      - uses: softprops/action-gh-release@v3
+      - uses: actions/download-artifact@v8
         with:
-          prerelease: true
-          files: release-assets/*
-
-  publish_npm:
-    name: Publish npm launcher after GitHub assets
-    needs: publish_release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+          name: repogrammar-installer
+          path: release-assets
+      - uses: actions/download-artifact@v8
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - run: node src/npm/repogrammar.test.js
-      - run: npm_config_cache="${RUNNER_TEMP}/npm-cache" npm pack --dry-run
-      - name: Publish npm package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          name: npm-package-${{ needs.classify.outputs.version }}
+          path: npm-candidate
+      - name: Retain the npm candidate manifest with the draft
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN disappeared after the publication preflight" >&2
+          test -f npm-candidate/candidate-manifest.json
+          test ! -e release-assets/npm-candidate-manifest.json
+          cp npm-candidate/candidate-manifest.json \
+            release-assets/npm-candidate-manifest.json
+          test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
+      - name: Refuse an existing release or draft for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v${{ needs.classify.outputs.version }}
+        run: |
+          set -euo pipefail
+          existing_release_id="$(gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[][] | select(.tag_name == env.TAG_NAME) | .id')"
+          if [ -n "${existing_release_id}" ]; then
+            echo "A GitHub release or draft already exists for ${TAG_NAME}; a full tag-run rerun must not replace it." >&2
+            echo "Use rerun-failed-jobs so successful candidate jobs are not rerun." >&2
+            echo "To restart from zero, first prove neither channel is public, reject the npm stage, and delete the draft deliberately." >&2
             exit 1
           fi
-          npm publish --access public --tag preview
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: v${{ needs.classify.outputs.version }}
+          draft: true
+          prerelease: ${{ needs.classify.outputs.channel == 'preview' }}
+          files: release-assets/*
+          overwrite_files: false
+          fail_on_unmatched_files: true
+      - name: Record approval boundary
+        run: |
+          echo "Release assets are attached to a draft GitHub release."
+          echo "After the npm stage job completes, inspect both private candidates before making either channel public."
 
-  reconcile_npm_tags:
-    name: Verify npm preview dist-tags
-    needs: publish_npm
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+  stage_npm_preview:
+    name: Stage immutable npm preview launcher
+    needs: [classify, package_npm, prepare_github_release]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'preview'
+    runs-on: ubuntu-latest
+    environment: npm-release
     permissions:
       contents: read
-    uses: ./.github/workflows/npm-tag-reconcile.yml
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package-${{ needs.classify.outputs.version }}
+          path: npm-candidate
+      - name: Stage the exact npm preview candidate
+        run: |
+          set -euo pipefail
+          package_file="npm-candidate/sioyooo-repogrammar-${{ needs.classify.outputs.version }}.tgz"
+          test -f "${package_file}"
+          cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
+            --tarball "${package_file}" \
+            --expected-version "${{ needs.classify.outputs.version }}" \
+            > npm-candidate/candidate-manifest.recheck.json
+          cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
+            --pack-json npm-candidate/npm-pack.json \
+            --candidate-manifest npm-candidate/candidate-manifest.recheck.json \
+            --expected-version "${{ needs.classify.outputs.version }}"
+          npm stage publish "${package_file}" --access public --tag preview --provenance
+      - name: Record npm preview approval boundary
+        run: |
+          echo "The preview npm package is staged and the GitHub prerelease remains a draft; neither channel is public."
+          echo "Publish the complete GitHub prerelease, approve the matching npm stage with 2FA, then run read-only preview verification."
+
+  stage_npm_stable:
+    name: Stage immutable npm stable launcher
+    needs: [classify, package_npm, prepare_github_release]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ needs.classify.outputs.version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.18.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package-${{ needs.classify.outputs.version }}
+          path: npm-candidate
+      - name: Verify exact npm launcher package
+        run: |
+          set -euo pipefail
+          test "$(npm --version)" = "11.18.0"
+          cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
+            --tarball npm-candidate/sioyooo-repogrammar-0.2.0.tgz \
+            --expected-version 0.2.0 \
+            > npm-candidate/candidate-manifest.recheck.json
+          cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
+            --pack-json npm-candidate/npm-pack.json \
+            --candidate-manifest npm-candidate/candidate-manifest.recheck.json \
+            --expected-version 0.2.0
+          set +e
+          npm stage publish npm-candidate/sioyooo-repogrammar-0.2.0.tgz --access public --tag latest --provenance
+          stage_status="$?"
+          set -e
+          if [ "${stage_status}" -ne 0 ]; then
+            echo "npm staging failed. Trusted CI cannot inspect or reuse a pending stage." >&2
+            echo "A maintainer must authenticate to npm, inspect the existing stage, and either approve the exact matching candidate or reject it before retrying." >&2
+            exit "${stage_status}"
+          fi
+      - name: Record npm approval boundary
+        run: |
+          echo "The stable npm package is staged and the GitHub release remains a draft; neither channel is public."
+          echo "A maintainer must inspect both candidates, publish the GitHub release with immutability enabled, then approve the npm stage with 2FA."
+          echo "After npm approval, run the read-only stable finalizer with this run id and successful run attempt."
