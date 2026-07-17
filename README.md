@@ -20,25 +20,29 @@ reproducible from this checkout.
 ### Stable channel — verify the exact version
 
 Availability is decided by the exact `0.2.0` publication, not by the
-contents of this README. Verify both registries before using the no-build path:
+contents of this README. Verify both registries and the complete npm channel
+mapping before using the no-build path:
 
 ```bash
 npm view @sioyooo/repogrammar@0.2.0 version
+npm view @sioyooo/repogrammar dist-tags --json
 curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
 ```
 
-Only when both commands succeed, run the pinned stable-channel release:
+Continue only when the exact-version and GitHub checks succeed and the dist-tag
+object contains exactly `"latest":"0.2.0"` and
+`"preview":"0.2.0-preview.0"`. Then run the pinned stable-channel release:
 
 ```bash
 npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target auto
 ```
 
-After both checks succeed, unversioned `npx @sioyooo/repogrammar` resolves the
-same `0.2.0` package through npm `latest`. Use the exact version for
-reproducible automation. The separate `@preview` dist-tag remains on
+After all three checks succeed, unversioned `npx @sioyooo/repogrammar`
+resolves the same `0.2.0` package through npm `latest`. Use the exact version
+for reproducible automation. The separate `@preview` dist-tag remains on
 `0.2.0-preview.0`; publishing stable must not rewrite that historical package.
 
-If either check fails, use the contributor/dogfood path, which builds once from
+If any check fails, use the contributor/dogfood path, which builds once from
 source. The complete publication gate is in the
 [stable release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.2.0-release-checklist.md).
 

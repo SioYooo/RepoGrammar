@@ -130,14 +130,18 @@ the temporary HOME remains empty. The complete release gate is in the
 
 ## Exact Published-Version Gate
 
-First verify the exact npm version and matching GitHub asset:
+First verify the exact npm version, complete npm channel mapping, and matching
+GitHub asset:
 
 ```text
 npm view @sioyooo/repogrammar@0.2.0 version
+npm view @sioyooo/repogrammar dist-tags --json
 curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.0/install.sh.sha256
 ```
 
-If both commands succeed, the pinned no-build path is:
+Continue only when the version and GitHub checks succeed and the dist-tag object
+contains exactly `"latest":"0.2.0"` and
+`"preview":"0.2.0-preview.0"`. The pinned no-build path is:
 
 ```text
 npx @sioyooo/repogrammar@0.2.0 setup --project /path/to/your/repo --target auto
@@ -148,7 +152,7 @@ npm `latest` and must resolve the same `0.2.0`. The separate `@preview` tag
 continues to resolve immutable `0.2.0-preview.0`; use the exact stable version
 for reproducible automation.
 
-If either check fails, stay on the source path above. The npm wrapper is a thin
+If any check fails, stay on the source path above. The npm wrapper is a thin
 downloader/launcher for checksummed release binaries; it does not compile
 RepoGrammar or implement analysis in JavaScript.
 
