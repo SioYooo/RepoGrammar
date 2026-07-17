@@ -18,7 +18,10 @@
   and setup then returned typed `repository_initialization_failed` because the
   tool-only PATH omitted `git`, which repository initialization requires. The
   finalizer now includes `git` in that bounded PATH without widening release
-  permissions or changing published artifacts.
+  permissions or changing published artifacts. Finalizer run
+  [`29591027524`](https://github.com/SioYooo/RepoGrammar/actions/runs/29591027524)
+  then passed every public evidence and smoke gate and emitted
+  `STABLE_RELEASE_READY`.
 
 ## 0.2.2 — 2026-07-17 stable channel
 
@@ -26,11 +29,13 @@ RepoGrammar `0.2.2` is the patch-forward first published stable-channel pre-1.0
 release. It makes no
 production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
 measured-token-savings, Windows-support, or expanded-language-support claim.
-This source record does not establish finalizer success by itself. Finalizer
-run `29587973589` verified the public GitHub/npm, provenance, packaged-native,
-and installer gates before the isolated npm launcher gate exposed the
-working-directory bug recorded under Unreleased; that attempt did not emit the
-final stable verdict.
+Finalizer run
+[`29591027524`](https://github.com/SioYooo/RepoGrammar/actions/runs/29591027524),
+bound to candidate run `29586694524`, attempt 1, verified the immutable GitHub
+release, npm integrity and provenance, native archive, public installer,
+pinned/latest/preview launchers, repository setup, indexing, and product MCP
+self-test before emitting `STABLE_RELEASE_READY`. The earlier verifier-only
+failures remain recorded under Unreleased.
 
 ### Changed
 

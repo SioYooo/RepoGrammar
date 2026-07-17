@@ -122,12 +122,13 @@ The Rust implementation follows a dependency-inverted
 | **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
 | **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
 
-RepoGrammar `0.2.2` is the patch-forward stable-channel candidate. Its MCP API
-and non-Python analyzers remain experimental; this is not a 1.0 API-stability
-or production-readiness claim. RepoGrammar is not a sound static analyzer and
-does not replace source inspection. `estimated_potential_token_savings` is an **estimated** local
-read-displacement diagnostic—not measured savings or a causal claim. Measured
-savings require a controlled before/after study; the current
+RepoGrammar `0.2.2` is the first published stable-channel pre-1.0 release. Its
+MCP API and non-Python analyzers remain experimental; this is not a 1.0
+API-stability or production-readiness claim. RepoGrammar is not a sound static
+analyzer and does not replace source inspection.
+`estimated_potential_token_savings` is an **estimated** local read-displacement
+diagnostic—not measured savings or a causal claim. Measured savings require a
+controlled before/after study; the current
 [limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) keep that boundary explicit.
 
 macOS and Linux are the current supported platforms. Windows is not fully
