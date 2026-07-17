@@ -212,7 +212,7 @@ correctness-gated study defined by the repository dogfood protocol.
 Repository copy and the audited static terminal visual are ready. The following
 steps cannot be completed by a documentation commit:
 
-1. verify and publish the intended preview tag, GitHub artifacts, and npm
+1. verify and publish the exact stable `v0.2.0` tag, GitHub artifacts, and npm
    package;
 2. record the live 90–100 second demo with spoken audio;
 3. edit, caption, and upload the video to YouTube;

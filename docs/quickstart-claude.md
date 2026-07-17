@@ -35,8 +35,10 @@ canonical target id `claude-code`.
 
 ## Verify The Global Claude Code Pre-flight
 
-The managed agent guidance can be inspected or refreshed independently of MCP
-wiring by selecting the actual guide explicitly:
+First identify the actual global guide used by your Claude Code installation or
+local policy. RepoGrammar does not discover or guess that path. If you have
+verified that the common candidate below is your active guide, inspect or
+refresh it independently of MCP wiring:
 
 ```text
 repogrammar instructions status --file "$HOME/.claude/CLAUDE.md" --json
@@ -44,10 +46,11 @@ repogrammar instructions sync --file "$HOME/.claude/CLAUDE.md" --dry-run
 repogrammar instructions sync --file "$HOME/.claude/CLAUDE.md" --yes
 ```
 
-The command updates only an exact current or known legacy RepoGrammar marker
-block, preserves unrelated instructions, and refuses foreign or malformed
-marker content. It does not create `.repogrammar/`, run setup, or mirror
-`AGENTS.md`.
+Use a different explicit path when local policy places the guide elsewhere.
+Sync creates or appends the exact managed block when it is absent, refreshes
+only an exact known legacy block, preserves unrelated instructions, and refuses
+foreign or malformed marker content. It does not create `.repogrammar/`, run
+setup, or mirror `AGENTS.md`.
 
 ## Initialize A Project
 

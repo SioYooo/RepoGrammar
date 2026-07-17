@@ -43,9 +43,11 @@ the repository-only result.
 
 Setup refreshes a managed instruction block only when the existing Codex
 integration is safely owned **and** an explicit instruction-file override is
-configured for that setup path. To inspect or refresh the default global guide
-without reconfiguring MCP or touching repository state, select that file
-explicitly:
+configured for that setup path. First identify the actual global guide used by
+your Codex installation or local policy. RepoGrammar does not discover or guess
+that path. If you have verified that the common candidate below is your active
+guide, inspect or refresh it explicitly without reconfiguring MCP or touching
+repository state:
 
 ```text
 repogrammar instructions status --file "$HOME/.codex/AGENTS.md" --json
@@ -53,11 +55,11 @@ repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --dry-run
 repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --yes
 ```
 
-Use a different explicit path when `CODEX_HOME` or local policy places the
-guide elsewhere. The command updates only an exact current or known legacy
-RepoGrammar marker block, preserves unrelated instructions, and refuses foreign
-or malformed marker content. It does not create `.repogrammar/`, run setup, or
-mirror `CLAUDE.md`.
+Use the actual explicit path when `CODEX_HOME` or local policy places the guide
+elsewhere. Sync creates or appends the exact managed block when it is absent,
+refreshes only an exact known legacy block, preserves unrelated instructions,
+and refuses foreign or malformed marker content. It does not create
+`.repogrammar/`, run setup, or mirror `CLAUDE.md`.
 
 ## Use Codex And GPT-5.6
 
