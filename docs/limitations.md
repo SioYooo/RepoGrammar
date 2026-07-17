@@ -1,21 +1,21 @@
 # Limitations
 
-RepoGrammar `0.2.1` is the patch-forward stable-channel candidate. Its MCP API
+RepoGrammar `0.2.2` is the patch-forward stable-channel candidate. Its MCP API
 and bounded analyzers remain experimental. It is designed to be conservative
 and local-first, not a sound general static analyzer or a production-readiness
 claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.2.1` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.2.1` is independently
+- Stable artifacts are available only after the exact `v0.2.2` GitHub release
+  is public and immutable and npm `@sioyooo/repogrammar@0.2.2` is independently
   verified.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood is the safe contributor path before release and npm
   publication exist.
 - The two-phase immutable rollout and recovery states are tracked in
-  `release/stable-v0.2.1-release-checklist.md`. The earlier preview record
+  `release/stable-v0.2.2-release-checklist.md`. The earlier preview record
   remains in `release/public-preview-release-checklist.md`.
 
 ## Language And Framework Scope
@@ -123,7 +123,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   module inventories are project context. The incremental copy-forward path is
   reserved for deltas that pass that project-context gate.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.2.1`; a dedicated `ready`
+  signal reports at most `partial` in `0.2.2`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

@@ -259,7 +259,7 @@ jobs:
           if [ -n "${existing_release_id}" ]; then
             echo "A GitHub release or draft already exists for ${TAG_NAME}; a full tag-run rerun must not replace it." >&2
             echo "Use rerun-failed-jobs so successful candidate jobs are not rerun." >&2
-            echo "To restart from zero, first prove neither channel is public, reject the npm stage, and delete the draft deliberately." >&2
+            echo "If this candidate must be abandoned, preserve its tag and draft, reject any npm stage, and patch forward with a new version." >&2
             exit 1
           fi
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -301,7 +301,7 @@ jobs:
       - name: Stage the exact npm preview candidate
         run: |
           set -euo pipefail
-          package_file="npm-candidate/sioyooo-repogrammar-${{ needs.classify.outputs.version }}.tgz"
+          package_file="./npm-candidate/sioyooo-repogrammar-${{ needs.classify.outputs.version }}.tgz"
           test -f "${package_file}"
           cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
             --tarball "${package_file}" \
@@ -347,15 +347,15 @@ jobs:
           set -euo pipefail
           test "$(npm --version)" = "11.18.0"
           cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
-            --tarball npm-candidate/sioyooo-repogrammar-0.2.1.tgz \
-            --expected-version 0.2.1 \
+            --tarball ./npm-candidate/sioyooo-repogrammar-0.2.2.tgz \
+            --expected-version 0.2.2 \
             > npm-candidate/candidate-manifest.recheck.json
           cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
             --pack-json npm-candidate/npm-pack.json \
             --candidate-manifest npm-candidate/candidate-manifest.recheck.json \
-            --expected-version 0.2.1
+            --expected-version 0.2.2
           set +e
-          npm stage publish npm-candidate/sioyooo-repogrammar-0.2.1.tgz --access public --tag latest --provenance
+          npm stage publish ./npm-candidate/sioyooo-repogrammar-0.2.2.tgz --access public --tag latest --provenance
           stage_status="$?"
           set -e
           if [ "${stage_status}" -ne 0 ]; then

@@ -1,6 +1,6 @@
 [package]
 name = "repogrammar"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Repository pattern-family analysis engine bootstrap"
 license = "MIT"

@@ -58,9 +58,12 @@ The check command verifies:
   npm 11.18.0, and Trusted Publisher OIDC to stage that candidate. They contain
   no traditional npm token, direct publish, approval, rejection, or dist-tag
   mutation authority;
-- stable staging has one registered literal command for the exact `0.2.1`
-  tarball; dynamic npm subcommands, marker-only comments, or alternate packing
-  and staging paths fail the guard;
+- preview staging has one registered assignment for its exact
+  `./npm-candidate/...tgz` local tarball, and stable staging has one registered
+  literal command for `./npm-candidate/sioyooo-repogrammar-0.2.2.tgz`; a bare
+  package path that npm could parse as GitHub shorthand, dynamic npm
+  subcommands, marker-only comments, or alternate packing and staging paths
+  fail the guard;
 - draft creation must retain the exact runner-compatible paginated release
   lookup, filter every page by the requested tag without `--slurp`, and exit
   before upload when any matching public release or draft exists;
@@ -138,7 +141,7 @@ truthful.
 
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified
-`@sioyooo/repogrammar@0.2.1` entry from the exact registry and exactly one SLSA
+`@sioyooo/repogrammar@0.2.2` entry from the exact registry and exactly one SLSA
 Provenance v1 declaration. npm 11.18 reports that declaration under the
 `attestations.provenance` object and provides both npm publish-v0.1 and SLSA
 entries in `attestationBundles`; the guard requires that exact two-bundle
@@ -146,7 +149,7 @@ inventory, including exactly one publish-v0.1 bundle and exactly one SLSA v1
 bundle, then requires an in-toto JSON DSSE payload for SLSA provenance. Its
 bounded dependency-free base64 decoder binds the decoded predicate and subject
 digest to the candidate SHA-512, the GitHub-hosted workflow builder to
-`.github/workflows/release.yml`, the push tag to `refs/tags/v0.2.1`, the
+`.github/workflows/release.yml`, the push tag to `refs/tags/v0.2.2`, the
 resolved dependency URI to the same repository and tag, its git commit to the
 checked-out release SHA, and the invocation identity to the exact retained
 Actions run id and attempt. It does not inspect certificates, raw signature
@@ -181,11 +184,11 @@ The release dist-tag classifier verifies the complete public npm state after a
 publication becomes visible:
 
 - preview preserves the existing `preview-dist-tag-action` policy;
-- the registered stable `0.2.1` policy requires exact `latest=0.2.1`, exact
+- the registered stable `0.2.2` policy requires exact `latest=0.2.2`, exact
   `preview=0.2.0-preview.0`, and both versions in the bounded complete
-  inventory. The failed, unpublished `0.2.0` candidate is explicitly forbidden;
-  its presence in the registry inventory fails closed. Other stable versions
-  fail closed until explicitly registered.
+  inventory. The failed, unpublished `0.2.0` and `0.2.1` candidates are
+  explicitly forbidden; either candidate's presence in the registry inventory
+  fails closed. Other stable versions fail closed until explicitly registered.
 
 For stable, the complete dist-tag object must contain exactly `latest` and
 `preview`. For preview, it must contain exactly `preview` plus `latest` only
@@ -270,6 +273,6 @@ canonical fields, verifies the public npm pack before any public product
 execution, and delegates the final verdict to `repo-guard`. Manual verification
 uses `release-dist-tag-action` against public tags and the complete inventory;
 stable requires exact
-`latest=0.2.1`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
+`latest=0.2.2`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
 without registry writes. Manual release dispatch remains build-only and manual
 finalization remains read-only.

@@ -13,4 +13,4 @@ combination. No GitHub `v0.2.0` Release and no npm
 The tag is retained for auditability and must not be moved, deleted, or reused.
 Do not execute or reconstruct the former `0.2.0` publication procedure. The
 active patch-forward authority is the
-[stable v0.2.1 release checklist](stable-v0.2.1-release-checklist.md).
+[stable v0.2.2 release checklist](stable-v0.2.2-release-checklist.md).

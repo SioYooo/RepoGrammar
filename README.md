@@ -19,32 +19,32 @@ reproducible from this checkout.
 
 ### Stable channel — verify the exact version
 
-Availability is decided by the exact `0.2.1` publication, not by the
+Availability is decided by the exact `0.2.2` publication, not by the
 contents of this README. Verify both registries and the complete npm channel
 mapping before using the no-build path:
 
 ```bash
-npm view @sioyooo/repogrammar@0.2.1 version
+npm view @sioyooo/repogrammar@0.2.2 version
 npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.1/install.sh.sha256
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.2.2/install.sh.sha256
 ```
 
 Continue only when the exact-version and GitHub checks succeed and the dist-tag
-object contains exactly `"latest":"0.2.1"` and
+object contains exactly `"latest":"0.2.2"` and
 `"preview":"0.2.0-preview.0"`. Then run the pinned stable-channel release:
 
 ```bash
-npx @sioyooo/repogrammar@0.2.1 setup --project /path/to/your/repo --target auto
+npx @sioyooo/repogrammar@0.2.2 setup --project /path/to/your/repo --target auto
 ```
 
 After all three checks succeed, unversioned `npx @sioyooo/repogrammar`
-resolves the same `0.2.1` package through npm `latest`. Use the exact version
+resolves the same `0.2.2` package through npm `latest`. Use the exact version
 for reproducible automation. The separate `@preview` dist-tag remains on
 `0.2.0-preview.0`; publishing stable must not rewrite that historical package.
 
 If any check fails, use the contributor/dogfood path, which builds once from
 source. The complete publication gate is in the
-[stable release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.2.1-release-checklist.md).
+[stable release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.2.2-release-checklist.md).
 
 ```bash
 git clone https://github.com/SioYooo/RepoGrammar.git
@@ -122,7 +122,7 @@ The Rust implementation follows a dependency-inverted
 | **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
 | **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
 
-RepoGrammar `0.2.1` is the patch-forward stable-channel candidate. Its MCP API
+RepoGrammar `0.2.2` is the patch-forward stable-channel candidate. Its MCP API
 and non-Python analyzers remain experimental; this is not a 1.0 API-stability
 or production-readiness claim. RepoGrammar is not a sound static analyzer and
 does not replace source inspection. `estimated_potential_token_savings` is an **estimated** local
