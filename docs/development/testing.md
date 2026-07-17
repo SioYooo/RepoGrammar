@@ -554,8 +554,10 @@ allowed.
   rejection, release-workflow tag/version-guard and artifact and
   installer-script checksum contract checks, Cargo/npm/lockfile and exact
   tag-at-current-`origin/main` publication authority, explicit build-only
-  rehearsal dispatch, tag-only candidate creation, refusal to replace an
-  existing draft, stage-only OIDC publication, the exact 11-asset draft
+  rehearsal dispatch, tag-only candidate creation, the exact runner-compatible
+  paginated collision query, rejection of `--slurp` combined with `--jq`,
+  refusal to replace an existing draft, stage-only OIDC publication, the exact
+  11-asset draft
   inventory, and the exact packaged-artifact lifecycle gate. That gate
   must unpack the candidate binary with its worker, use the committed Pydantic
   release fixture in an isolated HOME, and cover exact `version`, setup
@@ -972,11 +974,13 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. Stable requires exact `latest=0.2.0`, exact
+state. Stable requires exact `latest=0.2.1`, exact
 `preview=0.2.0-preview.0`, both immutable versions in the registry inventory,
-and a retained-candidate SRI match. Any other prerelease under `preview`, any
-prerelease-valued `latest` after stable, malformed inventories, or unpublished
-tag targets fail closed. Manual reconciliation remains read-only. Stable
+the explicit absence of the failed `0.2.0` candidate, and a retained-candidate
+SRI match. Any other prerelease under `preview`, any prerelease-valued `latest`
+after stable, the failed `0.2.0` candidate appearing as published, malformed
+inventories, or unpublished tag targets fail closed. Manual reconciliation
+remains read-only. Stable
 completion additionally requires immutable GitHub release verification, the
 exact 11-asset inventory including the public npm candidate manifest, every
 asset attestation and checksum, npm signature/provenance verification, and the

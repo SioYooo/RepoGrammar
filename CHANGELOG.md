@@ -4,9 +4,10 @@
 
 No unreleased changes.
 
-## 0.2.0 — 2026-07-17 stable channel
+## 0.2.1 — 2026-07-17 stable channel
 
-RepoGrammar `0.2.0` is the first non-prerelease pre-1.0 release. It makes no
+RepoGrammar `0.2.1` is the patch-forward stable-channel candidate intended to
+become the first published stable-channel pre-1.0 release. It makes no
 production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
 measured-token-savings, Windows-support, or expanded-language-support claim.
 Registry availability must be verified independently; this source record does
@@ -37,7 +38,7 @@ not prove that GitHub or npm publication completed.
   `session_restart_recommended` JSON boolean. This avoids implying that an
   already-running agent hot-reloads newly synchronized instructions.
 - Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
-  current install documentation on `0.2.0`. Historical
+  current install documentation on `0.2.1`. Historical
   `0.2.0-preview.0` evidence remains historical and the npm `preview` dist-tag
   must stay on that immutable prerelease.
 - Generalized the release policy from preview-only to fail-closed preview and
@@ -47,6 +48,14 @@ not prove that GitHub or npm publication completed.
 
 ### Fixed
 
+- Corrected the GitHub draft-collision query used by tag publication. The
+  failed `v0.2.0` candidate combined `gh api --paginate --slurp` with `--jq`,
+  which the runner CLI rejects before draft creation. The patch-forward uses
+  per-page `--jq` output without `--slurp`, and the repository guard rejects
+  that incompatible option combination while requiring the exact collision
+  query and refusal branch to remain present. Stable verification also fails
+  closed if the never-published `0.2.0` candidate appears in the registry
+  inventory.
 - Kept the creating Unix file handle alive and included its link count in the
   identity used to validate and clean an operation-owned managed-instruction
   temporary file. Unlinking changes the live handle's link-count identity, and
@@ -61,6 +70,16 @@ not prove that GitHub or npm publication completed.
   mandatory. This does not
   establish a stable release, and mismatched or malformed registry state still
   fails closed.
+
+## 0.2.0 — 2026-07-17 failed publication candidate
+
+The retained annotated `v0.2.0` tag points to
+`981eb9a0ab21e5cb7ea503feead4b2a350bf0471`. Its tag workflow run
+`29571508953`, attempt 1, failed before creating a GitHub draft or npm stage
+because the workflow used a runner-incompatible `gh api --slurp --jq`
+combination. GitHub `v0.2.0` and npm `@sioyooo/repogrammar@0.2.0` were never
+published. The tag is retained and must not be moved, deleted, or reused;
+`0.2.1` is the required patch-forward publication candidate.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 
