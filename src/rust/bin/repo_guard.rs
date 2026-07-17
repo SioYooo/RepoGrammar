@@ -98,8 +98,9 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 const IGNORED_DIRS: &[&str] = &[".git", "target", ".codegraph", ".repogrammar"];
 const IGNORED_DIR_PREFIXES: &[&str] = &[".repogrammar-"];
 const MAX_GITDIR_POINTER_BYTES: u64 = 4 * 1024;
-const STABLE_RELEASE_VERSION: &str = "0.2.0";
+const STABLE_RELEASE_VERSION: &str = "0.2.1";
 const STABLE_PREVIEW_VERSION: &str = "0.2.0-preview.0";
+const FAILED_STABLE_RELEASE_VERSION: &str = "0.2.0";
 const NPM_PACKAGE_NAME: &str = "@sioyooo/repogrammar";
 const MAX_NPM_CANDIDATE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RELEASE_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -116,7 +117,7 @@ const GITHUB_WORKFLOW_BUILD_TYPE_V1: &str =
 const GITHUB_HOSTED_BUILDER: &str = "https://github.com/actions/runner/github-hosted";
 const RELEASE_REPOSITORY_URL: &str = "https://github.com/SioYooo/RepoGrammar";
 const RELEASE_WORKFLOW_PATH: &str = ".github/workflows/release.yml";
-const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.2.0";
+const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.2.1";
 const NPM_PACKAGE_FILES: &[&str] = &[
     "package/LICENSE",
     "package/README.md",
@@ -664,6 +665,12 @@ fn release_dist_tag_action(
                 return Err("preview does not match the required stable predecessor");
             }
             let published_versions = parse_published_versions(versions_json)?;
+            if published_versions
+                .iter()
+                .any(|published| published == FAILED_STABLE_RELEASE_VERSION)
+            {
+                return Err("failed stable candidate version must not be published");
+            }
             if !published_versions
                 .iter()
                 .any(|published| published == version)
@@ -1310,7 +1317,7 @@ fn verify_stable_release_evidence(
     }
 
     let release = read_evidence_json(&directory, "github-release.json")?;
-    if release["tag_name"] != "v0.2.0"
+    if release["tag_name"] != "v0.2.1"
         || release["draft"] != false
         || release["prerelease"] != false
         || release["immutable"] != true
@@ -1479,7 +1486,7 @@ fn verify_stable_release_evidence(
     if candidate_run["name"] != "Release"
         || candidate_run["event"] != "push"
         || candidate_run["conclusion"] != "success"
-        || candidate_run["head_branch"] != "v0.2.0"
+        || candidate_run["head_branch"] != "v0.2.1"
         || candidate_run["path"] != RELEASE_WORKFLOW_PATH
         || candidate_run["head_sha"].as_str() != Some(expected_sha)
     {
@@ -1493,10 +1500,10 @@ fn verify_stable_release_evidence(
     verify_npm_provenance(&audit, manifest_sha512, expected_sha, run_id, run_attempt)?;
 
     for (name, expected) in [
-        ("pinned-version.txt", "repogrammar 0.2.0"),
-        ("latest-version.txt", "repogrammar 0.2.0"),
+        ("pinned-version.txt", "repogrammar 0.2.1"),
+        ("latest-version.txt", "repogrammar 0.2.1"),
         ("preview-version.txt", "repogrammar 0.2.0-preview.0"),
-        ("public-installer-version.txt", "repogrammar 0.2.0"),
+        ("public-installer-version.txt", "repogrammar 0.2.1"),
     ] {
         if read_evidence_text(&directory, name)?.trim() != expected {
             return Err("public npm version smoke did not match the expected channel".to_string());
@@ -1703,7 +1710,7 @@ fn validate_slsa_provenance(
         || build_definition["buildType"] != GITHUB_WORKFLOW_BUILD_TYPE_V1
         || workflow["repository"] != RELEASE_REPOSITORY_URL
         || workflow["path"] != RELEASE_WORKFLOW_PATH
-        || workflow["ref"] != "refs/tags/v0.2.0"
+        || workflow["ref"] != "refs/tags/v0.2.1"
         || github["event_name"] != "push"
         || dependencies[0]["uri"] != RELEASE_DEPENDENCY_URI
         || dependencies[0]["digest"]["gitCommit"] != expected_sha
@@ -2415,13 +2422,28 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         ));
     }
 
+    if release_workflow_combines_gh_api_slurp_with_jq(&release) {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "ReleaseWorkflowRunnerCompatibility",
+            "gh api must not combine --slurp with --jq; paginated release queries must filter each response page directly",
+        ));
+    }
+
     let package_job = workflow_job_section(&release, "package_npm");
     let preview_job = workflow_job_section(&release, "stage_npm_preview");
     let stable_job = workflow_job_section(&release, "stage_npm_stable");
     let classify_job = workflow_job_section(&release, "classify");
     let prepare_job = workflow_job_section(&release, "prepare_github_release");
+    if prepare_job.is_none_or(|job| !release_workflow_has_draft_collision_guard(job)) {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "StableReleaseDraftCollisionContract",
+            "draft creation must query every release page with the runner-compatible exact tag filter and fail when that tag already has a release or draft",
+        ));
+    }
     let exact_stage_command =
-        "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.0.tgz --access public --tag latest --provenance";
+        "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.1.tgz --access public --tag latest --provenance";
     let stable_global_markers = ["release-source", "draft: true"];
     let stable_job_markers = [
         "needs: [classify, package_npm, prepare_github_release]",
@@ -2603,8 +2625,8 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "permissions:",
         "contents: read",
         "actions: read",
-        "gh release verify v0.2.0",
-        "gh release verify-asset v0.2.0",
+        "gh release verify v0.2.1",
+        "gh release verify-asset v0.2.1",
         "npm-candidate-manifest.json",
         "test \"$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')\" = \"11\"",
         "--jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'",
@@ -2642,6 +2664,26 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
             "stable finalization must be manually dispatched, read-only, and verify immutable GitHub assets plus npm integrity, provenance, tags, and public smoke paths",
         ));
     }
+}
+
+fn release_workflow_combines_gh_api_slurp_with_jq(workflow: &str) -> bool {
+    let logical_lines = workflow.replace("\\\r\n", " ").replace("\\\n", " ");
+    logical_lines
+        .lines()
+        .any(|line| line.contains("gh api") && line.contains("--slurp") && line.contains("--jq"))
+}
+
+fn release_workflow_has_draft_collision_guard(job: &str) -> bool {
+    const EXACT_QUERY: &str = "existing_release_id=\"$(gh api --paginate \"repos/${GITHUB_REPOSITORY}/releases?per_page=100\" --jq '.[] | select(.tag_name == env.TAG_NAME) | .id')\"";
+    let logical_job = job
+        .replace("\\\r\n", " ")
+        .replace("\\\n", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    logical_job.contains(EXACT_QUERY)
+        && job.contains("if [ -n \"${existing_release_id}\" ]; then")
+        && job.lines().any(|line| line.trim() == "exit 1")
 }
 
 fn workflow_job_section<'a>(workflow: &'a str, job: &str) -> Option<&'a str> {
@@ -3065,44 +3107,44 @@ mod tests {
 
     #[test]
     fn stable_dist_tags_require_exact_latest_and_a_preserved_preview() {
-        let stable_tags = r#"{"latest":"0.2.0","preview":"0.2.0-preview.0"}"#;
+        let stable_tags = r#"{"latest":"0.2.1","preview":"0.2.0-preview.0"}"#;
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.2.0-preview.0",
-                "0.2.0",
+                "0.2.1",
                 stable_tags,
-                r#"["0.2.0-preview.0","0.2.0"]"#,
+                r#"["0.2.0-preview.0","0.2.1"]"#,
             ),
             Ok(ReleaseDistTagAction::StableVerified)
         );
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.2.0-preview.0",
                 "0.1.0",
                 r#"{"latest":"0.1.0","preview":"0.2.0-preview.0"}"#,
-                r#"["0.1.0","0.2.0-preview.0","0.2.0"]"#,
+                r#"["0.1.0","0.2.0-preview.0","0.2.1"]"#,
             ),
             Err("latest does not match the stable manifest version")
         );
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
-                "0.2.0",
-                "0.2.0",
-                r#"{"latest":"0.2.0","preview":"0.2.0"}"#,
-                r#"["0.2.0"]"#,
+                "0.2.1",
+                "0.2.1",
+                "0.2.1",
+                r#"{"latest":"0.2.1","preview":"0.2.1"}"#,
+                r#"["0.2.1"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.1.0-preview.9",
-                "0.2.0",
-                r#"{"latest":"0.2.0","preview":"0.1.0-preview.9"}"#,
-                r#"["0.1.0-preview.9","0.2.0"]"#,
+                "0.2.1",
+                r#"{"latest":"0.2.1","preview":"0.1.0-preview.9"}"#,
+                r#"["0.1.0-preview.9","0.2.1"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
@@ -3118,19 +3160,19 @@ mod tests {
         );
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.2.0-preview.0",
-                "0.2.0",
+                "0.2.1",
                 stable_tags,
-                r#"["0.2.0"]"#,
+                r#"["0.2.1"]"#,
             ),
             Err("preview does not reference a published version")
         );
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.2.0-preview.0",
-                "0.2.0",
+                "0.2.1",
                 stable_tags,
                 r#"["0.2.0-preview.0"]"#,
             ),
@@ -3138,29 +3180,39 @@ mod tests {
         );
 
         for tags in [
-            r#"{"latest":"0.2.0"}"#,
-            r#"{"latest":"0.2.0","preview":"0.2.0-preview.0","beta":"0.2.0"}"#,
+            r#"{"latest":"0.2.1"}"#,
+            r#"{"latest":"0.2.1","preview":"0.2.0-preview.0","beta":"0.2.1"}"#,
         ] {
             assert_eq!(
                 release_dist_tag_action(
-                    "0.2.0",
+                    "0.2.1",
                     "0.2.0-preview.0",
-                    "0.2.0",
+                    "0.2.1",
                     tags,
-                    r#"["0.2.0-preview.0","0.2.0"]"#,
+                    r#"["0.2.0-preview.0","0.2.1"]"#,
                 ),
                 Err("dist-tag inventory is not exact")
             );
         }
         assert_eq!(
             release_dist_tag_action(
-                "0.2.0",
+                "0.2.1",
                 "0.2.0-preview.0",
-                "0.2.0",
-                r#"{"latest":"0.2.0","preview":"0.1.0-preview.9"}"#,
-                r#"["0.2.0-preview.0","0.2.0"]"#,
+                "0.2.1",
+                r#"{"latest":"0.2.1","preview":"0.1.0-preview.9"}"#,
+                r#"["0.2.0-preview.0","0.2.1"]"#,
             ),
             Err("dist-tag inventory does not match the classified values")
+        );
+        assert_eq!(
+            release_dist_tag_action(
+                "0.2.1",
+                "0.2.0-preview.0",
+                "0.2.1",
+                stable_tags,
+                r#"["0.2.0-preview.0","0.2.0","0.2.1"]"#,
+            ),
+            Err("failed stable candidate version must not be published")
         );
     }
 
@@ -3200,15 +3252,15 @@ mod tests {
             [
                 "release-dist-tag-action",
                 "--version",
-                "0.2.0",
+                "0.2.1",
                 "--preview",
                 "0.2.0-preview.0",
                 "--latest",
-                "0.2.0",
+                "0.2.1",
                 "--tags-json",
-                r#"{"latest":"0.2.0","preview":"0.2.0-preview.0"}"#,
+                r#"{"latest":"0.2.1","preview":"0.2.0-preview.0"}"#,
                 "--versions-json",
-                r#"["0.2.0-preview.0","0.2.0"]"#,
+                r#"["0.2.0-preview.0","0.2.1"]"#,
             ],
             Path::new("."),
         );
@@ -3398,8 +3450,8 @@ mod tests {
             ),
             valid_release_workflow().replace("id-token: write", "id-token: read"),
             valid_release_workflow().replace(
-                "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.0.tgz",
-                "npm stage inspect npm-candidate/sioyooo-repogrammar-0.2.0.tgz",
+                "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.1.tgz",
+                "npm stage inspect npm-candidate/sioyooo-repogrammar-0.2.1.tgz",
             ),
         ] {
             write_file(
@@ -3426,6 +3478,65 @@ mod tests {
         assert!(violations
             .iter()
             .any(|violation| violation.rule == "ReleasePublicationAuthority"));
+    }
+
+    #[test]
+    fn release_workflow_rejects_paginated_gh_api_slurp_with_jq() {
+        let root = TempRoot::new("release-runner-gh-api-flags");
+        write_valid_release_contract(root.path());
+        let invalid = valid_release_workflow()
+            .replace("gh api --paginate \\\n", "gh api --paginate --slurp \\\n");
+        assert_ne!(invalid, valid_release_workflow());
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            invalid.as_bytes(),
+        );
+
+        let mut violations = Vec::new();
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| { violation.rule == "ReleaseWorkflowRunnerCompatibility" }),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_requires_the_exact_draft_collision_guard() {
+        let root = TempRoot::new("release-draft-collision-guard");
+        write_valid_release_contract(root.path());
+
+        for invalid in [
+            valid_release_workflow().replace("gh api --paginate \\\n", "gh api \\\n"),
+            valid_release_workflow().replace(
+                "repos/${GITHUB_REPOSITORY}/releases?per_page=100",
+                "repos/${GITHUB_REPOSITORY}/tags?per_page=100",
+            ),
+            valid_release_workflow().replace(
+                ".[] | select(.tag_name == env.TAG_NAME) | .id",
+                ".[][] | select(.tag_name == env.TAG_NAME) | .id",
+            ),
+            valid_release_workflow().replace(
+                "if [ -n \"${existing_release_id}\" ]; then",
+                "if [ -z \"${existing_release_id}\" ]; then",
+            ),
+        ] {
+            assert_ne!(invalid, valid_release_workflow());
+            write_file(
+                root.path().join(".github/workflows/release.yml"),
+                invalid.as_bytes(),
+            );
+
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| { violation.rule == "StableReleaseDraftCollisionContract" }),
+                "{violations:?}"
+            );
+        }
     }
 
     #[test]
@@ -3481,10 +3592,10 @@ mod tests {
         let root = TempRoot::new("stable-release-authority-bypass");
         write_valid_release_contract(root.path());
 
-        let exact = "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.0.tgz --access public --tag latest --provenance";
+        let exact = "npm stage publish npm-candidate/sioyooo-repogrammar-0.2.1.tgz --access public --tag latest --provenance";
         let dynamic = valid_release_workflow().replace(
             exact,
-            &format!("# {exact}\n    npm \"${{subcommand}}\" npm-candidate/sioyooo-repogrammar-0.2.0.tgz --access public --tag latest --provenance"),
+            &format!("# {exact}\n    npm \"${{subcommand}}\" npm-candidate/sioyooo-repogrammar-0.2.1.tgz --access public --tag latest --provenance"),
         );
         write_file(
             root.path().join(".github/workflows/release.yml"),
@@ -3616,6 +3727,12 @@ npm@11.18.0
     npm-candidate-manifest.json
     test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
     Refuse an existing release or draft for this tag
+    existing_release_id="$(gh api --paginate \
+      "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+      --jq '.[] | select(.tag_name == env.TAG_NAME) | .id')"
+    if [ -n "${existing_release_id}" ]; then
+      exit 1
+    fi
     overwrite_files: false
     fail_on_unmatched_files: true
   stage_npm_preview:
@@ -3634,7 +3751,7 @@ npm@11.18.0
     name: npm-package-${{ needs.classify.outputs.version }}
     smoke-npm-package
     verify-npm-pack-evidence
-    npm stage publish npm-candidate/sioyooo-repogrammar-0.2.0.tgz --access public --tag latest --provenance
+    npm stage publish npm-candidate/sioyooo-repogrammar-0.2.1.tgz --access public --tag latest --provenance
 "#
         .to_string()
     }
@@ -3660,8 +3777,8 @@ candidate_run_attempt:
 permissions:
 contents: read
 actions: read
-gh release verify v0.2.0
-gh release verify-asset v0.2.0
+gh release verify v0.2.1
+gh release verify-asset v0.2.1
 npm-candidate-manifest.json
 test "$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
 --jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'
@@ -3891,7 +4008,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "dependency_uri" => {
                     statement["predicate"]["buildDefinition"]["resolvedDependencies"][0]["uri"] =
                         serde_json::Value::String(
-                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.2.0"
+                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.2.1"
                                 .to_string(),
                         );
                 }
@@ -3958,7 +4075,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 }
                 "version" => {
                     audit["verified"][0]["version"] =
-                        serde_json::Value::String("0.2.1".to_string());
+                        serde_json::Value::String("0.2.0".to_string());
                 }
                 "predicate_inventory" => {
                     audit["verified"][0]["attestations"]["provenance"]["predicateType"] =
@@ -4051,7 +4168,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "candidate_copy" => {
                     let path = evidence.join("public-candidate-manifest.json");
                     let mut manifest = read_json(&path);
-                    manifest["version"] = serde_json::Value::String("0.2.1".to_string());
+                    manifest["version"] = serde_json::Value::String("0.2.0".to_string());
                     write_json(path, &manifest);
                 }
                 _ => unreachable!(),
@@ -4597,7 +4714,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "schema_version": 1,
             "package_name": NPM_PACKAGE_NAME,
             "version": STABLE_RELEASE_VERSION,
-            "filename": "sioyooo-repogrammar-0.2.0.tgz",
+            "filename": "sioyooo-repogrammar-0.2.1.tgz",
             "sha512": hex_digest(&digest),
             "integrity": format!("sha512-{}", base64_encode(&digest)),
             "files": NPM_PACKAGE_FILES,
@@ -4610,7 +4727,7 @@ verify-stable-release-evidence --evidence-dir evidence
         serde_json::json!({
             "_type": IN_TOTO_STATEMENT_V1,
             "subject": [{
-                "name": "pkg:npm/%40sioyooo/repogrammar@0.2.0",
+                "name": "pkg:npm/%40sioyooo/repogrammar@0.2.1",
                 "digest": {"sha512": hex_digest(&[0x2a_u8; 64])}
             }],
             "predicateType": SLSA_PROVENANCE_V1,
@@ -4621,7 +4738,7 @@ verify-stable-release-evidence --evidence-dir evidence
                         "workflow": {
                             "repository": RELEASE_REPOSITORY_URL,
                             "path": RELEASE_WORKFLOW_PATH,
-                            "ref": "refs/tags/v0.2.0"
+                            "ref": "refs/tags/v0.2.1"
                         }
                     },
                     "internalParameters": {"github": {"event_name": "push"}},
@@ -4660,7 +4777,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "location": "node_modules/@sioyooo/repogrammar",
                 "registry": NPM_REGISTRY_URL,
                 "attestations": {
-                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.2.0",
+                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.2.1",
                     "provenance": {"predicateType": SLSA_PROVENANCE_V1}
                 },
                 "attestationBundles": [
@@ -4721,7 +4838,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("github-release.json"),
             &serde_json::json!({
-                "tag_name": "v0.2.0",
+                "tag_name": "v0.2.1",
                 "draft": false,
                 "prerelease": false,
                 "immutable": true,
@@ -4744,7 +4861,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("public-npm-pack.json"),
             &serde_json::json!([{
-                "filename": "sioyooo-repogrammar-0.2.0.tgz",
+                "filename": "sioyooo-repogrammar-0.2.1.tgz",
                 "integrity": manifest["integrity"],
                 "files": [
                     {"path": "LICENSE"},
@@ -4781,7 +4898,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "name": "Release",
                 "path": RELEASE_WORKFLOW_PATH,
                 "event": "push",
-                "head_branch": "v0.2.0",
+                "head_branch": "v0.2.1",
                 "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "conclusion": "success"
             }),
@@ -4795,10 +4912,10 @@ verify-stable-release-evidence --evidence-dir evidence
             &stable_audit_signatures(&stable_provenance_statement()),
         );
         for (name, value) in [
-            ("pinned-version.txt", "repogrammar 0.2.0\n"),
-            ("latest-version.txt", "repogrammar 0.2.0\n"),
+            ("pinned-version.txt", "repogrammar 0.2.1\n"),
+            ("latest-version.txt", "repogrammar 0.2.1\n"),
             ("preview-version.txt", "repogrammar 0.2.0-preview.0\n"),
-            ("public-installer-version.txt", "repogrammar 0.2.0\n"),
+            ("public-installer-version.txt", "repogrammar 0.2.1\n"),
             (
                 "public-native-smoke.txt",
                 "packaged artifact smoke passed\n",

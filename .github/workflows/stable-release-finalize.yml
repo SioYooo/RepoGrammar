@@ -1,14 +1,14 @@
-name: Finalize stable v0.2.0 release
+name: Finalize stable v0.2.1 release
 
 on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Successful v0.2.0 tag workflow run that created the exact draft and staged npm candidate
+        description: Successful v0.2.1 tag workflow run that created the exact draft and staged npm candidate
         required: true
         type: string
       candidate_run_attempt:
-        description: Exact successful attempt of the v0.2.0 tag workflow run
+        description: Exact successful attempt of the v0.2.1 tag workflow run
         required: true
         type: string
 
@@ -17,7 +17,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: stable-v0.2.0-finalize
+  group: stable-v0.2.1-finalize
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: v0.2.0
+          ref: v0.2.1
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v7
@@ -43,11 +43,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence/github-assets
-          gh api repos/SioYooo/RepoGrammar/releases/tags/v0.2.0 \
+          gh api repos/SioYooo/RepoGrammar/releases/tags/v0.2.1 \
             > evidence/github-release.json
-          gh release verify v0.2.0 -R SioYooo/RepoGrammar --format json \
+          gh release verify v0.2.1 -R SioYooo/RepoGrammar --format json \
             > evidence/github-release-attestation.json
-          gh release download v0.2.0 -R SioYooo/RepoGrammar \
+          gh release download v0.2.1 -R SioYooo/RepoGrammar \
             --dir evidence/github-assets
           for asset in \
             install.sh \
@@ -62,7 +62,7 @@ jobs:
             repogrammar-x86_64-unknown-linux-gnu.tar.gz.sha256 \
             npm-candidate-manifest.json
           do
-            gh release verify-asset v0.2.0 "evidence/github-assets/${asset}" \
+            gh release verify-asset v0.2.1 "evidence/github-assets/${asset}" \
               -R SioYooo/RepoGrammar --format json \
               > "evidence/asset-attestation-${asset}.json"
           done
@@ -109,17 +109,17 @@ jobs:
             > evidence/npm-tags.json
           npm view @sioyooo/repogrammar versions --json \
             > evidence/npm-versions.json
-          npm view @sioyooo/repogrammar@0.2.0 dist.integrity \
+          npm view @sioyooo/repogrammar@0.2.1 dist.integrity \
             > evidence/npm-registry-integrity.txt
           mkdir -p public-npm
-          npm pack @sioyooo/repogrammar@0.2.0 --json --ignore-scripts \
+          npm pack @sioyooo/repogrammar@0.2.1 --json --ignore-scripts \
             --pack-destination public-npm \
             > public-npm/npm-pack.json
           cp public-npm/npm-pack.json evidence/public-npm-pack.json
           cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
             --pack-json public-npm/npm-pack.json \
             --candidate-manifest evidence/retained-candidate-manifest.json \
-            --expected-version 0.2.0
+            --expected-version 0.2.1
       - name: Smoke the verified public native archive
         run: |
           set -euo pipefail
@@ -131,7 +131,7 @@ jobs:
             --binary "${native_root}/unpacked/repogrammar" \
             --worker "${native_root}/unpacked/workers/python/worker.py" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
-            --expected-version 0.2.0 \
+            --expected-version 0.2.1 \
             > evidence/public-native-smoke.txt
       - name: Smoke the verified public installer
         run: |
@@ -151,7 +151,7 @@ jobs:
           REPOGRAMMAR_COMMAND_DIR="${installer_root}/commands" \
           REPOGRAMMAR_RELEASE_DIR="${GITHUB_WORKSPACE}/evidence/github-assets" \
             bash evidence/github-assets/install.sh \
-              --version v0.2.0 \
+              --version v0.2.1 \
               --install-cli-only \
               --yes
           "${installer_root}/commands/repogrammar" version \
@@ -160,14 +160,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
-            --tarball public-npm/sioyooo-repogrammar-0.2.0.tgz \
-            --expected-version 0.2.0 \
+            --tarball public-npm/sioyooo-repogrammar-0.2.1.tgz \
+            --expected-version 0.2.1 \
             > evidence/public-candidate-manifest.json
           mkdir -p npm-audit-project
           cd npm-audit-project
           npm init --yes >/dev/null
           npm install --ignore-scripts --no-audit --no-fund --save-exact \
-            @sioyooo/repogrammar@0.2.0
+            @sioyooo/repogrammar@0.2.1
           npm audit signatures --json --include-attestations \
             > ../evidence/npm-audit-signatures.json
       - name: Collect public npm launcher smoke evidence
@@ -204,13 +204,13 @@ jobs:
             PATH="${tool_bin}" \
             npx --yes "$@"
           }
-          run_npx pinned --package @sioyooo/repogrammar@0.2.0 \
+          run_npx pinned --package @sioyooo/repogrammar@0.2.1 \
             repogrammar version > evidence/pinned-version.txt
           run_npx latest --package @sioyooo/repogrammar \
             repogrammar version > evidence/latest-version.txt
           run_npx preview --package @sioyooo/repogrammar@preview \
             repogrammar version > evidence/preview-version.txt
-          run_npx pinned --package @sioyooo/repogrammar@0.2.0 repogrammar setup \
+          run_npx pinned --package @sioyooo/repogrammar@0.2.1 repogrammar setup \
             --project "${smoke_root}/pinned/project" \
             --target auto \
             --yes \
