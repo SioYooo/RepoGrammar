@@ -1,0 +1,49 @@
+{
+  "schema": "product-core-rc-verdict.v1",
+  "date": "2026-07-19",
+  "branch": "feat/product-core",
+  "baseline_commit": "33715e4",
+  "parent_commit": "30fd268",
+  "verdict": "PRODUCT_CORE_RELEASE_CANDIDATE_READY",
+  "phases_passed": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+  "phase7_scope_note": "pilot only (authorized $30 subset, spent $0.66); full grid unauthorized",
+  "gates": {
+    "fmt": "clean",
+    "clippy": "clean",
+    "tests": {"lib": 1444, "integration": 95, "bin": 113, "doc": 1, "failed": 0},
+    "repo_guard_check": "passed",
+    "product_eval": {
+      "queries": 79,
+      "false_family_selections": 0,
+      "selected_on_abstention_gold": 0,
+      "correct_abstention": "25/25",
+      "context": "12/12",
+      "hit_at_1": "21/42",
+      "candidate_recall": "13/14",
+      "mrr": 0.5,
+      "unsupported_rejection": "4/4",
+      "ambiguity_precision": "6/6"
+    },
+    "sync_equivalence": {"scenarios": 14, "passed": 14},
+    "payload_measure": {
+      "standard_full_rows_byte_stable": "44/44",
+      "minimal_tier_bytes_saved": 16351,
+      "minimal_tier_saved_share": 0.142
+    },
+    "release_smoke": "executed end-to-end on packaged artifact",
+    "mirrored_guides_identical": true
+  },
+  "phase8_findings": {"confirmed": 18, "refuted": 7, "closed": 18, "open": 0},
+  "deferrals": [
+    "phase7 full agent-study grid (unauthorized)",
+    "v2 retrieval ablation matrix",
+    "RQ3 non-member mutation matrix",
+    "precision slices S1/S3/S4/S9/S12/S13",
+    "S11 product-schemas.v2 cutover (gated on its own compatibility review)",
+    "S4 reference views (no-op sync 25s -> 1-3s target)"
+  ],
+  "open_product_questions": [
+    "MCP adoption 0/4 in tool-enabled pilot arm (instruction steering)"
+  ],
+  "publication_authorized": false
+}
