@@ -11,7 +11,9 @@ use crate::application::recovery::{
     RecoveryFreshness, RecoveryHealth, RecoveryLockState, RecoveryReason, RecoveryRecommendation,
 };
 use crate::error::RepoGrammarError;
-use crate::ports::index_store::{IndexStorageLayout, IndexStore, StorageInspection};
+use crate::ports::index_store::{
+    IndexStorageLayout, IndexStore, StorageInspection, STORAGE_SCHEMA_VERSION,
+};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -1724,6 +1726,17 @@ fn status_for_resolved_state(
                     .clone()
                     .unwrap_or_else(|| "none".to_string());
                 report.status = RepositoryStatus::Initialized { active_generation };
+                if let Some(stored_schema_version) = inspection.schema_version {
+                    if stored_schema_version != STORAGE_SCHEMA_VERSION {
+                        report.storage = RepositoryImplementationStatus::Unhealthy;
+                        report.storage_error = Some(storage_schema_mismatch_message(
+                            stored_schema_version,
+                            STORAGE_SCHEMA_VERSION,
+                        ));
+                        report.storage_inspection = Some(inspection);
+                        return Ok(report.with_readiness(resolved));
+                    }
+                }
                 report.storage = RepositoryImplementationStatus::Available;
                 if inspection.active_generation.is_some() {
                     report.indexing = if inspection.code_unit_count.unwrap_or(0) > 0 {
@@ -1745,6 +1758,18 @@ fn status_for_resolved_state(
     }
 
     Ok(report.with_readiness(resolved))
+}
+
+fn storage_schema_mismatch_message(stored: u32, supported: u32) -> String {
+    if stored < supported {
+        format!(
+            "SQLite storage schema {stored} is older than the running RepoGrammar binary supports ({supported}); run repogrammar resync with this binary"
+        )
+    } else {
+        format!(
+            "SQLite storage schema {stored} is newer than the running RepoGrammar binary supports ({supported}); upgrade RepoGrammar before querying and do not resync with this older binary"
+        )
+    }
 }
 
 fn empty_repository_readiness() -> RepositoryReadiness {
@@ -2475,6 +2500,7 @@ mod tests {
     use super::*;
     use crate::adapters::persistence::sqlite::SqliteIndexStore;
     use crate::test_support::TempWorkspace;
+    use rusqlite::{params, Connection};
     use std::fs;
     use std::io;
     use std::path::Path;
@@ -3032,6 +3058,77 @@ mod tests {
             .expect("storage error")
             .contains("cache"));
         assert!(!state.join("cache").exists());
+    }
+
+    fn status_with_stamped_storage_schema(
+        label: &str,
+        stored_schema_version: u32,
+    ) -> (RepositoryStatusReport, RepositoryDoctorReport) {
+        let workspace = TempWorkspace::new(label);
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let state = workspace.path().join(DEFAULT_STATE_DIR);
+        let store = SqliteIndexStore::new(&state);
+        store
+            .prepare_next_generation()
+            .expect("prepare storage schema");
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
+        connection
+            .execute("DELETE FROM schema_migrations", [])
+            .expect("clear schema stamp");
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, 'test', datetime('now'))",
+                params![stored_schema_version],
+            )
+            .expect("stamp storage schema");
+
+        let request = RepositoryStatusRequest::new(root_string(workspace.path()));
+        let status = repository_status_with_storage(request, &store).expect("storage status");
+        let doctor = repository_doctor_with_storage(
+            RepositoryDoctorRequest::new(root_string(workspace.path())),
+            &store,
+        )
+        .expect("storage doctor");
+        (status, doctor)
+    }
+
+    #[test]
+    fn status_and_doctor_reject_older_storage_schema_as_not_query_ready() {
+        let (status, doctor) = status_with_stamped_storage_schema(
+            "repository-storage-older-schema",
+            STORAGE_SCHEMA_VERSION - 1,
+        );
+
+        assert_eq!(status.storage, RepositoryImplementationStatus::Unhealthy);
+        assert!(!status.readiness.query_ready);
+        let error = status.storage_error.as_deref().expect("storage error");
+        assert!(error.contains("older than"));
+        assert!(error.contains("repogrammar resync"));
+        assert!(doctor.findings.iter().any(|finding| {
+            finding.code == RepositoryDoctorCode::StorageInvalid
+                && finding.detail.contains("repogrammar resync")
+        }));
+    }
+
+    #[test]
+    fn status_and_doctor_reject_newer_storage_schema_without_resync_guidance() {
+        let (status, doctor) = status_with_stamped_storage_schema(
+            "repository-storage-newer-schema",
+            STORAGE_SCHEMA_VERSION + 1,
+        );
+
+        assert_eq!(status.storage, RepositoryImplementationStatus::Unhealthy);
+        assert!(!status.readiness.query_ready);
+        let error = status.storage_error.as_deref().expect("storage error");
+        assert!(error.contains("newer than"));
+        assert!(error.contains("upgrade RepoGrammar"));
+        assert!(error.contains("do not resync"));
+        assert!(doctor.findings.iter().any(|finding| {
+            finding.code == RepositoryDoctorCode::StorageInvalid
+                && finding.detail.contains("upgrade RepoGrammar")
+                && finding.detail.contains("do not resync")
+        }));
     }
 
     #[test]

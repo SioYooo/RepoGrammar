@@ -4478,7 +4478,7 @@ fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
     );
     if instruction_session_restart_recommended(outcome) {
         rendered.push_str(
-            "next: start a new coding-agent session; running sessions may retain earlier instructions\n",
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
         );
     }
     rendered
@@ -5205,6 +5205,11 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
             "command_on_path={}\n",
             if outcome.command_on_path { "yes" } else { "no" }
         ));
+    }
+    if outcome.command == "install" {
+        output.push_str(
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
+        );
     }
     output
 }
@@ -11782,7 +11787,7 @@ mod tests {
         assert_eq!(status.status, 0, "{}", status.stderr);
         let status_json: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(status_json["state_before"], "missing");
-        assert_eq!(status_json["expected_content_version"], 2);
+        assert_eq!(status_json["expected_content_version"], 3);
         assert_eq!(status_json["changed"], false);
         assert_eq!(status_json["session_restart_recommended"], false);
         assert!(!status
@@ -11846,8 +11851,8 @@ mod tests {
         let with_gate = fs::read_to_string(&instruction_file).expect("synced guide");
         assert!(with_gate.contains("before any non-trivial code location"));
         assert!(with_gate.contains("operation: \"find_analogues\""));
-        assert!(with_gate.contains("State that fallback reason"));
-        assert!(with_gate.contains("Do not repeat the same RepoGrammar call"));
+        assert!(with_gate.contains("state that reason before CodeGraph"));
+        assert!(with_gate.contains("Call a given target only once"));
         assert!(!workspace.path().join("CLAUDE.md").exists());
         assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
 
@@ -11858,7 +11863,7 @@ mod tests {
         );
         assert_eq!(synced_human.status, 0, "{}", synced_human.stderr);
         assert!(synced_human.stdout.contains(
-            "next: start a new coding-agent session; running sessions may retain earlier instructions"
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
         ));
 
         let remove_plan = run_with_context(
@@ -18771,6 +18776,9 @@ mod tests {
             .stdout
             .contains("install: agent MCP integration installed"));
         assert!(output.stdout.contains("configured_targets=codex"));
+        assert!(output.stdout.contains(
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
+        ));
     }
 
     #[test]

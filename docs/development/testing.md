@@ -547,8 +547,9 @@ allowed.
   must keep newly configured targets separate from reconfigured pre-existing
   targets. Any real native-agent CLI integration test must be explicitly
   ignored or feature-gated outside default CI.
-- Managed-instruction tests must cover exact current content version `2`, the
-  exact unmarked legacy body classified as logical version `1`, exact
+- Managed-instruction tests must cover exact current content version `3`, exact
+  version `2` as a safely refreshable outdated body, the exact unmarked legacy
+  body classified as logical version `1`, exact
   unversioned global legacy `0`, single-byte/body
   drift becoming `foreign`, partial/duplicated
   markers becoming `malformed`, foreign/malformed preservation, exact legacy
@@ -1284,6 +1285,10 @@ file-local fast paths: each edits one function body (a Rust test fn under
 `service/rust/`, a TS ambient test under `web/`, a Python function under
 `analytics/`), and the incremental generation must be canonically equal to a
 clean rebuild while reparsing exactly one file (`expected_reparsed_files: 1`).
+`docs_noop` is the empty-delta fast-path oracle: because the Markdown edit is
+outside discovery, sync must retain the current active generation, report zero
+copied-forward files, zero reparses, and zero family recomputation, and remain
+canonically equal to a clean rebuild.
 `python_body_edit` is specifically the proof of the Python interface-hash gate:
 the body edit leaves `analytics/app.py`'s interface projection unchanged, so only
 that module reparses while its sibling `analytics/conftest.py` copies forward.

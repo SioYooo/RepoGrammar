@@ -408,8 +408,11 @@ The installer must:
 - validate every configured MCP integration by launching a self-test;
 - verify the native entry is present and still points at the expected installed
   executable with exactly the `serve` argument after configuration;
-- run the product binary's bounded `tools/list` self-test again after native
-  configuration and receipt creation, before reporting success;
+- run the product binary's bounded MCP self-test again after native
+  configuration and receipt creation, before reporting success; the test sends
+  `initialize` first, requires the current RepoGrammar server version and exact
+  managed instruction contract, then validates the exact context-tool operation
+  schema through `tools/list`;
 - store an installation receipt sufficient for precise, reversible uninstall;
 - never remove configuration that was not created by RepoGrammar;
 - treat instruction-file modification as optional and marker-fenced.
@@ -719,8 +722,9 @@ noninteractive live writes, and a dependency-light text wizard:
   user install data directory after native configuration succeeds, recording the
   resolved instruction-file path and instruction action;
 - after writing each receipt, install re-probes the native entry for exact
-  presence and runs the installed product binary's bounded exact-one-tool
-  `tools/list` self-test. Failure removes entries, receipts, instruction
+  presence and runs the installed product binary's bounded initialize/version/
+  instruction plus exact-one-tool-schema self-test. Failure removes entries,
+  receipts, instruction
   sections, and command files newly created by that install run, while restoring
   any pre-existing owned target that was being refreshed from its snapshot;
 - the managed instruction-file writer (create/append/replace/idempotent/remove,

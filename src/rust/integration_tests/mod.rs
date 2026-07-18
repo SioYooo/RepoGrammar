@@ -5,6 +5,7 @@ use crate::{
             list_families, lookup_family, repo_shape_diagnostics, unknown_inventory,
             FamilyLookupMode, FamilyLookupReport,
         },
+        recovery::{RecoveryAction, RecoveryReason, RecoveryRecommendation},
         repository::{
             RepositoryImplementationStatus, RepositoryManifestStatus, RepositoryReadiness,
             RepositoryStatus, RepositoryStatusReport, RepositoryStatusRequest,
@@ -577,7 +578,16 @@ impl McpReadOnlyRuntime for BenchmarkMcpRuntime<'_> {
             indexing: RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
             storage_inspection: None,
             storage_error: None,
-            readiness: RepositoryReadiness::default(),
+            readiness: RepositoryReadiness {
+                state: crate::application::repository::RepositoryReadinessState::ReadyActiveIndex,
+                query_ready: true,
+                active_generation_available: true,
+                recovery: Some(RecoveryRecommendation {
+                    action: RecoveryAction::None,
+                    reason: RecoveryReason::Ready,
+                }),
+                ..RepositoryReadiness::default()
+            },
         })
     }
 

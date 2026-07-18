@@ -364,6 +364,13 @@ mixed layout while retaining the mutable database as the active read source.
 Manifest status must be based on parsed JSON fields, not literal text layout,
 so valid reordered manifests are accepted and malformed required fields are
 reported as corrupted.
+Status and doctor must compare the inspected storage schema with the running
+binary's schema authority before reporting storage available or queries ready.
+An older stored schema is unhealthy with `repogrammar resync` guidance from the
+current binary. A stored schema newer than the binary is also unhealthy, but its
+guidance is to upgrade RepoGrammar and explicitly not to resync with the older
+binary; an old executable must never destroy a newer derived index while
+pretending to repair it.
 
 Status JSON must include a source-free `readiness` object so humans and agents
 can decide whether RepoGrammar can answer repository-local queries right now.
@@ -507,16 +514,19 @@ Python and conservative TS/JS exact-anchor derivation may also add separate
 bounded RepoGrammar support/context facts, not compiler/provider-backed facts.
 `sync` attempts a path-level incremental rebuild when the active generation is
 readable, mutable, schema-compatible, and dirty-free, no explicit semantic
-worker is configured, and the delta does not touch project-context files or
-source inventories such as any `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, or `.rs`
-file, TS/JS project config files, `pyproject.toml`, `conftest.py`,
-`setup.cfg`, root `setup.py`, `Cargo.toml`, or `Cargo.lock`. Incremental
-`sync` discovers the
-current manifest, copies unchanged active file/code-unit/IR/semantic records
-into a new building generation without reparsing those paths, reparses added
-and modified paths, omits removed paths, recomputes local derived support and
-families over the new generation, validates dirty/dependency state, and then
-activates the new generation. If a safe precondition is not met, `sync` must
+worker is configured, and the delta passes the project-context gate. Safe
+content-only edits of Rust and TS/JS sources and interface-stable Python modules
+may reparse only the changed paths; source-set changes and project-config,
+`conftest.py`, or unverifiable/interface-changing Python edits fall back as
+specified by the indexing pipeline. After those preconditions pass, a zero
+delta retains the existing validated active generation and reports zero
+copied-forward files, reparses, and family recomputations; it does not create a
+redundant generation. For a non-empty safe delta, sync copies unchanged active
+file/code-unit/IR/semantic records into a new building generation without
+reparsing those paths, reparses added and modified paths, omits removed paths,
+recomputes local derived support and families over the new generation, validates
+dirty/dependency state, and then activates the new generation. If a safe
+precondition is not met, `sync` must
 fall back to the full rebuild path and report `sync_mode:
 full_rebuild_fallback` with a `fallback_reason`.
 Inventory-only `go`, `go-config`, `php`, `php-config`, `ruby`, `ruby-config`,
@@ -1526,6 +1536,10 @@ includes `sync_mode`, `fallback_reason`, `base_generation`, `added_files`,
 `families_added`, and `families_removed`.
 `reparsed_files` is the actual number of parser dispatches in the generation,
 not the number of changed or discovered inventory-only files.
+For the zero-delta fast path, `generation_id` equals `base_generation`,
+`sync_mode` remains `incremental`, `unchanged_files` reports the manifest size,
+and `copied_forward_files`, `reparsed_files`, and `families_recomputed` are all
+zero.
 `families_added` and `families_removed` report the cross-generation family
 identity change: each is either `null` (when the sync had no base generation to
 diff against, or did not recompute families) or an object `{ "count": <n>,
