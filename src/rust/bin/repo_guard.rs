@@ -3946,6 +3946,15 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         expected_fallback_reason: Some("project_context_changed"),
         expected_reparsed_files: None,
     },
+    SyncEquivalenceScenario {
+        id: "python_context_budget",
+        patch_summary:
+            "grow a control-char-dense Python module body across the context-payload budget (interface unchanged: fallback)",
+        apply: patch_python_context_budget,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("python_context_budget"),
+        expected_reparsed_files: None,
+    },
 ];
 
 fn sync_equivalence_replace_once(
@@ -4084,6 +4093,29 @@ fn patch_python_conftest_edit(project: &Path) -> Result<(), String> {
         "analytics/conftest.py",
         "return \"default\"",
         "return \"primary\"",
+    )
+}
+
+fn patch_python_context_budget(project: &Path) -> Result<(), String> {
+    // Grow the body-local blob of `analytics/escape_heavy.py` from its sentinel to
+    // 128 KiB of U+0001 control bytes. The edit changes no top-level symbol,
+    // `__all__`, or re-export, so the module interface hash is stable and the
+    // interface probe would pass — but the added bytes push the whole-project
+    // Python context-payload estimate across the incremental-sync budget
+    // (`raw * 6 >= MAX_PYTHON_FRONTEND_INPUT_BYTES`, the 1 MiB worker cap). Control
+    // bytes are the worst case the size-only budget gate must bound: serde_json
+    // escapes each to a six-byte `\uXXXX` sequence, so this module's ~128 KiB
+    // escape to ~768 KiB. The gate must fall back with `python_context_budget`
+    // before probing the (stable) interface. The retired 2x headroom judged this
+    // same manifest safe (`raw * 2 < cap`) and would copy sibling facts forward
+    // under a regime the real request can no longer serialize context-complete, so
+    // this scenario fails closed if that unsound bound ever returns.
+    let blob = "\u{1}".repeat(131_072);
+    sync_equivalence_replace_once(
+        project,
+        "analytics/escape_heavy.py",
+        "ESCAPE_HEAVY_BLOB_SENTINEL",
+        &blob,
     )
 }
 
@@ -10035,6 +10067,15 @@ verify-stable-release-evidence --evidence-dir evidence
                 }
                 "python_conftest_edit" => {
                     assert!(read("analytics/conftest.py").contains("return \"primary\""))
+                }
+                "python_context_budget" => {
+                    let patched = read("analytics/escape_heavy.py");
+                    // The sentinel is fully replaced by the control-char blob, and
+                    // the module grows past the 6x budget boundary (cap/6 ~= 175 KB
+                    // raw is crossed once the blob is counted twice in the estimate).
+                    assert!(!patched.contains("ESCAPE_HEAVY_BLOB_SENTINEL"));
+                    assert!(patched.len() > 131_072);
+                    assert!(patched.contains('\u{1}'));
                 }
                 "java_add" => {
                     assert!(project.join("service/java/ExtraServiceTest.java").is_file())

@@ -227,7 +227,11 @@ These are intentional current behaviors or tracked deferrals, not defects:
   `python_interface_unverified`; and a Python edit whose whole-project context
   payload approaches the worker's per-request byte cap on either the base or the
   current manifest falls back with `python_context_budget`, since the worker would
-  silently drop that context and change how sibling modules parse. Any
+  silently drop that context and change how sibling modules parse. That budget is
+  estimated from manifest sizes alone (no file reads) against a provable 6x
+  worst-case JSON-escape bound, so even a control-char-dense module — whose bytes
+  each escape to a six-byte `\uXXXX` sequence — cannot slip a real request past the
+  cap; the conservative bound trades a wider full-rebuild band for soundness. Any
   add/remove/rename of a Python, TS/JS, or Rust source file (it changes the
   language's path set), any `conftest.py` edit (it
   alters ancestor fixture context), and any add/edit/remove of a project-config

@@ -1272,12 +1272,24 @@ facts (parsed under the base regime) diverge from a clean rebuild's (parsed unde
 the current regime). The gate closes this by requiring the aggregate Python
 context payload to stay safely under the cap on **both** the base and the current
 manifest, estimated conservatively from manifest sizes alone (no file reads): raw
-byte sizes plus fixed per-entry/envelope overhead, times a 2x headroom that
-bounds JSON escaping of valid source. If either manifest is near or over the cap,
-the sync falls back with `python_context_budget`. The check runs only when the
-delta modifies a Python module, since adds/removes and conftest/config edits
-already fall back and a delta with no modified module leaves the sizes
-byte-identical.
+byte sizes plus fixed per-entry/envelope overhead, times a **6x** headroom that
+bounds JSON string escaping. Because the gate never reads file contents it cannot
+assume the bytes are valid Python, so the headroom must bound the worst-case
+escaping of any byte: the request serializer (`serde_json`) escapes each
+short-escape-less control character `U+0000..=U+001F` to a six-byte `\uXXXX`
+sequence — the largest expansion any byte can incur (`"`, `\`, and `\b\t\n\f\r`
+cost two bytes; every other byte `>= 0x20`, including all UTF-8 continuation
+bytes, is emitted verbatim). A `.py` file dense in control characters therefore
+escapes up to 6x, not the ~2x of ordinary source, so `raw * 6 < cap` is the
+smallest provable bound and holds on every input; the retired 2x factor was
+unsound, admitting a control-char-dense module whose real request could serialize
+past the cap. If either manifest is near or over the cap, the sync falls back with
+`python_context_budget`. The check runs only when the delta modifies a Python
+module, since adds/removes and conftest/config edits already fall back and a delta
+with no modified module leaves the sizes byte-identical. The oracle's
+`python_context_budget` scenario exercises exactly this regime: a control-char
+module edit that crosses the 6x boundary but stays under the retired 2x boundary,
+so the oracle fails closed if the unsound headroom returns.
 
 This wave implements the sound conservative core only: an interface-changed edit
 falls back to a full rebuild rather than computing a reverse-import invalidation

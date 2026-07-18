@@ -1995,11 +1995,21 @@ fn classify_sync_context_gate(
 /// both regimes, so copy-forward matches a clean rebuild.
 ///
 /// The estimate is a conservative upper bound from manifest sizes only (no file
-/// reads): raw byte sizes plus fixed per-entry and envelope overhead, then a 2x
-/// escaping-headroom factor. JSON string escaping of valid Python source is at
-/// most ~2x (newlines, quotes, and backslashes each encode to two bytes;
-/// control-char-dense content fails Python tokenization), so `raw * 2 < cap`
-/// implies the real serialized request is under the cap.
+/// reads): raw byte sizes plus fixed per-entry and envelope overhead, then a
+/// `PYTHON_CONTEXT_ESCAPE_HEADROOM`x factor bounding JSON string escaping. Because
+/// the gate never reads file contents it cannot assume the bytes are valid Python,
+/// so the multiplier must bound the *worst-case* escaping of any byte. `serde_json`
+/// (the frontend request serializer) escapes each control character
+/// `U+0000..=U+001F` that lacks a short escape as `\uXXXX` — six output bytes for
+/// one source byte, the largest per-byte expansion any input can incur (`"`, `\`,
+/// and `\b\t\n\f\r` cost two bytes; every byte `>= 0x20` other than `"`/`\`,
+/// including all UTF-8 continuation bytes, is emitted verbatim). A `.py` file dense
+/// in control characters therefore escapes up to 6x, not the ~2x of ordinary
+/// source, so a 6x headroom is the smallest provable bound and `raw * 6 < cap`
+/// implies the real serialized request is under the cap on *every* input. A tighter
+/// 2x factor was unsound: a control-char-dense module with `raw` in `(cap/6, cap/2)`
+/// passes a 2x gate yet can serialize past the cap, reopening the silent
+/// context-drop divergence channel this gate exists to close.
 fn python_context_budget_is_safe(
     base_files: &[IndexedFileRecord],
     current_files: &[DiscoveredFile],
@@ -2041,9 +2051,14 @@ const PYTHON_CONTEXT_ENVELOPE_OVERHEAD: u128 = 4096;
 /// Fixed JSON overhead (bytes) charged per `.py` module for its `module_files`
 /// object braces, keys, and quotes.
 const PYTHON_CONTEXT_PER_FILE_OVERHEAD: u128 = 64;
-/// Multiplier applied to the raw estimate to bound JSON string escaping of valid
-/// Python source before comparing against the request cap.
-const PYTHON_CONTEXT_ESCAPE_HEADROOM: u128 = 2;
+/// Worst-case JSON string-escape expansion for any source byte, applied to the raw
+/// estimate before comparing against the request cap. Six bytes (`\uXXXX`) is the
+/// largest expansion `serde_json` produces for a single byte — a short-escape-less
+/// control character `U+0000..=U+001F` — so this is a provable upper bound that
+/// holds even for content the size-only gate cannot inspect. It supersedes an
+/// earlier 2x factor that under-counted control-char-dense modules and could admit
+/// a request that serialized past the cap.
+const PYTHON_CONTEXT_ESCAPE_HEADROOM: u128 = 6;
 
 /// Conservative raw byte estimate of the largest `parse_document` request over a
 /// Python file set (each item is `(path, size_bytes, is_conftest)`). Sums the
@@ -5836,8 +5851,8 @@ mod tests {
 
     #[test]
     fn python_context_budget_is_safe_under_and_over_an_injected_cap() {
-        let cap = 100_000usize;
-        // Both manifests comfortably under the cap after the 2x escaping headroom.
+        let cap = 300_000usize;
+        // Both manifests under the cap after the 6x worst-case escaping headroom.
         assert!(python_context_budget_is_safe(
             &[budget_base("app.py", 20_000)],
             &[gate_discovered_file_sized(
@@ -5878,7 +5893,7 @@ mod tests {
     fn python_context_budget_ignores_non_python_manifest_bytes() {
         // A large Rust or config file does not enter the Python context payload, so
         // it must not trip the Python budget.
-        let cap = 100_000usize;
+        let cap = 300_000usize;
         assert!(python_context_budget_is_safe(
             &[budget_base("app.py", 10_000)],
             &[
@@ -5893,9 +5908,9 @@ mod tests {
     fn python_context_budget_counts_conftest_text_twice() {
         // conftest text ships in both `module_files` and `conftest_files`, so a
         // conftest of a given size consumes more budget than a plain module of the
-        // same size. At a cap tuned between the two, the module is safe and the
-        // conftest is not.
-        let cap = 210_000usize;
+        // same size. At a cap tuned between the two (after the 6x escaping
+        // headroom), the module is safe and the conftest is not.
+        let cap = 700_000usize;
         assert!(python_context_budget_is_safe(
             &[budget_base("pkg/app.py", 50_000)],
             &[gate_discovered_file_sized(
@@ -5913,6 +5928,38 @@ mod tests {
                 50_000
             )],
             cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_rejects_control_char_escape_worst_case() {
+        // The size-only gate cannot read the bytes, so the headroom must bound the
+        // worst-case escape (6x for a `\uXXXX` control character), not the ~2x of
+        // ordinary source. A 150 KB module of control characters escapes to ~900 KB;
+        // its raw estimate sits in `(cap/6, cap/2)`, so the retired 2x factor would
+        // pass a 1.2 MB cap while the real request could approach 6x and cross it —
+        // the exact silent-truncation hole the gate must fail closed on. The 6x
+        // factor rejects it.
+        let cap = 1_200_000usize;
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("app.py", 150_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                150_000
+            )],
+            cap,
+        ));
+        // The same manifest under a cap generous enough to absorb the 6x headroom is
+        // still admitted: the fix tightens the bound, it does not blanket-reject.
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 150_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                150_000
+            )],
+            2_000_000,
         ));
     }
 

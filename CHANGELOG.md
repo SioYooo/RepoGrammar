@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- Made the Python context-budget gate's escape headroom a provable upper
+  bound. JSON-escaping expands a source byte by at most 6x (a
+  short-escape-less control character becomes `\uXXXX`), so the
+  incremental-sync budget check now multiplies manifest sizes by 6
+  instead of 2 — sealing the channel where control-character-dense
+  Python sources could pass the gate, exceed the frontend request cap,
+  and silently drop whole-project context on the incremental path. The
+  sync-equivalence oracle grows a fourteenth scenario that edits an
+  escape-heavy module across the budget boundary and was adversarially
+  proven to fail under the old 2x coefficient. Projects whose aggregate
+  Python context estimate stays under about 170 KiB (the vast majority)
+  see no change; estimates between 170 KiB and 512 KiB now fall back to
+  a full rebuild on interface-stable Python edits, a performance-only
+  trade for soundness.
+
 - Stopped the Equal constraint axis from fabricating a certain deviation
   out of uncertainty. A conformance target carrying a strict subset of a
   multi-value Equal constraint's expected values (missing values, no
