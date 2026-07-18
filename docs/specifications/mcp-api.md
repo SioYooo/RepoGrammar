@@ -475,18 +475,18 @@ budgets, and malformed argument types are transport/schema errors.
 MCP calls must not wait on telemetry network activity and must not trigger
 telemetry upload. Anonymous telemetry upload is only attempted by explicit
 `repogrammar telemetry upload` after consent and endpoint validation.
-Successful family-context MCP calls may best-effort update the repo-local
-aggregate `.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`.
-That local file stores only aggregate estimated token counts, event count,
-`ESTIMATED` kind, and caveat text; it must not store operation targets, paths,
-content hashes, prompts, source, evidence text, symbols, or raw errors.
-MCP `repogrammar_context` calls may also best-effort update
-`.repogrammar/telemetry/local-metrics/family_query_outcomes.json`, including
-preflight fallback, successful family context, deterministic
+Each MCP `repogrammar_context` invocation may best-effort update the repo-local
+`.repogrammar/telemetry/local-metrics/family_query_metrics.json` atomic cohort,
+including preflight fallback, successful family context, deterministic
 `PARTIAL_CONTEXT`, typed query-time `UNKNOWN`, and runtime fallback outcomes.
-This local file stores only low-cardinality aggregate buckets for operation
-category, lookup mode, status, UNKNOWN class/reason/required-mechanism/recovery
-code, read-plan item counts, and source-span request/inclusion/omission counts.
+Schema `family-query-metrics.v2` increments the query denominator exactly once
+and records any estimated-savings event in the same file replacement. It carries
+the explicit `atomic-query-accounting.v2` epoch, epoch start, and producer
+version. Legacy v1 savings and query-outcome files are unpaired historical
+evidence and are excluded from v2 stats. The v2 file stores only aggregate token
+totals and low-cardinality buckets for operation category, lookup mode, status,
+UNKNOWN class/reason/required-mechanism/recovery code, read-plan item counts,
+source-span request/inclusion/omission counts, outcome shape, and language.
 It must not store raw arguments, targets, paths, repository names, content
 hashes, prompts, source, evidence text, symbols, family ids, member ids,
 code-unit ids, raw tool input/output, raw errors, diffs, or patches.

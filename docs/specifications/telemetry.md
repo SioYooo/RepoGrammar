@@ -92,36 +92,25 @@ upload would open a network connection.
 telemetry is effectively enabled it may update one allowlisted bucketed rollup
 under `.repogrammar/telemetry/rollups/` without creating an upload queue or
 opening a network connection.
-Context-delivering family query and MCP responses may update
-`.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`
-even when anonymous telemetry is disabled. Found families, PARTIAL_CONTEXT read
-plans, and committed or partial alignment certificates each record one event
-under their outcome shape; abstentions record none. This file is not an
-anonymous upload payload and must store only aggregate event count, estimated
-baseline/returned token totals, aggregate `estimated_potential_token_savings`,
-`ESTIMATED` measurement kind, caveat text, and the additive `by_outcome_shape`
-(`found`/`partial_context`/`alignment`) and `by_language` breakdown objects.
-Each breakdown value carries only the four aggregate token/count numbers; the
-low-cardinality outcome-shape and language keys are restricted to their closed
-vocabularies (the language keys are the indexed language scopes plus `mixed` and
-`unknown`). The additive breakdowns are tolerated when absent in files written
-before they existed and keep the `estimated-potential-token-savings.v1` schema
-token. The file must never store code, source snippets, paths, repository names,
-symbols, raw targets, query text, content hashes, or byte ranges.
-Family query and MCP context calls may also best-effort update the local-only
-`.repogrammar/telemetry/local-metrics/family_query_outcomes.json` rollup with
-schema `family-query-outcomes.v1`. This file is separate from anonymous
-telemetry upload payload v1 and stores only source-free aggregate counts:
-event count; status buckets for `found`, `partial_context`, `unknown`,
-`fallback`, and `error`; entrypoint buckets for `cli` and `mcp`; CLI
-command/MCP operation category buckets; lookup-mode buckets; typed UNKNOWN
-class, reason-code, required-mechanism, and recovery-code buckets; read-plan
-returned counts and item-count buckets; and aggregate source-span request,
-inclusion, and omission-count buckets. It must not store code, source snippets,
-repository names, absolute or repo-relative paths, symbols, raw targets, query
-text, prompts, raw MCP/tool input or output, evidence text, content hashes,
-byte ranges, code-unit ids, fact ids, family ids, member ids, raw errors,
-diffs, or patches.
+Every CLI family query and MCP context call may best-effort update
+`.repogrammar/telemetry/local-metrics/family_query_metrics.json` even when
+anonymous telemetry is disabled. Schema `family-query-metrics.v2` stores the
+query denominator and optional estimated-savings numerator together: one
+`total_queries` increment per invocation plus, for found families,
+PARTIAL_CONTEXT read plans, and committed/partial alignment certificates, one
+`savings_events` increment and its token totals and breakdowns. Both sides are
+validated and persisted by one atomic file replacement. The file carries epoch
+`atomic-query-accounting.v2`, `epoch_started_unix_seconds`, and
+`producer_version`; stats may only form a ratio within this cohort. Existing
+`estimated-potential-token-savings.v1` and `family-query-outcomes.v1` files are
+historical unpaired artifacts: v2 does not import, rewrite, or combine them.
+The v2 file is separate from anonymous telemetry upload payload v1 and stores
+only the closed low-cardinality outcome, entrypoint, command/operation,
+lookup-mode, typed UNKNOWN, read-plan/source-span count buckets, aggregate token
+counts, and outcome/language savings breakdowns. It must not store code, source
+snippets, repository names, absolute or repo-relative paths, symbols, raw
+targets, query text, prompts, raw MCP/tool input or output, evidence text,
+content hashes, byte ranges, ids, raw errors, diffs, or patches.
 Local experiment recording remains separate from anonymous telemetry consent.
 The telemetry help surface scopes `--project <path>` to anonymous telemetry
 and research diagnostics. Local `experiment-*` subcommands use machine-local

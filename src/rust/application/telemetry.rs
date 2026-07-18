@@ -20,6 +20,8 @@ pub const TOKEN_EXPERIMENT_SCHEMA_VERSION: &str = "token-experiment.v1";
 pub const ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION: &str =
     "estimated-potential-token-savings.v1";
 pub const FAMILY_QUERY_OUTCOMES_SCHEMA_VERSION: &str = "family-query-outcomes.v1";
+pub const FAMILY_QUERY_METRICS_SCHEMA_VERSION: &str = "family-query-metrics.v2";
+pub const FAMILY_QUERY_METRICS_EPOCH: &str = "atomic-query-accounting.v2";
 pub const TELEMETRY_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_TELEMETRY_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
@@ -28,6 +30,7 @@ const COUNT_BUCKETS: &[&str] = &["0", "1-2", "3-9", "10-49", "50-199", "200+"];
 const RATIO_BUCKETS: &[&str] = &["unknown", "0", "0-25", "25-50", "50-75", "75-100"];
 const RISK_BUCKETS: &[&str] = &["unknown", "low", "medium", "high"];
 const FAMILY_QUERY_OUTCOMES_METRIC_NAME: &str = "family_query_outcomes";
+const FAMILY_QUERY_METRICS_METRIC_NAME: &str = "family_query_metrics";
 /// Context-delivering outcome shapes an estimated-potential-token-savings event
 /// can be attributed to. A closed vocabulary, additive to the
 /// `estimated-potential-token-savings.v1` rollup (tolerated-when-absent).
@@ -477,6 +480,42 @@ pub struct FamilyQueryOutcomeRecord<'a> {
     pub source_span_omission_count: Option<usize>,
 }
 
+/// The optional estimated-savings side of one query invocation. It is recorded
+/// in the same atomic v2 rollup write as the query denominator, never in a
+/// second file or transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct FamilyQuerySavingsRecord<'a> {
+    pub metric: &'a EstimatedPotentialTokenSavings,
+    pub outcome_shape: &'a str,
+    pub language: &'a str,
+}
+
+/// One cohort-aligned local query-accounting epoch. The v2 file is deliberately
+/// separate from both legacy v1 files: old numerator/denominator snapshots are
+/// historical unpaired evidence and are never imported into this rollup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyQueryMetricsRollup {
+    pub epoch: String,
+    pub epoch_started_unix_seconds: Option<u64>,
+    /// Version that created the epoch. Compatible later v2 writers preserve it
+    /// so the field remains a stable cohort provenance stamp.
+    pub producer_version: String,
+    pub query_outcomes: FamilyQueryOutcomeRollup,
+    pub savings: EstimatedPotentialTokenSavingsRollup,
+}
+
+impl Default for FamilyQueryMetricsRollup {
+    fn default() -> Self {
+        Self {
+            epoch: FAMILY_QUERY_METRICS_EPOCH.to_string(),
+            epoch_started_unix_seconds: None,
+            producer_version: env!("CARGO_PKG_VERSION").to_string(),
+            query_outcomes: FamilyQueryOutcomeRollup::default(),
+            savings: EstimatedPotentialTokenSavingsRollup::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelemetryPurgeReport {
     pub removed_files: usize,
@@ -832,6 +871,29 @@ pub fn record_estimated_potential_token_savings(
     outcome_shape: &str,
     language: &str,
 ) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    let path = estimated_potential_token_savings_file(request)?;
+    let mut rollup = read_estimated_potential_token_savings_file(&path)?;
+    accumulate_estimated_potential_token_savings(
+        &mut rollup,
+        FamilyQuerySavingsRecord {
+            metric,
+            outcome_shape,
+            language,
+        },
+    )?;
+    write_estimated_potential_token_savings_file(&path, &rollup)?;
+    Ok(rollup)
+}
+
+fn accumulate_estimated_potential_token_savings(
+    rollup: &mut EstimatedPotentialTokenSavingsRollup,
+    savings: FamilyQuerySavingsRecord<'_>,
+) -> Result<(), RepoGrammarError> {
+    let FamilyQuerySavingsRecord {
+        metric,
+        outcome_shape,
+        language,
+    } = savings;
     if !SAVINGS_OUTCOME_SHAPE_KEYS.contains(&outcome_shape) {
         return Err(invalid_input(
             "estimated potential token savings outcome shape is not in the allowlist",
@@ -844,8 +906,6 @@ pub fn record_estimated_potential_token_savings(
     // pins the producers to this constant so the coercion is a defensive backstop,
     // never the normal path.
     let language = normalize_savings_language(language);
-    let path = estimated_potential_token_savings_file(request)?;
-    let mut rollup = read_estimated_potential_token_savings_file(&path)?;
     rollup.event_count = rollup.event_count.saturating_add(1);
     rollup.total_estimated_baseline_tokens = rollup
         .total_estimated_baseline_tokens
@@ -866,8 +926,7 @@ pub fn record_estimated_potential_token_savings(
         .entry(language.to_string())
         .or_default()
         .accumulate(metric);
-    write_estimated_potential_token_savings_file(&path, &rollup)?;
-    Ok(rollup)
+    Ok(())
 }
 
 pub fn estimated_potential_token_savings_rollup(
@@ -883,6 +942,15 @@ pub fn record_family_query_outcome(
 ) -> Result<FamilyQueryOutcomeRollup, RepoGrammarError> {
     let path = family_query_outcomes_file(request)?;
     let mut rollup = read_family_query_outcomes_file(&path)?;
+    accumulate_family_query_outcome(&mut rollup, record)?;
+    write_family_query_outcomes_file(&path, &rollup)?;
+    Ok(rollup)
+}
+
+fn accumulate_family_query_outcome(
+    rollup: &mut FamilyQueryOutcomeRollup,
+    record: &FamilyQueryOutcomeRecord<'_>,
+) -> Result<(), RepoGrammarError> {
     rollup.event_count = rollup.event_count.saturating_add(1);
     increment_rollup_count(&mut rollup.by_status, record.status.as_str());
     increment_rollup_count(&mut rollup.by_entrypoint, record.entrypoint.as_str());
@@ -929,8 +997,35 @@ pub fn record_family_query_outcome(
             count_bucket(omission_count),
         );
     }
-    write_family_query_outcomes_file(&path, &rollup)?;
+    Ok(())
+}
+
+/// Record one complete query invocation in the v2 cohort. The denominator and
+/// optional savings numerator are validated and committed through one atomic
+/// file replacement, so a query can never advance only one side of the ratio.
+pub fn record_family_query_metric(
+    request: RepositoryStatusRequest,
+    record: &FamilyQueryOutcomeRecord<'_>,
+    savings: Option<FamilyQuerySavingsRecord<'_>>,
+) -> Result<FamilyQueryMetricsRollup, RepoGrammarError> {
+    let path = family_query_metrics_file(request)?;
+    let mut rollup = read_family_query_metrics_file(&path)?;
+    accumulate_family_query_outcome(&mut rollup.query_outcomes, record)?;
+    if let Some(savings) = savings {
+        accumulate_estimated_potential_token_savings(&mut rollup.savings, savings)?;
+    }
+    if rollup.epoch_started_unix_seconds.is_none() {
+        rollup.epoch_started_unix_seconds = Some(now_unix_seconds());
+    }
+    write_family_query_metrics_file(&path, &rollup)?;
     Ok(rollup)
+}
+
+pub fn family_query_metrics_rollup(
+    request: RepositoryStatusRequest,
+) -> Result<FamilyQueryMetricsRollup, RepoGrammarError> {
+    let path = family_query_metrics_file(request)?;
+    read_family_query_metrics_file(&path)
 }
 
 pub fn family_query_outcome_rollup(
@@ -1663,6 +1758,22 @@ fn family_query_outcomes_file(
         .join(format!("{FAMILY_QUERY_OUTCOMES_METRIC_NAME}.json")))
 }
 
+fn family_query_metrics_file(
+    request: RepositoryStatusRequest,
+) -> Result<PathBuf, RepoGrammarError> {
+    let location = repository_state_location(request)?;
+    if !location.state_dir.is_dir() {
+        return Err(invalid_input(
+            "repository-local telemetry state is unavailable",
+        ));
+    }
+    Ok(location
+        .state_dir
+        .join("telemetry")
+        .join("local-metrics")
+        .join(format!("{FAMILY_QUERY_METRICS_METRIC_NAME}.json")))
+}
+
 fn read_estimated_potential_token_savings_file(
     path: &Path,
 ) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
@@ -1750,6 +1861,59 @@ fn write_family_query_outcomes_file(
             "source_spans_requested_count": rollup.source_spans_requested_count,
             "source_spans_included_count": rollup.source_spans_included_count,
             "source_span_omission_count_bucket": &rollup.source_span_omission_count_bucket,
+        }),
+    )
+}
+
+fn read_family_query_metrics_file(
+    path: &Path,
+) -> Result<FamilyQueryMetricsRollup, RepoGrammarError> {
+    if !path.exists() {
+        return Ok(FamilyQueryMetricsRollup::default());
+    }
+    parse_family_query_metrics_rollup(&read_json_file_bounded(path)?)
+}
+
+fn write_family_query_metrics_file(
+    path: &Path,
+    rollup: &FamilyQueryMetricsRollup,
+) -> Result<(), RepoGrammarError> {
+    let started = rollup
+        .epoch_started_unix_seconds
+        .ok_or_else(|| invalid_input("family query metrics epoch has not started"))?;
+    ensure_parent_dir(path)?;
+    write_json_atomically(
+        path,
+        &json!({
+            "schema_version": FAMILY_QUERY_METRICS_SCHEMA_VERSION,
+            "metric_name": FAMILY_QUERY_METRICS_METRIC_NAME,
+            "epoch": rollup.epoch,
+            "epoch_started_unix_seconds": started,
+            "producer_version": rollup.producer_version,
+            "total_queries": rollup.query_outcomes.event_count,
+            "by_status": &rollup.query_outcomes.by_status,
+            "by_entrypoint": &rollup.query_outcomes.by_entrypoint,
+            "by_command_category": &rollup.query_outcomes.by_command_category,
+            "by_lookup_mode": &rollup.query_outcomes.by_lookup_mode,
+            "by_unknown_class": &rollup.query_outcomes.by_unknown_class,
+            "by_reason_code": &rollup.query_outcomes.by_reason_code,
+            "by_required_mechanism": &rollup.query_outcomes.by_required_mechanism,
+            "by_obligation": &rollup.query_outcomes.by_obligation,
+            "by_recovery_code": &rollup.query_outcomes.by_recovery_code,
+            "by_abstention_reason": &rollup.query_outcomes.by_abstention_reason,
+            "read_plan_returned_count": rollup.query_outcomes.read_plan_returned_count,
+            "read_plan_item_count_bucket": &rollup.query_outcomes.read_plan_item_count_bucket,
+            "source_spans_requested_count": rollup.query_outcomes.source_spans_requested_count,
+            "source_spans_included_count": rollup.query_outcomes.source_spans_included_count,
+            "source_span_omission_count_bucket": &rollup.query_outcomes.source_span_omission_count_bucket,
+            "measurement_kind": rollup.savings.measurement_kind.as_str(),
+            "savings_events": rollup.savings.event_count,
+            "total_estimated_baseline_tokens": rollup.savings.total_estimated_baseline_tokens,
+            "total_estimated_returned_tokens": rollup.savings.total_estimated_returned_tokens,
+            "total_estimated_potential_token_savings": rollup.savings.total_estimated_potential_token_savings,
+            "by_outcome_shape": savings_breakdown_map_json(&rollup.savings.by_outcome_shape),
+            "by_language": savings_breakdown_map_json(&rollup.savings.by_language),
+            "caveat": rollup.savings.caveat,
         }),
     )
 }
@@ -2379,6 +2543,108 @@ fn parse_savings_breakdown_map(
         );
     }
     Ok(output)
+}
+
+fn parse_family_query_metrics_rollup(
+    value: &Value,
+) -> Result<FamilyQueryMetricsRollup, RepoGrammarError> {
+    let invalid_message = "family query metrics rollup is invalid";
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_input(invalid_message))?;
+    let producer_version = object
+        .get("producer_version")
+        .and_then(Value::as_str)
+        .filter(|version| valid_metric_producer_version(version))
+        .ok_or_else(|| invalid_input(invalid_message))?;
+    let epoch_started_unix_seconds =
+        rollup_u64_named(object, "epoch_started_unix_seconds", invalid_message)?;
+    if object.get("schema_version").and_then(Value::as_str)
+        != Some(FAMILY_QUERY_METRICS_SCHEMA_VERSION)
+        || object.get("metric_name").and_then(Value::as_str)
+            != Some(FAMILY_QUERY_METRICS_METRIC_NAME)
+        || object.get("epoch").and_then(Value::as_str) != Some(FAMILY_QUERY_METRICS_EPOCH)
+        || epoch_started_unix_seconds == 0
+    {
+        return Err(invalid_input(invalid_message));
+    }
+
+    // Reuse the v1 field validators without reading either v1 file. The
+    // synthesized values exist only in memory and ensure both generations keep
+    // one allowlisted vocabulary while the persisted v2 file stays flat.
+    let mut query_value = object.clone();
+    query_value.insert(
+        "schema_version".to_string(),
+        json!(FAMILY_QUERY_OUTCOMES_SCHEMA_VERSION),
+    );
+    query_value.insert(
+        "metric_name".to_string(),
+        json!(FAMILY_QUERY_OUTCOMES_METRIC_NAME),
+    );
+    query_value.insert(
+        "event_count".to_string(),
+        object
+            .get("total_queries")
+            .cloned()
+            .ok_or_else(|| invalid_input(invalid_message))?,
+    );
+    let query_outcomes = parse_family_query_outcome_rollup(&Value::Object(query_value))?;
+
+    let mut savings_value = object.clone();
+    savings_value.insert(
+        "schema_version".to_string(),
+        json!(ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION),
+    );
+    savings_value.insert(
+        "metric_name".to_string(),
+        json!(EstimatedPotentialTokenSavings::METRIC_NAME),
+    );
+    savings_value.insert(
+        "event_count".to_string(),
+        object
+            .get("savings_events")
+            .cloned()
+            .ok_or_else(|| invalid_input(invalid_message))?,
+    );
+    let savings = parse_estimated_potential_token_savings_rollup(&Value::Object(savings_value))?;
+
+    if savings.event_count > query_outcomes.event_count
+        || count_map_total(&query_outcomes.by_status) != query_outcomes.event_count
+        || count_map_total(&query_outcomes.by_entrypoint) != query_outcomes.event_count
+        || count_map_total(&query_outcomes.by_command_category) != query_outcomes.event_count
+        || count_map_total(&query_outcomes.by_lookup_mode) != query_outcomes.event_count
+        || savings_breakdown_event_total(&savings.by_outcome_shape) != savings.event_count
+        || savings_breakdown_event_total(&savings.by_language) != savings.event_count
+    {
+        return Err(invalid_input(invalid_message));
+    }
+
+    Ok(FamilyQueryMetricsRollup {
+        epoch: FAMILY_QUERY_METRICS_EPOCH.to_string(),
+        epoch_started_unix_seconds: Some(epoch_started_unix_seconds),
+        producer_version: producer_version.to_string(),
+        query_outcomes,
+        savings,
+    })
+}
+
+fn valid_metric_producer_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 64
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+}
+
+fn count_map_total(map: &BTreeMap<String, u64>) -> u64 {
+    map.values()
+        .fold(0_u64, |total, count| total.saturating_add(*count))
+}
+
+fn savings_breakdown_event_total(map: &BTreeMap<String, SavingsBreakdown>) -> u64 {
+    map.values().fold(0_u64, |total, breakdown| {
+        total.saturating_add(breakdown.event_count)
+    })
 }
 
 fn parse_family_query_outcome_rollup(
@@ -3209,6 +3475,173 @@ mod tests {
                 "rollup leaked forbidden token {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn atomic_v2_query_metrics_count_repeated_invocations_in_one_cohort() {
+        let workspace = TempWorkspace::new("family-query-metrics-v2-repeated");
+        let request = repository_request(&workspace);
+        let found = FamilyQueryOutcomeRecord {
+            status: FamilyQueryOutcomeStatus::Found,
+            entrypoint: FamilyQueryEntrypoint::Mcp,
+            command_category: FamilyQueryCommandCategory::FindAnalogues,
+            lookup_mode: FamilyQueryLookupMode::Fuzzy,
+            unknowns: &[],
+            abstention_reason: None,
+            read_plan_item_count: Some(1),
+            source_spans_requested: false,
+            source_spans_included: false,
+            source_span_omission_count: None,
+        };
+        let metric = EstimatedPotentialTokenSavings::new(120, 40);
+        let savings = FamilyQuerySavingsRecord {
+            metric: &metric,
+            outcome_shape: "found",
+            language: "python",
+        };
+
+        record_family_query_metric(request.clone(), &found, Some(savings))
+            .expect("record first invocation");
+        let repeated = record_family_query_metric(request.clone(), &found, Some(savings))
+            .expect("record identical second invocation");
+        assert_eq!(repeated.query_outcomes.event_count, 2);
+        assert_eq!(repeated.query_outcomes.by_status["found"], 2);
+        assert_eq!(repeated.savings.event_count, 2);
+        assert_eq!(
+            repeated.savings.total_estimated_potential_token_savings,
+            160
+        );
+
+        let unknown = FamilyQueryOutcomeRecord {
+            status: FamilyQueryOutcomeStatus::Unknown,
+            entrypoint: FamilyQueryEntrypoint::Cli,
+            command_category: FamilyQueryCommandCategory::Find,
+            lookup_mode: FamilyQueryLookupMode::Fuzzy,
+            unknowns: &[],
+            abstention_reason: None,
+            read_plan_item_count: None,
+            source_spans_requested: false,
+            source_spans_included: false,
+            source_span_omission_count: None,
+        };
+        let rollup = record_family_query_metric(request.clone(), &unknown, None)
+            .expect("record denominator-only abstention");
+        assert_eq!(rollup.query_outcomes.event_count, 3);
+        assert_eq!(rollup.savings.event_count, 2);
+        assert_eq!(rollup.epoch, FAMILY_QUERY_METRICS_EPOCH);
+        assert!(rollup
+            .epoch_started_unix_seconds
+            .is_some_and(|value| value > 0));
+        assert_eq!(rollup.producer_version, env!("CARGO_PKG_VERSION"));
+
+        let path = family_query_metrics_file(request.clone()).expect("v2 metrics path");
+        let serialized = fs::read_to_string(&path).expect("v2 metrics JSON");
+        let value: Value = serde_json::from_str(&serialized).expect("parse v2 metrics");
+        assert_eq!(value["schema_version"], FAMILY_QUERY_METRICS_SCHEMA_VERSION);
+        assert_eq!(value["total_queries"], 3);
+        assert_eq!(value["savings_events"], 2);
+        assert!(!estimated_potential_token_savings_file(request.clone())
+            .expect("legacy savings path")
+            .exists());
+        assert!(!family_query_outcomes_file(request)
+            .expect("legacy query path")
+            .exists());
+        for forbidden in [
+            "src/routes",
+            "raw_target",
+            "query_text",
+            "source_snippet",
+            "family:python",
+            "unit:src",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "v2 query metrics leaked forbidden token {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn atomic_v2_query_metrics_never_import_or_rewrite_legacy_v1_files() {
+        let workspace = TempWorkspace::new("family-query-metrics-v2-legacy-isolation");
+        let request = repository_request(&workspace);
+        let legacy_savings_path =
+            estimated_potential_token_savings_file(request.clone()).expect("legacy savings path");
+        let legacy_queries_path =
+            family_query_outcomes_file(request.clone()).expect("legacy queries path");
+        ensure_parent_dir(&legacy_savings_path).expect("legacy metrics parent");
+        let legacy_savings =
+            r#"{"schema_version":"estimated-potential-token-savings.v1","event_count":14}"#;
+        let legacy_queries = r#"{"schema_version":"family-query-outcomes.v1","event_count":197}"#;
+        fs::write(&legacy_savings_path, legacy_savings).expect("write legacy savings sentinel");
+        fs::write(&legacy_queries_path, legacy_queries).expect("write legacy query sentinel");
+
+        let empty = family_query_metrics_rollup(request.clone()).expect("missing v2 defaults");
+        assert_eq!(empty.query_outcomes.event_count, 0);
+        assert_eq!(empty.savings.event_count, 0);
+        assert_eq!(empty.epoch_started_unix_seconds, None);
+
+        let fallback = FamilyQueryOutcomeRecord {
+            status: FamilyQueryOutcomeStatus::Fallback,
+            entrypoint: FamilyQueryEntrypoint::Mcp,
+            command_category: FamilyQueryCommandCategory::FindAnalogues,
+            lookup_mode: FamilyQueryLookupMode::Fuzzy,
+            unknowns: &[],
+            abstention_reason: None,
+            read_plan_item_count: None,
+            source_spans_requested: false,
+            source_spans_included: false,
+            source_span_omission_count: None,
+        };
+        let v2 =
+            record_family_query_metric(request, &fallback, None).expect("start isolated v2 epoch");
+        assert_eq!(v2.query_outcomes.event_count, 1);
+        assert_eq!(v2.savings.event_count, 0);
+        assert_eq!(
+            fs::read_to_string(legacy_savings_path).expect("legacy savings remains"),
+            legacy_savings
+        );
+        assert_eq!(
+            fs::read_to_string(legacy_queries_path).expect("legacy queries remains"),
+            legacy_queries
+        );
+    }
+
+    #[test]
+    fn atomic_v2_query_metrics_refuse_an_unwritable_rollup_without_v1_fallback() {
+        let workspace = TempWorkspace::new("family-query-metrics-v2-write-failure");
+        let request = repository_request(&workspace);
+        let v2_path = family_query_metrics_file(request.clone()).expect("v2 metrics path");
+        fs::create_dir_all(&v2_path).expect("occupy v2 file path with directory");
+        let found = FamilyQueryOutcomeRecord {
+            status: FamilyQueryOutcomeStatus::Found,
+            entrypoint: FamilyQueryEntrypoint::Cli,
+            command_category: FamilyQueryCommandCategory::Find,
+            lookup_mode: FamilyQueryLookupMode::Fuzzy,
+            unknowns: &[],
+            abstention_reason: None,
+            read_plan_item_count: Some(1),
+            source_spans_requested: false,
+            source_spans_included: false,
+            source_span_omission_count: None,
+        };
+        let metric = EstimatedPotentialTokenSavings::new(10, 5);
+        let result = record_family_query_metric(
+            request.clone(),
+            &found,
+            Some(FamilyQuerySavingsRecord {
+                metric: &metric,
+                outcome_shape: "found",
+                language: "python",
+            }),
+        );
+        assert!(result.is_err(), "occupied v2 path must fail");
+        assert!(!estimated_potential_token_savings_file(request.clone())
+            .expect("legacy savings path")
+            .exists());
+        assert!(!family_query_outcomes_file(request)
+            .expect("legacy query path")
+            .exists());
     }
 
     #[test]

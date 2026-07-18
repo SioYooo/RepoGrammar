@@ -964,6 +964,9 @@ full claim-input snapshots, or per-family detail. `stats` may report the
 repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
+These values and `total_queries` come from one `family-query-metrics.v2` atomic
+cohort with an explicit epoch, start timestamp, and producer version. Legacy v1
+savings and query-outcome files are excluded because their events are unpaired.
 This aggregate is all-scope: it sums savings events across every indexed
 language and every context-delivering outcome shape (found, PARTIAL_CONTEXT, and
 committed/partial alignment certificates), not only Python found families.
@@ -974,7 +977,7 @@ same totals, `measurement_kind: ESTIMATED`, the caveat, the honest
 estimated baseline/returned/potential token counts). All existing Python-scoped
 repo-shape fields are unchanged and remain the official-scope subset; the block
 carries a note pointing to that relationship. It must also include
-`query_outcome_rollup`, a local-only source-free object
+`query_outcome_rollup`, the denominator side of that same local-only source-free cohort,
 with `rollup_scope: local_query_outcomes`, aggregate event count, status,
 entrypoint, CLI command/MCP operation category, lookup-mode, typed UNKNOWN
 class/reason/mechanism/recovery buckets, read-plan count buckets, and
