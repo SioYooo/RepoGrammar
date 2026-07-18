@@ -4,11 +4,45 @@
 
 No unreleased changes.
 
+## 0.3.1 — 2026-07-19 stable channel
+
+RepoGrammar `0.3.1` is the verifier-fix patch-forward that succeeds the retained,
+unpublished `0.3.0` candidate. Its product behavior is identical to `0.3.0`; the
+only substantive change is the release-gate verifier fix below, plus the version
+advance and the release-mechanism pins. It makes no production-readiness, 1.0
+API-stability, stable-MCP-API, sound-analysis, measured-token-savings,
+runtime-equivalence, Windows-support, or expanded-language-support claim.
+Registry availability must be verified independently; this source record does not
+prove that GitHub or npm publication completed.
+
+### Fixed
+
+- Made the end-to-end payload-measure smoke self-build the product `repogrammar`
+  binary from the current workspace — `cargo build --bin repogrammar`, using the
+  executable path cargo itself reports — instead of requiring a sibling artifact
+  next to the test harness. The `0.3.0` tag run's Verify release gate panicked
+  under a fresh CI `cargo test --locked --workspace --all-features`, which does
+  not emit a standalone `target/<profile>/repogrammar` reachable from the
+  deps-hashed harness path, so the test's precondition never held and no draft
+  or npm stage was ever produced. Self-building always measures fresh current
+  source and closes the recurring stale/missing sibling-binary hazard.
+
+### Changed
+
+- Advanced the stable release authority, finalizer, and install/documentation
+  pins to `v0.3.1`, and registered the retained, unpublished `v0.3.0` candidate
+  among the failed stable versions that must never appear in the registry
+  inventory. The published `0.2.2` release and the retained `v0.2.0`/`v0.2.1`
+  candidate tags are unchanged.
+
 ## 0.3.0 — 2026-07-19 stable channel
 
 RepoGrammar `0.3.0` is the stable-channel candidate that succeeds the published
-`0.2.2`, intended to become the next published stable-channel pre-1.0 release. It
-makes no production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
+`0.2.2`, intended to become the next published stable-channel pre-1.0 release.
+Its `v0.3.0` tag run failed at the release-gate verifier and was never published;
+the tag is retained and non-reusable, and `0.3.1` is the patch-forward (see
+`docs/release/stable-v0.3.0-release-checklist.md`). It makes no
+production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
 measured-token-savings, runtime-equivalence, Windows-support, or
 expanded-language-support claim. Registry availability must be verified
 independently; this source record does not prove that GitHub or npm publication

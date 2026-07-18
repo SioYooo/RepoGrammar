@@ -347,15 +347,15 @@ jobs:
           set -euo pipefail
           test "$(npm --version)" = "11.18.0"
           cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
-            --tarball ./npm-candidate/sioyooo-repogrammar-0.3.0.tgz \
-            --expected-version 0.3.0 \
+            --tarball ./npm-candidate/sioyooo-repogrammar-0.3.1.tgz \
+            --expected-version 0.3.1 \
             > npm-candidate/candidate-manifest.recheck.json
           cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
             --pack-json npm-candidate/npm-pack.json \
             --candidate-manifest npm-candidate/candidate-manifest.recheck.json \
-            --expected-version 0.3.0
+            --expected-version 0.3.1
           set +e
-          npm stage publish ./npm-candidate/sioyooo-repogrammar-0.3.0.tgz --access public --tag latest --provenance
+          npm stage publish ./npm-candidate/sioyooo-repogrammar-0.3.1.tgz --access public --tag latest --provenance
           stage_status="$?"
           set -e
           if [ "${stage_status}" -ne 0 ]; then

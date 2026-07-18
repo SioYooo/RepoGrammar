@@ -4,18 +4,18 @@ This guide does not infer publication from its own version. Use the exact
 availability gate below; if any check fails, use source-checkout contributor
 dogfood.
 
-## 1. Verify And Acquire Exact 0.3.0
+## 1. Verify And Acquire Exact 0.3.1
 
 ```text
-npm view @sioyooo/repogrammar@0.3.0 version
+npm view @sioyooo/repogrammar@0.3.1 version
 npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.0/install.sh.sha256
-npx @sioyooo/repogrammar@0.3.0 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.1/install.sh.sha256
+npx @sioyooo/repogrammar@0.3.1 version
 ```
 
 Continue with the no-build path only when the exact-version and GitHub checks
-succeed, the dist-tag object contains exactly `"latest":"0.3.0"` and
-`"preview":"0.2.0-preview.0"`, and the pinned launcher reports `0.3.0`. The
+succeed, the dist-tag object contains exactly `"latest":"0.3.1"` and
+`"preview":"0.2.0-preview.0"`, and the pinned launcher reports `0.3.1`. The
 npm launcher requires Node/npm for acquisition, but the installed product does
 not require Rust/Cargo, Docker, the SQLite CLI, a local model, an embedding
 model, an OpenAI API key, or a cloud API. The bounded Python analyzer requires
@@ -100,7 +100,7 @@ source search for unsupported evidence.
 
 ## Supported Platforms
 
-The stable `0.3.0` binary matrix is:
+The stable `0.3.1` binary matrix is:
 
 - macOS arm64 and x86_64;
 - glibc 2.35+ Linux x86_64; and
@@ -129,7 +129,7 @@ For a safe product smoke, build the binary, use an isolated temporary HOME and
 target repository, and run `setup --dry-run --json --progress never`. Verify
 that stdout is one JSON value, stderr is empty, `.repogrammar/` is absent, and
 the temporary HOME remains empty. The complete release gate is in the
-[stable release checklist](release/stable-v0.3.0-release-checklist.md).
+[stable release checklist](release/stable-v0.3.1-release-checklist.md).
 
 ## Exact Published-Version Gate
 
@@ -137,21 +137,21 @@ First verify the exact npm version, complete npm channel mapping, and matching
 GitHub asset:
 
 ```text
-npm view @sioyooo/repogrammar@0.3.0 version
+npm view @sioyooo/repogrammar@0.3.1 version
 npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.0/install.sh.sha256
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.1/install.sh.sha256
 ```
 
 Continue only when the version and GitHub checks succeed and the dist-tag object
-contains exactly `"latest":"0.3.0"` and
+contains exactly `"latest":"0.3.1"` and
 `"preview":"0.2.0-preview.0"`. The pinned no-build path is:
 
 ```text
-npx @sioyooo/repogrammar@0.3.0 setup --project /path/to/your/repo --target auto
+npx @sioyooo/repogrammar@0.3.1 setup --project /path/to/your/repo --target auto
 ```
 
 After publication verification, unversioned `npx @sioyooo/repogrammar` uses
-npm `latest` and must resolve the same `0.3.0`. The separate `@preview` tag
+npm `latest` and must resolve the same `0.3.1`. The separate `@preview` tag
 continues to resolve immutable `0.2.0-preview.0`; use the exact stable version
 for reproducible automation.
 

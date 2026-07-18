@@ -16,7 +16,7 @@ Do not record or publish until all applicable boxes are true:
 
 - [ ] The recording starts from the intended `main` commit and states its tag.
 - [ ] If the no-build install is shown, the exact GitHub asset and npm package
-      have passed the stable `0.3.0` release checklist. Until then, record the
+      have passed the stable `0.3.1` release checklist. Until then, record the
       source-checkout acquisition path and call it contributor dogfood.
 - [ ] The disposable fixture and all CLI output are generated live from the
       current binary; no result is pasted into the terminal.
@@ -57,11 +57,11 @@ bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
 
-After `v0.3.0` artifacts and npm publication are independently
+After `v0.3.1` artifacts and npm publication are independently
 verified, replace that acquisition shot with the no-build path:
 
 ```bash
-npx @sioyooo/repogrammar@0.3.0 setup --project "$DEMO_REPO" --target codex
+npx @sioyooo/repogrammar@0.3.1 setup --project "$DEMO_REPO" --target codex
 ```
 
 That command is a recording option only after publication proof exists.
