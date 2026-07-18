@@ -291,6 +291,17 @@ pub trait GenerationRetentionStore {
     ) -> Result<GenerationPruneReport, IndexStoreError>;
 }
 
+/// Reads the RepoGrammar engine version stamped on the active generation when it
+/// was built (`index_generations.repogrammar_version`). The incremental sync
+/// preflight compares it against the running binary: after an upgrade a sync
+/// whose delta avoids the project-context gate (docs-only, inventory-only,
+/// no-op) would otherwise copy forward facts produced by the older engine and
+/// stamp the new version on the fresh generation. Returns `None` when there is
+/// no active generation to read a stamp from.
+pub trait GenerationEngineStampStore {
+    fn active_generation_engine_version(&self) -> Result<Option<String>, IndexStoreError>;
+}
+
 pub trait IndexMaintenanceStore {
     fn compact_storage(
         &self,

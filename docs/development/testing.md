@@ -1126,6 +1126,80 @@ mechanically lower), and the baseline's per-query latency measures in-process
 scoring rather than a product subprocess (near `0 ms`). Compare conditions on the
 retrieval metrics and the two safety counters, not on `matches` or latency.
 
+## Sync-equivalence oracle
+
+`repo-guard sync-equivalence` is the committed incremental/full-build
+equivalence oracle. It is the mandatory guard for every incremental-`sync`
+project-context gate rule: an incremental sync must produce a semantically
+identical active generation to a clean full rebuild over the same worktree, or
+explicitly fall back to a full rebuild. It changes no production behavior.
+
+```text
+cargo run --quiet --bin repo-guard -- sync-equivalence \
+  --fixture src/fixtures/incremental_equivalence/v1 \
+  [--scenario <id> | --all] [--bin <path-to-repogrammar>] \
+  --out <output-dir>
+```
+
+For each scenario the harness copies the committed fixture root into an
+isolated temporary workspace (isolated `HOME`/XDG/`CODEX_HOME`, tool-only
+`PATH`, telemetry disabled — identical to the product-eval harness). It builds
+state A with `init` then `resync`, applies the scenario's scripted patch, and
+runs `sync` to produce state B (incremental). It then builds a separate clean
+workspace C by applying the same patch first and running `init`+`resync`
+(clean full build). It compares canonical dumps of B and C across the product's
+own read surfaces — `files`, `units`, `families`, `family <id> --mode deep`
+(deep mode is required; compact mode returns an empty selected-evidence array so
+the family-evidence ledger would never be compared), `unknowns` — plus the
+store-port ledgers not exposed by any CLI surface: the semantic-fact multiset,
+the IR graph (nodes and edges, which have bespoke incremental copy-forward
+logic), and the repo-shape stats. When `--bin` is omitted the harness resolves
+the sibling `repogrammar` binary next to `repo-guard`. Workspaces are removed
+after each scenario. (The claim-input snapshot is intentionally not dumped
+separately: it is the union of the already-compared indexed-files, code-units,
+IR-graph, and semantic-fact surfaces.)
+
+Canonicalization strips only the sanctioned non-semantic fields: generation
+ids/timestamps (never surfaced into the compared dumps — the top-level
+`active_generation` of every response and the `unknown_inventory`'s
+`active_generation` are dropped) and the order/history-assigned
+`fact_id`/`evidence_id` sequence numbers (excluded from the fact and family-
+evidence tuples; the family-evidence `estimated_tokens` presentation field is
+also dropped). The fact tuple deliberately keeps `content_hash` (it is
+provenance-bearing — the field that distinguishes a stale retained fact from a
+correctly re-parsed one), encodes `target` Option-ness explicitly, and joins
+assumptions with the unit separator in emitted order. The single sanctioned
+semantic divergence — external TypeScript worker facts (`typescript`) retained
+by a worker-less incremental sync for unchanged files — is checked against a
+two-sided retention rule (retained facts' path unchanged and content hash
+matching the current indexed file; and no clean-only provider fact left
+unmatched) rather than by equality with the clean rebuild. `cargo_metadata`
+facts are compared by equality, since the in-binary Rust provider is
+reproducible in the clean rebuild. Every v1 scenario is worker-less, so that
+provider bucket is empty by construction; the rule is applied rather than
+blanket-ignored.
+
+Each scenario declares an `expected_outcome` (`EQUAL` or `FELL_BACK`) and, for a
+fallback, an `expected_fallback_reason`; a scenario `pass` requires the observed
+outcome and reason to match. This makes the exit-0 gate non-trivial: an
+unexpected `EQUAL` (a gate that silently regressed to the incremental path), an
+unexpected fallback (a misfiring preflight), a wrong fallback reason, or any
+`INEQUAL` all fail. The run writes `<output-dir>/sync-equivalence.json`
+(`schema: sync-equivalence.v1`): per scenario the observed `sync_mode`,
+`fallback_reason`, `equal`, `outcome`, `expected_outcome`,
+`expected_fallback_reason`, `pass`, and per-surface bounded diff samples. The
+exit status is `0` only when every requested scenario passes.
+
+The committed v1 scenarios are `java_edit`, `csharp_edit`, `docs_noop`,
+`java_add`, and `java_delete` (incremental paths, expected `EQUAL`); `tsjs_edit`,
+`mocharc_remove`, and `python_edit` (expected `FELL_BACK` via
+`project_context_changed`). The fixture carries ambient TS tests under `web/`
+that form runner families only while the root `.mocharc.json` is present, so the
+`mocharc_remove` scenario is the end-to-end regression for the Mocha-runner-config
+gate fix: if that gate regressed, the removal would run incrementally, copy
+forward the stale flag-on TS families, and diverge from the clean rebuild — a
+real inequality on top of the expected-outcome check.
+
 ## Required local gate
 
 Use the full gate before committing implementation changes:

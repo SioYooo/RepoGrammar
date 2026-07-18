@@ -37,9 +37,9 @@ use crate::ports::file_discovery::{
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
-    ActiveClaimInputSnapshot, GenerationHandle, IndexStorageLayout, IndexStore, IndexStoreError,
-    IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord,
-    IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
+    ActiveClaimInputSnapshot, GenerationEngineStampStore, GenerationHandle, IndexStorageLayout,
+    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
@@ -357,7 +357,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationEngineStampStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     sync_repository_with_optional_semantic_worker(
@@ -586,7 +586,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationEngineStampStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -616,7 +616,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationEngineStampStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -1110,7 +1110,7 @@ fn sync_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationEngineStampStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -1138,7 +1138,15 @@ fn sync_repository_with_optional_semantic_worker(
         store,
         progress,
     };
-    let preflight = incremental_sync_preflight(runtime.store, semantic_worker_configured)?;
+    let base_engine_version = runtime
+        .store
+        .active_generation_engine_version()
+        .map_err(index_store_error)?;
+    let preflight = incremental_sync_preflight(
+        runtime.store,
+        semantic_worker_configured,
+        base_engine_version.as_deref(),
+    )?;
     let Some(base_generation) = preflight.base_generation.clone() else {
         let sync_report = sync_fallback_report(None, &report, None, "missing_active_generation");
         return index_repository_full_after_discovery(
@@ -1199,6 +1207,7 @@ struct IncrementalSyncPreflight {
 fn incremental_sync_preflight(
     store: &impl IndexStore,
     semantic_worker_configured: bool,
+    base_engine_version: Option<&str>,
 ) -> Result<IncrementalSyncPreflight, RepoGrammarError> {
     let inspection = store.inspect().map_err(index_store_error)?;
     let mut fallback_reason = None;
@@ -1215,6 +1224,13 @@ fn incremental_sync_preflight(
         fallback_reason = Some("active_dirty_records".to_string());
     } else if semantic_worker_configured {
         fallback_reason = Some("semantic_worker_requires_full_rebuild".to_string());
+    } else if base_engine_version != Some(env!("CARGO_PKG_VERSION")) {
+        // The active generation was produced by a different RepoGrammar engine
+        // version than the running binary. Copy-forward would relabel its facts
+        // with the new version without reparsing, so rebuild instead. A missing
+        // stamp (`None`) is treated as a mismatch: never copy forward facts of
+        // unknown provenance.
+        fallback_reason = Some("engine_version_changed".to_string());
     }
     Ok(IncrementalSyncPreflight {
         base_generation: inspection.active_generation,
@@ -1832,6 +1848,18 @@ fn sync_path_requires_full_project_context(path: &str) -> bool {
             | "vitest.config.mjs"
             | "next.config.cjs"
             | "next.config.mjs"
+            // Mocha runner configs are discovered as TsJsConfig at the repository
+            // root (discovery.rs) and flip the global TS/JS test-runner flag in
+            // the parser project context (tsjs_has_test_runner_context). Adding,
+            // removing, or editing one changes how every TS/JS file is parsed, so
+            // it must force a full rebuild. `.mocharc.js` is already covered by
+            // the `.js` extension branch above; the remaining names are listed
+            // here explicitly so the gate mirrors the runner-flag consumption.
+            | ".mocharc.json"
+            | ".mocharc.jsonc"
+            | ".mocharc.cjs"
+            | ".mocharc.yml"
+            | ".mocharc.yaml"
             | "pyproject.toml"
             | "setup.cfg"
             | "Cargo.toml"
@@ -5027,6 +5055,140 @@ mod tests {
     }
 
     #[test]
+    fn mocharc_edit_forces_full_rebuild_fallback() {
+        // Regression: `.mocharc.*` runner configs are discovered as TsJsConfig
+        // and flip the global TS/JS test-runner flag, but they were absent from
+        // the incremental project-context gate. Editing one used to take the
+        // incremental path, copying forward facts parsed under the old runner
+        // flag while the changed file parsed under the new one. The edit must
+        // now force a full rebuild.
+        let workspace = TempWorkspace::new("indexing-mocharc-gate-sync");
+        fs::write(workspace.path().join("app.ts"), "export const value = 1;\n")
+            .expect("write TS source");
+        fs::write(
+            workspace.path().join(".mocharc.json"),
+            "{\"spec\": \"test/**/*.spec.ts\"}\n",
+        )
+        .expect("write mocharc runner config");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index TS + mocharc fixture");
+
+        fs::write(
+            workspace.path().join(".mocharc.json"),
+            "{\"spec\": \"spec/**/*.spec.ts\"}\n",
+        )
+        .expect("edit mocharc runner config");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after mocharc edit");
+        let report = synced.sync_report.expect("mocharc sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.modified_files, 1);
+    }
+
+    #[test]
+    fn sync_after_engine_version_change_forces_full_rebuild_fallback() {
+        // Regression: preflight never compared the base generation's producing
+        // engine version against the running binary, so after an upgrade a delta
+        // that avoids the project-context gate (here: a no-op) copied forward
+        // facts produced by the older engine and relabeled them with the new
+        // version. A matching version must stay incremental; a mismatch must
+        // force a full rebuild.
+        let workspace = TempWorkspace::new("indexing-engine-version-gate");
+        fs::write(
+            workspace.path().join("App.java"),
+            "class App { void run() {} }\n",
+        )
+        .expect("write Java source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Java fixture");
+
+        // Same engine version: an unchanged repository stays on the incremental
+        // path.
+        let same_version = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("no-op sync with matching engine version");
+        let same_report = same_version.sync_report.expect("same-version sync report");
+        assert_eq!(same_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(same_report.fallback_reason, None);
+
+        // Simulate an engine upgrade by rewriting the stored producing version on
+        // the now-active generation.
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
+        connection
+            .execute(
+                "UPDATE index_generations SET repogrammar_version = ?1 WHERE status = 'active'",
+                params!["0.0.0-older-engine"],
+            )
+            .expect("rewrite stored engine version");
+        drop(connection);
+
+        let after_upgrade = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("no-op sync after simulated engine upgrade");
+        let upgrade_report = after_upgrade.sync_report.expect("post-upgrade sync report");
+        assert_eq!(
+            upgrade_report.sync_mode,
+            IndexingSyncMode::FullRebuildFallback
+        );
+        assert_eq!(
+            upgrade_report.fallback_reason.as_deref(),
+            Some("engine_version_changed")
+        );
+    }
+
+    #[test]
     fn sync_project_context_gate_covers_root_and_nested_config_paths() {
         for path in [
             "package.json",
@@ -5040,6 +5202,12 @@ mod tests {
             "vitest.config.mjs",
             "next.config.cjs",
             "next.config.mjs",
+            ".mocharc.json",
+            ".mocharc.jsonc",
+            ".mocharc.js",
+            ".mocharc.cjs",
+            ".mocharc.yml",
+            ".mocharc.yaml",
             "pyproject.toml",
             "src/app.py",
             "src/conftest_helper.py",
@@ -5060,6 +5228,10 @@ mod tests {
         for path in [
             "Cargo.locked",
             "docs/Cargo.toml.md",
+            // Mocha runner configs are discovered only at the repository root, so
+            // a nested lookalike is an ordinary undiscovered file, not a gate hit.
+            "packages/app/.mocharc.json",
+            "docs/.mocharc.yaml.md",
             "src/main.go",
             "go.mod",
             "go.work",

@@ -121,7 +121,14 @@ These are intentional current behaviors or tracked deferrals, not defects:
 - **Source-inventory incremental sync is whole-project.** Any Python, TS/JS, or
   Rust source change forces a full-rebuild `sync` because import, fixture, and
   module inventories are project context. The incremental copy-forward path is
-  reserved for deltas that pass that project-context gate.
+  reserved for deltas that pass that project-context gate. That gate also forces
+  a full rebuild when a Mocha runner config (`.mocharc.json/.jsonc/.cjs/.yml/`
+  `.yaml`) changes, since these flip the global TS/JS test-runner flag, and when
+  the base generation's stored engine version differs from the running binary,
+  so a post-upgrade `sync` never copies forward facts produced by an older
+  engine. Every gate rule is guarded by the `repo-guard sync-equivalence`
+  oracle. Only Java, C#, C/C++ file-local edits and inventory-only tokens take
+  the incremental path today.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
   signal reports at most `partial` in `0.2.2`; a dedicated `ready`
   band is deferred.

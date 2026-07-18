@@ -5,7 +5,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::application::install::{managed_instruction_block, MANAGED_INSTRUCTION_VERSION};
+use repogrammar::ports::index_store::IndexStore;
 use sha2::{Digest, Sha256, Sha512};
 
 const ROOT_GUIDES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
@@ -204,6 +206,12 @@ where
             Ok(report) => CommandResult::ok(report),
             Err(error) => CommandResult::err(format!("product evaluation failed: {error}\n")),
         },
+        [command, rest @ ..] if command == "sync-equivalence" => {
+            match sync_equivalence_command(root, rest) {
+                Ok(summary) => CommandResult::ok(summary),
+                Err(error) => CommandResult::err(format!("sync-equivalence failed: {error}\n")),
+            }
+        }
         [command] if command == "check" => run_check(root),
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
@@ -317,7 +325,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -3615,6 +3623,991 @@ fn corpus_relative_path(root: &Path, absolute: &Path, original: &str) -> String 
         return original.replace('\\', "/");
     }
     original.to_string()
+}
+
+// ===========================================================================
+// Phase 4 S0: incremental/full-build equivalence oracle.
+//
+// `sync-equivalence` proves that a dependency-gated incremental `sync` produces
+// a semantically identical active generation to a clean full rebuild over the
+// same worktree, or explicitly falls back to a full rebuild. It drives the
+// product `repogrammar` binary in isolated workspaces (identical env to
+// `product-eval`) and compares canonical dumps of the product's own read
+// surfaces plus the semantic-fact ledger.
+//
+// Canonicalization strips only the sanctioned non-semantic fields: generation
+// ids/timestamps (never surfaced into the compared dumps — the top-level
+// `active_generation` of every response and the `unknown_inventory`'s
+// `active_generation` are dropped) and the order/history-assigned
+// `fact_id`/`evidence_id` sequence numbers (excluded from the fact content
+// tuple). The single sanctioned semantic divergence — provider/worker-origin
+// facts retained by a worker-less incremental sync for unchanged files — is
+// encoded explicitly: such facts are checked against the retention rule
+// (path unchanged and content hash matching the current indexed file) instead
+// of by equality with the clean rebuild. Every v1 scenario is worker-less, so
+// that provider bucket is empty by construction; the rule is nonetheless
+// applied rather than blanket-ignored.
+// ===========================================================================
+
+/// A scripted, deterministic patch applied identically to the incremental
+/// workspace (after its base build) and the clean-rebuild workspace, together
+/// with the outcome the oracle demands. A scenario passes only when the observed
+/// outcome and (for fallbacks) the fallback reason match these expectations, so
+/// an unexpected `EQUAL` (a gate that silently regressed to the incremental
+/// path), an unexpected fallback (e.g. a preflight that misfires and falls back
+/// everywhere), or a wrong fallback reason all exit non-zero.
+struct SyncEquivalenceScenario {
+    id: &'static str,
+    patch_summary: &'static str,
+    apply: fn(&Path) -> Result<(), String>,
+    expected_outcome: &'static str,
+    expected_fallback_reason: Option<&'static str>,
+}
+
+const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
+    SyncEquivalenceScenario {
+        id: "java_edit",
+        patch_summary: "modify a Java test-method body (file-local incremental path)",
+        apply: patch_java_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "csharp_edit",
+        patch_summary: "modify a C# test-method body (file-local incremental path)",
+        apply: patch_csharp_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "docs_noop",
+        patch_summary: "edit an undiscovered Markdown file (empty delta, no-op sync)",
+        apply: patch_docs_noop,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "java_add",
+        patch_summary: "add a new Java test file (incremental add path)",
+        apply: patch_java_add,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "java_delete",
+        patch_summary: "delete a Java test file (incremental remove path)",
+        apply: patch_java_delete,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "tsjs_edit",
+        patch_summary: "modify a TS ambient test body (TS source is whole-project: fallback)",
+        apply: patch_tsjs_edit,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+    },
+    SyncEquivalenceScenario {
+        id: "mocharc_remove",
+        patch_summary: "remove .mocharc.json, flipping the TS/JS test-runner flag (defect-1 fix)",
+        apply: patch_mocharc_remove,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+    },
+    SyncEquivalenceScenario {
+        id: "python_edit",
+        patch_summary: "modify a Python body (forces full rebuild today: recorded fallback)",
+        apply: patch_python_edit,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+    },
+];
+
+fn sync_equivalence_replace_once(
+    project: &Path,
+    relative: &str,
+    needle: &str,
+    replacement: &str,
+) -> Result<(), String> {
+    let path = project.join(relative);
+    let text = fs::read_to_string(&path)
+        .map_err(|_| format!("could not read scenario file '{relative}'"))?;
+    let Some(position) = text.find(needle) else {
+        return Err(format!("scenario needle not found in '{relative}'"));
+    };
+    let mut patched = String::with_capacity(text.len() + replacement.len());
+    patched.push_str(&text[..position]);
+    patched.push_str(replacement);
+    patched.push_str(&text[position + needle.len()..]);
+    fs::write(&path, patched).map_err(|_| format!("could not write scenario file '{relative}'"))
+}
+
+fn patch_java_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "service/java/OrderServiceTest.java",
+        "void placesOrder() {\n        assert true;",
+        "void placesOrder() {\n        assert 1 == 1;",
+    )
+}
+
+fn patch_csharp_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "service/csharp/CatalogTests.cs",
+        "public void ReturnsItems()\n    {\n        Assert.True(true);",
+        "public void ReturnsItems()\n    {\n        Assert.True(1 == 1);",
+    )
+}
+
+fn patch_docs_noop(project: &Path) -> Result<(), String> {
+    let path = project.join("docs/NOTES.md");
+    let mut text =
+        fs::read_to_string(&path).map_err(|_| "could not read scenario file 'docs/NOTES.md'")?;
+    text.push_str("\nAppended by the docs-only no-op scenario.\n");
+    fs::write(&path, text).map_err(|_| "could not write scenario file 'docs/NOTES.md'".to_string())
+}
+
+fn patch_tsjs_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "web/orders.spec.ts",
+        "it(\"creates an order\", () => {});",
+        "it(\"creates an order\", () => { return; });",
+    )
+}
+
+fn patch_mocharc_remove(project: &Path) -> Result<(), String> {
+    // Removing the root .mocharc.json flips the global TS/JS test-runner flag
+    // off. The ambient tests under web/ form runner families only while the flag
+    // is on, so if the gate ever regressed to the incremental path B would copy
+    // forward the stale flag-on families while the clean rebuild C would not,
+    // producing a real inequality on top of the expected-outcome check.
+    fs::remove_file(project.join(".mocharc.json"))
+        .map_err(|_| "could not delete scenario file '.mocharc.json'".to_string())
+}
+
+fn patch_python_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "analytics/app.py",
+        "return \"default\"",
+        "return \"primary\"",
+    )
+}
+
+fn patch_java_add(project: &Path) -> Result<(), String> {
+    let path = project.join("service/java/ExtraServiceTest.java");
+    fs::write(
+        &path,
+        "package com.example.orders;\n\nimport org.junit.jupiter.api.Test;\n\nclass ExtraServiceTest {\n    @Test\n    void reservesOrder() {\n        assert true;\n    }\n}\n",
+    )
+    .map_err(|_| "could not add scenario file 'service/java/ExtraServiceTest.java'".to_string())
+}
+
+fn patch_java_delete(project: &Path) -> Result<(), String> {
+    fs::remove_file(project.join("service/java/OrderServiceTest.java")).map_err(|_| {
+        "could not delete scenario file 'service/java/OrderServiceTest.java'".to_string()
+    })
+}
+
+/// Canonical serialization with recursively sorted object keys, so the compared
+/// strings are independent of the product's JSON map ordering.
+fn canonical_json_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let inner: Vec<String> = keys
+                .iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String((*key).clone()),
+                        canonical_json_string(&map[*key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(canonical_json_string).collect();
+            format!("[{}]", inner.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+fn sync_equivalence_sorted_items(value: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut items: Vec<String> = value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|array| array.iter().map(canonical_json_string).collect())
+        .unwrap_or_default();
+    items.sort();
+    items
+}
+
+/// One compared read surface's multiset difference between the incremental
+/// state (B) and the clean rebuild (C), with bounded samples.
+struct SyncEquivalenceSurfaceDiff {
+    surface: &'static str,
+    equal: bool,
+    b_only_sample: Vec<String>,
+    c_only_sample: Vec<String>,
+    note: Option<String>,
+}
+
+const SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP: usize = 8;
+
+fn sync_equivalence_multiset_diff(b: &[String], c: &[String]) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
+    for item in b {
+        *counts.entry(item.as_str()).or_default() += 1;
+    }
+    for item in c {
+        *counts.entry(item.as_str()).or_default() -= 1;
+    }
+    let mut b_only = Vec::new();
+    let mut c_only = Vec::new();
+    for (item, count) in counts {
+        if count > 0 {
+            b_only.push(item.to_string());
+        } else if count < 0 {
+            c_only.push(item.to_string());
+        }
+    }
+    b_only.truncate(SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP);
+    c_only.truncate(SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP);
+    (b_only, c_only)
+}
+
+fn sync_equivalence_surface(
+    surface: &'static str,
+    b: &[String],
+    c: &[String],
+) -> SyncEquivalenceSurfaceDiff {
+    let (b_only_sample, c_only_sample) = sync_equivalence_multiset_diff(b, c);
+    SyncEquivalenceSurfaceDiff {
+        surface,
+        equal: b_only_sample.is_empty() && c_only_sample.is_empty(),
+        b_only_sample,
+        c_only_sample,
+        note: None,
+    }
+}
+
+/// The one semantic-fact origin a worker-less clean rebuild genuinely cannot
+/// reproduce: raw facts from an external TypeScript worker (`typescript`),
+/// retained for unchanged files by a worker-less incremental sync — the design's
+/// single sanctioned divergence. `cargo_metadata` is deliberately excluded: the
+/// in-binary Rust provider runs under the identical isolated environment in both
+/// the incremental base build and the clean rebuild, so its facts are
+/// reproducible in C and must be compared by strict equality like any other
+/// local engine.
+fn sync_equivalence_is_worker_provider_origin(origin_engine: &str) -> bool {
+    origin_engine == "typescript"
+}
+
+/// Canonical content tuple of a semantic fact: every persisted field except the
+/// order/history-assigned `fact_id`/`evidence_id` (re-keyed across generations).
+/// `content_hash` IS included — it records the file content the fact was
+/// extracted from and is exactly the field that distinguishes a wrongfully
+/// retained (stale) fact from a correctly re-parsed one when all other fields
+/// coincide; in a correct incremental sync every retained fact's hash equals the
+/// current file hash, so equality with the clean rebuild still holds.
+/// `target` Option-ness is encoded explicitly (`some:`/`none`) so `None` and
+/// `Some("")` never collapse, and assumptions keep their emitted order joined by
+/// the unit separator so `["a,b"]` and `["a","b"]` cannot canonicalize alike.
+fn sync_equivalence_fact_tuple(
+    fact: &repogrammar::ports::index_store::IndexedSemanticFactRecord,
+) -> String {
+    let target = match &fact.target {
+        Some(value) => format!("some:{value}"),
+        None => "none".to_string(),
+    };
+    [
+        fact.path.clone(),
+        fact.content_hash.as_str().to_string(),
+        fact.start_byte.to_string(),
+        fact.end_byte.to_string(),
+        fact.code_unit_id.clone(),
+        fact.kind.clone(),
+        fact.subject.clone(),
+        target,
+        fact.certainty.clone(),
+        fact.origin_engine.clone(),
+        fact.origin_engine_version.clone(),
+        fact.origin_method.clone(),
+        fact.assumptions.join("\u{1f}"),
+        fact.note.clone(),
+    ]
+    .join("\u{1f}")
+}
+
+/// Store-port ledgers read through the `SqliteIndexStore` handle: the
+/// semantic-fact multiset (partitioned local vs external-worker provider), the
+/// IR graph (which has bespoke incremental copy-forward logic that a full
+/// rebuild replays differently), and the repo-shape stats. These are not exposed
+/// by any product CLI read surface.
+struct SyncEquivalenceStoreLedgers {
+    facts_local: Vec<String>,
+    facts_provider: Vec<String>,
+    provider_retained_ok: bool,
+    ir_nodes: Vec<String>,
+    ir_edges: Vec<String>,
+    repo_shape: Vec<String>,
+}
+
+fn sync_equivalence_dump_store_ledgers(
+    state_dir: &Path,
+) -> Result<SyncEquivalenceStoreLedgers, String> {
+    use std::collections::BTreeMap;
+    let store = SqliteIndexStore::new(state_dir);
+    let facts = store
+        .list_active_semantic_facts()
+        .map_err(|_| "could not read the semantic-fact ledger".to_string())?
+        .facts;
+    let file_hashes: BTreeMap<String, String> = store
+        .list_active_indexed_files()
+        .map_err(|_| "could not read the indexed-file ledger".to_string())?
+        .files
+        .into_iter()
+        .map(|file| (file.path, file.content_hash.as_str().to_string()))
+        .collect();
+    let mut facts_local = Vec::new();
+    let mut facts_provider = Vec::new();
+    let mut provider_retained_ok = true;
+    for fact in &facts {
+        let tuple = sync_equivalence_fact_tuple(fact);
+        if sync_equivalence_is_worker_provider_origin(&fact.origin_engine) {
+            let retained = file_hashes
+                .get(&fact.path)
+                .is_some_and(|hash| hash == fact.content_hash.as_str());
+            if !retained {
+                provider_retained_ok = false;
+            }
+            facts_provider.push(tuple);
+        } else {
+            facts_local.push(tuple);
+        }
+    }
+    facts_local.sort();
+    facts_provider.sort();
+
+    let ir = store
+        .list_active_ir_graph()
+        .map_err(|_| "could not read the IR graph ledger".to_string())?;
+    let mut ir_nodes: Vec<String> = ir
+        .nodes
+        .iter()
+        .map(|node| {
+            [
+                node.id.clone(),
+                node.code_unit_id.clone(),
+                node.kind.clone(),
+                node.payload_json.clone(),
+            ]
+            .join("\u{1f}")
+        })
+        .collect();
+    ir_nodes.sort();
+    let mut ir_edges: Vec<String> = ir
+        .edges
+        .iter()
+        .map(|edge| {
+            [
+                edge.from_node_id.clone(),
+                edge.to_node_id.clone(),
+                edge.label.clone(),
+            ]
+            .join("\u{1f}")
+        })
+        .collect();
+    ir_edges.sort();
+
+    let shape = store
+        .active_repo_shape_stats()
+        .map_err(|_| "could not read the repo-shape stats".to_string())?;
+    let mut repo_shape: Vec<String> = shape
+        .by_language
+        .iter()
+        .map(|language| {
+            format!(
+                "lang\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                language.language,
+                language.indexed_file_count,
+                language.indexed_code_unit_count,
+                language.eligible_code_units,
+                language.family_count,
+                language.family_member_count,
+                language.covered_code_units,
+            )
+        })
+        .collect();
+    repo_shape.push(format!(
+        "totals\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        shape.indexed_file_count,
+        shape.indexed_code_unit_count,
+        shape.semantic_fact_count,
+        shape.eligible_code_units,
+        shape.family_count,
+        shape.family_member_count,
+        shape.covered_code_units,
+    ));
+    repo_shape.sort();
+
+    Ok(SyncEquivalenceStoreLedgers {
+        facts_local,
+        facts_provider,
+        provider_retained_ok,
+        ir_nodes,
+        ir_edges,
+        repo_shape,
+    })
+}
+
+/// A canonical, order-independent dump of one active generation across the
+/// product read surfaces plus the store-port ledgers.
+struct SyncEquivalenceStateDump {
+    files: Vec<String>,
+    units: Vec<String>,
+    families: Vec<String>,
+    family_details: Vec<String>,
+    unknowns: Vec<String>,
+    facts_local: Vec<String>,
+    facts_provider: Vec<String>,
+    provider_retained_ok: bool,
+    ir_nodes: Vec<String>,
+    ir_edges: Vec<String>,
+    repo_shape: Vec<String>,
+}
+
+struct SyncEquivalenceWorkspace {
+    root: PathBuf,
+    home: PathBuf,
+    project: PathBuf,
+    tools: PathBuf,
+    binary: PathBuf,
+    python: PathBuf,
+}
+
+impl SyncEquivalenceWorkspace {
+    fn new(binary: &Path, fixture_source: &Path, label: &str) -> Result<Self, String> {
+        let root = unique_sync_equivalence_root(label);
+        let home = root.join("home");
+        let project = root.join("project");
+        let tools = root.join("tools");
+        fs::create_dir_all(&home)
+            .map_err(|_| "could not create isolated sync-equivalence HOME".to_string())?;
+        fs::create_dir_all(&project)
+            .map_err(|_| "could not create isolated sync-equivalence project".to_string())?;
+        fs::create_dir_all(&tools)
+            .map_err(|_| "could not create isolated sync-equivalence tool PATH".to_string())?;
+        let python = prepare_isolated_tool_path(&tools)?;
+        copy_dir_sorted(fixture_source, &project)?;
+        Ok(Self {
+            root,
+            home,
+            project,
+            tools,
+            binary: binary.to_path_buf(),
+            python,
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_clear()
+            .current_dir(&self.project)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env("CODEX_HOME", self.home.join(".codex"))
+            .env("PATH", &self.tools)
+            .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python)
+            .env("REPOGRAMMAR_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1");
+        command
+    }
+
+    fn project_arg(&self) -> Result<String, String> {
+        self.project
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "isolated sync-equivalence project path was not UTF-8".to_string())
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.project.join(".repogrammar")
+    }
+
+    fn run_json(&self, command: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
+        let project = self.project_arg()?;
+        let mut args: Vec<String> = vec![command.to_string(), "--project".to_string(), project];
+        args.extend(extra.iter().map(|value| (*value).to_string()));
+        let output = self
+            .command()
+            .args(&args)
+            .output()
+            .map_err(|_| format!("sync-equivalence '{command}' could not execute"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "sync-equivalence '{command}' returned a failure status"
+            ));
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| format!("sync-equivalence '{command}' output was not UTF-8"))?;
+        serde_json::from_str(stdout.trim())
+            .map_err(|_| format!("sync-equivalence '{command}' output was not JSON"))
+    }
+
+    fn init(&self) -> Result<(), String> {
+        self.run_json("init", &["--yes", "--json", "--progress", "never"])?;
+        Ok(())
+    }
+
+    fn resync(&self) -> Result<(), String> {
+        let value = self.run_json("resync", &["--json", "--progress", "never"])?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("complete") {
+            return Err("sync-equivalence 'resync' did not complete".to_string());
+        }
+        Ok(())
+    }
+
+    fn dump_state(&self) -> Result<SyncEquivalenceStateDump, String> {
+        let files_value = self.run_json("files", &["--json"])?;
+        let units_value = self.run_json("units", &["--json"])?;
+        let families_value = self.run_json("families", &["--json"])?;
+        let unknowns_value = self.run_json("unknowns", &["--json"])?;
+
+        let files = sync_equivalence_sorted_items(&files_value, "files");
+        let units = sync_equivalence_sorted_items(&units_value, "units");
+        let mut families = sync_equivalence_sorted_items(&families_value, "families");
+        for listing_unknown in sync_equivalence_sorted_items(&families_value, "unknowns") {
+            families.push(format!("list_unknown|{listing_unknown}"));
+        }
+        families.sort();
+
+        let mut family_ids: Vec<String> = families_value
+            .get("families")
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("family_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        family_ids.sort();
+        family_ids.dedup();
+        let mut family_details = Vec::new();
+        for family_id in &family_ids {
+            // `--mode deep` is required: the default compact mode returns an
+            // empty selected-evidence array, so the family-evidence ledger would
+            // never actually be compared.
+            let detail = self.run_json("family", &[family_id, "--mode", "deep", "--json"])?;
+            for key in [
+                "family",
+                "members",
+                "variation_slots",
+                "evidence",
+                "unknowns",
+            ] {
+                let value = detail.get(key).cloned().unwrap_or(serde_json::Value::Null);
+                let value = if key == "evidence" {
+                    sync_equivalence_strip_evidence_presentation(value)
+                } else {
+                    value
+                };
+                let canon = canonical_json_string(&value);
+                family_details.push(format!("{family_id}|{key}|{canon}"));
+            }
+        }
+        family_details.sort();
+
+        let mut inventory = unknowns_value
+            .get("unknown_inventory")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(map) = &mut inventory {
+            map.remove("active_generation");
+        }
+        let unknowns = vec![format!("inventory|{}", canonical_json_string(&inventory))];
+
+        let ledgers = sync_equivalence_dump_store_ledgers(&self.state_dir())?;
+        Ok(SyncEquivalenceStateDump {
+            files,
+            units,
+            families,
+            family_details,
+            unknowns,
+            facts_local: ledgers.facts_local,
+            facts_provider: ledgers.facts_provider,
+            provider_retained_ok: ledgers.provider_retained_ok,
+            ir_nodes: ledgers.ir_nodes,
+            ir_edges: ledgers.ir_edges,
+            repo_shape: ledgers.repo_shape,
+        })
+    }
+}
+
+/// Strips the non-semantic fields from deep-mode family-evidence rows: the
+/// order/history-assigned `evidence_id` (re-keyed across generations, like
+/// `fact_id`) and `estimated_tokens` (a query-presentation estimate, not
+/// persisted family state). The load-bearing rows — `code_unit_id`, `path`,
+/// `content_hash`, byte ranges, `covered_claims`, `note` — are retained and
+/// compared.
+fn sync_equivalence_strip_evidence_presentation(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sync_equivalence_strip_evidence_presentation)
+                .collect(),
+        ),
+        serde_json::Value::Object(mut map) => {
+            map.remove("evidence_id");
+            map.remove("estimated_tokens");
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+impl Drop for SyncEquivalenceWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn unique_sync_equivalence_root(label: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let sanitized: String = label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    env::temp_dir().join(format!(
+        "repogrammar-sync-equivalence-{}-{sanitized}-{nanos}-{sequence}",
+        std::process::id()
+    ))
+}
+
+struct SyncEquivalenceScenarioResult {
+    id: &'static str,
+    patch_summary: &'static str,
+    sync_mode: String,
+    fallback_reason: Option<String>,
+    equal: bool,
+    outcome: &'static str,
+    expected_outcome: &'static str,
+    expected_fallback_reason: Option<&'static str>,
+    pass: bool,
+    surfaces: Vec<SyncEquivalenceSurfaceDiff>,
+}
+
+fn sync_equivalence_compare(
+    incremental: &SyncEquivalenceStateDump,
+    clean: &SyncEquivalenceStateDump,
+) -> Vec<SyncEquivalenceSurfaceDiff> {
+    let mut surfaces = vec![
+        sync_equivalence_surface("indexed_files", &incremental.files, &clean.files),
+        sync_equivalence_surface("code_units", &incremental.units, &clean.units),
+        sync_equivalence_surface("ir_nodes", &incremental.ir_nodes, &clean.ir_nodes),
+        sync_equivalence_surface("ir_edges", &incremental.ir_edges, &clean.ir_edges),
+        sync_equivalence_surface("families", &incremental.families, &clean.families),
+        sync_equivalence_surface(
+            "family_details",
+            &incremental.family_details,
+            &clean.family_details,
+        ),
+        sync_equivalence_surface("unknown_inventory", &incremental.unknowns, &clean.unknowns),
+        sync_equivalence_surface(
+            "repo_shape_stats",
+            &incremental.repo_shape,
+            &clean.repo_shape,
+        ),
+        sync_equivalence_surface(
+            "semantic_facts_local",
+            &incremental.facts_local,
+            &clean.facts_local,
+        ),
+    ];
+    // External-worker (`typescript`) provider facts retained by a worker-less
+    // incremental sync are the one sanctioned divergence, checked against the
+    // retention rule rather than by equality with the clean rebuild. The rule is
+    // two-sided: it also fails on clean-only provider facts unmatched in the
+    // incremental state (a dropped-fact regression). In worker-less runs both
+    // buckets are empty and the surface is trivially equal.
+    let (b_only, c_only) =
+        sync_equivalence_multiset_diff(&incremental.facts_provider, &clean.facts_provider);
+    let provider_equal = incremental.provider_retained_ok && c_only.is_empty();
+    surfaces.push(SyncEquivalenceSurfaceDiff {
+        surface: "semantic_facts_provider_retained",
+        equal: provider_equal,
+        b_only_sample: if incremental.provider_retained_ok {
+            Vec::new()
+        } else {
+            b_only
+        },
+        c_only_sample: c_only,
+        note: Some(format!(
+            "incremental provider facts: {}, clean provider facts: {}, retention satisfied: {}",
+            incremental.facts_provider.len(),
+            clean.facts_provider.len(),
+            incremental.provider_retained_ok
+        )),
+    });
+    surfaces
+}
+
+/// A scenario passes only when the observed outcome matches the declared
+/// expectation and, for a fallback, the observed reason matches too. This is
+/// what makes the exit-0 gate non-trivial: an unexpected EQUAL (a regressed gate
+/// that took the incremental path), an unexpected fallback (a misfiring
+/// preflight), a wrong fallback reason, or any INEQUAL all fail.
+fn sync_equivalence_scenario_passes(
+    outcome: &str,
+    fallback_reason: Option<&str>,
+    expected_outcome: &str,
+    expected_fallback_reason: Option<&str>,
+) -> bool {
+    outcome == expected_outcome && fallback_reason == expected_fallback_reason
+}
+
+fn run_sync_equivalence_scenario(
+    binary: &Path,
+    fixture_source: &Path,
+    scenario: &SyncEquivalenceScenario,
+) -> Result<SyncEquivalenceScenarioResult, String> {
+    // Workspace A -> B: full base build, scripted patch, then incremental sync.
+    let incremental_workspace =
+        SyncEquivalenceWorkspace::new(binary, fixture_source, &format!("{}-inc", scenario.id))?;
+    incremental_workspace.init()?;
+    incremental_workspace.resync()?;
+    (scenario.apply)(&incremental_workspace.project)?;
+    let sync_value = incremental_workspace.run_json("sync", &["--json", "--progress", "never"])?;
+    let sync_mode = sync_value
+        .get("sync_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let fallback_reason = sync_value
+        .get("fallback_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let incremental_dump = incremental_workspace.dump_state()?;
+
+    // Workspace C: patch first, then a clean full build over the same worktree.
+    let clean_workspace =
+        SyncEquivalenceWorkspace::new(binary, fixture_source, &format!("{}-clean", scenario.id))?;
+    (scenario.apply)(&clean_workspace.project)?;
+    clean_workspace.init()?;
+    clean_workspace.resync()?;
+    let clean_dump = clean_workspace.dump_state()?;
+
+    let surfaces = sync_equivalence_compare(&incremental_dump, &clean_dump);
+    let equal = surfaces.iter().all(|surface| surface.equal);
+    let outcome = if !equal {
+        "INEQUAL"
+    } else if sync_mode == "full_rebuild_fallback" {
+        "FELL_BACK"
+    } else {
+        "EQUAL"
+    };
+    let pass = sync_equivalence_scenario_passes(
+        outcome,
+        fallback_reason.as_deref(),
+        scenario.expected_outcome,
+        scenario.expected_fallback_reason,
+    );
+    Ok(SyncEquivalenceScenarioResult {
+        id: scenario.id,
+        patch_summary: scenario.patch_summary,
+        sync_mode,
+        fallback_reason,
+        equal,
+        outcome,
+        expected_outcome: scenario.expected_outcome,
+        expected_fallback_reason: scenario.expected_fallback_reason,
+        pass,
+        surfaces,
+    })
+}
+
+fn sync_equivalence_report(
+    fixture: &str,
+    binary: &Path,
+    results: &[SyncEquivalenceScenarioResult],
+) -> serde_json::Value {
+    let scenarios: Vec<serde_json::Value> = results
+        .iter()
+        .map(|result| {
+            let surfaces: Vec<serde_json::Value> = result
+                .surfaces
+                .iter()
+                .map(|surface| {
+                    serde_json::json!({
+                        "surface": surface.surface,
+                        "equal": surface.equal,
+                        "b_only_sample": surface.b_only_sample,
+                        "c_only_sample": surface.c_only_sample,
+                        "note": surface.note,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "id": result.id,
+                "patch_summary": result.patch_summary,
+                "sync_mode": result.sync_mode,
+                "fallback_reason": result.fallback_reason,
+                "equal": result.equal,
+                "outcome": result.outcome,
+                "expected_outcome": result.expected_outcome,
+                "expected_fallback_reason": result.expected_fallback_reason,
+                "pass": result.pass,
+                "surfaces": surfaces,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "schema": "sync-equivalence.v1",
+        "fixture": fixture,
+        "binary": binary.to_string_lossy(),
+        "scenario_count": results.len(),
+        "all_passed": results.iter().all(|result| result.pass),
+        "scenarios": scenarios,
+    })
+}
+
+fn resolve_sync_equivalence_fixture(root: &Path, fixture: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(fixture);
+    let path = if candidate.is_absolute() {
+        candidate
+    } else {
+        root.join(candidate)
+    };
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| "fixture root is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("fixture root must be a directory".to_string());
+    }
+    fs::canonicalize(path).map_err(|_| "fixture root is unavailable".to_string())
+}
+
+fn sync_equivalence_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut fixture = None;
+    let mut out = None;
+    let mut bin = None;
+    let mut scenario: Option<String> = None;
+    let mut all = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--fixture" => fixture = Some(product_eval_take_value(args, &mut index, "--fixture")?),
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--scenario" => {
+                scenario = Some(product_eval_take_value(args, &mut index, "--scenario")?)
+            }
+            "--all" => all = true,
+            other => return Err(format!("unknown sync-equivalence argument '{other}'")),
+        }
+        index += 1;
+    }
+    let fixture = fixture.ok_or_else(|| "--fixture <path> is required".to_string())?;
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    if all && scenario.is_some() {
+        return Err("--all and --scenario are mutually exclusive".to_string());
+    }
+
+    let binary = resolve_product_binary(root, bin.as_deref())?;
+    let fixture_source = resolve_sync_equivalence_fixture(root, &fixture)?;
+    let selected: Vec<&SyncEquivalenceScenario> = match &scenario {
+        Some(id) => vec![SYNC_EQUIVALENCE_SCENARIOS
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| format!("unknown scenario '{id}'"))?],
+        None => SYNC_EQUIVALENCE_SCENARIOS.iter().collect(),
+    };
+
+    let out_dir = if Path::new(&out).is_absolute() {
+        PathBuf::from(&out)
+    } else {
+        root.join(&out)
+    };
+    fs::create_dir_all(&out_dir).map_err(|_| "could not create --out directory".to_string())?;
+
+    let mut results = Vec::new();
+    for scenario in selected {
+        results.push(run_sync_equivalence_scenario(
+            &binary,
+            &fixture_source,
+            scenario,
+        )?);
+    }
+
+    let report = sync_equivalence_report(&fixture, &binary, &results);
+    let report_path = out_dir.join("sync-equivalence.json");
+    let serialized = serde_json::to_string_pretty(&report)
+        .map_err(|_| "could not serialize the sync-equivalence report".to_string())?;
+    fs::write(&report_path, format!("{serialized}\n"))
+        .map_err(|_| "could not write the sync-equivalence report".to_string())?;
+
+    let mut summary = format!(
+        "sync-equivalence: {} scenario(s) over {}\n",
+        results.len(),
+        fixture
+    );
+    for result in &results {
+        let fallback = result
+            .fallback_reason
+            .as_deref()
+            .map(|reason| format!("[{reason}]"))
+            .unwrap_or_default();
+        summary.push_str(&format!(
+            "  {:<15} {:<22} {:<10} expected {:<10} {}\n",
+            result.id,
+            format!("{}{}", result.sync_mode, fallback),
+            result.outcome,
+            result.expected_outcome,
+            if result.pass { "PASS" } else { "FAIL" },
+        ));
+    }
+    summary.push_str(&format!("report: {}\n", report_path.display()));
+
+    let failed: Vec<&str> = results
+        .iter()
+        .filter(|result| !result.pass)
+        .map(|result| result.id)
+        .collect();
+    if failed.is_empty() {
+        Ok(summary)
+    } else {
+        Err(format!(
+            "{summary}outcome mismatch in scenario(s): {}",
+            failed.join(", ")
+        ))
+    }
 }
 
 fn product_eval_command(root: &Path, args: &[String]) -> Result<String, String> {
@@ -7928,5 +8921,200 @@ verify-stable-release-evidence --evidence-dir evidence
                 .expect("parse");
         assert_eq!(parsed_product["condition"], "product");
         assert!(parsed_product["baseline"].is_null());
+    }
+
+    #[test]
+    fn canonical_json_string_is_stable_and_discriminating() {
+        let left: serde_json::Value =
+            serde_json::from_str(r#"{"b":1,"a":[3,{"y":2,"x":1}]}"#).expect("parse left");
+        let right: serde_json::Value =
+            serde_json::from_str(r#"{"a":[3,{"x":1,"y":2}],"b":1}"#).expect("parse right");
+        assert_eq!(canonical_json_string(&left), canonical_json_string(&right));
+        let changed: serde_json::Value =
+            serde_json::from_str(r#"{"a":[3,{"x":9,"y":2}],"b":1}"#).expect("parse changed");
+        assert_ne!(
+            canonical_json_string(&left),
+            canonical_json_string(&changed)
+        );
+    }
+
+    #[test]
+    fn sync_equivalence_multiset_diff_has_teeth() {
+        let incremental = vec!["a".to_string(), "b".to_string(), "b".to_string()];
+        let clean = vec!["a".to_string(), "b".to_string()];
+        let (b_only, c_only) = sync_equivalence_multiset_diff(&incremental, &clean);
+        assert_eq!(b_only, vec!["b".to_string()]);
+        assert!(c_only.is_empty());
+
+        let (same_b, same_c) = sync_equivalence_multiset_diff(&incremental, &incremental);
+        assert!(same_b.is_empty() && same_c.is_empty());
+
+        assert!(!sync_equivalence_surface("code_units", &incremental, &clean).equal);
+        assert!(sync_equivalence_surface("code_units", &incremental, &incremental).equal);
+    }
+
+    #[test]
+    fn sync_equivalence_provider_origin_classification() {
+        // Only the external TypeScript worker is exempted from equality; the
+        // in-binary Rust provider (`cargo_metadata`) is reproducible in the clean
+        // rebuild and must be compared like any local engine.
+        assert!(sync_equivalence_is_worker_provider_origin("typescript"));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "cargo_metadata"
+        ));
+        assert!(!sync_equivalence_is_worker_provider_origin("python"));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "repogrammar-java-syntax"
+        ));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "repogrammar-tsjs-syntax"
+        ));
+    }
+
+    #[test]
+    fn sync_equivalence_scenario_pass_gate_is_not_trivially_satisfiable() {
+        // Expected EQUAL, incremental path: passes.
+        assert!(sync_equivalence_scenario_passes(
+            "EQUAL", None, "EQUAL", None
+        ));
+        // Expected FELL_BACK with a reason: passes on the exact reason.
+        assert!(sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("project_context_changed"),
+            "FELL_BACK",
+            Some("project_context_changed"),
+        ));
+        // Gate regression: an expected fallback silently ran incrementally and
+        // was (vacuously) EQUAL — must FAIL.
+        assert!(!sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            "FELL_BACK",
+            Some("project_context_changed"),
+        ));
+        // Preflight misfire: an expected-incremental scenario fell back — fail.
+        assert!(!sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("engine_version_changed"),
+            "EQUAL",
+            None,
+        ));
+        // Right outcome, wrong reason — fail.
+        assert!(!sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("engine_version_changed"),
+            "FELL_BACK",
+            Some("project_context_changed"),
+        ));
+        // Any inequality — fail regardless of expectation.
+        assert!(!sync_equivalence_scenario_passes(
+            "INEQUAL", None, "EQUAL", None
+        ));
+    }
+
+    #[test]
+    fn sync_equivalence_fact_tuple_distinguishes_hash_target_and_assumptions() {
+        use repogrammar::core::model::ContentHash;
+        use repogrammar::ports::index_store::IndexedSemanticFactRecord;
+        let base = || IndexedSemanticFactRecord {
+            fact_id: "semantic-fact:1".to_string(),
+            kind: "FRAMEWORK_ROLE".to_string(),
+            subject: "s".to_string(),
+            target: None,
+            certainty: "FRAMEWORK_HEURISTIC".to_string(),
+            origin_engine: "python".to_string(),
+            origin_engine_version: "1".to_string(),
+            origin_method: "m".to_string(),
+            assumptions: vec!["a".to_string(), "b".to_string()],
+            evidence_id: "semantic-evidence:1".to_string(),
+            code_unit_id: "unit:x".to_string(),
+            path: "x.py".to_string(),
+            content_hash: ContentHash::new(format!("sha256:{}", "a".repeat(64))).expect("hash"),
+            start_byte: 0,
+            end_byte: 10,
+            note: "n".to_string(),
+        };
+        // Sequence ids are excluded, so tuples ignore fact_id/evidence_id.
+        let mut only_ids = base();
+        only_ids.fact_id = "semantic-fact:99".to_string();
+        only_ids.evidence_id = "semantic-evidence:99".to_string();
+        assert_eq!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&only_ids)
+        );
+        // content_hash is part of the tuple (stale-fact detection).
+        let mut other_hash = base();
+        other_hash.content_hash =
+            ContentHash::new(format!("sha256:{}", "b".repeat(64))).expect("hash");
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&other_hash)
+        );
+        // target=None and target=Some("") do not collapse.
+        let mut empty_target = base();
+        empty_target.target = Some(String::new());
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&empty_target)
+        );
+        // ["a","b"] and ["a,b"] do not canonicalize alike (unit-separator join).
+        let mut joined_assumptions = base();
+        joined_assumptions.assumptions = vec!["a,b".to_string()];
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&joined_assumptions)
+        );
+    }
+
+    #[test]
+    fn resolve_sync_equivalence_fixture_requires_a_directory() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let error = resolve_sync_equivalence_fixture(manifest, "Cargo.toml")
+            .expect_err("a regular file is not a fixture root");
+        assert!(error.contains("directory"));
+        resolve_sync_equivalence_fixture(manifest, "src/fixtures/incremental_equivalence/v1")
+            .expect("committed oracle fixture resolves");
+    }
+
+    #[test]
+    fn sync_equivalence_scenario_patches_apply_to_committed_fixture() {
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/incremental_equivalence/v1");
+        for scenario in SYNC_EQUIVALENCE_SCENARIOS {
+            let scratch = unique_smoke_root().with_file_name(format!(
+                "repogrammar-sync-equivalence-patch-{}-{}",
+                std::process::id(),
+                scenario.id
+            ));
+            let project = scratch.join("project");
+            fs::create_dir_all(&project).expect("create scratch project");
+            copy_dir_sorted(&source, &project).expect("copy committed fixture");
+            (scenario.apply)(&project).unwrap_or_else(|error| panic!("{}: {error}", scenario.id));
+            let read = |relative: &str| {
+                fs::read_to_string(project.join(relative)).expect("read patched file")
+            };
+            match scenario.id {
+                "java_edit" => {
+                    assert!(read("service/java/OrderServiceTest.java").contains("assert 1 == 1;"))
+                }
+                "csharp_edit" => {
+                    assert!(read("service/csharp/CatalogTests.cs").contains("Assert.True(1 == 1);"))
+                }
+                "docs_noop" => {
+                    assert!(read("docs/NOTES.md").contains("docs-only no-op scenario"))
+                }
+                "tsjs_edit" => assert!(read("web/orders.spec.ts").contains("return;")),
+                "mocharc_remove" => assert!(!project.join(".mocharc.json").exists()),
+                "python_edit" => assert!(read("analytics/app.py").contains("return \"primary\"")),
+                "java_add" => {
+                    assert!(project.join("service/java/ExtraServiceTest.java").is_file())
+                }
+                "java_delete" => {
+                    assert!(!project.join("service/java/OrderServiceTest.java").exists())
+                }
+                other => panic!("unhandled scenario '{other}'"),
+            }
+            let _ = fs::remove_dir_all(&scratch);
+        }
     }
 }

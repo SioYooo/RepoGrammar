@@ -31,8 +31,8 @@ inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
 generation, and mark the corresponding `index_generations` row active. `index`
 and `resync` do this as full rebuilds; `sync` attempts path-level incremental
 copy-forward from the readable active generation and falls back to the full
-rebuild path when project context, worker, schema, layout, or dirty-state
-preconditions are unsafe. The
+rebuild path when project context, worker, engine-version, schema, layout, or
+dirty-state preconditions are unsafe. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
 semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
@@ -1178,3 +1178,40 @@ copied-forward worker facts, so a worker-less incremental `sync` preserves the
 base generation's provider-resolved family support for unchanged files instead
 of silently dropping it and diverging from a full rebuild. Lazy query-time
 recomputation remains future work.
+
+The project-context gate treats an added, modified, or removed non-inventory
+file as unsafe when its repo-relative path is a supported source file
+(`.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs`) or a discovered project-config file. The
+config set covers root `package.json`, `tsconfig.json`, `jsconfig.json`,
+`jest.config.{json,cjs,mjs}`, `vitest.config.{json,cjs,mjs}`,
+`next.config.{cjs,mjs}`, `pyproject.toml`, `setup.cfg`, and `Cargo.toml`/
+`Cargo.lock` at any depth, plus `conftest.py` at any depth. It also covers the
+Mocha runner configs `.mocharc.json`, `.mocharc.jsonc`, `.mocharc.cjs`,
+`.mocharc.yml`, and `.mocharc.yaml` (`.mocharc.js`/`jest.config.js`/
+`next.config.js` and other `.js` config names are already covered by the `.js`
+extension): these are discovered as TS/JS config and flip the global TS/JS
+test-runner flag in the parser project context, so adding, editing, or removing
+one must force a full rebuild rather than copy forward facts parsed under the
+old runner flag.
+
+Sync preflight also compares the base generation's stored producing engine
+version (`index_generations.repogrammar_version`) with the running binary. A
+mismatch forces a full rebuild, because copy-forward would relabel facts
+produced by an older engine with the new version without reparsing them. A base
+generation that stores no readable version stamp is treated as a mismatch:
+`sync` never copies forward facts of unknown provenance.
+
+The full-rebuild fallback reason vocabulary reported on
+`IndexingSyncReport.fallback_reason` is: `legacy_or_empty_storage_layout`,
+`unsupported_storage_schema`, `missing_active_generation`,
+`active_dirty_records`, `semantic_worker_requires_full_rebuild`,
+`engine_version_changed` (preflight, in that order), and
+`project_context_changed` (the post-delta project-context gate). Each fallback
+is a valid, recorded outcome; the incremental path is entered only when none
+apply.
+
+Every narrowing of this gate is guarded by the incremental/full-build
+equivalence oracle: for an active state and a scripted patch, `repo-guard
+sync-equivalence` requires the incremental-sync generation to be canonically
+equal to a clean full rebuild over the same worktree, or to have explicitly
+fallen back to a full rebuild. See `docs/development/testing.md`.

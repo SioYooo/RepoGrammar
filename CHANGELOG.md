@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- Closed two incremental-sync correctness gaps and added the
+  sync-equivalence oracle that proves incremental builds equal a clean
+  full rebuild. Mocha runner configs (`.mocharc.json/.jsonc/.cjs/.yml/
+  .yaml`) now force the full project-context rebuild their global
+  runner-flag effect requires, and sync preflight compares the base
+  generation's recorded engine version, falling back to a full rebuild
+  with an explicit `engine_version_changed` reason after an upgrade.
+  The new `repo-guard sync-equivalence` harness compares an incremental
+  sync against an independent clean rebuild across ten canonicalized
+  surfaces (files, units, IR graph, families, deep family evidence,
+  unknown inventory, repo-shape stats, local and provider semantic
+  facts) with per-scenario expected outcomes and fallback reasons, so a
+  regressed gate or misfiring preflight fails the suite instead of
+  passing vacuously; all eight committed scenarios pass, proving the
+  currently-incremental java/csharp paths equivalent.
+
 ### Added
 
 - Wired constraint-profile persistence into production indexing and

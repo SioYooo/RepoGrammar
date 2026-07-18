@@ -21,11 +21,11 @@ use crate::ports::family_store::{
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-    ActiveRepoShapeStats, ActiveSemanticFacts, GenerationHandle, GenerationPruneReport,
-    GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport, IndexCompactRequest,
-    IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout, IndexStorageSizeReport,
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
+    ActiveRepoShapeStats, ActiveSemanticFacts, GenerationEngineStampStore, GenerationHandle,
+    GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport,
+    IndexCompactRequest, IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout,
+    IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
     RepoShapeLanguageStats, StorageCleanReport, StorageCleanRequest, StorageInspection,
     STORAGE_SCHEMA_VERSION,
 };
@@ -1289,6 +1289,30 @@ impl IndexStore for SqliteIndexStore {
         inspection.wal_bytes = None;
         inspection.shm_bytes = None;
         Ok(inspection)
+    }
+}
+
+impl GenerationEngineStampStore for SqliteIndexStore {
+    fn active_generation_engine_version(&self) -> Result<Option<String>, IndexStoreError> {
+        self.ensure_layout()?;
+        let Some(connection) = self.try_open_mutable_database_read_only()? else {
+            return Ok(None);
+        };
+        let Some(generation_id) = active_generation_id(&connection)? else {
+            return Ok(None);
+        };
+        // A missing row or a NULL/absent stamp both map to `None` so the sync
+        // preflight treats an unstamped base generation as an engine mismatch
+        // rather than hard-erroring the whole sync.
+        connection
+            .query_row(
+                "SELECT repogrammar_version FROM index_generations WHERE generation_id = ?1",
+                params![generation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(sql_unavailable)
     }
 }
 
