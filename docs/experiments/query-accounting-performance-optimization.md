@@ -4,6 +4,7 @@ Date: 2026-07-19
 Optimization branch baseline: `v0.3.2` (`26ce59e`)
 Performance implementation measured at: `e9ad298`
 Query vocabulary v2 measured at: `ce64e8b`
+Post-install cohort measured at: `4f6259e`
 
 ## Question and preregistered safety gate
 
@@ -102,6 +103,42 @@ remain strong (`17/17` in the query-funnel audit). The remaining 17 retrieval
 misses are mostly intentional decoy collisions or sibling families tied after
 normalization; guessing among them or lowering the selection threshold is
 rejected because it would trade abstention safety for apparent yield.
+
+## Source install and post-install cohort
+
+The merged `main` source was rebuilt in release mode and installed through the
+source installer for both Codex and Claude Code. The installed shell binary,
+managed binary, Codex command alias, and release build had the same SHA-256
+digest. Both MCP configurations resolve to the managed binary. The installer
+also removed the stale NVM shim. The package version remains `0.3.2`; this is a
+source build from `main` ahead of the `v0.3.2` tag, not a newly published package
+version.
+
+The first combined install exposed a current-Claude compatibility case: an
+absent server is now reported as `No MCP server named ... Configured servers:`
+rather than with the older add-command guidance. The native absence probe now
+accepts those two exact, bounded shapes while continuing to reject arbitrary
+stderr suffixes. Targeted tests, the real Claude CLI probe, and a complete
+two-target source install passed after the fix.
+
+After a fresh resync, the atomic v2 metric epoch started at zero. Seven CLI
+`find` invocations were then recorded: the same exact `path:line` locator three
+times, one qualified fixture phrase, and three queries that safely abstained.
+The final cohort was:
+
+- `7` query events, `7` attributed to the CLI and `find`;
+- `1` found, `3` partial-context, and `3` unknown outcomes;
+- `4` context-delivering savings events and `4` returned read plans;
+- `466,135` estimated baseline tokens, `488` estimated returned tokens, and
+  `465,647` estimated potential savings.
+
+The three identical locator calls each incremented the denominator and each
+produced a partial-context event, directly confirming that repeated queries are
+not deduplicated. The resolved locator reported `match_kind: path_exact` with
+high confidence. The `by_lookup_mode: fuzzy` label is command-pipeline metadata
+for `find`, not evidence that the exact path was resolved fuzzily. All token
+figures in this cohort remain estimates; they are useful for accounting and
+coverage diagnosis but cannot satisfy the paired-measurement gate.
 
 ## Validation and remaining limits
 
