@@ -536,7 +536,8 @@ allowed.
   Default tests must not invoke real `codex` or `claude` binaries; validate
   native integration through dry-run output, command-vector construction, fake
   configurators, fake prompts, and receipt behavior. Native probe tests must
-  cover exact target-specific not-found classification, successful config
+  cover the allowlisted target-specific not-found classifications (including
+  both supported Claude Code output variants), successful config
   parsing, unexpected failed output fail-closed behavior, successful
   unrecognized output becoming a preserved malformed state without raw output
   or path leakage, no-receipt foreign entries, receipt/native missing or command
