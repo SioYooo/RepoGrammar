@@ -727,8 +727,10 @@ allowed.
   errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output with the exact
-  request/response tuple `protocol_version=1, contract_revision=1`, and prove
-  that a missing or different revision returns only the low-cardinality
+  request/response tuple `protocol_version=1, contract_revision=2`, require the
+  normal response's strict interface hash to equal `extract_interface` for the
+  same path and source, and prove that a missing or different revision returns
+  only the low-cardinality
   `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope without paths, source, or raw
   payload. They must also cover syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
@@ -1302,6 +1304,12 @@ scenario is the end-to-end regression for the Mocha-runner-config gate fix: if
 that gate regressed, the removal would run incrementally, copy forward the stale
 flag-on TS families, and diverge from the clean rebuild — a real inequality on top
 of the expected-outcome check.
+
+Application indexing tests additionally count Python frontend operations: a
+full build must persist the parse-document response hash with zero
+`extract_interface` calls, while an interface-stable body edit may call
+`extract_interface` once in sync preflight and must not call it again after the
+file is reparsed.
 
 ## Response payload byte measurement (payload-measure)
 

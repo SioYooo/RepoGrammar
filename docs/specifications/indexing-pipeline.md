@@ -811,8 +811,10 @@ compatible project analysis. Its private
 parse-document mode is used by the Rust parser adapter to get CPython
 `ast`-derived code-unit metadata without hand-written Python parsing. The
 private parse-document boundary requires the exact request/response tuple
-`protocol_version=1, contract_revision=1`. Full rebuilds and incremental
-reparses use the same gate. The current host maps missing or different response
+`protocol_version=1, contract_revision=2`. The normal response carries the
+strict `sha256:` module interface hash computed from the same source and path.
+Full rebuilds and incremental reparses use the same gate. The current host maps
+missing or different response
 revisions and mixed installations where an older worker rejects the revision-
 bearing request to typed `PythonFrontendContractMismatch`. It also classifies
 the new worker's low-cardinality response to a legacy request as that typed
@@ -1247,9 +1249,11 @@ context payload stays safely under the worker's per-request byte cap on both the
 base and the current manifest (see the payload-regime condition below).
 
 To decide this before parsing, indexing persists each Python module's interface
-hash at build time (schema v10 `python_module_interfaces`, computed by the
-frontend worker's `extract_interface` mode) and, at sync preflight for a
-Python-modified delta, re-probes each modified module's current interface hash
+hash at build time (schema v10 `python_module_interfaces`) directly from the
+private parse-document revision-2 response. The hash is computed by the same
+projection used by `extract_interface`, but build and reparse do not launch a
+second worker process. At sync preflight for a Python-modified delta, indexing
+uses `extract_interface` to probe each modified module's current interface hash
 with one bounded worker call per file. When every modified module's hash equals
 its stored base hash, the cross-file context every *other* module sees is
 byte-identical, so the modified modules reparse in isolation (with the freshly

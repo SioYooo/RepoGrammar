@@ -3,7 +3,7 @@
 use crate::core::model::{CodeUnit, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId};
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, PythonInterfaceProbe, SourceDocument,
-    SourceParser,
+    SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeSet;
 
@@ -90,6 +90,21 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.rust.parse_with_context(document, context)
             }
             crate::core::model::Language::Unknown(_) => Err(ParseError::UnsupportedLanguage),
+        }
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        match document.language {
+            crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
+                self.python.parse_with_context_output(document, context)
+            }
+            _ => self
+                .parse_with_context(document, context)
+                .map(SourceParseOutput::from_report),
         }
     }
 

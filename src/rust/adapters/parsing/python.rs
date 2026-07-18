@@ -10,7 +10,7 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    PythonInterfaceProbe, SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
 const PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION: u64 = 1;
-const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 1;
+const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 2;
 
 // A source file can legitimately produce substantially more metadata than its
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
@@ -87,41 +87,28 @@ impl PythonAstParser {
             timeout,
         }
     }
-}
 
-impl SourceParser for PythonAstParser {
-    fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
-        if is_python_project_config_path(document.path) {
-            if document.language != Language::PythonConfig {
-                return Err(ParseError::UnsupportedLanguage);
-            }
-            let response = self.parse_project_config(&document)?;
-            return parse_project_config_response(&document, &response);
-        }
-        if document.language != Language::Python {
-            return Err(ParseError::UnsupportedLanguage);
-        }
-        let output = self.parse_document(&document, None)?;
-        parse_worker_response(&document, &output.response)
-    }
-
-    fn parse_with_context(
+    fn parse_source_document(
         &self,
         document: SourceDocument<'_>,
-        context: &ParserProjectContext,
-    ) -> Result<ParseReport, ParseError> {
+        context: Option<&ParserProjectContext>,
+    ) -> Result<SourceParseOutput, ParseError> {
         if is_python_project_config_path(document.path) {
             if document.language != Language::PythonConfig {
                 return Err(ParseError::UnsupportedLanguage);
             }
             let response = self.parse_project_config(&document)?;
-            return parse_project_config_response(&document, &response);
+            return parse_project_config_response(&document, &response)
+                .map(SourceParseOutput::from_report);
         }
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
         }
-        let output = self.parse_document(&document, Some(context))?;
-        let mut report = parse_worker_response(&document, &output.response)?;
+        let output = self.parse_document(&document, context)?;
+        let ParsedPythonDocument {
+            mut report,
+            interface_hash,
+        } = parse_worker_response(&document, &output.response)?;
         if output.context_omitted {
             report.diagnostics.push(ParseDiagnostic {
                 path: document.path.to_string(),
@@ -131,7 +118,34 @@ impl SourceParser for PythonAstParser {
                     .to_string(),
             });
         }
-        Ok(report)
+        Ok(SourceParseOutput {
+            report,
+            python_interface_hash: Some(interface_hash),
+        })
+    }
+}
+
+impl SourceParser for PythonAstParser {
+    fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        self.parse_source_document(document, None)
+            .map(|output| output.report)
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        self.parse_source_document(document, Some(context))
+            .map(|output| output.report)
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        self.parse_source_document(document, Some(context))
     }
 
     fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
@@ -533,10 +547,16 @@ fn is_sha256_interface_hash(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedPythonDocument {
+    report: ParseReport,
+    interface_hash: String,
+}
+
 fn parse_worker_response(
     document: &SourceDocument<'_>,
     response: &str,
-) -> Result<ParseReport, ParseError> {
+) -> Result<ParsedPythonDocument, ParseError> {
     parse_report_response(
         document,
         response,
@@ -546,6 +566,7 @@ fn parse_worker_response(
             "contract_revision",
             "mode",
             "path",
+            "interface_hash",
             "units",
             "facts",
             "diagnostics",
@@ -609,7 +630,7 @@ fn parse_report_response(
     response: &str,
     expected_mode: &str,
     allowed_keys: &[&str],
-) -> Result<ParseReport, ParseError> {
+) -> Result<ParsedPythonDocument, ParseError> {
     if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
         return Err(ParseError::Internal(
             "python ast frontend output exceeded size limit".to_string(),
@@ -658,6 +679,14 @@ fn parse_report_response(
             "python ast frontend response envelope was invalid".to_string(),
         ));
     }
+    let interface_hash = object
+        .get("interface_hash")
+        .and_then(Value::as_str)
+        .filter(|hash| is_sha256_interface_hash(hash))
+        .ok_or_else(|| {
+            ParseError::Internal("python ast frontend interface hash was invalid".to_string())
+        })?
+        .to_string();
     let mut units = object
         .get("units")
         .and_then(Value::as_array)
@@ -706,12 +735,15 @@ fn parse_report_response(
     sort_semantic_facts(&mut semantic_facts);
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    Ok(ParseReport {
-        units,
-        ir_nodes,
-        ir_edges,
-        semantic_facts,
-        diagnostics,
+    Ok(ParsedPythonDocument {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges,
+            semantic_facts,
+            diagnostics,
+        },
+        interface_hash,
     })
 }
 
@@ -1909,6 +1941,26 @@ mod tests {
             symbol_added,
             PythonInterfaceProbe::Computed(base_hash),
             "adding a top-level symbol must change the interface hash"
+        );
+    }
+
+    #[test]
+    fn parse_document_output_carries_the_exact_interface_probe_hash() {
+        let parser = PythonAstParser::default();
+        let path = "app.py";
+        let source = "def current_tenant() -> str:\n    return \"default\"\n";
+        let output = parser
+            .parse_with_context_output(document_at(path, source), &ParserProjectContext::default())
+            .expect("parse Python document with interface metadata");
+        let probe = parser.extract_python_interface(path, source);
+
+        assert!(!output.report.units.is_empty());
+        assert_eq!(
+            output.python_interface_hash,
+            match probe {
+                PythonInterfaceProbe::Computed(hash) => Some(hash),
+                PythonInterfaceProbe::Unverified => panic!("expected verified interface probe"),
+            }
         );
     }
 
@@ -4722,7 +4774,10 @@ def _api_client():
 
         for (field, value) in [
             ("protocol_version", json!(2)),
-            ("contract_revision", json!(2)),
+            (
+                "contract_revision",
+                json!(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION + 1),
+            ),
         ] {
             let mut response = valid_response(source, vec![valid_structural_fact(source)]);
             let mut envelope: Value = serde_json::from_str(&response).expect("response JSON");
@@ -4767,6 +4822,27 @@ def _api_client():
         let mut response = valid_response(source, vec![valid_structural_fact(source)]);
         let mut value: Value = serde_json::from_str(&response).expect("response JSON");
         value["snippet"] = json!("def ok(): pass");
+        response = value.to_string();
+        assert!(matches!(
+            parse_worker_response(&document(source), &response),
+            Err(ParseError::Internal(_))
+        ));
+
+        let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+        let mut value: Value = serde_json::from_str(&response).expect("response JSON");
+        value
+            .as_object_mut()
+            .expect("response object")
+            .remove("interface_hash");
+        response = value.to_string();
+        assert!(matches!(
+            parse_worker_response(&document(source), &response),
+            Err(ParseError::Internal(_))
+        ));
+
+        let mut response = valid_response(source, vec![valid_structural_fact(source)]);
+        let mut value: Value = serde_json::from_str(&response).expect("response JSON");
+        value["interface_hash"] = json!("sha256:ABCDEF");
         response = value.to_string();
         assert!(matches!(
             parse_worker_response(&document(source), &response),
@@ -4995,6 +5071,7 @@ def _api_client():
             "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": "app.py",
+            "interface_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "units": [{
                 "name": "module",
                 "kind": "module",

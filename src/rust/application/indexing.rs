@@ -47,7 +47,7 @@ use crate::ports::index_store::{
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    PythonInterfaceProbe, SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -773,7 +773,10 @@ where
             })
             .map_err(source_store_error)?;
         parser_attempted_files += 1;
-        let parse_report = match parser.parse_with_context(
+        let SourceParseOutput {
+            report: parse_report,
+            python_interface_hash,
+        } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -784,7 +787,7 @@ where
             },
             &parser_context,
         ) {
-            Ok(report) => report,
+            Ok(output) => output,
             Err(ParseError::UnsupportedLanguage) => {
                 warnings.push(format!(
                     "parser skipped unsupported language: {}",
@@ -821,7 +824,11 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
-        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
+        record_python_module_interface_if_python(
+            session.as_mut(),
+            file,
+            python_interface_hash.as_deref(),
+        )?;
         indexed_units += parse_outcome.indexed_units;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
@@ -1542,7 +1549,10 @@ where
             })
             .map_err(source_store_error)?;
         parser_attempted_files += 1;
-        let parse_report = match parser.parse_with_context(
+        let SourceParseOutput {
+            report: parse_report,
+            python_interface_hash,
+        } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -1553,7 +1563,7 @@ where
             },
             &parser_context,
         ) {
-            Ok(report) => report,
+            Ok(output) => output,
             Err(ParseError::UnsupportedLanguage) => {
                 warnings.push(format!(
                     "parser skipped unsupported language: {}",
@@ -1590,12 +1600,15 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
-        // A reparsed `.py` module stores its freshly probed interface hash, exactly
-        // as a full rebuild would. Modified modules reached here only with an
-        // unchanged interface, so the fresh hash equals the copied-forward base
-        // hash of an unchanged module — both paths converge on the full-rebuild
-        // interface table.
-        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
+        // A reparsed `.py` module stores the interface hash returned by that same
+        // parse request. Modified modules reached here only with an unchanged
+        // interface, so the fresh hash equals the copied-forward base hash of an
+        // unchanged module — both paths converge on the full-rebuild table.
+        record_python_module_interface_if_python(
+            session.as_mut(),
+            file,
+            python_interface_hash.as_deref(),
+        )?;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
@@ -2708,27 +2721,22 @@ fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact])
     roots.into_iter().collect()
 }
 
-/// Record the interface hash of a just-parsed `.py` module (schema v10
-/// `python_module_interfaces`), so a later sync can decide whether an edit to it
-/// is file-local. Uses the same worker probe the preflight uses, so build-time
-/// and preflight hashes are computed by identical code. Non-Python files store
-/// nothing. An `Unverified` probe during a build is not fatal — the module keeps
-/// no stored hash and the next sync conservatively rebuilds — so a transient
-/// worker hiccup can never corrupt the build.
+/// Record the interface hash returned by the same parse request that produced a
+/// just-parsed `.py` module (schema v10 `python_module_interfaces`), so a later
+/// sync can decide whether an edit to it is file-local. Non-Python files and
+/// parsers that return no verified hash store nothing; the next Python sync then
+/// conservatively falls back through `python_interface_unverified`.
 fn record_python_module_interface_if_python(
     session: &mut dyn GenerationWriteSession,
-    parser: &impl SourceParser,
     file: &DiscoveredFile,
-    text: &str,
+    interface_hash: Option<&str>,
 ) -> Result<(), RepoGrammarError> {
     if file.language != DiscoveredLanguage::Python {
         return Ok(());
     }
-    if let PythonInterfaceProbe::Computed(interface_hash) =
-        parser.extract_python_interface(&file.path, text)
-    {
+    if let Some(interface_hash) = interface_hash {
         session
-            .record_python_module_interface(&file.path, &interface_hash)
+            .record_python_module_interface(&file.path, interface_hash)
             .map_err(index_store_error)?;
     }
     Ok(())
@@ -5375,6 +5383,94 @@ mod tests {
         assert!(!rendered.contains("must-not-leak"));
         assert!(!rendered.contains("worker.py"));
         assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn python_indexing_persists_parse_hash_without_a_second_interface_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingPythonParser {
+            parse_requests: AtomicUsize,
+            interface_probes: AtomicUsize,
+        }
+
+        impl SourceParser for CountingPythonParser {
+            fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                RepoGrammarSourceParser::default().parse(document)
+            }
+
+            fn parse_with_context_output(
+                &self,
+                document: SourceDocument<'_>,
+                context: &ParserProjectContext,
+            ) -> Result<SourceParseOutput, ParseError> {
+                self.parse_requests.fetch_add(1, Ordering::SeqCst);
+                RepoGrammarSourceParser::default().parse_with_context_output(document, context)
+            }
+
+            fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
+                self.interface_probes.fetch_add(1, Ordering::SeqCst);
+                RepoGrammarSourceParser::default().extract_python_interface(path, text)
+            }
+        }
+
+        let workspace = TempWorkspace::new("indexing-python-single-worker-request");
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"default\"\n",
+        )
+        .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = CountingPythonParser {
+            parse_requests: AtomicUsize::new(0),
+            interface_probes: AtomicUsize::new(0),
+        };
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python source");
+        assert_eq!(parser.parse_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(parser.interface_probes.load(Ordering::SeqCst), 0);
+        let interfaces = store
+            .active_python_module_interfaces()
+            .expect("read stored Python interface hashes");
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0].path, "app.py");
+        assert!(interfaces[0].interface_hash.starts_with("sha256:"));
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"primary\"\n",
+        )
+        .expect("edit Python function body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("incrementally sync Python body edit");
+        let report = synced.sync_report.expect("Python sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.reparsed_files, 1);
+        assert_eq!(parser.parse_requests.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            parser.interface_probes.load(Ordering::SeqCst),
+            1,
+            "only the incremental preflight may launch extract_interface"
+        );
     }
 
     #[test]
