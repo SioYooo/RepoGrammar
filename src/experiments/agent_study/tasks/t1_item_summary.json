@@ -1,0 +1,46 @@
+{
+  "task_id": "t1-fst-item-summary-a",
+  "task_type": "T1",
+  "repo_id": "py-app-template",
+  "prompt_template_id": "t1a-v1",
+  "prompt": "In this repository, add a new read-only endpoint that returns a lightweight summary for a single item. It must be a GET route whose path ends in `/summary` for a single item id, live in the same router module as the existing item detail endpoints, and follow this repository's existing conventions for that router: obtain the database session through the same session dependency the other item endpoints use, enforce the same authentication/current-user dependency the other item endpoints use, and declare a response_model. Produce the change as edits to the repository's files. Do not add new dependencies or new files unless the repository's own conventions require it. Write any explanatory text in English.",
+  "oracle": {
+    "oracle_id": "t1a-static-v1",
+    "kind": "patch_static_assert",
+    "require_changed": true,
+    "provenance": {
+      "calibrated_against_sha": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "note": "Assertions are scoped to the diff's ADDED lines (scope=added), not the whole worktree, so pre-existing SessionDep/CurrentUser/response_model in items.py cannot pre-satisfy them (adversarial review S1): the AGENT's added route code must carry the conventions. This is a proximity heuristic over added text, not proof of runtime auth enforcement or full conformance (that is the blinded reviewer's job)."
+    },
+    "assertions": [
+      {
+        "type": "any_file_matches",
+        "scope": "added",
+        "path_glob": "backend/app/api/routes/*.py",
+        "regex": "@router\\.get\\(\\s*\"[^\"]*summary\"",
+        "desc": "the added code declares a GET route whose path ends in summary"
+      },
+      {
+        "type": "any_file_matches",
+        "scope": "added",
+        "path_glob": "backend/app/api/routes/*.py",
+        "regex": "SessionDep",
+        "desc": "the added route code uses the repo SessionDep dependency"
+      },
+      {
+        "type": "any_file_matches",
+        "scope": "added",
+        "path_glob": "backend/app/api/routes/*.py",
+        "regex": "CurrentUser",
+        "desc": "the added route code uses the repo CurrentUser auth dependency"
+      },
+      {
+        "type": "any_file_matches",
+        "scope": "added",
+        "path_glob": "backend/app/api/routes/*.py",
+        "regex": "response_model\\s*=",
+        "desc": "the added route declares a response_model"
+      }
+    ]
+  }
+}

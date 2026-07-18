@@ -1,0 +1,21 @@
+{
+  "$comment": "Byte-identical tool-permission surface across all arms (design §4). The mcp__repogrammar__* entry is inert in A0 (no server configured). Bash/WebFetch/WebSearch/Task are denied so the pilot task environment is offline and leak-free; grading runs offline in the harness, so the agent never needs Bash. For the full grid, the design permits a pinned Bash(build/test) allowlist; the pilot deliberately denies Bash and documents that deviation.",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "mcp__repogrammar__repogrammar_context"
+    ],
+    "deny": [
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Task"
+    ]
+  },
+  "includeCoAuthoredBy": false,
+  "enableAllProjectMcpServers": false
+}

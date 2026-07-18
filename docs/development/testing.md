@@ -1269,6 +1269,34 @@ that gate regressed, the removal would run incrementally, copy forward the stale
 flag-on TS families, and diverge from the clean rebuild — a real inequality on top
 of the expected-outcome check.
 
+## Agent-study pilot harness (RQ5)
+
+The Phase 7 RQ5 agent-impact study has a standalone pilot harness under
+`src/experiments/agent_study/` (Python 3 stdlib only, no new dependencies). It
+is automation tooling, not product code, and is exercised independently of the
+Rust gate. See `docs/experiments/agent-study-pilot.md` for the protocol,
+pilot results, and honest caveats (N=2 proves mechanics only — no effect
+claims).
+
+- Unit tests (tree-hash equivalence to the Rust `fixture_version` hash,
+  transcript parsers, safety detectors, mechanical grader, record schema +
+  privacy guard):
+  `python3 src/experiments/agent_study/selftest.py`
+  The seeded fixture transcripts are gitignored (the `transcript*.jsonl`
+  privacy backstop covers them too); on a fresh checkout the selftest
+  regenerates them deterministically from the committed
+  `fixtures/build_fixtures.py` before running.
+- Zero-spend end-to-end pipeline check (parse → detect → grade → record → cost
+  accounting over scripted fixture transcripts, including the four seeded
+  detector runs; launches no agent and needs no network):
+  `python3 src/experiments/agent_study/driver.py --dry-run`
+
+Committed records (`agent-study-run.v1` JSONL) hold only hashes, counts, and
+repo-relative paths; raw transcripts and patches stay in a local untracked work
+base outside the repo tree (the driver refuses a `--work-base` inside the repo).
+`regrade.py` re-derives verdicts/metrics from saved transcripts with zero spend
+and writes the committed `docs/experiments/data/agent-study-regrade.v1.json`.
+
 ## Required local gate
 
 Use the full gate before committing implementation changes:
