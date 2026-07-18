@@ -1,7 +1,10 @@
 //! Persistence port for pattern-family records.
 
 use crate::core::model::{ContentHash, FamilyConstraintProfile, FamilyPrevalence};
-use crate::ports::index_store::GenerationHandle;
+use crate::ports::index_store::{
+    GenerationHandle, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+};
 
 pub const FAMILY_EVIDENCE_COVERED_CLAIMS: &[&str] =
     &["canonical", "support", "contrast", "variation", "exception"];
@@ -268,3 +271,112 @@ pub trait FamilyConstraintProfileStore {
 pub trait FamilyStoreWithProfiles: FamilyStore + FamilyConstraintProfileStore {}
 
 impl<T: FamilyStore + FamilyConstraintProfileStore + ?Sized> FamilyStoreWithProfiles for T {}
+
+/// Bounded, session-local counters an adapter exposes about a single generation
+/// build, for tests and benchmarks. `transactions` counts committed batches (the
+/// capacity commits, phase checkpoints, and the final seal), `rows_written`
+/// counts logical rows persisted, and `checkpoints` counts phase-boundary
+/// commits. All three are live counters incremented as the session runs, not
+/// values asserted by construction. Connection-open counts are measured at the
+/// adapter, not here, since one session opens exactly one connection.
+/// RepoGrammar-owned values only; carries no repository source text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteSessionStats {
+    pub transactions: usize,
+    pub rows_written: usize,
+    pub checkpoints: usize,
+}
+
+/// Single writer for one `building` generation.
+///
+/// A build opens exactly one session (see [`GenerationWriteStore`]), routes every
+/// record through it under bounded-batch transactions on one connection, and
+/// closes it with [`finish`](GenerationWriteSession::finish) (commit and seal) or
+/// [`abandon`](GenerationWriteSession::abandon) (roll back the open batch and, if
+/// a batch already committed, stamp the terminal `failed` status). The
+/// `building -> validated -> active` state machine stays on
+/// [`IndexStore::validate_generation`](crate::ports::index_store::IndexStore) and
+/// [`activate_generation`](crate::ports::index_store::IndexStore), which run after
+/// the session is finished, so they always observe fully committed data.
+///
+/// Every method mirrors the field-level and referential validation of the
+/// historical per-record store methods, so the session is invisible to build
+/// results. It is object-safe (`&mut self`, concrete record types) so build
+/// pipelines thread `&mut dyn GenerationWriteSession` uniformly.
+pub trait GenerationWriteSession {
+    /// The `building` generation this session writes into.
+    fn generation(&self) -> &GenerationHandle;
+
+    fn record_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError>;
+
+    fn remove_indexed_file(&mut self, path: &str) -> Result<(), IndexStoreError>;
+
+    fn record_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError>;
+
+    fn record_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError>;
+
+    fn record_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError>;
+
+    fn record_semantic_fact(
+        &mut self,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError>;
+
+    fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError>;
+
+    fn record_family_member(
+        &mut self,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), StoreError>;
+
+    fn record_variation_slot(
+        &mut self,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), StoreError>;
+
+    fn record_family_evidence(
+        &mut self,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), StoreError>;
+
+    fn record_family_constraint_profile(
+        &mut self,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError>;
+
+    /// Commit any open batch and checkpoint the write-ahead log at a pipeline
+    /// phase boundary, bounding WAL growth to roughly one phase rather than the
+    /// whole build. The production pipelines call it after the file/unit/IR write
+    /// phase, after the semantic-fact phase, and after the family phase.
+    /// Correctness never depends on it — a committed batch and the still-open
+    /// batch are both visible to this session's own referential reads — so a
+    /// best-effort WAL checkpoint failure is not fatal. Errors on a sealed
+    /// session.
+    fn checkpoint(&mut self) -> Result<(), IndexStoreError>;
+
+    /// Commit everything and seal the session, then run best-effort post-commit
+    /// maintenance whose failure cannot fail the committed build. The generation
+    /// stays `building` and is validated and activated through the [`IndexStore`]
+    /// state machine. A record call, `checkpoint`, or a second `finish` after the
+    /// session is sealed (by `finish` or `abandon`) is a typed error, so a build
+    /// that abandoned on one path can never silently `finish` on another.
+    fn finish(&mut self) -> Result<(), IndexStoreError>;
+
+    /// Roll back the open batch and, if a batch already committed, mark the
+    /// generation `failed` (best effort). Dropping an unsealed session performs
+    /// the same reclamation. Idempotent once sealed.
+    fn abandon(&mut self) -> Result<(), IndexStoreError>;
+
+    /// Bounded build counters for tests and benchmarks.
+    fn stats(&self) -> WriteSessionStats;
+}
+
+/// Opens the single [`GenerationWriteSession`] for a `building` generation that
+/// was created by
+/// [`IndexStore::prepare_next_generation`](crate::ports::index_store::IndexStore).
+pub trait GenerationWriteStore {
+    fn open_generation_write_session<'a>(
+        &'a self,
+        generation: &GenerationHandle,
+    ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError>;
+}

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed
+
+- Rewrote the storage write lifecycle around generation write sessions.
+  A generation build now uses one writer connection with bounded
+  2000-row immediate transactions and explicit phase checkpoints (after
+  the file/unit/IR phase, the semantic-fact phase, and the family
+  phase, each committing the open batch and running a passive WAL
+  checkpoint), replacing the per-record connection-open pattern. Every
+  per-record validation is preserved on the session connection and
+  generation validation gains a set-wide code-unit/file conformance
+  scan; whole-database integrity checking runs once per sync instead of
+  twice; abandoned builds that committed at least one batch are stamped
+  with the terminal failed status while post-finish validation or
+  activation failures truthfully leave a building generation for prune;
+  maintenance errors after sealing are non-fatal and finish after
+  abandon is a typed error. Measured at fixture scale with real
+  instrumentation: one connection open instead of one per record, and
+  a 6,200-record build dropping from 5.2 s on the granular per-record
+  API to 0.26 s in the session, with crash and fault injection tests
+  proving the active generation stays readable and unchanged.
+
 ### Added
 
 - Upgraded check/check_conformance from an advisory no-op into

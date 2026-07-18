@@ -13,11 +13,11 @@ use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativeP
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
     ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySearchSummaries,
-    ActiveFamilySummaries, FamilyConstraintProfileStore, FamilyStore, IndexedFamilyCandidateRecord,
-    IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceProjectionRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
-    StoreError, FAMILY_SEARCH_PATH_COMPONENT_CAP,
+    ActiveFamilySummaries, FamilyConstraintProfileStore, FamilyStore, GenerationWriteSession,
+    GenerationWriteStore, IndexedFamilyCandidateRecord, IndexedFamilyConstraintProfileRecord,
+    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
+    IndexedVariationSlotRecord, StoreError, WriteSessionStats, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -54,16 +54,39 @@ pub struct SqliteIndexLocation {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Test-only aggregate write instrumentation, shared between a store and every
+/// write session it opens. It measures the real number of write-session
+/// connection opens, committed transactions, and phase checkpoints across a run,
+/// so benchmarks and pipeline tests report measured figures rather than values
+/// asserted by construction. Production builds compile none of this.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct WriteInstrumentation {
+    pub connection_opens: std::sync::atomic::AtomicUsize,
+    pub transactions: std::sync::atomic::AtomicUsize,
+    pub checkpoints: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Debug, Clone)]
 pub struct SqliteIndexStore {
     state_dir: PathBuf,
+    #[cfg(test)]
+    write_instrumentation: std::sync::Arc<WriteInstrumentation>,
 }
 
 impl SqliteIndexStore {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
             state_dir: state_dir.into(),
+            #[cfg(test)]
+            write_instrumentation: std::sync::Arc::new(WriteInstrumentation::default()),
         }
+    }
+
+    /// A shared handle to this store's test-only write instrumentation.
+    #[cfg(test)]
+    pub(crate) fn write_instrumentation(&self) -> std::sync::Arc<WriteInstrumentation> {
+        std::sync::Arc::clone(&self.write_instrumentation)
     }
 
     fn database_path(&self) -> PathBuf {
@@ -690,52 +713,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         file: &IndexedFileRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&file.path)?;
-        let size_bytes = i64::try_from(file.size_bytes)
-            .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        let existing_file =
-            indexed_file_metadata(&transaction, &generation.generation_id, &file.path)?;
-        if existing_file.as_ref().is_some_and(|existing| {
-            existing.content_hash == file.content_hash.as_str()
-                && existing.size_bytes == size_bytes
-                && existing.language == file.language
-        }) {
-            transaction.commit().map_err(sql_unavailable)?;
-            return Ok(());
-        }
-        if existing_file.is_some() {
-            mark_dependents_dirty_for_path(
-                &transaction,
-                &generation.generation_id,
-                &file.path,
-                "path_replaced",
-            )?;
-            transaction
-                .execute(
-                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
-                    params![generation.generation_id, file.path],
-                )
-                .map_err(sql_unavailable)?;
-        }
-        transaction
-            .execute(
-                "INSERT INTO indexed_files \
-                 (generation_id, path, content_hash, size_bytes, language) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    generation.generation_id,
-                    file.path,
-                    file.content_hash.as_str(),
-                    size_bytes,
-                    file.language,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        transaction.commit().map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_indexed_file(file)?;
+        session.seal(false)
     }
 
     fn remove_indexed_file(
@@ -743,27 +723,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         path: &str,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(path)?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        if indexed_file_metadata(&transaction, &generation.generation_id, path)?.is_some() {
-            mark_dependents_dirty_for_path(
-                &transaction,
-                &generation.generation_id,
-                path,
-                "path_removed",
-            )?;
-            transaction
-                .execute(
-                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
-                    params![generation.generation_id, path],
-                )
-                .map_err(sql_unavailable)?;
-        }
-        transaction.commit().map_err(sql_unavailable)?;
-        let _ = run_post_commit_maintenance(&connection)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.remove_indexed_file(path)?;
+        session.seal(true)
     }
 
     fn record_code_unit(
@@ -771,55 +733,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         unit: &IndexedCodeUnitRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&unit.path)?;
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "code units")?;
-        let Some((file_hash, file_size_bytes)) = connection
-            .query_row(
-                "SELECT content_hash, size_bytes FROM indexed_files \
-                 WHERE generation_id = ?1 AND path = ?2",
-                params![generation.generation_id, unit.path],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(sql_unavailable)?
-        else {
-            return Err(invalid_record(
-                "code unit must reference an indexed file in the same generation",
-            ));
-        };
-        if file_hash != unit.content_hash.as_str() {
-            return Err(invalid_record(
-                "code unit content hash must match indexed file content hash",
-            ));
-        }
-        let start_byte = i64::try_from(unit.start_byte)
-            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
-        let end_byte = i64::try_from(unit.end_byte)
-            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
-        if end_byte > file_size_bytes {
-            return Err(invalid_record(
-                "code unit range must not exceed indexed file size",
-            ));
-        }
-        connection
-            .execute(
-                "INSERT INTO code_units \
-                 (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    generation.generation_id,
-                    unit.id,
-                    unit.path,
-                    unit.language,
-                    unit.kind,
-                    start_byte,
-                    end_byte,
-                    unit.content_hash.as_str(),
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_code_unit(unit)?;
+        session.seal(false)
     }
 
     fn record_ir_node(
@@ -827,47 +743,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         node: &IndexedIrNodeRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_index_text_field(&node.id, "IR node id")?;
-        validate_index_text_field(&node.code_unit_id, "IR node code unit id")?;
-        IrNodeKind::parse_protocol_str(&node.kind).map_err(|_| {
-            IndexStoreError::InvalidRecord("IR node kind is unsupported".to_string())
-        })?;
-        validate_empty_object_payload(&node.payload_json, "IR node payload")?;
-        if node.id != format!("ir:{}", node.code_unit_id) {
-            return Err(invalid_record(
-                "IR node id must be derived from code unit id",
-            ));
-        }
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "IR nodes")?;
-        let code_unit_exists = connection
-            .query_row(
-                "SELECT count(*) FROM code_units \
-                 WHERE generation_id = ?1 AND code_unit_id = ?2",
-                params![generation.generation_id, node.code_unit_id],
-                |row| row.get::<_, u32>(0),
-            )
-            .map_err(sql_unavailable)?;
-        if code_unit_exists != 1 {
-            return Err(invalid_record(
-                "IR node must reference an indexed code unit in the same generation",
-            ));
-        }
-        connection
-            .execute(
-                "INSERT INTO ir_nodes \
-                 (generation_id, node_id, code_unit_id, kind, payload_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    generation.generation_id,
-                    node.id,
-                    node.code_unit_id,
-                    node.kind,
-                    node.payload_json,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_ir_node(node)?;
+        session.seal(false)
     }
 
     fn record_ir_edge(
@@ -875,48 +753,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         edge: &IndexedIrEdgeRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_index_text_field(&edge.from_node_id, "IR edge from node id")?;
-        validate_index_text_field(&edge.to_node_id, "IR edge to node id")?;
-        IrEdgeLabel::parse_protocol_str(&edge.label).map_err(|_| {
-            IndexStoreError::InvalidRecord("IR edge label is unsupported".to_string())
-        })?;
-        if edge.from_node_id == edge.to_node_id {
-            return Err(invalid_record("IR edge must not point to itself"));
-        }
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "IR edges")?;
-        for (node_id, label) in [
-            (edge.from_node_id.as_str(), "from"),
-            (edge.to_node_id.as_str(), "to"),
-        ] {
-            let node_exists = connection
-                .query_row(
-                    "SELECT count(*) FROM ir_nodes \
-                     WHERE generation_id = ?1 AND node_id = ?2",
-                    params![generation.generation_id, node_id],
-                    |row| row.get::<_, u32>(0),
-                )
-                .map_err(sql_unavailable)?;
-            if node_exists != 1 {
-                return Err(IndexStoreError::InvalidRecord(format!(
-                    "IR edge must reference an indexed {label} node in the same generation"
-                )));
-            }
-        }
-        connection
-            .execute(
-                "INSERT INTO ir_edges \
-                 (generation_id, from_node_id, to_node_id, label) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    generation.generation_id,
-                    edge.from_node_id,
-                    edge.to_node_id,
-                    edge.label,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_ir_edge(edge)?;
+        session.seal(false)
     }
 
     fn record_semantic_fact(
@@ -924,117 +763,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&fact.path)?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "semantic facts")?;
-        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = connection
-            .query_row(
-                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
-                        code_units.end_byte, indexed_files.content_hash \
-                 FROM code_units \
-                 JOIN indexed_files \
-                   ON indexed_files.generation_id = code_units.generation_id \
-                  AND indexed_files.path = code_units.path \
-                 WHERE code_units.generation_id = ?1 \
-                   AND code_units.code_unit_id = ?2",
-                params![generation.generation_id, fact.code_unit_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(sql_unavailable)?
-        else {
-            return Err(invalid_record(
-                "semantic fact must reference an indexed code unit in the same generation",
-            ));
-        };
-        if unit_path != fact.path {
-            return Err(invalid_record(
-                "semantic fact evidence path must match code unit path",
-            ));
-        }
-        if unit_hash != fact.content_hash.as_str() || file_hash != fact.content_hash.as_str() {
-            return Err(invalid_record(
-                "semantic fact content hash must match indexed file and code unit",
-            ));
-        }
-        let start_byte = i64::try_from(fact.start_byte)
-            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
-        let end_byte = i64::try_from(fact.end_byte)
-            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
-        if start_byte < unit_start_byte || end_byte > unit_end_byte {
-            return Err(invalid_record(
-                "semantic fact range must stay within code unit range",
-            ));
-        }
-        let assumptions_json = serde_json::to_string(&fact.assumptions).map_err(|_| {
-            IndexStoreError::InvalidRecord("semantic fact assumptions are invalid".to_string())
-        })?;
-
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO evidence \
-                 (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
-                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    generation.generation_id,
-                    fact.evidence_id,
-                    fact.code_unit_id,
-                    fact.path,
-                    fact.content_hash.as_str(),
-                    start_byte,
-                    end_byte,
-                    fact.note,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO semantic_facts \
-                 (generation_id, fact_id, kind, subject, target, certainty, \
-                  origin_engine, origin_engine_version, origin_method, assumptions_json, evidence_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    generation.generation_id,
-                    fact.fact_id,
-                    fact.kind,
-                    fact.subject,
-                    fact.target.as_deref(),
-                    fact.certainty,
-                    fact.origin_engine,
-                    fact.origin_engine_version,
-                    fact.origin_method,
-                    assumptions_json,
-                    fact.evidence_id,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        record_derived_dependency(
-            &transaction,
-            &generation.generation_id,
-            "semantic_fact",
-            &fact.fact_id,
-            &fact.path,
-            fact.content_hash.as_str(),
-        )?;
-        record_derived_dependency(
-            &transaction,
-            &generation.generation_id,
-            "semantic_evidence",
-            &fact.evidence_id,
-            &fact.path,
-            fact.content_hash.as_str(),
-        )?;
-        transaction.commit().map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_semantic_fact(fact)?;
+        session.seal(false)
     }
 
     fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
@@ -1141,6 +872,17 @@ impl IndexStore for SqliteIndexStore {
                 "IR graph is inconsistent with indexed code units".to_string(),
             ));
         }
+        // Set-wide re-proof of the two per-record `record_code_unit` invariants
+        // that the evidence-scoped scans above never revisit for units carrying
+        // no evidence: the unit hash must equal its file's hash, and the unit
+        // range must stay within the file. This makes the activation gate a
+        // strict superset of the historical per-record enforcement.
+        if code_unit_file_conformance_violation_count(&connection, &generation.generation_id)? != 0
+        {
+            return Err(IndexStoreError::InvalidState(
+                "code units are inconsistent with indexed files".to_string(),
+            ));
+        }
         match generation_status(&connection, &generation.generation_id)?.as_deref() {
             Some("building") => {
                 let updated = connection
@@ -1183,7 +925,43 @@ impl IndexStore for SqliteIndexStore {
     }
 
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
-        self.validate_generation(generation)?;
+        // Validate exactly once per activation. The sync pipeline validates the
+        // generation immediately before activating it under the held index lock,
+        // leaving it `validated`; re-running the whole-database integrity check
+        // here would be the second full-database scan per sync. Nothing can write
+        // between validate and activate while the lock is held, so a `validated`
+        // status is authoritative and its violation scans need not be repeated.
+        // Only a not-yet-validated (`building`) generation is validated here —
+        // the direct-activate path used to seed an initial active generation
+        // hands a freshly prepared `building` row straight to activation.
+        let status = {
+            let connection = self.open_existing_generation(&generation.generation_id)?;
+            generation_status(&connection, &generation.generation_id)?
+        };
+        match status.as_deref() {
+            Some("validated") => {}
+            Some("building") => self.validate_generation(generation)?,
+            Some("active") => {
+                return Err(IndexStoreError::InvalidState(
+                    "active generation cannot be reactivated".to_string(),
+                ));
+            }
+            Some("failed") => {
+                return Err(IndexStoreError::InvalidState(
+                    "failed generation cannot be activated".to_string(),
+                ));
+            }
+            Some(other) => {
+                return Err(IndexStoreError::InvalidState(format!(
+                    "unsupported generation status: {other}"
+                )));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
         let mut connection = self.open_existing_generation(&generation.generation_id)?;
         let transaction = connection.transaction().map_err(sql_unavailable)?;
         transaction
@@ -1480,7 +1258,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         family: &IndexedFamilyRecord,
     ) -> Result<(), StoreError> {
-        record_family_sqlite(self, generation, family).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family(family)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_family_member(
@@ -1488,7 +1269,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         member: &IndexedFamilyMemberRecord,
     ) -> Result<(), StoreError> {
-        record_family_member_sqlite(self, generation, member).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_member(member)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_variation_slot(
@@ -1496,7 +1280,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         slot: &IndexedVariationSlotRecord,
     ) -> Result<(), StoreError> {
-        record_variation_slot_sqlite(self, generation, slot).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_variation_slot(slot)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_family_evidence(
@@ -1504,7 +1291,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         evidence: &IndexedFamilyEvidenceRecord,
     ) -> Result<(), StoreError> {
-        record_family_evidence_sqlite(self, generation, evidence).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_evidence(evidence)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn list_active_families(&self) -> Result<ActiveFamilies, StoreError> {
@@ -1653,8 +1443,10 @@ impl FamilyConstraintProfileStore for SqliteIndexStore {
         generation: &GenerationHandle,
         record: &IndexedFamilyConstraintProfileRecord,
     ) -> Result<(), StoreError> {
-        record_family_constraint_profile_sqlite(self, generation, record)
-            .map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_constraint_profile(record)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn show_family_constraint_profile(
@@ -1670,28 +1462,979 @@ impl FamilyConstraintProfileStore for SqliteIndexStore {
     }
 }
 
-fn record_family_constraint_profile_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    record: &IndexedFamilyConstraintProfileRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&record.family_id, "family constraint profile family id")?;
-    let profile_json = constraint_profile_to_json(&record.profile)?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(
-        &connection,
-        &generation.generation_id,
-        "family constraint profiles",
-    )?;
-    require_family_row(&connection, &generation.generation_id, &record.family_id)?;
-    connection
-        .execute(
-            "INSERT INTO family_constraint_profiles (generation_id, family_id, profile_json) \
-             VALUES (?1, ?2, ?3)",
-            params![generation.generation_id, record.family_id, profile_json],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
+/// Rows committed per bounded batch (Phase 5 design §5). Chosen so a worst-case
+/// batch (semantic facts write four rows per record) stays a few MB of WAL and a
+/// sub-100 ms commit; the session also commits at explicit phase checkpoints. A
+/// `building` generation is never read and never resumed, so this bound targets
+/// WAL size and lock-hold time, not partial-work durability.
+const WRITE_SESSION_BATCH_CAPACITY: usize = 2_000;
+
+/// Deterministic fault-injection points for the write-session fault tests. Only
+/// ever set through the `#[cfg(test)]` setter; production builds neither compile
+/// the field nor construct a variant.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InjectedWriteFault {
+    /// Fail the next record once `rows_written` has reached the threshold.
+    AfterRows(usize),
+    /// Fail a batch just before it commits.
+    BeforeCommit,
+    /// In `record_semantic_fact`, fail after the evidence insert and before the
+    /// fact insert (the mid-record seam).
+    AfterEvidenceBeforeFact,
+}
+
+/// Single writer for one `building` generation (Phase 5 design). Owns one
+/// connection with pragmas applied once, writes through bounded-batch
+/// transactions, and finally either `finish`es (commit + seal) or `abandon`s
+/// (rollback + terminal `failed` status). Every record method reproduces the
+/// field-level and referential validation of the historical per-record store
+/// methods; referential reads run on this session's own connection, which sees
+/// both committed batches and the current open batch, so the checks are at least
+/// as strong as the previous per-record SELECTs against the committed database.
+pub struct SqliteGenerationWriteSession {
+    connection: Connection,
+    generation: GenerationHandle,
+    sealed: bool,
+    batch_open: bool,
+    rows_in_batch: usize,
+    batch_capacity: usize,
+    transactions: usize,
+    rows_written: usize,
+    checkpoints: usize,
+    #[cfg(test)]
+    injected_fault: Option<InjectedWriteFault>,
+    #[cfg(test)]
+    instrumentation: std::sync::Arc<WriteInstrumentation>,
+}
+
+impl SqliteGenerationWriteSession {
+    fn open(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+    ) -> Result<Self, IndexStoreError> {
+        let connection = store.open_existing_generation(&generation.generation_id)?;
+        // Require a building generation with a grammatical, record-agnostic
+        // message (one session backs every record kind for the whole build).
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {}
+            Some(status) => {
+                return Err(IndexStoreError::InvalidState(format!(
+                    "records may only be written for building generations, found {status}"
+                )));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
+        #[cfg(test)]
+        store
+            .write_instrumentation
+            .connection_opens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Self {
+            connection,
+            generation: generation.clone(),
+            sealed: false,
+            batch_open: false,
+            rows_in_batch: 0,
+            batch_capacity: WRITE_SESSION_BATCH_CAPACITY,
+            transactions: 0,
+            rows_written: 0,
+            checkpoints: 0,
+            #[cfg(test)]
+            injected_fault: None,
+            #[cfg(test)]
+            instrumentation: store.write_instrumentation(),
+        })
+    }
+
+    fn generation_id(&self) -> &str {
+        &self.generation.generation_id
+    }
+
+    fn ensure_not_sealed(&self) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Err(IndexStoreError::InvalidState(
+                "generation write session is already sealed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Open a batch if none is active and re-assert the `building` status under
+    /// the write lock. `BEGIN IMMEDIATE` takes the write lock up front, so the
+    /// status observed here is held for the whole batch; the process-level index
+    /// lock additionally excludes any other writer, making the per-batch status
+    /// check equivalent to (not weaker than) the historical per-record check.
+    fn ensure_batch(&mut self) -> Result<(), IndexStoreError> {
+        self.check_after_rows_fault()?;
+        if self.batch_open {
+            return Ok(());
+        }
+        self.connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(sql_unavailable)?;
+        self.batch_open = true;
+        self.rows_in_batch = 0;
+        // Roll back the just-opened batch on every non-`building` outcome,
+        // including a status-read error, so the per-batch status re-assertion is
+        // never silently skipped for an open batch.
+        let status = match generation_status(&self.connection, self.generation_id()) {
+            Ok(status) => status,
+            Err(error) => {
+                self.rollback_batch();
+                return Err(error);
+            }
+        };
+        match status.as_deref() {
+            Some("building") => Ok(()),
+            Some(status) => {
+                self.rollback_batch();
+                Err(IndexStoreError::InvalidState(format!(
+                    "records may only be written for building generations, found {status}"
+                )))
+            }
+            None => {
+                self.rollback_batch();
+                Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ))
+            }
+        }
+    }
+
+    fn note_rows(&mut self, rows: usize) -> Result<(), IndexStoreError> {
+        self.rows_in_batch = self.rows_in_batch.saturating_add(rows);
+        self.rows_written = self.rows_written.saturating_add(rows);
+        if self.rows_in_batch >= self.batch_capacity {
+            self.commit_batch()?;
+        }
+        Ok(())
+    }
+
+    fn commit_batch(&mut self) -> Result<(), IndexStoreError> {
+        if !self.batch_open {
+            return Ok(());
+        }
+        self.check_before_commit_fault()?;
+        self.connection
+            .execute_batch("COMMIT")
+            .map_err(sql_unavailable)?;
+        self.batch_open = false;
+        self.rows_in_batch = 0;
+        self.transactions = self.transactions.saturating_add(1);
+        self.instrument_transaction();
+        Ok(())
+    }
+
+    fn rollback_batch(&mut self) {
+        if self.batch_open {
+            let _ = self.connection.execute_batch("ROLLBACK");
+            self.batch_open = false;
+            self.rows_in_batch = 0;
+        }
+    }
+
+    /// Best-effort terminal status write for an abandoned build that already
+    /// persisted rows. Purely additive: the schema already allows `failed`,
+    /// `validate_generation` refuses it, and prune deletes any non-active
+    /// generation, so a `failed` row is inert. It is applied only when at least
+    /// one batch committed (`transactions > 0`); a session that rolled back its
+    /// sole open batch persisted nothing, so its generation stays a pristine,
+    /// reusable `building` row. This keeps the granular per-record store methods
+    /// (each a one-shot session) from stamping `failed` on a mere field- or
+    /// referential-validation rejection.
+    fn mark_failed_if_persisted(&self) {
+        if self.transactions == 0 {
+            return;
+        }
+        let _ = self.connection.execute(
+            "UPDATE index_generations SET status = 'failed' \
+             WHERE generation_id = ?1 AND status = 'building'",
+            params![self.generation.generation_id],
+        );
+    }
+
+    /// Commit the final batch, seal the session, then optionally run best-effort
+    /// post-commit maintenance. Sealing happens **before** maintenance so that a
+    /// transient `PRAGMA optimize`/`wal_checkpoint` failure over already-committed
+    /// rows cannot leave the session unsealed and let `Drop` stamp a durable
+    /// build `failed`. A second seal (after `finish` or `abandon`) is a typed
+    /// error rather than a silent success, closing the abandon-then-finish
+    /// footgun. `run_maintenance` is true for a whole-build `finish` and for the
+    /// granular `remove_indexed_file` (which historically ran maintenance) and
+    /// false for the other granular one-shot record paths (which historically ran
+    /// none), so per-record maintenance is not newly introduced.
+    fn seal(&mut self, run_maintenance: bool) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Err(IndexStoreError::InvalidState(
+                "generation write session is already sealed".to_string(),
+            ));
+        }
+        self.commit_batch()?;
+        self.sealed = true;
+        if run_maintenance {
+            let _ = run_post_commit_maintenance(&self.connection);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn instrument_transaction(&self) {
+        self.instrumentation
+            .transactions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn instrument_transaction(&self) {}
+
+    #[cfg(test)]
+    fn instrument_checkpoint(&self) {
+        self.instrumentation
+            .checkpoints
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn instrument_checkpoint(&self) {}
+
+    fn write_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&file.path)?;
+        let size_bytes = i64::try_from(file.size_bytes)
+            .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?;
+        self.ensure_batch()?;
+        let existing_file =
+            indexed_file_metadata(&self.connection, self.generation_id(), &file.path)?;
+        if existing_file.as_ref().is_some_and(|existing| {
+            existing.content_hash == file.content_hash.as_str()
+                && existing.size_bytes == size_bytes
+                && existing.language == file.language
+        }) {
+            return Ok(());
+        }
+        let mut rows = 0usize;
+        if existing_file.is_some() {
+            mark_dependents_dirty_for_path(
+                &self.connection,
+                self.generation_id(),
+                &file.path,
+                "path_replaced",
+            )?;
+            self.connection
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![self.generation.generation_id, file.path],
+                )
+                .map_err(sql_unavailable)?;
+            rows += 1;
+        }
+        self.connection
+            .execute(
+                "INSERT INTO indexed_files \
+                 (generation_id, path, content_hash, size_bytes, language) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    self.generation.generation_id,
+                    file.path,
+                    file.content_hash.as_str(),
+                    size_bytes,
+                    file.language,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        rows += 1;
+        self.note_rows(rows)
+    }
+
+    fn write_remove_indexed_file(&mut self, path: &str) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(path)?;
+        self.ensure_batch()?;
+        if indexed_file_metadata(&self.connection, self.generation_id(), path)?.is_some() {
+            mark_dependents_dirty_for_path(
+                &self.connection,
+                self.generation_id(),
+                path,
+                "path_removed",
+            )?;
+            self.connection
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![self.generation.generation_id, path],
+                )
+                .map_err(sql_unavailable)?;
+            self.note_rows(1)?;
+        }
+        Ok(())
+    }
+
+    fn write_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&unit.path)?;
+        let start_byte = i64::try_from(unit.start_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(unit.end_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        self.ensure_batch()?;
+        let Some((file_hash, file_size_bytes)) = self
+            .connection
+            .query_row(
+                "SELECT content_hash, size_bytes FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = ?2",
+                params![self.generation.generation_id, unit.path],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "code unit must reference an indexed file in the same generation",
+            ));
+        };
+        if file_hash != unit.content_hash.as_str() {
+            return Err(invalid_record(
+                "code unit content hash must match indexed file content hash",
+            ));
+        }
+        if end_byte > file_size_bytes {
+            return Err(invalid_record(
+                "code unit range must not exceed indexed file size",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO code_units \
+                 (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    self.generation.generation_id,
+                    unit.id,
+                    unit.path,
+                    unit.language,
+                    unit.kind,
+                    start_byte,
+                    end_byte,
+                    unit.content_hash.as_str(),
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&node.id, "IR node id")?;
+        validate_index_text_field(&node.code_unit_id, "IR node code unit id")?;
+        IrNodeKind::parse_protocol_str(&node.kind).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR node kind is unsupported".to_string())
+        })?;
+        validate_empty_object_payload(&node.payload_json, "IR node payload")?;
+        if node.id != format!("ir:{}", node.code_unit_id) {
+            return Err(invalid_record(
+                "IR node id must be derived from code unit id",
+            ));
+        }
+        self.ensure_batch()?;
+        let code_unit_exists = self
+            .connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND code_unit_id = ?2",
+                params![self.generation.generation_id, node.code_unit_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(sql_unavailable)?;
+        if code_unit_exists != 1 {
+            return Err(invalid_record(
+                "IR node must reference an indexed code unit in the same generation",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO ir_nodes \
+                 (generation_id, node_id, code_unit_id, kind, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    self.generation.generation_id,
+                    node.id,
+                    node.code_unit_id,
+                    node.kind,
+                    node.payload_json,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&edge.from_node_id, "IR edge from node id")?;
+        validate_index_text_field(&edge.to_node_id, "IR edge to node id")?;
+        IrEdgeLabel::parse_protocol_str(&edge.label).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR edge label is unsupported".to_string())
+        })?;
+        if edge.from_node_id == edge.to_node_id {
+            return Err(invalid_record("IR edge must not point to itself"));
+        }
+        self.ensure_batch()?;
+        for (node_id, label) in [
+            (edge.from_node_id.as_str(), "from"),
+            (edge.to_node_id.as_str(), "to"),
+        ] {
+            let node_exists = self
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM ir_nodes \
+                     WHERE generation_id = ?1 AND node_id = ?2",
+                    params![self.generation.generation_id, node_id],
+                    |row| row.get::<_, u32>(0),
+                )
+                .map_err(sql_unavailable)?;
+            if node_exists != 1 {
+                return Err(IndexStoreError::InvalidRecord(format!(
+                    "IR edge must reference an indexed {label} node in the same generation"
+                )));
+            }
+        }
+        self.connection
+            .execute(
+                "INSERT INTO ir_edges \
+                 (generation_id, from_node_id, to_node_id, label) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    edge.from_node_id,
+                    edge.to_node_id,
+                    edge.label,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_semantic_fact(
+        &mut self,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&fact.path)?;
+        let start_byte = i64::try_from(fact.start_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(fact.end_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        let assumptions_json = serde_json::to_string(&fact.assumptions).map_err(|_| {
+            IndexStoreError::InvalidRecord("semantic fact assumptions are invalid".to_string())
+        })?;
+        self.ensure_batch()?;
+        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = self
+            .connection
+            .query_row(
+                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
+                        code_units.end_byte, indexed_files.content_hash \
+                 FROM code_units \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = code_units.generation_id \
+                  AND indexed_files.path = code_units.path \
+                 WHERE code_units.generation_id = ?1 \
+                   AND code_units.code_unit_id = ?2",
+                params![self.generation.generation_id, fact.code_unit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "semantic fact must reference an indexed code unit in the same generation",
+            ));
+        };
+        if unit_path != fact.path {
+            return Err(invalid_record(
+                "semantic fact evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != fact.content_hash.as_str() || file_hash != fact.content_hash.as_str() {
+            return Err(invalid_record(
+                "semantic fact content hash must match indexed file and code unit",
+            ));
+        }
+        if start_byte < unit_start_byte || end_byte > unit_end_byte {
+            return Err(invalid_record(
+                "semantic fact range must stay within code unit range",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    self.generation.generation_id,
+                    fact.evidence_id,
+                    fact.code_unit_id,
+                    fact.path,
+                    fact.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    fact.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.check_after_evidence_before_fact_fault()?;
+        self.connection
+            .execute(
+                "INSERT INTO semantic_facts \
+                 (generation_id, fact_id, kind, subject, target, certainty, \
+                  origin_engine, origin_engine_version, origin_method, assumptions_json, evidence_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    self.generation.generation_id,
+                    fact.fact_id,
+                    fact.kind,
+                    fact.subject,
+                    fact.target.as_deref(),
+                    fact.certainty,
+                    fact.origin_engine,
+                    fact.origin_engine_version,
+                    fact.origin_method,
+                    assumptions_json,
+                    fact.evidence_id,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "semantic_fact",
+            &fact.fact_id,
+            &fact.path,
+            fact.content_hash.as_str(),
+        )?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "semantic_evidence",
+            &fact.evidence_id,
+            &fact.path,
+            fact.content_hash.as_str(),
+        )?;
+        self.note_rows(4)
+    }
+
+    fn write_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&family.family_id, "family id")?;
+        validate_family_classification(&family.classification)?;
+        let prevalence = &family.prevalence;
+        if prevalence.classification_reason.trim().is_empty() {
+            return Err(invalid_record(
+                "family classification reason must not be empty",
+            ));
+        }
+        let eligible_peer_count =
+            family_prevalence_count_param(prevalence.eligible_peer_count, "eligible peer count")?;
+        let supported_member_count = family_prevalence_count_param(
+            prevalence.supported_member_count,
+            "supported member count",
+        )?;
+        let competing_ready_family_count = family_prevalence_count_param(
+            prevalence.competing_ready_family_count,
+            "competing ready family count",
+        )?;
+        let largest_competing_support = family_prevalence_count_param(
+            prevalence.largest_competing_support,
+            "largest competing support",
+        )?;
+        let blocked_peer_count =
+            family_prevalence_count_param(prevalence.blocked_peer_count, "blocked peer count")?;
+        let unsupported_peer_count = family_prevalence_count_param(
+            prevalence.unsupported_peer_count,
+            "unsupported peer count",
+        )?;
+        self.ensure_batch()?;
+        self.connection
+            .execute(
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    self.generation.generation_id,
+                    family.family_id,
+                    family.classification,
+                    eligible_peer_count,
+                    supported_member_count,
+                    prevalence.coverage_ratio,
+                    competing_ready_family_count,
+                    largest_competing_support,
+                    blocked_peer_count,
+                    unsupported_peer_count,
+                    prevalence.classification_reason,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_family_member(
+        &mut self,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&member.family_id, "family member family id")?;
+        validate_index_text_field(&member.code_unit_id, "family member code unit id")?;
+        validate_index_text_field(&member.role, "family member role")?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &member.family_id)?;
+        require_code_unit_row(&self.connection, self.generation_id(), &member.code_unit_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO family_members (generation_id, family_id, code_unit_id, role) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    member.family_id,
+                    member.code_unit_id,
+                    member.role,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_variation_slot(
+        &mut self,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&slot.family_id, "variation slot family id")?;
+        validate_index_text_field(&slot.slot_id, "variation slot id")?;
+        validate_index_text_field(&slot.description, "variation slot description")?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &slot.family_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO variation_slots (generation_id, family_id, slot_id, description) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    slot.family_id,
+                    slot.slot_id,
+                    slot.description,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_family_evidence(
+        &mut self,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
+        validate_index_text_field(&evidence.family_id, "family evidence family id")?;
+        validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
+        validate_family_evidence_covered_claims(&evidence.covered_claims)?;
+        validate_repo_relative_path(&evidence.path)?;
+        validate_index_text_field(&evidence.note, "family evidence note")?;
+        let start_byte = i64::try_from(evidence.start_byte)
+            .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(evidence.end_byte)
+            .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+        if start_byte > end_byte {
+            return Err(invalid_record(
+                "family evidence range start must not exceed end",
+            ));
+        }
+        let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &evidence.family_id)?;
+        let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
+            code_unit_evidence_bounds(
+                &self.connection,
+                self.generation_id(),
+                &evidence.code_unit_id,
+            )?;
+        if unit_path != evidence.path {
+            return Err(invalid_record(
+                "family evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != evidence.content_hash.as_str()
+            || file_hash != evidence.content_hash.as_str()
+        {
+            return Err(invalid_record(
+                "family evidence content hash must match indexed file and code unit",
+            ));
+        }
+        if start_byte < unit_start_byte || end_byte > unit_end_byte || end_byte > file_size {
+            return Err(invalid_record(
+                "family evidence range must stay within code unit range",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    self.generation.generation_id,
+                    evidence.evidence_id,
+                    evidence.family_id,
+                    evidence.code_unit_id,
+                    covered_claims_json,
+                    evidence.path,
+                    evidence.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    evidence.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "family",
+            &evidence.family_id,
+            &evidence.path,
+            evidence.content_hash.as_str(),
+        )?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "family_evidence",
+            &evidence.evidence_id,
+            &evidence.path,
+            evidence.content_hash.as_str(),
+        )?;
+        self.note_rows(3)
+    }
+
+    fn write_family_constraint_profile(
+        &mut self,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&record.family_id, "family constraint profile family id")?;
+        let profile_json = constraint_profile_to_json(&record.profile)?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &record.family_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO family_constraint_profiles (generation_id, family_id, profile_json) \
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    self.generation.generation_id,
+                    record.family_id,
+                    profile_json
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    #[cfg(test)]
+    fn check_after_rows_fault(&mut self) -> Result<(), IndexStoreError> {
+        if let Some(InjectedWriteFault::AfterRows(threshold)) = self.injected_fault {
+            if self.rows_written >= threshold {
+                self.injected_fault = None;
+                return Err(IndexStoreError::InvalidState(
+                    "injected write-session fault after rows".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_after_rows_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn check_before_commit_fault(&mut self) -> Result<(), IndexStoreError> {
+        if self.injected_fault == Some(InjectedWriteFault::BeforeCommit) {
+            self.injected_fault = None;
+            return Err(IndexStoreError::InvalidState(
+                "injected write-session fault before commit".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_before_commit_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn check_after_evidence_before_fact_fault(&mut self) -> Result<(), IndexStoreError> {
+        if self.injected_fault == Some(InjectedWriteFault::AfterEvidenceBeforeFact) {
+            self.injected_fault = None;
+            return Err(IndexStoreError::InvalidState(
+                "injected write-session fault after evidence before fact".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_after_evidence_before_fact_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_fault(&mut self, fault: InjectedWriteFault) {
+        self.injected_fault = Some(fault);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_is_open(&self) -> bool {
+        self.batch_open
+    }
+}
+
+impl GenerationWriteSession for SqliteGenerationWriteSession {
+    fn generation(&self) -> &GenerationHandle {
+        &self.generation
+    }
+
+    fn record_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_indexed_file(file)
+    }
+
+    fn remove_indexed_file(&mut self, path: &str) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_remove_indexed_file(path)
+    }
+
+    fn record_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_code_unit(unit)
+    }
+
+    fn record_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_ir_node(node)
+    }
+
+    fn record_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_ir_edge(edge)
+    }
+
+    fn record_semantic_fact(
+        &mut self,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_semantic_fact(fact)
+    }
+
+    fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family(family).map_err(family_store_error)
+    }
+
+    fn record_family_member(
+        &mut self,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_member(member).map_err(family_store_error)
+    }
+
+    fn record_variation_slot(
+        &mut self,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_variation_slot(slot).map_err(family_store_error)
+    }
+
+    fn record_family_evidence(
+        &mut self,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_evidence(evidence)
+            .map_err(family_store_error)
+    }
+
+    fn record_family_constraint_profile(
+        &mut self,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_constraint_profile(record)
+            .map_err(family_store_error)
+    }
+
+    fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.commit_batch()?;
+        self.checkpoints = self.checkpoints.saturating_add(1);
+        self.instrument_checkpoint();
+        // Checkpoint committed frames back into the main database so WAL growth
+        // is bounded to roughly one phase rather than the whole build. This is a
+        // best-effort optimization over already-committed data, so a transient
+        // failure is not fatal.
+        let _ = run_passive_wal_checkpoint(&self.connection);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), IndexStoreError> {
+        self.seal(true)
+    }
+
+    fn abandon(&mut self) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Ok(());
+        }
+        self.rollback_batch();
+        self.mark_failed_if_persisted();
+        self.sealed = true;
+        Ok(())
+    }
+
+    fn stats(&self) -> WriteSessionStats {
+        WriteSessionStats {
+            transactions: self.transactions,
+            rows_written: self.rows_written,
+            checkpoints: self.checkpoints,
+        }
+    }
+}
+
+impl Drop for SqliteGenerationWriteSession {
+    fn drop(&mut self) {
+        if self.sealed {
+            return;
+        }
+        // A build dropped before `finish` (error propagation or panic unwind)
+        // reclaims the generation: roll back the open batch and, if any batch
+        // already committed, stamp `failed`. Errors are swallowed so drop never
+        // panics.
+        self.rollback_batch();
+        self.mark_failed_if_persisted();
+        self.sealed = true;
+    }
+}
+
+impl GenerationWriteStore for SqliteIndexStore {
+    fn open_generation_write_session<'a>(
+        &'a self,
+        generation: &GenerationHandle,
+    ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+        Ok(Box::new(SqliteGenerationWriteSession::open(
+            self, generation,
+        )?))
+    }
 }
 
 fn query_family_constraint_profile(
@@ -2032,201 +2775,6 @@ fn constraint_profile_bool(value: Option<&serde_json::Value>) -> Result<bool, In
     value
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(malformed_constraint_profile)
-}
-
-fn record_family_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    family: &IndexedFamilyRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&family.family_id, "family id")?;
-    validate_family_classification(&family.classification)?;
-    let prevalence = &family.prevalence;
-    if prevalence.classification_reason.trim().is_empty() {
-        return Err(invalid_record(
-            "family classification reason must not be empty",
-        ));
-    }
-    let eligible_peer_count =
-        family_prevalence_count_param(prevalence.eligible_peer_count, "eligible peer count")?;
-    let supported_member_count =
-        family_prevalence_count_param(prevalence.supported_member_count, "supported member count")?;
-    let competing_ready_family_count = family_prevalence_count_param(
-        prevalence.competing_ready_family_count,
-        "competing ready family count",
-    )?;
-    let largest_competing_support = family_prevalence_count_param(
-        prevalence.largest_competing_support,
-        "largest competing support",
-    )?;
-    let blocked_peer_count =
-        family_prevalence_count_param(prevalence.blocked_peer_count, "blocked peer count")?;
-    let unsupported_peer_count =
-        family_prevalence_count_param(prevalence.unsupported_peer_count, "unsupported peer count")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "families")?;
-    connection
-        .execute(
-            "INSERT INTO families (\
-                 generation_id, family_id, classification, eligible_peer_count, \
-                 supported_member_count, coverage_ratio, competing_ready_family_count, \
-                 largest_competing_support, blocked_peer_count, unsupported_peer_count, \
-                 classification_reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                generation.generation_id,
-                family.family_id,
-                family.classification,
-                eligible_peer_count,
-                supported_member_count,
-                prevalence.coverage_ratio,
-                competing_ready_family_count,
-                largest_competing_support,
-                blocked_peer_count,
-                unsupported_peer_count,
-                prevalence.classification_reason,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
-}
-
-fn record_family_member_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    member: &IndexedFamilyMemberRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&member.family_id, "family member family id")?;
-    validate_index_text_field(&member.code_unit_id, "family member code unit id")?;
-    validate_index_text_field(&member.role, "family member role")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "family members")?;
-    require_family_row(&connection, &generation.generation_id, &member.family_id)?;
-    require_code_unit_row(&connection, &generation.generation_id, &member.code_unit_id)?;
-    connection
-        .execute(
-            "INSERT INTO family_members (generation_id, family_id, code_unit_id, role) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                generation.generation_id,
-                member.family_id,
-                member.code_unit_id,
-                member.role,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
-}
-
-fn record_variation_slot_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    slot: &IndexedVariationSlotRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&slot.family_id, "variation slot family id")?;
-    validate_index_text_field(&slot.slot_id, "variation slot id")?;
-    validate_index_text_field(&slot.description, "variation slot description")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "variation slots")?;
-    require_family_row(&connection, &generation.generation_id, &slot.family_id)?;
-    connection
-        .execute(
-            "INSERT INTO variation_slots (generation_id, family_id, slot_id, description) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                generation.generation_id,
-                slot.family_id,
-                slot.slot_id,
-                slot.description,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
-}
-
-fn record_family_evidence_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    evidence: &IndexedFamilyEvidenceRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
-    validate_index_text_field(&evidence.family_id, "family evidence family id")?;
-    validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
-    validate_family_evidence_covered_claims(&evidence.covered_claims)?;
-    validate_repo_relative_path(&evidence.path)?;
-    validate_index_text_field(&evidence.note, "family evidence note")?;
-    let mut connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "family evidence")?;
-    require_family_row(&connection, &generation.generation_id, &evidence.family_id)?;
-    let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
-        code_unit_evidence_bounds(
-            &connection,
-            &generation.generation_id,
-            &evidence.code_unit_id,
-        )?;
-    if unit_path != evidence.path {
-        return Err(invalid_record(
-            "family evidence path must match code unit path",
-        ));
-    }
-    if unit_hash != evidence.content_hash.as_str() || file_hash != evidence.content_hash.as_str() {
-        return Err(invalid_record(
-            "family evidence content hash must match indexed file and code unit",
-        ));
-    }
-    let start_byte = i64::try_from(evidence.start_byte)
-        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
-    let end_byte = i64::try_from(evidence.end_byte)
-        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
-    if start_byte > end_byte {
-        return Err(invalid_record(
-            "family evidence range start must not exceed end",
-        ));
-    }
-    if start_byte < unit_start_byte || end_byte > unit_end_byte || end_byte > file_size {
-        return Err(invalid_record(
-            "family evidence range must stay within code unit range",
-        ));
-    }
-    let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
-    let transaction = connection.transaction().map_err(sql_unavailable)?;
-    transaction
-        .execute(
-            "INSERT INTO evidence \
-             (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                generation.generation_id,
-                evidence.evidence_id,
-                evidence.family_id,
-                evidence.code_unit_id,
-                covered_claims_json,
-                evidence.path,
-                evidence.content_hash.as_str(),
-                start_byte,
-                end_byte,
-                evidence.note,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    record_derived_dependency(
-        &transaction,
-        &generation.generation_id,
-        "family",
-        &evidence.family_id,
-        &evidence.path,
-        evidence.content_hash.as_str(),
-    )?;
-    record_derived_dependency(
-        &transaction,
-        &generation.generation_id,
-        "family_evidence",
-        &evidence.evidence_id,
-        &evidence.path,
-        evidence.content_hash.as_str(),
-    )?;
-    transaction.commit().map_err(sql_unavailable)?;
-    Ok(())
 }
 
 struct IndexedFileMetadata {
@@ -3836,6 +4384,18 @@ fn run_post_commit_maintenance(
     ))
 }
 
+/// Checkpoint committed WAL frames back into the main database without blocking
+/// on readers. Used at pipeline phase boundaries to bound WAL growth; it touches
+/// only already-committed data, so callers treat a failure as non-fatal.
+fn run_passive_wal_checkpoint(connection: &Connection) -> Result<(), IndexStoreError> {
+    connection
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
 fn run_compaction_maintenance(connection: &Connection) -> Result<(u64, u64, u64), IndexStoreError> {
     connection
         .execute_batch("PRAGMA optimize; VACUUM;")
@@ -4570,6 +5130,37 @@ fn ir_graph_violation_count(
     })
 }
 
+/// Count code-unit rows whose stored content hash or byte range disagrees with
+/// their indexed file. The `record_code_unit` write path proves both invariants
+/// per record, but the evidence-scoped validation scans only revisit units that
+/// carry evidence; this set-wide check closes that gap so the activation gate is
+/// a strict superset of per-record enforcement. Every code-unit row references an
+/// existing file by foreign key, so an inner join covers the whole set.
+fn code_unit_file_conformance_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM code_units \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = code_units.generation_id \
+              AND indexed_files.path = code_units.path \
+             WHERE code_units.generation_id = ?1 \
+               AND (code_units.content_hash <> indexed_files.content_hash \
+                    OR code_units.end_byte > indexed_files.size_bytes)",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    usize::try_from(count).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "code unit conformance violation count is outside valid range".to_string(),
+        )
+    })
+}
+
 fn generation_status(
     connection: &Connection,
     generation_id: &str,
@@ -4626,22 +5217,6 @@ fn list_database_generation_entries(
     }
     entries.sort_by_key(|entry| entry.number);
     Ok(entries)
-}
-
-fn require_building_generation(
-    connection: &Connection,
-    generation_id: &str,
-    record_type: &str,
-) -> Result<(), IndexStoreError> {
-    match generation_status(connection, generation_id)?.as_deref() {
-        Some("building") => Ok(()),
-        Some(_) => Err(IndexStoreError::InvalidState(format!(
-            "{record_type} may only be recorded for building generations"
-        ))),
-        None => Err(IndexStoreError::InvalidState(
-            "generation row is missing".to_string(),
-        )),
-    }
 }
 
 fn ensure_real_dir(path: &Path, label: &'static str) -> Result<(), IndexStoreError> {
@@ -8931,6 +9506,401 @@ mod tests {
         let error = store
             .inspect()
             .expect_err("broken symlink pointer must fail");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    // --- Generation write-session fault-injection tests --------------------
+    //
+    // These exercise the single-connection, bounded-batch write session and its
+    // abandonment lifecycle. The invariant across every fault is: the active
+    // generation stays readable and unchanged, an abandoned build that already
+    // committed rows is stamped `failed`, and a build that persisted nothing
+    // leaves a reusable `building` generation.
+
+    fn generation_status_of(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+    ) -> Option<String> {
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        generation_status(&connection, &generation.generation_id).expect("read status")
+    }
+
+    fn generation_table_count(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+        table: &str,
+    ) -> i64 {
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE generation_id = ?1"),
+                params![generation.generation_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rows")
+    }
+
+    fn seed_active_generation(store: &SqliteIndexStore, path: &str) -> GenerationHandle {
+        let generation = store.prepare_next_generation().expect("prepare active");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file(path))
+                .expect("record file");
+            session.finish().expect("finish session");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate seed generation");
+        generation
+    }
+
+    #[test]
+    fn write_session_builds_generation_with_one_connection_and_bounded_transactions() {
+        use std::sync::atomic::Ordering;
+        let workspace = TempWorkspace::new("sqlite-write-session-happy");
+        let store = store(&workspace);
+        let instrumentation = store.write_instrumentation();
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session
+            .record_code_unit(&code_unit("src/a.ts"))
+            .expect("record code unit");
+        session
+            .record_semantic_fact(&semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        session.checkpoint().expect("checkpoint");
+        session.finish().expect("finish");
+        let stats = session.stats();
+        assert!(stats.transactions >= 1);
+        assert!(stats.transactions < stats.rows_written);
+        assert!(stats.rows_written >= 3);
+        assert_eq!(stats.checkpoints, 1);
+        drop(session);
+
+        // The whole build opened exactly one measured connection.
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        store.validate_generation(&generation).expect("validate");
+        store.activate_generation(&generation).expect("activate");
+        let files = store.list_active_indexed_files().expect("list files");
+        assert_eq!(files.files.len(), 1);
+    }
+
+    #[test]
+    fn write_session_checkpoint_commits_and_counts() {
+        let workspace = TempWorkspace::new("sqlite-write-session-checkpoint");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        // A phase checkpoint commits the open batch (so the row is durable and a
+        // fresh reader sees it) and increments the checkpoint counter.
+        assert_eq!(session.stats().transactions, 0);
+        session.checkpoint().expect("checkpoint");
+        assert_eq!(session.stats().transactions, 1);
+        assert_eq!(session.stats().checkpoints, 1);
+        assert!(!session.batch_is_open());
+        session
+            .checkpoint()
+            .expect("second checkpoint is a no-op commit");
+        assert_eq!(session.stats().checkpoints, 2);
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            1
+        );
+        session.finish().expect("finish");
+    }
+
+    #[test]
+    fn write_session_finish_after_abandon_is_a_typed_error() {
+        let workspace = TempWorkspace::new("sqlite-write-session-finish-after-abandon");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.abandon().expect("abandon");
+        // A build that gave up on one path must not silently finish on another.
+        let error = session
+            .finish()
+            .expect_err("finish after abandon must error");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        // The rolled-back build persisted nothing and stays a reusable building
+        // row (abandon committed no batch), so it can never activate an empty
+        // index through the finished path.
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            0
+        );
+    }
+
+    #[test]
+    fn write_session_double_finish_is_a_typed_error() {
+        let workspace = TempWorkspace::new("sqlite-write-session-double-finish");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.finish().expect("first finish");
+        let error = session.finish().expect_err("second finish must error");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn write_session_record_validation_failure_leaves_generation_building() {
+        let workspace = TempWorkspace::new("sqlite-write-session-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            // A code unit with no matching indexed file: a referential rejection
+            // that persists nothing.
+            let error = session
+                .record_code_unit(&code_unit("src/missing.ts"))
+                .expect_err("referential failure");
+            assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+        }
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+    }
+
+    #[test]
+    fn write_session_abandon_after_commit_marks_failed_and_preserves_active() {
+        let workspace = TempWorkspace::new("sqlite-write-session-abandon");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint commits a batch");
+            session.abandon().expect("abandon");
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        let files = store.list_active_indexed_files().expect("list active");
+        assert_eq!(files.generation_id, first.generation_id);
+    }
+
+    #[test]
+    fn write_session_drop_without_finish_after_commit_marks_failed() {
+        let workspace = TempWorkspace::new("sqlite-write-session-drop");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint commits a batch");
+            // Dropped without finish or abandon (the panic-unwind path).
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_fault_after_rows_aborts_and_reclaims() {
+        let workspace = TempWorkspace::new("sqlite-write-session-after-rows");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint");
+            session.inject_fault(InjectedWriteFault::AfterRows(1));
+            let error = session
+                .record_indexed_file(&file("src/c.ts"))
+                .expect_err("mid-build fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_fault_after_evidence_before_fact_rolls_back() {
+        let workspace = TempWorkspace::new("sqlite-write-session-mid-record");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file("src/a.ts"))
+                .expect("record file");
+            session
+                .record_code_unit(&code_unit("src/a.ts"))
+                .expect("record code unit");
+            session.checkpoint().expect("commit file and unit");
+            session.inject_fault(InjectedWriteFault::AfterEvidenceBeforeFact);
+            let error = session
+                .record_semantic_fact(&semantic_fact("src/a.ts"))
+                .expect_err("mid-record fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            session.abandon().expect("abandon");
+        }
+        // File and unit survive (committed), the torn fact and its evidence are
+        // rolled back, and the generation is unreachable.
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            1
+        );
+        assert_eq!(generation_table_count(&store, &generation, "code_units"), 1);
+        assert_eq!(
+            generation_table_count(&store, &generation, "semantic_facts"),
+            0
+        );
+        assert_eq!(generation_table_count(&store, &generation, "evidence"), 0);
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("failed")
+        );
+    }
+
+    #[test]
+    fn write_session_fault_before_commit_discards_batch() {
+        let workspace = TempWorkspace::new("sqlite-write-session-before-commit");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file("src/a.ts"))
+                .expect("record file");
+            session.inject_fault(InjectedWriteFault::BeforeCommit);
+            let error = session.checkpoint().expect_err("commit fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            assert!(session.batch_is_open());
+            session.abandon().expect("abandon");
+        }
+        // The sole batch never committed, so nothing persisted and the
+        // generation stays a reusable `building` row.
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            0
+        );
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+    }
+
+    #[test]
+    fn write_session_reader_sees_old_active_until_activation() {
+        let workspace = TempWorkspace::new("sqlite-write-session-reader");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+        session
+            .record_indexed_file(&file("src/b.ts"))
+            .expect("record file");
+        session.checkpoint().expect("checkpoint");
+        // Mid-build, reads still resolve the previous active generation.
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+        session.finish().expect("finish");
+        drop(session);
+        store.validate_generation(&second).expect("validate");
+        store.activate_generation(&second).expect("activate");
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active after activation")
+                .generation_id,
+            second.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_status_flip_between_batches_is_rejected() {
+        let workspace = TempWorkspace::new("sqlite-write-session-flip");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.checkpoint().expect("checkpoint closes the batch");
+        // An external writer flips the generation out of `building` between
+        // batches.
+        {
+            let connection = store
+                .open_existing_generation(&generation.generation_id)
+                .expect("open generation");
+            connection
+                .execute(
+                    "UPDATE index_generations SET status = 'failed' WHERE generation_id = ?1",
+                    params![generation.generation_id],
+                )
+                .expect("flip status");
+        }
+        let error = session
+            .record_code_unit(&code_unit("src/a.ts"))
+            .expect_err("status flip must be caught at the next batch");
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 }

@@ -5,10 +5,171 @@ use crate::core::model::{
     FeatureConstraintSemantics, TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode,
     VariationConstraint,
 };
+use crate::ports::family_store::{
+    GenerationWriteSession, IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceRecord,
+    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+    WriteSessionStats,
+};
+use crate::ports::index_store::{
+    GenerationHandle, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+};
+use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
+
+/// A deterministic in-memory [`GenerationWriteSession`] fake for pipeline and
+/// application-boundary tests. It records nothing to a database: each record call
+/// appends the target generation id to a shared log and returns `Ok`, unless an
+/// indexed-file failure message is configured, in which case `record_indexed_file`
+/// returns that typed error. This lets tests drive the session-based storage
+/// wrappers (which keep the application-boundary validation) and observe write
+/// ordering or inject a mid-build record failure without a real store.
+pub struct FakeWriteSession {
+    generation: GenerationHandle,
+    log: Rc<RefCell<Vec<String>>>,
+    fail_indexed_file_message: Option<String>,
+    rows_written: usize,
+    transactions: usize,
+    checkpoints: usize,
+}
+
+impl FakeWriteSession {
+    pub fn new(generation: GenerationHandle) -> Self {
+        Self::with_log(generation, Rc::new(RefCell::new(Vec::new())))
+    }
+
+    /// Build a session that shares its recorded-generation log with the caller,
+    /// so a fake store can hand out sessions and later assert what was written.
+    pub fn with_log(generation: GenerationHandle, log: Rc<RefCell<Vec<String>>>) -> Self {
+        Self {
+            generation,
+            log,
+            fail_indexed_file_message: None,
+            rows_written: 0,
+            transactions: 0,
+            checkpoints: 0,
+        }
+    }
+
+    /// Configure `record_indexed_file` to fail with the given message.
+    pub fn failing_indexed_file(mut self, message: &str) -> Self {
+        self.fail_indexed_file_message = Some(message.to_string());
+        self
+    }
+
+    fn note(&mut self) {
+        self.log
+            .borrow_mut()
+            .push(self.generation.generation_id.clone());
+        self.rows_written += 1;
+    }
+}
+
+impl GenerationWriteSession for FakeWriteSession {
+    fn generation(&self) -> &GenerationHandle {
+        &self.generation
+    }
+
+    fn record_indexed_file(&mut self, _file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        if let Some(message) = &self.fail_indexed_file_message {
+            return Err(IndexStoreError::InvalidRecord(message.clone()));
+        }
+        self.note();
+        Ok(())
+    }
+
+    fn remove_indexed_file(&mut self, _path: &str) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_code_unit(&mut self, _unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_ir_node(&mut self, _node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_ir_edge(&mut self, _edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_semantic_fact(
+        &mut self,
+        _fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_family(&mut self, _family: &IndexedFamilyRecord) -> Result<(), StoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_family_member(
+        &mut self,
+        _member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), StoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_variation_slot(
+        &mut self,
+        _slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), StoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_family_evidence(
+        &mut self,
+        _evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), StoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_family_constraint_profile(
+        &mut self,
+        _record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
+        self.transactions += 1;
+        self.checkpoints += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), IndexStoreError> {
+        self.transactions += 1;
+        Ok(())
+    }
+
+    fn abandon(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    fn stats(&self) -> WriteSessionStats {
+        WriteSessionStats {
+            transactions: self.transactions,
+            rows_written: self.rows_written,
+            checkpoints: self.checkpoints,
+        }
+    }
+}
 
 /// A deterministic dominant-shaped [`FamilyPrevalence`] for tests that need a
 /// prevalence value but do not exercise the classifier itself.

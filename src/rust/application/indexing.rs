@@ -29,7 +29,8 @@ use crate::core::model::{
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    FamilyConstraintProfileStore, FamilyStore, FamilyStoreWithProfiles,
+    FamilyConstraintProfileStore, FamilyStore, FamilyStoreWithProfiles, GenerationWriteSession,
+    GenerationWriteStore,
 };
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -37,8 +38,8 @@ use crate::ports::file_discovery::{
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
-    ActiveClaimInputSnapshot, GenerationEngineStampStore, GenerationHandle, IndexStorageLayout,
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
+    IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
     IndexedIrNodeRecord, IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
@@ -265,7 +266,7 @@ pub fn index_repository_with_discovery(
 pub fn index_repository_with_discovery_and_store(
     request: IndexingRequest,
     discovery: &impl FileDiscovery,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let _index_lock = crate::application::repository::acquire_index_lock(
         &request.repository_root,
@@ -273,17 +274,21 @@ pub fn index_repository_with_discovery_and_store(
     )?;
     let report = discover_repository_files(request.clone(), discovery)?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
-    for file in &report.files {
-        crate::application::storage::record_indexed_file(
-            store,
-            &generation,
-            &IndexedFileRecord {
-                path: file.path.clone(),
-                content_hash: file.content_hash.clone(),
-                size_bytes: file.size_bytes,
-                language: file.language.as_str().to_string(),
-            },
-        )?;
+    {
+        let mut session =
+            crate::application::storage::open_index_write_session(store, &generation)?;
+        for file in &report.files {
+            crate::application::storage::record_indexed_file(
+                session.as_mut(),
+                &IndexedFileRecord {
+                    path: file.path.clone(),
+                    content_hash: file.content_hash.clone(),
+                    size_bytes: file.size_bytes,
+                    language: file.language.as_str().to_string(),
+                },
+            )?;
+        }
+        crate::application::storage::finish_index_write_session(session.as_mut())?;
     }
     crate::application::storage::validate_index_generation(store, &generation)?;
     crate::application::storage::activate_index_generation(store, &generation)?;
@@ -307,7 +312,7 @@ pub fn index_repository_with_discovery_parser_and_store(
     discovery: &impl FileDiscovery,
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -332,7 +337,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -357,7 +362,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + GenerationEngineStampStore),
+    store: &(impl IndexStore + GenerationEngineStampStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     sync_repository_with_optional_semantic_worker(
@@ -382,7 +387,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -407,7 +412,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     index_repository_with_optional_semantic_worker(
@@ -432,7 +437,7 @@ pub fn index_repository_with_discovery_parser_frameworks_rust_provider_families_
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -458,7 +463,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     semantic_worker: &dyn SemanticWorker,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -484,7 +489,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     semantic_worker: &dyn SemanticWorker,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -510,7 +515,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     semantic_worker: &dyn SemanticWorker,
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
@@ -530,7 +535,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_worker: (&dyn FrameworkRoleDetector, &dyn SemanticWorker),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker) = framework_and_worker;
@@ -560,7 +565,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_pr
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -586,7 +591,11 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationEngineStampStore),
+    store: &(impl IndexStore
+          + FamilyStore
+          + FamilyConstraintProfileStore
+          + GenerationEngineStampStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -616,7 +625,11 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationEngineStampStore),
+    store: &(impl IndexStore
+          + FamilyStore
+          + FamilyConstraintProfileStore
+          + GenerationEngineStampStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -642,7 +655,7 @@ fn index_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -681,7 +694,7 @@ fn index_repository_full_after_discovery<SourceStoreImpl, SourceParserImpl, Inde
 where
     SourceStoreImpl: SourceStore,
     SourceParserImpl: SourceParser,
-    IndexStoreImpl: IndexStore,
+    IndexStoreImpl: IndexStore + GenerationWriteStore,
 {
     let source_store = runtime.source_store;
     let parser = runtime.parser;
@@ -695,10 +708,15 @@ where
         known_work_units(report.files.len(), report.files.len()),
     );
     let generation = crate::application::storage::prepare_index_generation(store)?;
+    // One write session serves the whole build: a single connection with pragmas
+    // applied once and bounded-batch transactions replaces the historical
+    // per-record connection opens. It is finished (committed and sealed) before
+    // validation; an early return drops it, which rolls back the open batch and
+    // stamps the terminal `failed` status.
+    let mut session = crate::application::storage::open_index_write_session(store, &generation)?;
     for (index, file) in report.files.iter().enumerate() {
         crate::application::storage::record_indexed_file(
-            store,
-            &generation,
+            session.as_mut(),
             &IndexedFileRecord {
                 path: file.path.clone(),
                 content_hash: file.content_hash.clone(),
@@ -788,8 +806,7 @@ where
             }
         };
         let parse_outcome = record_parse_report(
-            store,
-            &generation,
+            session.as_mut(),
             file,
             &source.text,
             parse_report,
@@ -813,12 +830,14 @@ where
         "stored code units",
         known_work_units(indexed_units, indexed_units),
     );
+    // Phase boundary: the file, code-unit, and IR write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
 
     sort_semantic_facts(&mut parser_semantic_facts);
-    let parser_fact_count = record_semantic_facts(store, &generation, 0, &parser_semantic_facts)?;
+    let parser_fact_count = record_semantic_facts(session.as_mut(), 0, &parser_semantic_facts)?;
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
-        record_semantic_facts(store, &generation, parser_fact_count, &framework_role_facts)?;
+        record_semantic_facts(session.as_mut(), parser_fact_count, &framework_role_facts)?;
     let mut derived_python_support_facts = derive_python_framework_support_facts(
         &indexed_code_units,
         &parser_semantic_facts,
@@ -826,8 +845,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_python_support_facts);
     let derived_python_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count + framework_fact_count,
         &derived_python_support_facts,
     )?;
@@ -838,8 +856,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_tsjs_support_facts);
     let derived_tsjs_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
         &derived_tsjs_support_facts,
     )?;
@@ -850,8 +867,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_java_support_facts);
     let derived_java_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -865,8 +881,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_csharp_support_facts);
     let derived_csharp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -881,8 +896,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_cpp_support_facts);
     let derived_cpp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -898,8 +912,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_rust_support_facts);
     let derived_rust_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -927,9 +940,8 @@ where
     let rust_provider_facts = record_rust_provider_facts(
         &request,
         &indexed_code_units,
-        &generation,
         options.rust_provider,
-        store,
+        session.as_mut(),
         &mut warnings,
         local_support_fact_count,
     )?;
@@ -963,11 +975,10 @@ where
             request: &request,
             discovery_report: &report,
             parser_semantic_facts: &parser_semantic_facts,
-            generation: &generation,
             semantic_worker: options.semantic_worker,
             fact_id_offset: local_support_fact_count + rust_provider_fact_count,
         },
-        store,
+        session.as_mut(),
         &mut warnings,
     )?;
     let worker_semantic_facts = worker_facts.len();
@@ -988,8 +999,7 @@ where
         )?;
     sort_semantic_facts(&mut derived_tsjs_provider_support_facts);
     let derived_tsjs_provider_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         local_support_fact_count + rust_provider_fact_count + worker_semantic_facts,
         &derived_tsjs_provider_support_facts,
     )?;
@@ -1005,6 +1015,8 @@ where
         );
     }
 
+    // Phase boundary: the semantic-fact write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     if let Some(family_store) = options.family_store {
         emit_progress(
             progress,
@@ -1043,12 +1055,8 @@ where
             .filter(|report| report.base_generation.is_some())
             .map(|_| base_generation_family_ids(family_store))
             .transpose()?;
-        let (family_count, new_family_ids) = record_family_claims(
-            family_store,
-            &generation,
-            &indexed_code_units,
-            &family_facts,
-        )?;
+        let (family_count, new_family_ids) =
+            record_family_claims(session.as_mut(), &indexed_code_units, &family_facts)?;
         if let Some(sync_report) = sync_report.as_mut() {
             sync_report.families_recomputed = family_count;
             if let Some(base_family_ids) = &base_family_ids {
@@ -1064,8 +1072,13 @@ where
             "stored eligible family claims",
             WorkUnits::Unknown,
         );
+        // Phase boundary: the family recomputation and write phase is complete.
+        crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     }
 
+    // Commit and seal the write session so validation and activation observe the
+    // fully committed generation on their own connections.
+    crate::application::storage::finish_index_write_session(session.as_mut())?;
     emit_progress(
         progress,
         ProgressStage::PersistenceValidation,
@@ -1110,7 +1123,7 @@ fn sync_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &(impl IndexStore + GenerationEngineStampStore),
+    store: &(impl IndexStore + GenerationEngineStampStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -1343,7 +1356,7 @@ fn index_repository_incremental_after_discovery<SourceStoreImpl, SourceParserImp
 where
     SourceStoreImpl: SourceStore,
     SourceParserImpl: SourceParser,
-    IndexStoreImpl: IndexStore,
+    IndexStoreImpl: IndexStore + GenerationWriteStore,
 {
     let source_store = runtime.source_store;
     let parser = runtime.parser;
@@ -1357,6 +1370,9 @@ where
         known_work_units(report.files.len(), report.files.len()),
     );
     let generation = crate::application::storage::prepare_index_generation(store)?;
+    // One write session serves the whole incremental build, including the
+    // copy-forward of unchanged rows; see the full-build path for the lifecycle.
+    let mut session = crate::application::storage::open_index_write_session(store, &generation)?;
     let changed_files = delta.changed_files();
     let inventory_only_paths = inventory_only_paths(&report);
     let unchanged_paths = delta
@@ -1367,7 +1383,7 @@ where
 
     let mut stored_files = 0usize;
     for file in &delta.unchanged_files {
-        crate::application::storage::record_indexed_file(store, &generation, file)?;
+        crate::application::storage::record_indexed_file(session.as_mut(), file)?;
         stored_files += 1;
         emit_progress(
             progress,
@@ -1378,8 +1394,7 @@ where
     }
     for file in &changed_files {
         crate::application::storage::record_indexed_file(
-            store,
-            &generation,
+            session.as_mut(),
             &IndexedFileRecord {
                 path: file.path.clone(),
                 content_hash: file.content_hash.clone(),
@@ -1402,7 +1417,7 @@ where
         if !unchanged_paths.contains(&unit.path) || inventory_only_paths.contains(&unit.path) {
             continue;
         }
-        crate::application::storage::record_code_unit(store, &generation, unit)?;
+        crate::application::storage::record_code_unit(session.as_mut(), unit)?;
         copied_unit_ids.insert(unit.id.clone());
         indexed_code_units.push(unit.clone());
     }
@@ -1412,14 +1427,14 @@ where
         if !copied_unit_ids.contains(&node.code_unit_id) {
             continue;
         }
-        crate::application::storage::record_ir_node(store, &generation, node)?;
+        crate::application::storage::record_ir_node(session.as_mut(), node)?;
         copied_node_ids.insert(node.id.clone());
     }
     for edge in &snapshot.ir_edges {
         if copied_node_ids.contains(&edge.from_node_id)
             && copied_node_ids.contains(&edge.to_node_id)
         {
-            crate::application::storage::record_ir_edge(store, &generation, edge)?;
+            crate::application::storage::record_ir_edge(session.as_mut(), edge)?;
         }
     }
 
@@ -1439,7 +1454,7 @@ where
         {
             continue;
         }
-        crate::application::storage::record_semantic_fact(store, &generation, record)?;
+        crate::application::storage::record_semantic_fact(session.as_mut(), record)?;
         let fact = semantic_fact_from_index_record(record)?;
         if fact.kind == SemanticFactKind::FrameworkRole
             && fact.certainty == FactCertainty::FrameworkHeuristic
@@ -1526,8 +1541,7 @@ where
             }
         };
         let parse_outcome = record_parse_report(
-            store,
-            &generation,
+            session.as_mut(),
             file,
             &source.text,
             parse_report,
@@ -1550,15 +1564,17 @@ where
         "stored code units",
         known_work_units(indexed_code_units.len(), indexed_code_units.len()),
     );
+    // Phase boundary: the file, code-unit, and IR write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
 
     let mut next_fact_offset = next_semantic_fact_offset(&copied_semantic_records);
     sort_semantic_facts(&mut parser_semantic_facts);
     let parser_fact_count =
-        record_semantic_facts(store, &generation, next_fact_offset, &parser_semantic_facts)?;
+        record_semantic_facts(session.as_mut(), next_fact_offset, &parser_semantic_facts)?;
     next_fact_offset += parser_fact_count;
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
-        record_semantic_facts(store, &generation, next_fact_offset, &framework_role_facts)?;
+        record_semantic_facts(session.as_mut(), next_fact_offset, &framework_role_facts)?;
     next_fact_offset += framework_fact_count;
 
     let mut all_parser_facts = copied_parser_facts;
@@ -1573,8 +1589,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_python_support_facts);
     let derived_python_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_python_support_facts,
     )?;
@@ -1586,8 +1601,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_tsjs_support_facts);
     let derived_tsjs_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_tsjs_support_facts,
     )?;
@@ -1599,8 +1613,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_java_support_facts);
     let derived_java_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_java_support_facts,
     )?;
@@ -1612,8 +1625,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_csharp_support_facts);
     let derived_csharp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_csharp_support_facts,
     )?;
@@ -1625,8 +1637,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_cpp_support_facts);
     let derived_cpp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_cpp_support_facts,
     )?;
@@ -1638,8 +1649,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_rust_support_facts);
     let derived_rust_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_rust_support_facts,
     )?;
@@ -1656,8 +1666,7 @@ where
         )?;
     sort_semantic_facts(&mut derived_tsjs_provider_support_facts);
     let derived_tsjs_provider_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_tsjs_provider_support_facts,
     )?;
@@ -1699,6 +1708,8 @@ where
         family_identity_delta: None,
     };
 
+    // Phase boundary: the semantic-fact write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     if let Some(family_store) = options.family_store {
         emit_progress(
             progress,
@@ -1729,12 +1740,8 @@ where
         // The incremental path always resyncs from an active base generation, so
         // its family ids are always available to diff against.
         let base_family_ids = base_generation_family_ids(family_store)?;
-        let (family_count, new_family_ids) = record_family_claims(
-            family_store,
-            &generation,
-            &indexed_code_units,
-            &family_facts,
-        )?;
+        let (family_count, new_family_ids) =
+            record_family_claims(session.as_mut(), &indexed_code_units, &family_facts)?;
         sync_report.families_recomputed = family_count;
         sync_report.family_identity_delta = Some(FamilyIdentityDelta::from_id_sets(
             &base_family_ids,
@@ -1746,8 +1753,13 @@ where
             "stored eligible family claims",
             WorkUnits::Unknown,
         );
+        // Phase boundary: the family recomputation and write phase is complete.
+        crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     }
 
+    // Commit and seal the write session so validation and activation observe the
+    // fully committed generation on their own connections.
+    crate::application::storage::finish_index_write_session(session.as_mut())?;
     emit_progress(
         progress,
         ProgressStage::PersistenceValidation,
@@ -2359,8 +2371,7 @@ fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact])
 }
 
 fn record_parse_report(
-    store: &impl IndexStore,
-    generation: &crate::ports::index_store::GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     file: &DiscoveredFile,
     text: &str,
     mut parse_report: ParseReport,
@@ -2424,14 +2435,13 @@ fn record_parse_report(
             end_byte: unit.range.end_byte,
             content_hash: unit.provenance.content_hash.clone(),
         };
-        crate::application::storage::record_code_unit(store, generation, &record)?;
+        crate::application::storage::record_code_unit(session, &record)?;
         code_units.push(record);
         count += 1;
     }
     for node in &parse_report.ir_nodes {
         crate::application::storage::record_ir_node(
-            store,
-            generation,
+            session,
             &IndexedIrNodeRecord {
                 id: node.id.as_str().to_string(),
                 code_unit_id: node.code_unit_id.as_str().to_string(),
@@ -2442,8 +2452,7 @@ fn record_parse_report(
     }
     for edge in &parse_report.ir_edges {
         crate::application::storage::record_ir_edge(
-            store,
-            generation,
+            session,
             &IndexedIrEdgeRecord {
                 from_node_id: edge.from_node_id.as_str().to_string(),
                 to_node_id: edge.to_node_id.as_str().to_string(),
@@ -2463,8 +2472,7 @@ fn record_parse_report(
 /// set of family ids recorded into `generation`, so callers can diff it against
 /// the base generation for cross-generation identity reporting.
 fn record_family_claims(
-    store: &dyn FamilyStoreWithProfiles,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     code_units: &[IndexedCodeUnitRecord],
     framework_role_facts: &[SemanticFact],
 ) -> Result<(usize, BTreeSet<String>), RepoGrammarError> {
@@ -2472,22 +2480,21 @@ fn record_family_claims(
     let mut family_ids = BTreeSet::new();
     for claim in &report.claims {
         let records = family_storage_records(claim);
-        crate::application::storage::record_family(store, generation, &records.family)?;
+        crate::application::storage::record_family(session, &records.family)?;
         for member in &records.members {
-            crate::application::storage::record_family_member(store, generation, member)?;
+            crate::application::storage::record_family_member(session, member)?;
         }
         for slot in &records.variation_slots {
-            crate::application::storage::record_variation_slot(store, generation, slot)?;
+            crate::application::storage::record_variation_slot(session, slot)?;
         }
         for evidence in &records.evidence {
-            crate::application::storage::record_family_evidence(store, generation, evidence)?;
+            crate::application::storage::record_family_evidence(session, evidence)?;
         }
         // Persist the co-derived constraint profile alongside the family it
         // specifies, in the same generation, so query surfaces can hydrate the
         // source-backed implementation specification the claim already carries.
         crate::application::storage::record_family_constraint_profile(
-            store,
-            generation,
+            session,
             &family_constraint_profile_record(claim),
         )?;
         family_ids.insert(claim.family_id.clone());
@@ -2512,9 +2519,8 @@ fn base_generation_family_ids(
 fn record_rust_provider_facts(
     request: &IndexingRequest,
     code_units: &[IndexedCodeUnitRecord],
-    generation: &GenerationHandle,
     rust_provider: Option<&dyn RustSemanticProvider>,
-    store: &impl IndexStore,
+    session: &mut dyn GenerationWriteSession,
     warnings: &mut Vec<String>,
     fact_id_offset: usize,
 ) -> Result<Vec<SemanticFact>, RepoGrammarError> {
@@ -2551,7 +2557,7 @@ fn record_rust_provider_facts(
         ));
     }
     sort_semantic_facts(&mut facts);
-    record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    record_semantic_facts(session, fact_id_offset, &facts)?;
     Ok(facts)
 }
 
@@ -4167,14 +4173,13 @@ struct SemanticWorkerFactRecording<'a> {
     request: &'a IndexingRequest,
     discovery_report: &'a FileDiscoveryReport,
     parser_semantic_facts: &'a [SemanticFact],
-    generation: &'a GenerationHandle,
     semantic_worker: Option<&'a dyn SemanticWorker>,
     fact_id_offset: usize,
 }
 
 fn record_semantic_worker_facts(
     input: SemanticWorkerFactRecording<'_>,
-    store: &impl IndexStore,
+    session: &mut dyn GenerationWriteSession,
     warnings: &mut Vec<String>,
 ) -> Result<(SemanticWorkerRunStatus, Vec<SemanticFact>), RepoGrammarError> {
     let Some(semantic_worker) = input.semantic_worker else {
@@ -4212,7 +4217,7 @@ fn record_semantic_worker_facts(
     };
 
     sort_semantic_facts(&mut facts);
-    record_semantic_facts(store, input.generation, input.fact_id_offset, &facts)?;
+    record_semantic_facts(session, input.fact_id_offset, &facts)?;
     Ok((SemanticWorkerRunStatus::Complete, facts))
 }
 
@@ -4365,15 +4370,13 @@ fn fact_assumption_value<'a>(fact: &'a SemanticFact, prefix: &str) -> Option<&'a
 }
 
 fn record_semantic_facts(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     fact_id_offset: usize,
     facts: &[SemanticFact],
 ) -> Result<usize, RepoGrammarError> {
     for (index, fact) in facts.iter().enumerate() {
         crate::application::storage::record_semantic_fact(
-            store,
-            generation,
+            session,
             &indexed_semantic_fact_record(fact_id_offset + index, fact),
         )?;
     }
@@ -5052,6 +5055,64 @@ mod tests {
         assert_eq!(report.reparsed_files, 0);
         assert_eq!(report.copied_forward_files, 1);
         assert_active_pydantic_validator_evidence(&store);
+    }
+
+    #[test]
+    fn indexing_pipelines_checkpoint_at_phase_boundaries() {
+        use std::sync::atomic::Ordering;
+        // Both production build pipelines route every record through one write
+        // session and commit + WAL-checkpoint at phase boundaries. This asserts,
+        // through the store's real write instrumentation, that the full and
+        // incremental pipelines each open exactly one connection and checkpoint
+        // at the file/unit/IR and semantic-fact phase boundaries (the family
+        // phase adds a third checkpoint when families recompute).
+        let workspace = TempWorkspace::new("indexing-pipeline-checkpoints");
+        let source = include_str!("../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
+        fs::write(workspace.path().join("schemas.py"), source).expect("write fixture source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let instrumentation = store.write_instrumentation();
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("full index");
+        let after_full = instrumentation.checkpoints.load(Ordering::Relaxed);
+        assert!(
+            after_full >= 2,
+            "full pipeline must checkpoint at phase boundaries, saw {after_full}"
+        );
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("incremental sync");
+        assert_eq!(
+            synced.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let after_sync = instrumentation.checkpoints.load(Ordering::Relaxed);
+        assert!(
+            after_sync >= after_full + 2,
+            "incremental pipeline must checkpoint at phase boundaries, saw {} more",
+            after_sync - after_full
+        );
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -13988,6 +14049,18 @@ extraPaths = ["src/lib", "C:/secret"]
             }
         }
 
+        impl GenerationWriteStore for FailingStore {
+            fn open_generation_write_session<'a>(
+                &'a self,
+                generation: &GenerationHandle,
+            ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+                Ok(Box::new(
+                    crate::test_support::FakeWriteSession::new(generation.clone())
+                        .failing_indexed_file("record rejected"),
+                ))
+            }
+        }
+
         let workspace = TempWorkspace::new("indexing-store-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
         create_index_state(&workspace.path().join(".repogrammar"));
@@ -14005,10 +14078,11 @@ extraPaths = ["src/lib", "C:/secret"]
     #[test]
     fn failed_generation_validation_preserves_previous_active_generation() {
         use std::cell::RefCell;
+        use std::rc::Rc;
 
         struct ValidationFailingStore {
             active_generation: RefCell<String>,
-            recorded_generations: RefCell<Vec<String>>,
+            recorded_generations: Rc<RefCell<Vec<String>>>,
         }
 
         impl IndexStore for ValidationFailingStore {
@@ -14145,12 +14219,24 @@ extraPaths = ["src/lib", "C:/secret"]
             }
         }
 
+        impl GenerationWriteStore for ValidationFailingStore {
+            fn open_generation_write_session<'a>(
+                &'a self,
+                generation: &GenerationHandle,
+            ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+                Ok(Box::new(crate::test_support::FakeWriteSession::with_log(
+                    generation.clone(),
+                    Rc::clone(&self.recorded_generations),
+                )))
+            }
+        }
+
         let workspace = TempWorkspace::new("indexing-validation-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
         create_index_state(&workspace.path().join(".repogrammar"));
         let store = ValidationFailingStore {
             active_generation: RefCell::new("gen-000001".to_string()),
-            recorded_generations: RefCell::new(Vec::new()),
+            recorded_generations: Rc::new(RefCell::new(Vec::new())),
         };
 
         let error = index_repository_with_discovery_and_store(

@@ -19,8 +19,8 @@ use crate::{
     },
     ports::{
         family_store::{
-            FamilyStore, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
-            IndexedFamilyRecord,
+            FamilyStore, GenerationWriteStore, IndexedFamilyEvidenceRecord,
+            IndexedFamilyMemberRecord, IndexedFamilyRecord,
         },
         index_store::{
             GenerationHandle, IndexStore, IndexedCodeUnitRecord, IndexedFileRecord,
@@ -36,6 +36,202 @@ const READ_PATH_BENCH_CODE_UNITS: usize = 12_000;
 const READ_PATH_BENCH_FAMILIES: usize = 300;
 const READ_PATH_BENCH_EVIDENCE: usize = 25_000;
 const READ_PATH_BENCH_SEMANTIC_FACTS: usize = 18_000;
+
+// Fixture-scale write-path corpus. Deliberately smaller than the read-path
+// fixture so the per-record comparison arm (which opens one connection per
+// record) still completes quickly; the counter reductions, not the absolute
+// wall-clock, are the load-bearing signal at this scale.
+const WRITE_PATH_BENCH_FILES: usize = 1_500;
+const WRITE_PATH_BENCH_SEMANTIC_FACTS: usize = 2_000;
+const WRITE_PATH_BENCH_FAMILIES: usize = 100;
+const WRITE_PATH_BENCH_EVIDENCE: usize = 1_000;
+
+/// Total record calls the write-path benchmark performs, used to bound the
+/// session transaction-count assertion.
+const WRITE_PATH_BENCH_RECORDS: usize = WRITE_PATH_BENCH_FILES * 2
+    + WRITE_PATH_BENCH_SEMANTIC_FACTS
+    + WRITE_PATH_BENCH_FAMILIES * 2
+    + WRITE_PATH_BENCH_EVIDENCE;
+
+/// One measured write-path run: adapter-instrumented connection opens and
+/// committed transactions (never asserted by construction), plus rows and
+/// wall-clock.
+struct WritePathMeasurement {
+    connection_opens: usize,
+    transactions: usize,
+    checkpoints: usize,
+    rows_written: usize,
+    elapsed: Duration,
+}
+
+#[test]
+#[ignore = "explicit write-path benchmark fixture; run with --ignored --nocapture"]
+fn write_path_benchmark_fixture_measures_session_vs_per_record() {
+    // Session path: one connection, pragmas once, bounded-batch commits.
+    let session = measure_write_path_session();
+    // Granular one-shot path: the current per-record store methods, each opening
+    // its own session and committing one batch. This is NOT the deleted historical
+    // code (which was bare autocommit inserts) — it is today's granular API, which
+    // this benchmark uses only as an in-repo reference for the connection-open and
+    // transaction reduction the session delivers over per-record opens. The
+    // wall-clock ratio is a same-implementation comparison, not a before/after of
+    // the change.
+    let per_record = measure_write_path_per_record();
+
+    eprintln!(
+        "{{\"benchmark\":\"write_path_fixture\",\"records\":{},\
+\"session_connection_opens\":{},\"session_transactions\":{},\"session_checkpoints\":{},\
+\"session_rows_written\":{},\"session_ms\":{:.3},\
+\"per_record_connection_opens\":{},\"per_record_transactions\":{},\"per_record_ms\":{:.3},\
+\"connection_open_reduction\":\"{}x\",\
+\"comparison\":\"same-implementation: session vs granular one-shot API, not historical baseline\"}}",
+        WRITE_PATH_BENCH_RECORDS,
+        session.connection_opens,
+        session.transactions,
+        session.checkpoints,
+        session.rows_written,
+        session.elapsed.as_secs_f64() * 1_000.0,
+        per_record.connection_opens,
+        per_record.transactions,
+        per_record.elapsed.as_secs_f64() * 1_000.0,
+        per_record.connection_opens / session.connection_opens.max(1),
+    );
+
+    // Measured invariants (not asserted by construction): the whole build opens
+    // exactly one connection and commits far fewer transactions than records
+    // (batches and phase checkpoints, not rows); the granular path opens and
+    // commits once per record.
+    assert_eq!(session.connection_opens, 1);
+    assert!(session.transactions >= 1);
+    assert!(session.transactions < WRITE_PATH_BENCH_RECORDS);
+    assert!(session.checkpoints >= 2);
+    assert!(session.rows_written >= WRITE_PATH_BENCH_RECORDS);
+    assert_eq!(per_record.connection_opens, WRITE_PATH_BENCH_RECORDS);
+    assert_eq!(per_record.transactions, WRITE_PATH_BENCH_RECORDS);
+}
+
+/// Build the write-path corpus through a single generation write session; read
+/// the adapter's real connection/transaction counters and elapsed wall-clock.
+fn measure_write_path_session() -> WritePathMeasurement {
+    use std::sync::atomic::Ordering;
+    let workspace = TempWorkspace::new("write-path-benchmark-session");
+    let state_dir = workspace.path().join(".repogrammar");
+    let store = SqliteIndexStore::new(&state_dir);
+    let instrumentation = store.write_instrumentation();
+    let generation = store
+        .prepare_next_generation()
+        .expect("prepare benchmark generation");
+
+    let start = Instant::now();
+    let mut session = store
+        .open_generation_write_session(&generation)
+        .expect("open write session");
+    let mut units = Vec::with_capacity(WRITE_PATH_BENCH_FILES);
+    for index in 0..WRITE_PATH_BENCH_FILES {
+        let file = benchmark_file(index);
+        let unit = benchmark_unit(&file, index);
+        session.record_indexed_file(&file).expect("record file");
+        session.record_code_unit(&unit).expect("record code unit");
+        units.push(unit);
+    }
+    session.checkpoint().expect("checkpoint after code units");
+    for index in 0..WRITE_PATH_BENCH_SEMANTIC_FACTS {
+        let unit = &units[index % units.len()];
+        session
+            .record_semantic_fact(&benchmark_semantic_fact(unit, index))
+            .expect("record semantic fact");
+    }
+    session.checkpoint().expect("checkpoint after facts");
+    for (index, unit) in units.iter().enumerate().take(WRITE_PATH_BENCH_FAMILIES) {
+        let family = benchmark_family(index);
+        session.record_family(&family).expect("record family");
+        session
+            .record_family_member(&benchmark_family_member(&family, unit))
+            .expect("record family member");
+    }
+    for index in 0..WRITE_PATH_BENCH_EVIDENCE {
+        let family = benchmark_family(index % WRITE_PATH_BENCH_FAMILIES);
+        let unit = &units[index % units.len()];
+        session
+            .record_family_evidence(&benchmark_family_evidence(&family, unit, index))
+            .expect("record family evidence");
+    }
+    session.finish().expect("finish write session");
+    let stats = session.stats();
+    let elapsed = start.elapsed();
+
+    store
+        .validate_generation(&generation)
+        .expect("validate benchmark generation");
+    WritePathMeasurement {
+        connection_opens: instrumentation.connection_opens.load(Ordering::Relaxed),
+        transactions: instrumentation.transactions.load(Ordering::Relaxed),
+        checkpoints: stats.checkpoints,
+        rows_written: stats.rows_written,
+        elapsed,
+    }
+}
+
+/// Build the same corpus through the granular per-record store methods, each of
+/// which opens its own one-shot session; read the adapter's real connection and
+/// transaction counters and elapsed wall-clock.
+fn measure_write_path_per_record() -> WritePathMeasurement {
+    use std::sync::atomic::Ordering;
+    let workspace = TempWorkspace::new("write-path-benchmark-per-record");
+    let state_dir = workspace.path().join(".repogrammar");
+    let store = SqliteIndexStore::new(&state_dir);
+    let instrumentation = store.write_instrumentation();
+    let generation = store
+        .prepare_next_generation()
+        .expect("prepare benchmark generation");
+
+    let start = Instant::now();
+    let mut units = Vec::with_capacity(WRITE_PATH_BENCH_FILES);
+    for index in 0..WRITE_PATH_BENCH_FILES {
+        let file = benchmark_file(index);
+        let unit = benchmark_unit(&file, index);
+        store
+            .record_indexed_file(&generation, &file)
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &unit)
+            .expect("record code unit");
+        units.push(unit);
+    }
+    for index in 0..WRITE_PATH_BENCH_SEMANTIC_FACTS {
+        let unit = &units[index % units.len()];
+        store
+            .record_semantic_fact(&generation, &benchmark_semantic_fact(unit, index))
+            .expect("record semantic fact");
+    }
+    for (index, unit) in units.iter().enumerate().take(WRITE_PATH_BENCH_FAMILIES) {
+        let family = benchmark_family(index);
+        store
+            .record_family(&generation, &family)
+            .expect("record family");
+        store
+            .record_family_member(&generation, &benchmark_family_member(&family, unit))
+            .expect("record family member");
+    }
+    for index in 0..WRITE_PATH_BENCH_EVIDENCE {
+        let family = benchmark_family(index % WRITE_PATH_BENCH_FAMILIES);
+        let unit = &units[index % units.len()];
+        store
+            .record_family_evidence(
+                &generation,
+                &benchmark_family_evidence(&family, unit, index),
+            )
+            .expect("record family evidence");
+    }
+    let elapsed = start.elapsed();
+    WritePathMeasurement {
+        connection_opens: instrumentation.connection_opens.load(Ordering::Relaxed),
+        transactions: instrumentation.transactions.load(Ordering::Relaxed),
+        checkpoints: instrumentation.checkpoints.load(Ordering::Relaxed),
+        rows_written: WRITE_PATH_BENCH_RECORDS,
+        elapsed,
+    }
+}
 
 #[test]
 fn bootstrap_interfaces_are_reachable() {
@@ -426,9 +622,17 @@ fn constraint_profile_round_trips_through_storage_use_cases() {
         profile: crate::test_support::sample_family_constraint_profile(),
     };
     // The write path runs through the storage use-case (validation) into the
-    // real SQLite adapter, proving the full stack round-trips a profile.
-    crate::application::storage::record_family_constraint_profile(&store, &generation, &record)
-        .expect("record constraint profile through the storage use case");
+    // real SQLite adapter via the generation write session, proving the full
+    // stack round-trips a profile.
+    {
+        let mut session =
+            crate::application::storage::open_index_write_session(&store, &generation)
+                .expect("open write session");
+        crate::application::storage::record_family_constraint_profile(session.as_mut(), &record)
+            .expect("record constraint profile through the storage use case");
+        crate::application::storage::finish_index_write_session(session.as_mut())
+            .expect("finish write session");
+    }
     store
         .activate_generation(&generation)
         .expect("activate generation");

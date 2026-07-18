@@ -686,6 +686,80 @@ used by read-model queries when an initialized mutable database predates the
 current storage schema. Indexing is the only writer of repository analysis
 records.
 
+### Generation Write Session
+
+A build persists a generation through a single **generation write session**, not
+through one connection per record. The session is opened once against the
+`building` generation, owns exactly one writable SQLite connection with the
+write pragmas applied a single time, and routes every `record_*` call through
+bounded-batch transactions on that connection. The build finishes the session
+(commit and seal) before the generation is validated and activated through the
+unchanged `building -> validated -> active` state machine, so validation and
+activation always observe fully committed data on their own connections. The
+granular per-record store methods remain for tests and the storage boundary and
+delegate to one one-shot session each; production builds open exactly one
+session for the whole build.
+
+- **Transaction boundaries.** Writes accumulate in a batch opened with
+  `BEGIN IMMEDIATE`; the batch commits when it reaches a bounded row capacity
+  (2000 rows) and at explicit pipeline phase checkpoints. Both production build
+  pipelines checkpoint after the file/code-unit/IR write phase, after the
+  semantic-fact phase, and after the family phase; each checkpoint commits the
+  open batch and passively checkpoints the write-ahead log. `BEGIN IMMEDIATE`
+  takes the write lock up front, and the session re-reads the generation status
+  under that lock at every batch open, so a status flip landing between batches
+  is rejected before the next write. The row-capacity bound targets transaction
+  size and lock-hold time rather than partial-work durability: a `building`
+  generation is never readable and never resumed, so a crash discards the open
+  batch and the next build supersedes the leftover.
+- **Referential validation.** Each record reproduces the field-level and
+  referential checks of the historical per-record path, reading referenced
+  files, code units, and families on the session's own connection. That
+  connection sees both committed batches and the current open batch, so the
+  checks are at least as strong as the previous per-record reads against the
+  committed database. Statements are issued directly (`execute`/`query_row`);
+  per-statement prepared-statement caching is a deferred optimization gated on
+  enabling the SQLite driver's statement-cache feature and is not required for
+  the single-connection win.
+- **Terminal `failed` status.** The `failed` stamp is written only for a build
+  abandoned **before the session is sealed** and only when it already committed
+  at least one batch — a record error propagated out of the pipeline while the
+  session is still open, an explicit `abandon`, or a dropped unsealed session —
+  which rolls back the open batch and stamps the generation `failed`. A session
+  that committed nothing (for example a lone field- or referential-validation
+  rejection through a granular store method) rolls back and leaves a pristine,
+  reusable `building` row instead of stamping `failed`. Errors raised **after**
+  the session is sealed — a generation-validation rejection or an activation
+  failure — do not stamp anything: the fully committed generation stays
+  `building` (unchanged from the historical behavior) and is reclaimed by prune,
+  exactly like the previous active generation which remains readable throughout.
+  The schema already permits `failed`, validation refuses it, and retention
+  deletes any non-active generation, so both a `failed` and a leftover
+  `building` row are inert and reclaimable. Finishing a session after it was
+  abandoned (or finishing twice) is a typed error, so a build that gave up on
+  one path can never silently seal and activate on another.
+- **Validation once per activation.** Activation validates the generation
+  exactly once. The pipeline validates immediately before activating under the
+  held index lock, leaving the generation `validated`; activation then accepts
+  that status without re-running the whole-database integrity check, so the
+  full-database `PRAGMA integrity_check` runs once per sync rather than twice.
+  Only a not-yet-validated (`building`) generation handed straight to activation
+  is validated inline. The generation-scoped violation scans — family evidence,
+  semantic evidence, derived dependencies, dirty records, the IR graph, and a
+  code-unit/indexed-file conformance scan that re-proves every code unit's hash
+  and byte range against its file — run during validation and make the
+  activation gate a strict superset of per-record enforcement.
+- **WAL behavior and maintenance.** Batch commits alone do not truncate the
+  write-ahead log, so WAL growth is bounded by the phase checkpoints — each runs
+  a passive `wal_checkpoint`, holding the WAL to roughly one phase rather than
+  the whole build. Sealing runs `PRAGMA optimize` plus a passive WAL checkpoint
+  once for a whole-build `finish`; it is sealed **before** that best-effort
+  maintenance so a transient maintenance failure over already-committed rows can
+  never fail or `failed`-stamp the build. The granular one-shot record methods
+  run no post-commit maintenance (matching the historical per-record path), with
+  the sole exception of `remove_indexed_file`, which retains its historical
+  maintenance.
+
 Generation retention may remove inactive generation rows after an active
 generation is readable and storage health checks pass. The default retention
 policy is active plus the newest 2 inactive generations; CLI callers may

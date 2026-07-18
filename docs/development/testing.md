@@ -220,6 +220,23 @@ allowed.
   `compact --dry-run --json` size reporting without writes, `compact --yes`
   active-generation preservation and before/after size reporting, and refusal
   of unsafe active database states such as dirty records.
+- Generation write-session tests must cover the single-connection,
+  bounded-batch write lifecycle with deterministic, test-only fault injection.
+  Required cases: a clean build reports one measured connection open, far fewer
+  committed transactions than rows, and the expected phase-checkpoint count; a
+  standalone checkpoint commits the open batch and increments the checkpoint
+  counter; a field- or referential-validation rejection that persisted nothing
+  leaves a reusable `building` generation (never a false `failed`); an abandon or
+  drop after at least one committed batch stamps `failed` and leaves the previous
+  active generation readable and unchanged; a fault injected mid-record (after an
+  evidence insert, before its fact insert) rolls the torn batch back atomically
+  while committed batches survive; a commit-time fault leaves the batch open and
+  discards it on rollback; a reader resolves the previous active generation
+  throughout the build and only flips after activation; a generation status flip
+  landing between batches is rejected at the next batch open; and finishing after
+  an abandon, or finishing twice, is a typed error rather than a silent success.
+  Faults are injected only through a `#[cfg(test)]` seam on the session;
+  production builds neither compile the seam nor construct a fault.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
@@ -318,6 +335,28 @@ allowed.
   explicitly with
   `cargo test --lib read_path_benchmark_fixture_measures_bounded_query_paths -- --ignored --nocapture`
   when validating read-path performance work.
+- Write-path performance architecture must keep an ignored reproducible
+  benchmark fixture under `src/rust/integration_tests/`. The
+  `write_path_benchmark_fixture_measures_session_vs_per_record` test builds the
+  same fixture corpus twice — once through one generation write session and once
+  through the granular per-record store methods (each a one-shot session) — and
+  reports elapsed wall-clock plus the adapter-measured connection-open and
+  committed-transaction counts for both arms (read from the store's real write
+  instrumentation, never asserted by construction). It asserts the session path
+  opens exactly one connection and commits far fewer transactions than the
+  record count, and that the granular path opens and commits once per record.
+  The per-record arm is today's granular API, not the deleted historical code
+  (which was bare autocommit inserts); the wall-clock ratio is a
+  same-implementation comparison of one session versus per-record opens, not a
+  before/after of the change. It is intentionally ignored so default gates stay
+  deterministic; run it explicitly with
+  `cargo test --lib write_path_benchmark_fixture_measures_session_vs_per_record -- --ignored --nocapture`
+  when validating write-path performance work. Fixture-scale numbers are
+  hardware-dependent; report them with a machine caveat.
+- Write-session phase checkpointing must have a pipeline-level test that indexes
+  a real repository through both the full and incremental pipelines and asserts,
+  through the store's write instrumentation, that each pipeline opens exactly one
+  write connection and checkpoints at its phase boundaries.
 - Rust self-dogfood tests must cover `.rs` and `Cargo.toml` discovery,
   Tree-sitter Rust code-unit extraction, structural Rust anchors, typed
   `MacroOrPreprocessor`, `BuildVariantAmbiguity`, `FrameworkMagic`, and

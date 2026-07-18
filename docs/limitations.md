@@ -183,11 +183,19 @@ These are intentional current behaviors or tracked deferrals, not defects:
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and
   signature verification (or pinned digests) are deferred.
-- **Single-writer connection reuse for indexing is deferred.** Each record write
-  currently opens its own SQLite connection. Reusing one writer connection per
-  generation build (and, further out, batching multiple rows per transaction) is
-  a tracked storage-write-lifecycle change that must preserve per-record
-  crash-consistency and mid-build cross-connection reads.
+- **Indexing uses one write session per build; two follow-ups remain.** A build
+  now persists a generation through a single write session: one connection with
+  the write pragmas applied once and bounded-batch transactions, so connection
+  opens drop from one-per-record to one-per-build. Two smaller items are still
+  open. First, abandoned builds that committed rows are stamped terminal
+  `failed`, but reclamation of `failed`, stale `building`, and old `validated`
+  generations still requires manual `prune`/`compact`; the sync path does not
+  auto-prune. Second, statements are issued directly rather than through a
+  reused prepared-statement cache — per-statement caching is gated on enabling
+  the SQLite driver's statement-cache feature and is a deferred optimization
+  that the single-connection change does not require. The granular per-record
+  store methods remain (each a one-shot session) for tests and the storage
+  boundary.
 - **Local metrics opt-out and retention are partial.** Local aggregate,
   source-free query-outcome and token-savings rollups do not yet re-check the
   `DO_NOT_TRACK`/`REPOGRAMMAR_TELEMETRY`/`CI` environment kill-switch, and the
