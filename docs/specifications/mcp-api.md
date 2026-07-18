@@ -33,6 +33,14 @@ The current input schema is intentionally small:
   evidence metadata. Supplying it implies `mode: evidence` unless an explicit
   mode is provided.
 - optional `mode`: one of `compact`, `evidence`, or `deep`.
+- optional `verbosity`: one of `minimal`, `standard`, or `full`; default
+  `standard`. `verbosity` selects response field density and is orthogonal to
+  `mode`, which selects evidence detail. It is additive under
+  `product-schemas.v1`: `standard` is the current, byte-stable response shape,
+  `minimal` opts into the lean shape, and `full` retains every diagnostic field.
+  An unrecognized value is an invalid-operation schema error, never a silent
+  fallback. The per-field reductions that make the tiers diverge land in later
+  precision slices; in the current schema all three tiers are byte-identical.
 - optional `include_variations` and `include_exceptions`: booleans requesting
   those evidence-coverage labels. Current output reports them as missing unless
   stored family evidence explicitly covers them.

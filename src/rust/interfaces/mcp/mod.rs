@@ -13,8 +13,8 @@ use crate::application::query::{
     FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
     FamilyQueryUnknown, OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation,
     QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, ResolvedQueryTarget,
-    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES,
-    MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
+    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, Verbosity,
+    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -232,6 +232,15 @@ pub fn tool_schema() -> Value {
                 "mode": {
                     "type": "string",
                     "enum": ["compact", "evidence", "deep"],
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        Verbosity::Minimal.as_str(),
+                        Verbosity::Standard.as_str(),
+                        Verbosity::Full.as_str(),
+                    ],
+                    "description": "Response field density. Additive under product-schemas.v1: `standard` (default) is the current shape, `minimal` opts into the lean shape, `full` retains every diagnostic field. Orthogonal to `mode`.",
                 },
                 "include_variations": {
                     "type": "boolean",
@@ -882,6 +891,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
                 | "target"
                 | "token_budget"
                 | "mode"
+                | "verbosity"
                 | "include_variations"
                 | "include_exceptions"
                 | "include_source_spans"
@@ -949,6 +959,23 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
     if token_budget.is_some() && !mode_explicit && evidence_mode == FamilyEvidenceMode::Compact {
         evidence_mode = FamilyEvidenceMode::Evidence;
     }
+    // `verbosity` selects response field density and is orthogonal to `mode`,
+    // which selects evidence detail. Absent verbosity keeps the byte-stable
+    // `standard` shape; an unrecognized value is a schema error, never a silent
+    // fallback.
+    let verbosity = match object.get("verbosity") {
+        None | Some(Value::Null) => Verbosity::Standard,
+        Some(Value::String(value)) => Verbosity::parse(value).ok_or_else(|| {
+            McpProtocolError::invalid_params(
+                "repogrammar_context verbosity must be minimal, standard, or full",
+            )
+        })?,
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context verbosity must be a string when provided",
+            ));
+        }
+    };
     for field in [
         "include_variations",
         "include_exceptions",
@@ -980,6 +1007,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             token_budget,
             include_variations,
             include_exceptions,
+            verbosity,
         },
         include_source_spans,
     })
@@ -1691,6 +1719,76 @@ mod tests {
                 .expect_err("invalid query input must be rejected");
 
             assert_eq!(error.code(), -32602);
+        }
+    }
+
+    #[test]
+    fn context_arguments_parse_verbosity_default_valid_and_invalid() {
+        // Absent verbosity defaults to the byte-stable `standard` shape.
+        let default = parse_context_arguments(&json!({"operation": "find_analogues"}))
+            .expect("default arguments");
+        assert_eq!(default.output_options.verbosity, Verbosity::Standard);
+
+        // Each documented value parses on the MCP surface.
+        for (value, expected) in [
+            ("minimal", Verbosity::Minimal),
+            ("standard", Verbosity::Standard),
+            ("full", Verbosity::Full),
+        ] {
+            let parsed = parse_context_arguments(
+                &json!({"operation": "find_analogues", "verbosity": value}),
+            )
+            .expect("verbosity arguments");
+            assert_eq!(parsed.output_options.verbosity, expected);
+        }
+
+        // Unknown-string and non-string values are schema errors (-32602), never
+        // a silent fallback to the default.
+        for arguments in [
+            json!({"operation": "find_analogues", "verbosity": "loud"}),
+            json!({"operation": "find_analogues", "verbosity": "STANDARD"}),
+            json!({"operation": "find_analogues", "verbosity": 3}),
+        ] {
+            let error = parse_context_arguments(&arguments)
+                .expect_err("invalid verbosity must be rejected");
+            assert_eq!(error.code(), -32602);
+        }
+    }
+
+    #[test]
+    fn verbosity_standard_matches_default_and_all_tiers_byte_for_byte() {
+        let workspace = TempWorkspace::new("mcp-verbosity-byte-parity");
+        let context = context_for_workspace(&workspace);
+        let target = "src/routes/a.ts";
+
+        let baseline = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context,
+            &json!({"operation": "find_analogues", "target": target}),
+        )
+        .expect("baseline found response");
+        assert_eq!(baseline["status"], "ok");
+        // v1 must not introduce a `verbosity` echo in the response envelope.
+        assert!(baseline.get("verbosity").is_none());
+
+        // S0 is additive: the explicit `standard` default and the skeleton
+        // `minimal`/`full` tiers each reproduce the pre-precision bytes exactly.
+        for verbosity in ["standard", "minimal", "full"] {
+            let response = handle_context_call(
+                &FakeMcpRuntime::ready_found(),
+                &context,
+                &json!({
+                    "operation": "find_analogues",
+                    "target": target,
+                    "verbosity": verbosity,
+                }),
+            )
+            .expect("verbosity found response");
+            assert_eq!(
+                serde_json::to_string(&response).expect("serialize response"),
+                serde_json::to_string(&baseline).expect("serialize baseline"),
+                "verbosity={verbosity} must be byte-identical to the default response in S0",
+            );
         }
     }
 

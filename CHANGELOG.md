@@ -18,6 +18,17 @@
 
 ### Added
 
+- Added a `verbosity` request parameter (`minimal | standard | full`,
+  default `standard`) to the CLI query flags and the MCP
+  `repogrammar_context` input, additive under `product-schemas.v1` and
+  orthogonal to `--mode`: `mode` selects how much evidence the
+  resolver gathers, `verbosity` selects the response field density the
+  serializers emit. In this release all three tiers are byte-identical
+  (golden tests pin `standard` to the pre-change response bytes on
+  both surfaces); later precision slices suppress demoted diagnostic
+  fields at `minimal`. Invalid values are explicit protocol errors,
+  never a silent fallback.
+
 - Extended estimated-potential token-savings accounting to every
   context-delivering outcome. A single estimator authority records an
   ESTIMATED event for found, partial-context, and committed-alignment

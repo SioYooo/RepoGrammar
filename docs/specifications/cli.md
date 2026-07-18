@@ -109,6 +109,7 @@ All query commands must support:
 - `--project <path>`
 - `--token-budget <n>` where `n` is positive and no greater than 200000
 - `--mode compact|evidence|deep`
+- `--verbosity minimal|standard|full`
 - `--json`
 - `--include-variations`
 - `--include-exceptions`
@@ -1376,6 +1377,15 @@ covers any dimension it solely represents. `exception` evidence remains unlinked
 in this slice.
 `--mode deep` is accepted as an explicit detail request, but it remains
 metadata-first and does not imply source output without `--include-source-spans`.
+`--verbosity minimal|standard|full` selects response field density and is
+orthogonal to `--mode`, which selects evidence detail; the two never interact.
+It defaults to `standard`, the current byte-stable structured payload, and is
+additive under `product-schemas.v1`: `minimal` opts into the lean shape and
+`full` retains every diagnostic field. An unrecognized value is rejected rather
+than silently defaulted. The per-field reductions that make the tiers diverge
+land in later precision slices; in the current schema all three tiers emit
+byte-identical output. This CLI flag stays byte-parallel with the MCP
+`verbosity` request field.
 None of these modes may include absolute paths. `check` returns a static
 alignment certificate. Its top-level `status` is the alignment status token
 (`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,

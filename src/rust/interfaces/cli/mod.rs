@@ -29,7 +29,7 @@ use crate::application::query::{
     ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
     RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
     SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket,
-    UnknownInventoryReport, PRODUCT_SCHEMA_VERSION,
+    UnknownInventoryReport, Verbosity, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -1033,6 +1033,7 @@ fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
         "  --project <path>                    Repository root. Defaults to the current directory.",
         "  --token-budget <n>                  Positive budget up to 200000; implies --mode evidence unless mode is explicit.",
         "  --mode compact|evidence|deep        Select metadata detail. Deep still omits source unless source spans are requested.",
+        "  --verbosity minimal|standard|full   Select response field density. Default standard; additive under product-schemas.v1. Orthogonal to --mode.",
         "  --json                             Emit machine-readable output.",
         "  --include-variations               Request variation evidence coverage metadata.",
         "  --include-exceptions               Request exception evidence coverage metadata.",
@@ -7481,6 +7482,7 @@ struct QueryOptions {
     include_variations: bool,
     include_exceptions: bool,
     include_source_spans: bool,
+    verbosity: Verbosity,
     all: bool,
 }
 
@@ -7491,6 +7493,7 @@ impl QueryOptions {
             token_budget: self.token_budget,
             include_variations: self.include_variations,
             include_exceptions: self.include_exceptions,
+            verbosity: self.verbosity,
         }
     }
 }
@@ -8167,6 +8170,12 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 options.evidence_mode = FamilyEvidenceMode::parse(value)
                     .ok_or_else(|| "--mode requires compact, evidence, or deep".to_string())?;
                 options.mode_explicit = true;
+                index += 2;
+            }
+            "--verbosity" => {
+                let value = option_value(rest, index, "--verbosity", "minimal, standard, or full")?;
+                options.verbosity = Verbosity::parse(value)
+                    .ok_or_else(|| "--verbosity requires minimal, standard, or full".to_string())?;
                 index += 2;
             }
             "--json" => {
@@ -13223,6 +13232,36 @@ mod tests {
     }
 
     #[test]
+    fn query_options_parse_verbosity_default_valid_and_invalid() {
+        // Absent `--verbosity` defaults to the byte-stable `standard` shape.
+        assert_eq!(
+            parse_query_options(&[])
+                .expect("default query options")
+                .verbosity,
+            Verbosity::Standard
+        );
+
+        // Each documented value parses on the CLI surface.
+        for (value, expected) in [
+            ("minimal", Verbosity::Minimal),
+            ("standard", Verbosity::Standard),
+            ("full", Verbosity::Full),
+        ] {
+            assert_eq!(
+                parse_query_options(&["--verbosity".to_string(), value.to_string()])
+                    .expect("verbosity query options")
+                    .verbosity,
+                expected
+            );
+        }
+
+        // Unknown value and a missing value are rejected, never silently
+        // defaulted.
+        assert!(parse_query_options(&["--verbosity".to_string(), "loud".to_string()]).is_err());
+        assert!(parse_query_options(&["--verbosity".to_string()]).is_err());
+    }
+
+    #[test]
     fn inventory_commands_reject_inapplicable_flags() {
         let strings = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         // Only --json and --project/--path are accepted.
@@ -13994,6 +14033,52 @@ mod tests {
         assert!(value["alignment"].is_null());
         assert!(value.get("check").is_none());
         assert!(value["query_route"]["selected_family_id"].is_null());
+    }
+
+    #[test]
+    fn find_verbosity_standard_matches_default_and_all_tiers_byte_for_byte() {
+        let workspace = TempWorkspace::new("cli-verbosity-byte-parity");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+        assert_eq!(
+            run_with_context(["init", "--state-only"], workspace.path(), &env).status,
+            0
+        );
+
+        let baseline = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(baseline.status, 0);
+        let baseline_value: Value =
+            serde_json::from_str(baseline.stdout.trim()).expect("baseline family JSON");
+        assert_eq!(baseline_value["status"], "ok");
+        // v1 must not echo `verbosity` into the structured payload.
+        assert!(baseline_value.get("verbosity").is_none());
+
+        // S0 is additive: the explicit `standard` default and the skeleton
+        // `minimal`/`full` tiers each reproduce the pre-precision stdout exactly.
+        for verbosity in ["standard", "minimal", "full"] {
+            let output = run_with_context_and_runtime(
+                [
+                    "find",
+                    "src/routes/a.ts",
+                    "--verbosity",
+                    verbosity,
+                    "--json",
+                ],
+                workspace.path(),
+                &env,
+                &runtime,
+            );
+            assert_eq!(output.status, 0);
+            assert_eq!(
+                output.stdout, baseline.stdout,
+                "--verbosity {verbosity} must be byte-identical to the default output in S0",
+            );
+        }
     }
 
     #[test]

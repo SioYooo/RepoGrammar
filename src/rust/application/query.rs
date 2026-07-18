@@ -754,12 +754,89 @@ impl FamilyEvidenceMode {
     }
 }
 
+/// Response verbosity requested by the caller.
+///
+/// `verbosity` is orthogonal to [`FamilyEvidenceMode`]: `mode` selects how much
+/// *evidence detail* the resolver gathers and budgets, whereas `verbosity`
+/// selects how many *response fields* the serializers emit. The two never
+/// interact.
+///
+/// Under `product-schemas.v1` every tier is additive and byte-identical to the
+/// pre-precision response shape: `Standard` is the current default, `Minimal`
+/// is the opt-in lean shape, and `Full` retains every diagnostic field. The
+/// per-field demotions that make the tiers diverge land in later precision
+/// slices; this foundation only threads the request parameter and exposes the
+/// [`Verbosity::renders`] gate those slices consume.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Verbosity {
+    /// Opt-in lean shape. Currently equivalent to [`Verbosity::Standard`];
+    /// later precision slices suppress demoted fields at this tier.
+    Minimal,
+    /// Current default shape, byte-identical to the pre-precision response.
+    #[default]
+    Standard,
+    /// Superset shape that retains every field, including those later slices
+    /// demote out of `Standard` and `Minimal`.
+    Full,
+}
+
+impl Verbosity {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "minimal" => Some(Self::Minimal),
+            "standard" => Some(Self::Standard),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        }
+    }
+
+    /// Gate consumed by precision slices: does this verbosity render a field
+    /// classified at `tier`? A field is emitted when the requested verbosity is
+    /// at least as detailed as the field's tier. Under `product-schemas.v1` no
+    /// field is demoted yet, so serializers still emit their full field set
+    /// regardless of this gate.
+    pub fn renders(self, tier: VerbosityTier) -> bool {
+        match tier {
+            VerbosityTier::Minimal => true,
+            VerbosityTier::Standard => matches!(self, Self::Standard | Self::Full),
+            VerbosityTier::Full => matches!(self, Self::Full),
+        }
+    }
+}
+
+/// Field-visibility tier a serializer assigns to an individual response field.
+///
+/// Precision slices tag each demotable field with the lowest verbosity that
+/// still renders it; [`Verbosity::renders`] evaluates the gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerbosityTier {
+    /// Core field rendered at every verbosity, including `minimal`.
+    Minimal,
+    /// Field rendered at `standard` and `full`; suppressed at `minimal`.
+    Standard,
+    /// Diagnostic field rendered only at `full`.
+    Full,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FamilyOutputOptions {
     pub evidence_mode: FamilyEvidenceMode,
     pub token_budget: Option<usize>,
     pub include_variations: bool,
     pub include_exceptions: bool,
+    /// Requested response verbosity. Defaults to [`Verbosity::Standard`], the
+    /// byte-stable pre-precision shape. Serializers gate demotable fields on
+    /// this via [`Verbosity::renders`] in later slices; the current shape is
+    /// identical across all tiers.
+    pub verbosity: Verbosity,
 }
 
 impl Default for FamilyOutputOptions {
@@ -769,6 +846,7 @@ impl Default for FamilyOutputOptions {
             token_budget: None,
             include_variations: false,
             include_exceptions: false,
+            verbosity: Verbosity::Standard,
         }
     }
 }
@@ -6976,6 +7054,40 @@ mod tests {
     }
 
     #[test]
+    fn verbosity_parses_defaults_and_gates_field_tiers() {
+        // Values round-trip; unknown or wrong-case values are rejected (no
+        // silent fallback).
+        for tier in [Verbosity::Minimal, Verbosity::Standard, Verbosity::Full] {
+            assert_eq!(Verbosity::parse(tier.as_str()), Some(tier));
+        }
+        assert_eq!(Verbosity::parse("loud"), None);
+        assert_eq!(Verbosity::parse("STANDARD"), None);
+
+        // `standard` is the default, byte-stable shape, threaded through the
+        // shared output options.
+        assert_eq!(Verbosity::default(), Verbosity::Standard);
+        assert_eq!(
+            FamilyOutputOptions::default().verbosity,
+            Verbosity::Standard
+        );
+
+        // The gate every precision slice consumes: a field renders when the
+        // requested verbosity is at least as detailed as the field's tier.
+        // Minimal-tier (core) fields render at every verbosity.
+        for verbosity in [Verbosity::Minimal, Verbosity::Standard, Verbosity::Full] {
+            assert!(verbosity.renders(VerbosityTier::Minimal));
+        }
+        // Standard-tier fields render at standard and full, not minimal.
+        assert!(!Verbosity::Minimal.renders(VerbosityTier::Standard));
+        assert!(Verbosity::Standard.renders(VerbosityTier::Standard));
+        assert!(Verbosity::Full.renders(VerbosityTier::Standard));
+        // Full-tier (diagnostic) fields render only at full.
+        assert!(!Verbosity::Minimal.renders(VerbosityTier::Full));
+        assert!(!Verbosity::Standard.renders(VerbosityTier::Full));
+        assert!(Verbosity::Full.renders(VerbosityTier::Full));
+    }
+
+    #[test]
     fn nonmember_satisfying_required_is_a_near_miss() {
         // A non-member that statically aligns but was never admitted (e.g.
         // sub-support) is a NEAR_MISS, never a member.
@@ -10034,6 +10146,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         // Every dimension's witness is selected; the two shared "variation" tokens
@@ -10062,6 +10175,7 @@ mod tests {
                 token_budget: Some(1),
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         assert!(!tiny.budget_satisfied);
@@ -10129,6 +10243,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         let ids = selected
@@ -10178,6 +10293,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         assert!(
@@ -10212,6 +10328,7 @@ mod tests {
                 token_budget: None,
                 include_variations: false,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         let support = read_plan
@@ -10239,6 +10356,7 @@ mod tests {
                 token_budget: None,
                 include_variations: false,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         let fallback_support = fallback
@@ -10286,6 +10404,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         assert_eq!(
@@ -10325,6 +10444,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
 
@@ -10361,6 +10481,7 @@ mod tests {
                 token_budget: Some(1),
                 include_variations: true,
                 include_exceptions: true,
+                verbosity: Verbosity::Standard,
             },
         );
         assert_eq!(tiny_budget.evidence[0].record, first);
@@ -10386,6 +10507,7 @@ mod tests {
                 token_budget: None,
                 include_variations: false,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
 
@@ -10723,6 +10845,7 @@ mod tests {
             token_budget: Some(1),
             include_variations: true,
             include_exceptions: false,
+            verbosity: Verbosity::Standard,
         };
 
         let first_plan = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, options);
