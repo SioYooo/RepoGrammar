@@ -154,3 +154,26 @@ These are intentional current behaviors or tracked deferrals, not defects:
   does not re-mine, re-cluster, or repair anything: a `stale` family stays listed
   with its verdict and a report-level `StaleEvidence` signal that recovers via
   `run repogrammar resync`, rather than being recomputed in place.
+- **Natural-language resolution uses a bounded, deterministic vocabulary.**
+  Natural-language, synonym, and framework-plus-concept targets now resolve to a
+  fresh family through deterministic term retrieval (a committed alias/concept
+  vocabulary with no LLM, embedding, or network dependency); they no longer always
+  resolve to zero candidates. Resolution requires the top candidate to clear an
+  absolute score floor (in practice a framework filter plus a pattern concept, or
+  a concept plus enough evidence-token matches) and carry a pattern-concept signal,
+  and to be a single family clearly ahead of any competitor that also clears the
+  floor. A bare framework name, a bare concept, an unrecognised token (including
+  typos), a genuinely ambiguous target, or an unsupported concept still abstains
+  with a typed `UNKNOWN` and a low-cardinality route reason. Because scoring is a
+  pure function of the normalized query, targets that normalize identically share
+  one outcome, so some natural-language phrasings deliberately abstain rather than
+  risk a false family. See `docs/specifications/query-resolution.md`.
+- **Term retrieval is skipped for path-locator-shaped targets, judged before
+  normalization.** A target is treated as a file locator — and routed to the
+  exact/local-context path instead of term retrieval — when a whitespace token
+  contains `/` or ends in a known indexed source-file extension (`.py`, `.ts`,
+  `.js`, `.rs`, `.java`, `.cs`, `.go`, `.cpp`, …). A single interior-dotted word
+  in prose (`fastapi.Depends`, a version like `0.100`, or `e.g.`) is not treated
+  as a locator, so such phrasings still reach term retrieval. Conversely, a bare
+  filename such as `app.py` is a locator and never reaches term retrieval even
+  when phrased as a question.

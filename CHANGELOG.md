@@ -40,6 +40,41 @@
 
 ### Added
 
+- Routed the deterministic term-retrieval substrate into the production fuzzy
+  lookup path so natural-language, synonym, and framework-plus-concept queries now
+  resolve to a fresh family with calibrated abstention — no LLM, embedding, or
+  network dependency. Term retrieval runs **only** when the exact authority layers
+  (exact family id, `unit:` member id, exact role, exact `//`-suffix path) and the
+  role/evidence fuzzy layer produce **no candidate at all** (a single `query
+  target` `InsufficientSupport` block with empty candidate ids) for a target that
+  is not path-locator-shaped; exact-layer candidate-set and ambiguity abstentions
+  keep their own claim, candidate ids, and narrowing recovery verbatim. A target
+  is path-shaped only when a whitespace token contains `/` or ends in a known
+  source-file extension, so prose with an interior-dotted word (`fastapi.Depends`,
+  `0.100`, `e.g.`) still reaches retrieval. Normalization scores the source-free
+  family search projection and applies named abstention gates
+  (`MIN_RETRIEVAL_SCORE = 10`, `MIN_RETRIEVAL_MARGIN = 1`, hydration bounded by the
+  defensive `MAX_RETRIEVAL_HYDRATIONS = 5`): a selection requires the top candidate
+  to clear the additive absolute floor and carry a pattern-concept signal, and to
+  beat any competing family that also clears the floor. Bare frameworks, bare
+  concepts, typos, truncated ties, stale candidates, and genuinely ambiguous
+  targets abstain with a typed `UNKNOWN` and a low-cardinality `abstention_reason`
+  (`no_candidate`, `below_min_score`, `unsupported_target`, `margin_too_close`,
+  `truncated_tie`, `stale_candidates`, `hydration_ambiguous`). Calibrated on the
+  73-query product-eval corpus (42 retrieval + 25 abstention + 6 context), this
+  raises hit@1 to 21/42 (from the pre-routing 17/43) while holding zero
+  false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
+  6/6 ambiguity precision, and 14/14 candidate recall with no regression among
+  previously-matching exact/context queries. The committed retrieval vocabulary
+  also treats `repository` as a data-access concept (previously shadowed by a
+  stopword) and `model` as both a validation-model and a data-access concept, so
+  repository-worded queries resolve and bare `models` stays genuinely ambiguous.
+  The `query_route` report (CLI JSON, MCP, and human) gains source-free
+  term-retrieval metadata (`hydrated_family_count`, `retrieval_stage_count`, and a
+  `term_retrieval` object with route token, counts, bucketed scores, matched
+  signals, truncation flag, and abstention reason), and anonymous telemetry gains
+  the enum-only `by_abstention_reason` rollup dimension (kept in lockstep with the
+  reason enum by a build-time equality test). No raw target text is ever persisted.
 - Committed the deterministic product-core evaluation harness: a report-only
   `repo-guard product-eval` command that indexes committed fixtures in isolated
   temporary workspaces and drives the product binary through

@@ -8,8 +8,8 @@ use crate::application::query::{
     validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
     FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
     FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport, MAX_QUERY_TARGET_BYTES,
-    MAX_QUERY_TOKEN_BUDGET,
+    ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport,
+    TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -335,6 +335,7 @@ pub fn handle_context_call(
                     arguments.operation,
                     FamilyQueryOutcomeStatus::Found,
                     &family.unknowns,
+                    None,
                     Some(&read_plan),
                     source_spans.as_ref(),
                     arguments.include_source_spans,
@@ -404,6 +405,7 @@ pub fn handle_context_call(
                     arguments.operation,
                     FamilyQueryOutcomeStatus::PartialContext,
                     &report.unknowns,
+                    None,
                     Some(&read_plan),
                     source_spans.as_ref(),
                     arguments.include_source_spans,
@@ -427,6 +429,11 @@ pub fn handle_context_call(
                     arguments.operation,
                     FamilyQueryOutcomeStatus::Unknown,
                     &report.unknowns,
+                    report
+                        .term_retrieval
+                        .as_ref()
+                        .and_then(|term| term.abstention_reason)
+                        .map(TermRetrievalAbstention::as_str),
                     None,
                     None,
                     arguments.include_source_spans,
@@ -467,11 +474,13 @@ fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_mcp_family_query_outcome(
     request: RepositoryStatusRequest,
     operation: McpOperation,
     status: FamilyQueryOutcomeStatus,
     unknowns: &[FamilyQueryUnknown],
+    abstention_reason: Option<&str>,
     read_plan: Option<&ReadPlan>,
     source_spans: Option<&SourceSpanRenderReport>,
     source_spans_requested: bool,
@@ -486,6 +495,7 @@ fn record_mcp_family_query_outcome(
         command_category: family_query_operation_category(operation),
         lookup_mode: family_query_lookup_mode(lookup_mode_for_operation(operation)),
         unknowns: &unknown_metrics,
+        abstention_reason,
         read_plan_item_count: read_plan.map(|read_plan| read_plan.items.len()),
         source_spans_requested,
         source_spans_included: read_plan
@@ -506,6 +516,7 @@ fn record_mcp_family_query_fallback(
         command_category: family_query_operation_category(operation),
         lookup_mode: family_query_lookup_mode(lookup_mode_for_operation(operation)),
         unknowns: &[],
+        abstention_reason: None,
         read_plan_item_count: None,
         source_spans_requested,
         source_spans_included: false,
@@ -965,6 +976,41 @@ fn query_route_value(route: &FamilyQueryRouteReport) -> Value {
         "candidate_family_ids": route.candidate_family_ids,
         "follow_up_family_ids": route.follow_up_family_ids,
         "why_selected": route.why_selected,
+        // Numeric fields the product-eval harness reads directly; null unless the
+        // deterministic term-retrieval fallback produced this route.
+        "hydrated_family_count": route
+            .term_retrieval
+            .as_ref()
+            .map(|term| term.hydrated_candidate_count),
+        "retrieval_stage_count": route
+            .term_retrieval
+            .as_ref()
+            .map(|term| term.retrieval_stage_count),
+        "term_retrieval": route.term_retrieval.as_ref().map(term_retrieval_value),
+    })
+}
+
+/// Source-free JSON for a term-retrieval route (MCP shape). Carries only enum
+/// tokens, counts, and small integer scores; never raw target text.
+fn term_retrieval_value(term: &TermRetrievalRoute) -> Value {
+    json!({
+        "route": term.route,
+        "retrieved_summary_count": term.retrieved_summary_count,
+        "ranked_candidate_count": term.ranked_candidate_count,
+        "hydrated_candidate_count": term.hydrated_candidate_count,
+        "retrieval_stage_count": term.retrieval_stage_count,
+        "top_score": term.top_score,
+        "margin": term.margin,
+        "top_score_bucket": term.top_score_bucket,
+        "margin_bucket": term.margin_bucket,
+        "truncated": term.truncated,
+        "matched_signals": term.matched_signals.map(|signals| json!({
+            "framework_filter": signals.framework_filter,
+            "concept": signals.concept,
+            "language_filter": signals.language_filter,
+            "residue_hits": signals.residue_hits,
+        })),
+        "abstention_reason": term.abstention_reason.map(|reason| reason.as_str()),
     })
 }
 
@@ -1124,6 +1170,7 @@ fn error_response(id: Value, error: McpProtocolError) -> Value {
 mod tests {
     use super::*;
     use crate::application::query::{FamilyQueryUnknown, FamilyUnknownReport};
+    use crate::application::query_terms::MatchedSignals;
     use crate::application::repository::{
         RepositoryImplementationStatus, RepositoryReadiness, RepositoryStatus,
     };
@@ -1133,6 +1180,53 @@ mod tests {
     };
     use crate::test_support::TempWorkspace;
     use std::fs;
+
+    #[test]
+    fn query_route_value_serializes_term_retrieval_metadata() {
+        let route = FamilyQueryRouteReport {
+            route: "discovery_unknown",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["discover_candidates", "abstain"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: None,
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            follow_up_family_ids: vec![],
+            why_selected: "candidate discovery could not produce a single supported family",
+            term_retrieval: Some(TermRetrievalRoute {
+                route: "term_retrieval_unknown",
+                retrieved_summary_count: 8,
+                ranked_candidate_count: 1,
+                hydrated_candidate_count: 0,
+                retrieval_stage_count: 4,
+                top_score: Some(4),
+                margin: None,
+                top_score_bucket: "below_min",
+                margin_bucket: "none",
+                matched_signals: Some(MatchedSignals {
+                    framework_filter: false,
+                    concept: true,
+                    language_filter: false,
+                    residue_hits: 0,
+                }),
+                truncated: false,
+                abstention_reason: Some(TermRetrievalAbstention::BelowMinScore),
+            }),
+        };
+        let value = query_route_value(&route);
+        assert_eq!(value["hydrated_family_count"], 0);
+        assert_eq!(value["retrieval_stage_count"], 4);
+        let term = &value["term_retrieval"];
+        assert_eq!(term["route"], "term_retrieval_unknown");
+        assert_eq!(term["abstention_reason"], "below_min_score");
+        assert_eq!(term["top_score"], 4);
+        assert_eq!(term["top_score_bucket"], "below_min");
+        assert_eq!(term["ranked_candidate_count"], 1);
+        assert_eq!(term["matched_signals"]["concept"], true);
+    }
 
     #[test]
     fn tool_names_match_bootstrap_contract() {
@@ -2087,6 +2181,7 @@ mod tests {
                     "run repogrammar resync after adding compatible implementations".to_string(),
                 ),
             }],
+            term_retrieval: None,
         })
     }
 
@@ -2187,6 +2282,7 @@ mod tests {
                 affected_claim: "runtime_equivalence".to_string(),
                 recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
             }],
+            term_retrieval: None,
         }
     }
 

@@ -1182,6 +1182,20 @@ typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `selected_family_id`, `candidate_family_ids`, `follow_up_family_ids`, and
 `why_selected`. Candidate/follow-up family ids are narrowing handles; only
 `selected_family_id` on a matched family response is a supported family claim.
+When a natural-language, synonym, or framework-plus-concept target is resolved by
+the deterministic term-retrieval fallback, `query_route` additionally carries
+`hydrated_family_count`, `retrieval_stage_count`, and a source-free
+`term_retrieval` object: `route` (`term_retrieval_hydrate` |
+`term_retrieval_unknown`), `retrieved_summary_count`, `ranked_candidate_count`,
+`hydrated_candidate_count`, `retrieval_stage_count`, raw `top_score`/`margin`,
+`top_score_bucket`/`margin_bucket`, `truncated`, `matched_signals`, and
+`abstention_reason`. The `abstention_reason` vocabulary is `no_candidate`,
+`below_min_score`, `unsupported_target`, `margin_too_close`, `truncated_tie`,
+`stale_candidates`, and `hydration_ambiguous` (null when a family was found).
+These fields are null for exact/role/path routes. The human-readable output adds
+`query_term_route`, and either `query_term_matched_signal` (on a match) or
+`query_term_abstention_reason` with the bounded candidate family ids (on an
+abstention). See `docs/specifications/query-resolution.md`.
 Matched family output defaults to `--mode compact`: family
 id, classification, support, members, variation slots, typed unknowns, selected
 output metadata, a `read_plan`, and no evidence records or source snippets.

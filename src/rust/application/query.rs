@@ -4,6 +4,7 @@ use crate::application::family::{
     classify_unknown_family_effect, FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
 };
 use crate::application::providers::provider_recovery_code;
+use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
 use crate::application::recovery::{
     classify_recovery, recovery_guidance, RecoveryAction, RecoveryAgentState,
     RecoveryAutosyncState, RecoveryContext, RecoveryEvidenceState, RecoveryFreshness,
@@ -39,6 +40,53 @@ pub const MAX_QUERY_TARGET_BYTES: usize = 8 * 1024;
 pub const MAX_QUERY_TOKEN_BUDGET: usize = 200_000;
 pub const MAX_RENDERED_SOURCE_SPAN_BYTES: usize = 16 * 1024;
 const FUZZY_FAMILY_CANDIDATE_LIMIT: usize = 5;
+
+// ---------------------------------------------------------------------------
+// Term-retrieval abstention calibration.
+//
+// These constants gate the deterministic metadata-retrieval fallback that runs
+// only after the exact authority layers (exact family id, `unit:` member id,
+// exact role, exact `//`-suffix evidence path) and the existing role/evidence
+// fuzzy layer have produced no candidate at all for a non-path-locator target.
+// They enforce exactly two conditions for a selection: the top candidate clears
+// the absolute floor `MIN_RETRIEVAL_SCORE`, and it carries a pattern-concept
+// signal. The score is additive over framework(6)/concept(4)/language(2)/
+// residue(3-per-hit): with the floor at 10, the common resolving shape is a
+// framework filter plus a pattern concept (6 + 4), but a concept plus enough
+// residue hits can also clear the floor — the gates do not structurally require
+// a framework signal. The winner must also clear `MIN_RETRIEVAL_MARGIN` over any
+// competing family that itself clears the floor. Every other case abstains.
+// Calibrated against the v1 product-eval corpus (73 queries). See
+// `docs/specifications/query-resolution.md`.
+// ---------------------------------------------------------------------------
+
+/// Minimum absolute retrieval score for a candidate to be selectable. Equal to
+/// `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` (6 + 4). The score is additive, so
+/// this is an absolute floor, not a structural framework+concept requirement: a
+/// bare concept (4), bare framework filter (6), or bare language filter (2)
+/// abstains, while framework+concept, or concept plus residue hits, can clear it.
+const MIN_RETRIEVAL_SCORE: i64 = 10;
+
+/// Minimum score gap between the top candidate and a competing family that
+/// itself clears `MIN_RETRIEVAL_SCORE` for the top candidate to be selected. A
+/// tie (gap 0) or a sub-margin gap against such a competitor abstains with
+/// `margin_too_close` rather than guessing between two families. A runner-up
+/// below the floor is not a competitor and never forces abstention.
+const MIN_RETRIEVAL_MARGIN: i64 = 1;
+
+/// Upper bound on top-tier candidates hydrated through the freshness gate.
+/// Matches `FUZZY_FAMILY_CANDIDATE_LIMIT`. In practice the margin gate reduces
+/// the winning score tier to a single family before hydration, so this bound is
+/// a defensive ceiling rather than an operative multi-hydration limit.
+const MAX_RETRIEVAL_HYDRATIONS: usize = FUZZY_FAMILY_CANDIDATE_LIMIT;
+
+/// Retrieval pipeline stage count reported when abstaining before hydration
+/// with no ranked candidate (normalize, retrieve summaries, score).
+const TERM_STAGE_SCORE: usize = 3;
+/// Stage count when abstaining at a score/margin/support gate (adds gating).
+const TERM_STAGE_GATE: usize = 4;
+/// Stage count when hydration ran (adds bounded hydration + freshness).
+const TERM_STAGE_HYDRATE: usize = 5;
 
 pub fn validate_query_target(value: &str) -> Result<(), &'static str> {
     if value.trim().is_empty() {
@@ -294,6 +342,9 @@ pub struct FamilyDetailReport {
     pub variation_slots: Vec<IndexedVariationSlotRecord>,
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Present only when the deterministic term-retrieval fallback selected this
+    /// family; carries its source-free route metadata for the query response.
+    pub term_retrieval: Option<TermRetrievalRoute>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +352,9 @@ pub struct FamilyUnknownReport {
     pub active_generation: String,
     pub candidate_family_ids: Vec<String>,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Present only when the deterministic term-retrieval fallback abstained;
+    /// carries its source-free route metadata (including the abstention reason).
+    pub term_retrieval: Option<TermRetrievalRoute>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -347,6 +401,97 @@ pub struct FamilyQueryRouteReport {
     pub candidate_family_ids: Vec<String>,
     pub follow_up_family_ids: Vec<String>,
     pub why_selected: &'static str,
+    /// Source-free metadata for the deterministic term-retrieval fallback, when
+    /// that fallback produced this report. `None` for exact/role/path routes.
+    pub term_retrieval: Option<TermRetrievalRoute>,
+}
+
+/// Low-cardinality reason a term-retrieval query abstained. Every value is a
+/// stable enum token safe for telemetry; none carries raw target text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermRetrievalAbstention {
+    /// No family scored a positive retrieval signal.
+    NoCandidate,
+    /// The top candidate scored below the absolute floor `MIN_RETRIEVAL_SCORE`
+    /// (e.g. a bare concept at 4, a bare framework filter at 6, or a bare
+    /// language filter at 2).
+    BelowMinScore,
+    /// The top candidate cleared the floor on filters/residue alone, with no
+    /// pattern-concept signal (e.g. a framework filter plus residue that
+    /// substring-matches role tokens — a typo such as `framework:fastapi.rout`).
+    UnsupportedTarget,
+    /// A competing family that itself clears the floor was within
+    /// `MIN_RETRIEVAL_MARGIN` of the top.
+    MarginTooClose,
+    /// The ranking was truncated at K with a competitor tied at the top score.
+    TruncatedTie,
+    /// Every hydrated candidate failed the evidence-freshness gate.
+    StaleCandidates,
+    /// Defensive backstop: more than one hydrated candidate survived the
+    /// single-fresh-family gate. The margin gate normally reduces the winning
+    /// score tier to one family before hydration, so this is not reached in
+    /// practice, but it keeps the single-fresh-family invariant explicit.
+    HydrationAmbiguous,
+}
+
+impl TermRetrievalAbstention {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoCandidate => "no_candidate",
+            Self::BelowMinScore => "below_min_score",
+            Self::UnsupportedTarget => "unsupported_target",
+            Self::MarginTooClose => "margin_too_close",
+            Self::TruncatedTie => "truncated_tie",
+            Self::StaleCandidates => "stale_candidates",
+            Self::HydrationAmbiguous => "hydration_ambiguous",
+        }
+    }
+
+    /// The full low-cardinality vocabulary. A telemetry test asserts element-wise
+    /// equality with `telemetry::FAMILY_QUERY_ABSTENTION_REASON_KEYS`, so a drift
+    /// between the two lists fails the build rather than silently dropping records.
+    pub const ALL: &'static [TermRetrievalAbstention] = &[
+        Self::NoCandidate,
+        Self::BelowMinScore,
+        Self::UnsupportedTarget,
+        Self::MarginTooClose,
+        Self::TruncatedTie,
+        Self::StaleCandidates,
+        Self::HydrationAmbiguous,
+    ];
+}
+
+/// Source-free route metadata describing one deterministic term-retrieval run.
+/// It never carries the raw query text: identity is limited to already-public
+/// family ids, typed signal booleans, and small integer counts/scores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermRetrievalRoute {
+    /// `term_retrieval_hydrate` when a single fresh family was selected,
+    /// `term_retrieval_unknown` when the run abstained.
+    pub route: &'static str,
+    /// Active-generation family search-summary rows scored.
+    pub retrieved_summary_count: usize,
+    /// Candidates that scored a positive signal (bounded by the K cap).
+    pub ranked_candidate_count: usize,
+    /// Top-tier candidates hydrated through the freshness gate (0 when a
+    /// score/margin gate abstained before hydration).
+    pub hydrated_candidate_count: usize,
+    /// Number of retrieval pipeline stages executed.
+    pub retrieval_stage_count: usize,
+    /// Raw integer score of the top candidate, if any.
+    pub top_score: Option<i64>,
+    /// Raw integer gap between the top two candidates, if a runner-up exists.
+    pub margin: Option<i64>,
+    /// Low-cardinality band for `top_score` (telemetry-safe).
+    pub top_score_bucket: &'static str,
+    /// Low-cardinality band for `margin` (telemetry-safe).
+    pub margin_bucket: &'static str,
+    /// Typed signal breakdown for the selected candidate (only when found).
+    pub matched_signals: Option<MatchedSignals>,
+    /// Whether the ranking was truncated at the K cap.
+    pub truncated: bool,
+    /// Abstention reason, or `None` when a family was selected.
+    pub abstention_reason: Option<TermRetrievalAbstention>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -716,6 +861,25 @@ pub fn family_query_route_report(
         candidate_family_ids,
         follow_up_family_ids,
         why_selected: query_route_why(report, mode),
+        term_retrieval: report_term_retrieval(report).cloned(),
+    }
+}
+
+/// The source-free term-retrieval abstention reason token for this report, when
+/// it abstained through the term-retrieval fallback. Used by telemetry rollups.
+pub fn family_query_abstention_reason(report: &FamilyLookupReport) -> Option<&'static str> {
+    report_term_retrieval(report)
+        .and_then(|term| term.abstention_reason)
+        .map(TermRetrievalAbstention::as_str)
+}
+
+/// The term-retrieval route metadata embedded in a lookup report, if the
+/// term-retrieval fallback produced it. Exact/role/path routes carry `None`.
+fn report_term_retrieval(report: &FamilyLookupReport) -> Option<&TermRetrievalRoute> {
+    match report {
+        FamilyLookupReport::Found(family) => family.term_retrieval.as_ref(),
+        FamilyLookupReport::Unknown(unknown) => unknown.term_retrieval.as_ref(),
+        FamilyLookupReport::PartialContext(_) => None,
     }
 }
 
@@ -2240,6 +2404,7 @@ pub fn lookup_family(
             active_generation: active.generation_id,
             candidate_family_ids: Vec::new(),
             unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
         }));
     };
     let FamilyMatchSet {
@@ -2253,6 +2418,7 @@ pub fn lookup_family(
             active_generation,
             candidate_family_ids,
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(unknown) = ambiguous_target_unknown(&matches) {
@@ -2260,6 +2426,7 @@ pub fn lookup_family(
             active_generation,
             candidate_family_ids: candidate_family_ids_from_matches(&matches),
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(matched) = matches.into_iter().next() {
@@ -2269,6 +2436,7 @@ pub fn lookup_family(
         active_generation,
         candidate_family_ids,
         unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: None,
     }))
 }
 
@@ -2588,6 +2756,7 @@ pub fn lookup_family_with_freshness(
             active_generation: active.generation_id,
             candidate_family_ids: Vec::new(),
             unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
         }));
     };
     let FamilyMatchSet {
@@ -2601,6 +2770,7 @@ pub fn lookup_family_with_freshness(
             active_generation,
             candidate_family_ids,
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(unknown) = ambiguous_target_unknown(&matches) {
@@ -2608,6 +2778,7 @@ pub fn lookup_family_with_freshness(
             active_generation,
             candidate_family_ids: candidate_family_ids_from_matches(&matches),
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(matched) = matches.into_iter().next() {
@@ -2622,12 +2793,14 @@ pub fn lookup_family_with_freshness(
                 "{}:evidence_freshness",
                 family_id
             ))],
+            term_retrieval: None,
         }));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
         candidate_family_ids,
         unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: None,
     }))
 }
 
@@ -2639,8 +2812,318 @@ pub fn lookup_family_with_freshness_and_local_context(
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
-    let report = lookup_family_with_freshness(request, family_store, source_store, target, mode)?;
+    // Exact authority + role/evidence fuzzy layers run first and unchanged.
+    let report =
+        lookup_family_with_freshness(request.clone(), family_store, source_store, target, mode)?;
+    // Only when those layers produced no candidate for a non-path-locator target
+    // does deterministic term retrieval run, through the same freshness gate.
+    let report =
+        term_retrieval_fallback(&request, family_store, source_store, report, target, mode)?;
+    // The existing local-context read-plan fallback still applies where its
+    // preconditions hold (path-shaped targets, or term retrieval that abstained).
     add_local_context_fallback(index_store, report, target, mode)
+}
+
+/// Deterministic, dependency-free term-retrieval fallback. It runs only for a
+/// `FuzzyQuery` whose exact/role/path layers produced **no candidate at all** —
+/// a single `InsufficientSupport` block with claim `query target` and an empty
+/// `candidate_family_ids` — and whose target is not path-locator-shaped. Exact
+/// layers that *did* find candidates (a `unit:` member in more than one family,
+/// a truncated role/evidence candidate set, or an exact-role multi-family
+/// ambiguity) keep their own claim, candidate ids, and narrowing recovery text
+/// verbatim: term retrieval never rewrites them. Natural language, synonym, and
+/// framework targets flow into [`crate::application::query_terms`] scoring, the
+/// calibrated abstention gates, and bounded hydration through the existing
+/// freshness + single-fresh-family gates.
+fn term_retrieval_fallback(
+    request: &FamilyEvidenceFreshnessRequest,
+    store: &impl FamilyStore,
+    source_store: &impl SourceStore,
+    report: FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    if mode != FamilyLookupMode::FuzzyQuery {
+        return Ok(report);
+    }
+    let FamilyLookupReport::Unknown(ref unknown) = report else {
+        return Ok(report);
+    };
+    if !term_retrieval_eligible(unknown) {
+        // Candidate-set, ambiguity, and stale-evidence blocks keep their own
+        // claim, candidate ids, and recovery guidance verbatim.
+        return Ok(report);
+    }
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(report);
+    };
+    // Path-locator-shaped targets are handled by the exact/suffix/local-context
+    // path; term retrieval only claims non-path natural-language style targets.
+    // A single interior-dotted word (e.g. `fastapi.Depends`, `0.100`, `e.g.`) is
+    // NOT path-shaped, so such prose still reaches retrieval.
+    if target_has_path_locator_shape(target) {
+        return Ok(report);
+    }
+    run_term_retrieval(
+        request,
+        store,
+        source_store,
+        target,
+        &unknown.active_generation,
+    )
+}
+
+/// A fuzzy lookup is eligible for term retrieval only when the exact/role/path
+/// layers produced no candidate at all: exactly one `InsufficientSupport`
+/// blocking unknown with claim `query target` and an empty candidate set. The
+/// candidate-set-too-broad (`query target candidate set`) and ambiguity
+/// (`query target ambiguity`) blocks both carry candidate ids and must pass
+/// through untouched, so they are excluded here.
+fn term_retrieval_eligible(report: &FamilyUnknownReport) -> bool {
+    report.candidate_family_ids.is_empty()
+        && matches!(
+            report.unknowns.as_slice(),
+            [FamilyQueryUnknown {
+                class: UnknownClass::Blocking,
+                reason: UnknownReasonCode::InsufficientSupport,
+                affected_claim,
+                ..
+            }] if affected_claim == "query target"
+        )
+}
+
+/// Known repository source-file extensions that mark a bare (slash-free) token
+/// as a genuine file locator for the retrieval guard. Kept deliberately small
+/// and aligned with the indexed languages; a dotted word whose final segment is
+/// not one of these (e.g. `fastapi.Depends`, `0.100`, `e.g`) is not path-shaped.
+const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
+    "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "java", "cs", "go", "rb", "php",
+    "swift", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx",
+];
+
+/// True when the target is genuinely path-locator-shaped for the term-retrieval
+/// guard: some whitespace token contains `/`, or (after stripping a trailing
+/// `:line`/`:start-end` locator) ends in a known source-file extension. Prose
+/// containing a single interior-dotted word is not path-shaped.
+fn target_has_path_locator_shape(target: &str) -> bool {
+    target.split_whitespace().any(|token| {
+        if token.contains('/') {
+            return true;
+        }
+        let (path, _) = split_query_path_locator(token);
+        path.rsplit_once('.')
+            .map(|(_, extension)| {
+                PATH_LOCATOR_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn run_term_retrieval(
+    request: &FamilyEvidenceFreshnessRequest,
+    store: &impl FamilyStore,
+    source_store: &impl SourceStore,
+    target: &str,
+    expected_generation: &str,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let summaries = store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    // If a resync landed between the exact layers and this projection, the two
+    // reads describe different generations. Rather than score and attribute a
+    // different generation than the exact layers abstained against, return the
+    // exact-layer report unchanged so a re-query resolves consistently.
+    if summaries.generation_id != expected_generation {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: expected_generation.to_string(),
+            candidate_family_ids: Vec::new(),
+            unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
+        }));
+    }
+    let active_generation = summaries.generation_id.clone();
+    let normalized = normalize_query(target);
+    let ranking = score_family_candidates(&normalized, &summaries.families);
+    let candidate_ids: Vec<String> = ranking
+        .candidates
+        .iter()
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+
+    let top_score = ranking.candidates.first().map(|candidate| candidate.score);
+    let margin = match (ranking.candidates.first(), ranking.candidates.get(1)) {
+        (Some(top), Some(second)) => Some(top.score - second.score),
+        _ => None,
+    };
+    let mut route = TermRetrievalRoute {
+        route: "term_retrieval_unknown",
+        retrieved_summary_count: summaries.families.len(),
+        ranked_candidate_count: ranking.candidates.len(),
+        hydrated_candidate_count: 0,
+        retrieval_stage_count: TERM_STAGE_SCORE,
+        top_score,
+        margin,
+        top_score_bucket: term_score_bucket(top_score),
+        margin_bucket: term_margin_bucket(margin),
+        matched_signals: None,
+        truncated: ranking.truncated,
+        abstention_reason: None,
+    };
+
+    // Gate 1: nothing scored a positive retrieval signal.
+    let Some(top) = ranking.candidates.first() else {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::NoCandidate,
+            candidate_ids,
+        ));
+    };
+    route.retrieval_stage_count = TERM_STAGE_GATE;
+    // The top candidate's typed signal breakdown explains both a selection and an
+    // abstention; it carries no raw target text.
+    route.matched_signals = Some(top.signals);
+
+    // Gate 2: the top candidate did not clear the absolute selection floor. The
+    // score is additive over framework(6)/concept(4)/language(2)/residue(3-per-
+    // hit), so a bare framework (6), bare concept (4), or bare language (2)
+    // always abstains here.
+    if top.score < MIN_RETRIEVAL_SCORE {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::BelowMinScore,
+            candidate_ids,
+        ));
+    }
+
+    // Gate 3: the top candidate cleared the floor on filters/residue alone, with
+    // no pattern-concept signal (e.g. a framework filter plus residue typo). A
+    // selection must name a pattern concept; abstain as unsupported.
+    if !top.signals.concept {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::UnsupportedTarget,
+            candidate_ids,
+        ));
+    }
+
+    // Gate 4: the K-truncated ranking hides a competitor tied at the top score.
+    if ranking.truncated {
+        if let Some(last) = ranking.candidates.last() {
+            if last.score == top.score {
+                return Ok(term_unknown_report(
+                    active_generation,
+                    route,
+                    TermRetrievalAbstention::TruncatedTie,
+                    candidate_ids,
+                ));
+            }
+        }
+    }
+
+    // Gate 5: a competing family that itself clears the selection floor is
+    // within the confidence margin of the top. The `second.score >=
+    // MIN_RETRIEVAL_SCORE` qualifier is deliberate: a runner-up that could not be
+    // selected on its own is not a real competitor, so it never forces an
+    // abstention. Each summary is one row per family, so `candidates[1]` is
+    // always a different family than the top.
+    if let Some(second) = ranking.candidates.get(1) {
+        if second.score >= MIN_RETRIEVAL_SCORE && (top.score - second.score) < MIN_RETRIEVAL_MARGIN
+        {
+            return Ok(term_unknown_report(
+                active_generation,
+                route,
+                TermRetrievalAbstention::MarginTooClose,
+                candidate_ids,
+            ));
+        }
+    }
+
+    // Hydrate the top-tier (families tied at the winning score, which the margin
+    // gate has already reduced to the single winner), bounded, and verify
+    // freshness through the existing single-fresh-family gate.
+    let top_signals = top.signals;
+    let winning_score = top.score;
+    let hydrate_ids: Vec<String> = ranking
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.score == winning_score)
+        .take(MAX_RETRIEVAL_HYDRATIONS)
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+    route.hydrated_candidate_count = hydrate_ids.len();
+    route.retrieval_stage_count = TERM_STAGE_HYDRATE;
+
+    let mut fresh_families: Vec<ActiveFamily> = Vec::new();
+    for family_id in &hydrate_ids {
+        let Some(active_family) = store.show_family(family_id).map_err(family_store_error)? else {
+            continue;
+        };
+        if family_evidence_is_fresh(request, source_store, &active_family)? {
+            fresh_families.push(active_family);
+        }
+    }
+
+    match fresh_families.len() {
+        0 => Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::StaleCandidates,
+            candidate_ids,
+        )),
+        1 => {
+            let winner = fresh_families.into_iter().next().expect("one fresh family");
+            route.route = "term_retrieval_hydrate";
+            route.matched_signals = Some(top_signals);
+            let mut detail = family_detail(winner);
+            detail.term_retrieval = Some(route);
+            Ok(FamilyLookupReport::Found(detail))
+        }
+        _ => Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::HydrationAmbiguous,
+            candidate_ids,
+        )),
+    }
+}
+
+fn term_unknown_report(
+    active_generation: String,
+    mut route: TermRetrievalRoute,
+    reason: TermRetrievalAbstention,
+    candidate_family_ids: Vec<String>,
+) -> FamilyLookupReport {
+    route.route = "term_retrieval_unknown";
+    route.abstention_reason = Some(reason);
+    // Keep the `query target` claim so the downstream local-context fallback
+    // still applies where its preconditions hold.
+    FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: normalized_family_ids(candidate_family_ids),
+        unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: Some(route),
+    })
+}
+
+fn term_score_bucket(score: Option<i64>) -> &'static str {
+    match score {
+        None => "none",
+        Some(score) if score <= 0 => "zero",
+        Some(score) if score < MIN_RETRIEVAL_SCORE => "below_min",
+        Some(_) => "at_or_above_min",
+    }
+}
+
+fn term_margin_bucket(margin: Option<i64>) -> &'static str {
+    match margin {
+        None => "none",
+        Some(margin) if margin <= 0 => "zero",
+        Some(margin) if margin < MIN_RETRIEVAL_MARGIN => "below_margin",
+        Some(_) => "at_or_above_margin",
+    }
 }
 
 pub fn select_family_evidence(
@@ -2730,6 +3213,7 @@ fn add_local_context_fallback(
                 affected_claim: "query target resolution".to_string(),
                 recovery: Some(recovery_guidance(recovery.action).to_string()),
             }],
+            term_retrieval: None,
         }));
     }
     match resolve_local_context(target, &files.files, &units.units)? {
@@ -2764,6 +3248,7 @@ fn add_local_context_fallback(
                 active_generation: files.generation_id,
                 candidate_family_ids: unknown_report.candidate_family_ids.clone(),
                 unknowns: vec![unknown],
+                term_retrieval: None,
             }))
         }
         LocalContextResolution::Unresolved => Ok(FamilyLookupReport::Unknown(unknown_report)),
@@ -4194,6 +4679,7 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         variation_slots: family.variation_slots,
         evidence: family.evidence,
         unknowns,
+        term_retrieval: None,
     }
 }
 
@@ -5268,6 +5754,7 @@ mod tests {
             variation_slots: Vec::new(),
             evidence,
             unknowns: Vec::new(),
+            term_retrieval: None,
         }
     }
 
@@ -8427,5 +8914,529 @@ mod tests {
         };
         assert_eq!(unknown.class, UnknownClass::Blocking);
         assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+    }
+
+    // ---- Term-retrieval fallback ----
+
+    struct TermRetrievalSourceStore {
+        fresh: bool,
+    }
+
+    impl SourceStore for TermRetrievalSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            if self.fresh {
+                Ok(SourceText {
+                    path: request.path.clone(),
+                    content_hash: request.expected_content_hash.clone(),
+                    text: String::new(),
+                })
+            } else {
+                Err(SourceStoreError::Missing("stale evidence".to_string()))
+            }
+        }
+    }
+
+    fn term_family(family_id: &str, role: &str, classification: &str, path: &str) -> ActiveFamily {
+        let code_unit_id = format!("unit:{path}#member:0-1:1");
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: classification.to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.clone(),
+                role: role.to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: vec![IndexedFamilyEvidenceRecord {
+                evidence_id: "family-evidence:000000".to_string(),
+                family_id: family_id.to_string(),
+                code_unit_id,
+                covered_claims: vec!["canonical".to_string()],
+                path: path.to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte: 0,
+                end_byte: 1,
+                note: "term retrieval evidence".to_string(),
+            }],
+        }
+    }
+
+    fn term_route(report: &FamilyLookupReport) -> TermRetrievalRoute {
+        match report {
+            FamilyLookupReport::Found(family) => {
+                family.term_retrieval.clone().expect("found term route")
+            }
+            FamilyLookupReport::Unknown(unknown) => {
+                unknown.term_retrieval.clone().expect("unknown term route")
+            }
+            FamilyLookupReport::PartialContext(_) => panic!("unexpected partial context"),
+        }
+    }
+
+    #[test]
+    fn term_retrieval_resolves_single_framework_concept_family() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes/users.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        let route = term_route(&report);
+        assert_eq!(route.route, "term_retrieval_hydrate");
+        assert_eq!(route.abstention_reason, None);
+        assert_eq!(route.top_score, Some(MIN_RETRIEVAL_SCORE));
+        // Hydration is bounded and the single fresh family is selected.
+        assert_eq!(route.hydrated_candidate_count, 1);
+        assert!(route.hydrated_candidate_count <= MAX_RETRIEVAL_HYDRATIONS);
+        let signals = route.matched_signals.expect("matched signals");
+        assert!(signals.framework_filter && signals.concept);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_on_margin_tie() {
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:javascript:express_route:framework_express_route_handler",
+                "framework:express.route_handler",
+                "DOMINANT_PATTERN",
+                "js/routes/app.js",
+            ),
+            term_family(
+                "family:typescript:express_route:framework_express_route_handler",
+                "framework:express.route_handler",
+                "UNKNOWN_PREVALENCE",
+                "ts/routes/app.ts",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are Express routes registered?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert!(matches!(report, FamilyLookupReport::Unknown(_)));
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::MarginTooClose)
+        );
+        // The score/margin gate abstains before any hydration.
+        assert_eq!(route.hydrated_candidate_count, 0);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_below_min_score_and_on_no_candidate() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // A bare concept ("endpoint" -> route concept, score 4) is below the
+        // framework+concept floor.
+        let bare_concept = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "endpoint",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert_eq!(
+            term_route(&bare_concept).abstention_reason,
+            Some(TermRetrievalAbstention::BelowMinScore)
+        );
+        // Residue that matches no family yields no candidate at all.
+        let junk = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are Kubernetes manifests structured?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert_eq!(
+            term_route(&junk).abstention_reason,
+            Some(TermRetrievalAbstention::NoCandidate)
+        );
+    }
+
+    #[test]
+    fn term_retrieval_abstains_unsupported_target_without_concept() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // A framework filter plus residue typo (`framework` + `rout`) clears the
+        // absolute floor but carries no pattern concept.
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "framework:fastapi.rout",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::UnsupportedTarget)
+        );
+        assert!(route.top_score.unwrap() >= MIN_RETRIEVAL_SCORE);
+        assert!(!route.matched_signals.expect("signals").concept);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_on_truncated_tie() {
+        let families: Vec<ActiveFamily> = (0
+            ..(crate::application::query_terms::MAX_RANKED_CANDIDATES + 2))
+            .map(|index| {
+                term_family(
+                    &format!("family:python:fastapi_route:framework_fastapi_route:v{index:04}"),
+                    "framework:fastapi.route",
+                    "DOMINANT_PATTERN",
+                    &format!("app/api/routes_{index}.py"),
+                )
+            })
+            .collect();
+        let store = FakeFamilyStore::with_families(families);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert!(route.truncated);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::TruncatedTie)
+        );
+    }
+
+    #[test]
+    fn term_retrieval_abstains_when_selected_family_is_stale() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: false };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::StaleCandidates)
+        );
+        // Hydration ran (the freshness gate rejected the candidate), within bound.
+        assert_eq!(route.hydrated_candidate_count, 1);
+        assert!(route.hydrated_candidate_count <= MAX_RETRIEVAL_HYDRATIONS);
+    }
+
+    #[test]
+    fn term_retrieval_does_not_override_exact_family_id_and_is_deterministic() {
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // An exact family id resolves through the exact authority layer; term
+        // retrieval must not run and must not attach its metadata.
+        let exact = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("family:python:fastapi_route:framework_fastapi_route"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("exact lookup");
+        let FamilyLookupReport::Found(exact_family) = &exact else {
+            panic!("expected exact Found");
+        };
+        assert!(
+            exact_family.term_retrieval.is_none(),
+            "exact family id must not route through term retrieval"
+        );
+
+        // Determinism: the same natural-language query twice is identical.
+        let first = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How are FastAPI routes implemented?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("first");
+        let second = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How are FastAPI routes implemented?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("second");
+        assert_eq!(first, second, "term retrieval must be deterministic");
+    }
+
+    fn term_member_family(family_id: &str, code_unit_id: &str, role: &str) -> ActiveFamily {
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.to_string(),
+                role: role.to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: vec![IndexedFamilyEvidenceRecord {
+                evidence_id: "family-evidence:000000".to_string(),
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.to_string(),
+                covered_claims: vec!["canonical".to_string()],
+                path: "app/routes.py".to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte: 0,
+                end_byte: 1,
+                note: "member evidence".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn term_retrieval_does_not_rewrite_ambiguous_member_abstention() {
+        // An exact `unit:` member shared by two families is an ambiguity block:
+        // term retrieval must not run and must not rewrite the candidate ids or
+        // the narrowing recovery text.
+        let shared_member = "unit:pkg/mod.py#fastapi_route:handler:0-1:1";
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![
+            term_member_family(
+                "family:python:fastapi_route:framework_fastapi_route:va",
+                shared_member,
+                "framework:fastapi.route",
+            ),
+            term_member_family(
+                "family:python:fastapi_route:framework_fastapi_route:vb",
+                shared_member,
+                "framework:fastapi.route",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some(shared_member),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown, got {report:?}");
+        };
+        assert!(
+            unknown.term_retrieval.is_none(),
+            "ambiguity block must not be rewritten by term retrieval"
+        );
+        assert_eq!(unknown.unknowns.len(), 1);
+        assert_eq!(unknown.unknowns[0].affected_claim, "query target ambiguity");
+        assert_eq!(
+            unknown.candidate_family_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route:va".to_string(),
+                "family:python:fastapi_route:framework_fastapi_route:vb".to_string(),
+            ]
+        );
+        // The narrowing recovery text lists the exact candidate families.
+        let recovery = unknown.unknowns[0].recovery.as_deref().unwrap_or_default();
+        assert!(recovery.contains(":va") && recovery.contains(":vb"));
+    }
+
+    #[test]
+    fn term_retrieval_does_not_rewrite_truncated_candidate_set_abstention() {
+        // A role shared by more than FUZZY_FAMILY_CANDIDATE_LIMIT families is a
+        // candidate-set-too-broad block; term retrieval must pass it through.
+        let families: Vec<ActiveFamily> = (0..(FUZZY_FAMILY_CANDIDATE_LIMIT + 2))
+            .map(|index| {
+                term_member_family(
+                    &format!("family:python:fastapi_route:framework_fastapi_route:v{index:02}"),
+                    &format!("unit:pkg/mod{index}.py#fastapi_route:h:0-1:1"),
+                    "framework:fastapi.route",
+                )
+            })
+            .collect();
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(families);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("framework:fastapi.route"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown, got {report:?}");
+        };
+        assert!(
+            unknown.term_retrieval.is_none(),
+            "candidate-set block must not be rewritten by term retrieval"
+        );
+        assert_eq!(unknown.unknowns.len(), 1);
+        assert_eq!(
+            unknown.unknowns[0].affected_claim,
+            "query target candidate set"
+        );
+        assert!(!unknown.candidate_family_ids.is_empty());
+    }
+
+    #[test]
+    fn term_retrieval_runs_for_prose_with_interior_dotted_word() {
+        // A single interior-dotted word in prose is not path-shaped; term
+        // retrieval must still run (and here resolve the fastapi route family).
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How does fastapi.Depends injection work in fastapi routes?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert!(family.term_retrieval.is_some());
+
+        // A genuinely path-shaped target (known source extension) keeps the
+        // exact/local-context path and never attaches term-retrieval metadata.
+        assert!(target_has_path_locator_shape("app/api/routes.py"));
+        assert!(target_has_path_locator_shape("routes.py"));
+        assert!(target_has_path_locator_shape("src/models.ts:12"));
+        assert!(!target_has_path_locator_shape(
+            "How does fastapi.Depends injection work?"
+        ));
+        assert!(!target_has_path_locator_shape(
+            "FastAPI 0.100 routing e.g. here"
+        ));
+    }
+
+    #[test]
+    fn term_retrieval_margin_boundary_selects_clear_winner_and_abstains_on_tie() {
+        // Two fastapi route families both clear the floor (framework 6 + concept
+        // 4 = 10). A residue hit on the winner's evidence path lifts it to 13,
+        // giving a margin of 3 >= MIN_RETRIEVAL_MARGIN over the competitor, so the
+        // winner is selected outright.
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route:users",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/users.py",
+            ),
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route:orders",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/orders.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let winner = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes for users implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let FamilyLookupReport::Found(family) = &winner else {
+            panic!("expected Found, got {winner:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route:users"
+        );
+        let route = term_route(&winner);
+        assert_eq!(route.top_score, Some(13));
+        assert_eq!(route.margin, Some(3));
+
+        // With no residue disambiguator both tie at 10 (margin 0 < 1) and abstain.
+        let tie = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let tie_route = term_route(&tie);
+        assert_eq!(tie_route.margin, Some(0));
+        assert_eq!(
+            tie_route.abstention_reason,
+            Some(TermRetrievalAbstention::MarginTooClose)
+        );
     }
 }

@@ -118,6 +118,18 @@ const FAMILY_QUERY_RECOVERY_CODE_KEYS: &[&str] = &[
     "manual_review_required",
     "unknown",
 ];
+/// Low-cardinality term-retrieval abstention vocabulary. Every value is a stable
+/// enum token; none carries raw target text. Kept in sync with
+/// [`crate::application::query::TermRetrievalAbstention`].
+const FAMILY_QUERY_ABSTENTION_REASON_KEYS: &[&str] = &[
+    "no_candidate",
+    "below_min_score",
+    "unsupported_target",
+    "margin_too_close",
+    "truncated_tie",
+    "stale_candidates",
+    "hydration_ambiguous",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsentDecision {
@@ -386,6 +398,9 @@ pub struct FamilyQueryOutcomeRollup {
     pub by_required_mechanism: BTreeMap<String, u64>,
     pub by_obligation: BTreeMap<String, u64>,
     pub by_recovery_code: BTreeMap<String, u64>,
+    /// Term-retrieval abstention reasons (source-free enum tokens). Empty for
+    /// rollups whose queries never reached the term-retrieval fallback.
+    pub by_abstention_reason: BTreeMap<String, u64>,
     pub read_plan_returned_count: u64,
     pub read_plan_item_count_bucket: BTreeMap<String, u64>,
     pub source_spans_requested_count: u64,
@@ -400,6 +415,10 @@ pub struct FamilyQueryOutcomeRecord<'a> {
     pub command_category: FamilyQueryCommandCategory,
     pub lookup_mode: FamilyQueryLookupMode,
     pub unknowns: &'a [FamilyQueryUnknownMetric],
+    /// Term-retrieval abstention reason token, when the query abstained through
+    /// the term-retrieval fallback. Must be a `FAMILY_QUERY_ABSTENTION_REASON_KEYS`
+    /// value; never raw target text.
+    pub abstention_reason: Option<&'a str>,
     pub read_plan_item_count: Option<usize>,
     pub source_spans_requested: bool,
     pub source_spans_included: bool,
@@ -793,6 +812,14 @@ pub fn record_family_query_outcome(
         );
         increment_rollup_count(&mut rollup.by_obligation, unknown.obligation);
         increment_rollup_count(&mut rollup.by_recovery_code, unknown.recovery_code);
+    }
+    if let Some(reason) = record.abstention_reason {
+        if !FAMILY_QUERY_ABSTENTION_REASON_KEYS.contains(&reason) {
+            return Err(invalid_input(
+                "family query abstention reason is not in the allowlist",
+            ));
+        }
+        increment_rollup_count(&mut rollup.by_abstention_reason, reason);
     }
     if let Some(item_count) = record.read_plan_item_count {
         rollup.read_plan_returned_count = rollup.read_plan_returned_count.saturating_add(1);
@@ -1605,6 +1632,7 @@ fn write_family_query_outcomes_file(
             "by_required_mechanism": &rollup.by_required_mechanism,
             "by_obligation": &rollup.by_obligation,
             "by_recovery_code": &rollup.by_recovery_code,
+            "by_abstention_reason": &rollup.by_abstention_reason,
             "read_plan_returned_count": rollup.read_plan_returned_count,
             "read_plan_item_count_bucket": &rollup.read_plan_item_count_bucket,
             "source_spans_requested_count": rollup.source_spans_requested_count,
@@ -2255,6 +2283,19 @@ fn parse_family_query_outcome_rollup(
             FAMILY_QUERY_RECOVERY_CODE_KEYS,
             invalid_message,
         )?,
+        // `by_abstention_reason` is a later addition; tolerate its absence in
+        // rollup files written before it existed while still validating the
+        // fixed vocabulary when present.
+        by_abstention_reason: if object.contains_key("by_abstention_reason") {
+            rollup_allowed_count_map(
+                object,
+                "by_abstention_reason",
+                FAMILY_QUERY_ABSTENTION_REASON_KEYS,
+                invalid_message,
+            )?
+        } else {
+            BTreeMap::new()
+        },
         read_plan_returned_count: rollup_u64_named(
             object,
             "read_plan_returned_count",
@@ -2620,8 +2661,26 @@ fn invalid_input(message: impl Into<String>) -> RepoGrammarError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::query::TermRetrievalAbstention;
     use crate::test_support::TempWorkspace;
     use std::cell::Cell;
+
+    #[test]
+    fn abstention_reason_allowlist_matches_enum_exactly() {
+        // The telemetry allowlist is a hand-written mirror of the term-retrieval
+        // abstention enum. Assert element-wise correspondence so any future drift
+        // fails the build instead of silently dropping whole outcome records
+        // (an unlisted reason makes record_family_query_outcome return Err).
+        let enum_tokens: Vec<&str> = TermRetrievalAbstention::ALL
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect();
+        assert_eq!(
+            enum_tokens.as_slice(),
+            FAMILY_QUERY_ABSTENTION_REASON_KEYS,
+            "TermRetrievalAbstention::ALL and FAMILY_QUERY_ABSTENTION_REASON_KEYS drifted"
+        );
+    }
 
     #[derive(Default)]
     struct FakeTransport {
@@ -2845,6 +2904,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::Find,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &[],
+            abstention_reason: None,
             read_plan_item_count: Some(3),
             source_spans_requested: false,
             source_spans_included: false,
@@ -2902,6 +2962,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::ExplainDeviation,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &unknown_metrics,
+            abstention_reason: Some("margin_too_close"),
             read_plan_item_count: None,
             source_spans_requested: false,
             source_spans_included: false,
@@ -2913,6 +2974,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::FindAnalogues,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &unknown_metrics,
+            abstention_reason: None,
             read_plan_item_count: Some(1),
             source_spans_requested: true,
             source_spans_included: true,
@@ -2934,11 +2996,33 @@ mod tests {
         );
         assert_eq!(rollup.by_obligation["governance"], 2);
         assert_eq!(rollup.by_recovery_code["manual_review_required"], 2);
+        // The term-retrieval abstention reason is rolled up as an enum token and
+        // survives a round trip through the on-disk rollup file.
+        assert_eq!(rollup.by_abstention_reason["margin_too_close"], 1);
         assert_eq!(rollup.read_plan_returned_count, 1);
         assert_eq!(rollup.read_plan_item_count_bucket["1-2"], 1);
         assert_eq!(rollup.source_spans_requested_count, 1);
         assert_eq!(rollup.source_spans_included_count, 1);
         assert_eq!(rollup.source_span_omission_count_bucket["1-2"], 1);
+
+        // The persisted rollup carries only enum tokens; no raw target text — the
+        // natural-language phrase that produced the abstention never appears.
+        let path = family_query_outcomes_file(request).expect("rollup path");
+        let serialized = fs::read_to_string(path).expect("rollup JSON");
+        assert!(serialized.contains("margin_too_close"));
+        for forbidden in [
+            "How are",
+            "routes",
+            "raw_target",
+            "query_text",
+            "endpoint",
+            "fastapi",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "abstention rollup leaked forbidden token {forbidden}"
+            );
+        }
     }
 
     #[test]

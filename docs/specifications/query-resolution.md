@@ -5,17 +5,139 @@ resolution: how a raw fuzzy target is normalized into typed retrieval signals an
 how those signals rank the family index. It has no LLM, embedding, or network
 dependency.
 
-## Status: substrate, not yet routed
+## Status: routed with calibrated abstention
 
 The normalization and retrieval layer described here is implemented in
-`application::query_terms` and backed by the `list_active_family_search_summaries`
-store projection. It is **substrate**: fully typed, tested, and documented, but
-**not yet wired** into `fuzzy_family_match_set` or the production lookup paths.
-Today the production fuzzy path still resolves a target only when it equals a
-family id, a `unit:` member id, an exact member role, or an exact `//`-suffix
-evidence path; natural-language targets therefore abstain with
-`InsufficientSupport`. Wiring this substrate into the lookup path and calibrating
-its abstention threshold land in a following change.
+`application::query_terms`, backed by the `list_active_family_search_summaries`
+store projection, and **routed into the production lookup path**
+(`application::query::lookup_family_with_freshness_and_local_context`). Natural
+language, synonym, and framework-plus-concept targets now resolve deterministically
+with calibrated absolute-score and margin abstention; bare frameworks, bare
+concepts, typos, and genuinely ambiguous targets abstain with a typed `UNKNOWN`
+and a low-cardinality route reason.
+
+## Routed pipeline
+
+For a `FuzzyQuery`, resolution runs these stages in strict priority order. Each
+earlier stage is authoritative: a lower-priority signal never overrides a valid
+exact identifier.
+
+1. **Exact authority (unchanged, first).** Exact family id, `unit:` member id,
+   exact member role, and exact `//`-suffix evidence path — including their own
+   candidate-set and ambiguity abstentions — resolve exactly as before. When an
+   exact/role/evidence layer finds candidates but cannot pick one (a `unit:`
+   member in more than one family, a truncated candidate set, or a multi-family
+   role ambiguity), that block keeps its own claim (`query target candidate set`
+   or `query target ambiguity`), its candidate family ids, and its narrowing
+   recovery text verbatim; term retrieval never runs for it and never rewrites it.
+2. **Term retrieval (this spec).** Runs **only** when the exact/role/evidence
+   layers produced **no candidate at all** — exactly one `InsufficientSupport`
+   block with claim `query target` **and an empty `candidate_family_ids`** —
+   **and** the target is **not path-locator-shaped** (`target_has_path_locator_shape`
+   is false: no whitespace token contains `/` and none ends in a known indexed
+   source-file extension). A single interior-dotted word in prose
+   (`fastapi.Depends`, `0.100`, `e.g.`) is **not** path-shaped, so such queries
+   still reach term retrieval; genuine file locators (`app/routes.py`, `models.ts`,
+   `app.py:12`) stay on the exact/local-context path. Eligible targets flow into
+   normalization → scoring → the abstention gates below → bounded hydration.
+3. **Local-context read plan (unchanged).** Where term retrieval abstains and its
+   preconditions still hold (a path-shaped target resolving to one indexed file or
+   unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
+
+### Abstention gates and reasons
+
+A term-retrieval query resolves to a family **only** when the top candidate clears
+every gate; otherwise it returns a typed `UNKNOWN` (`InsufficientSupport`, claim
+`query target`) plus a low-cardinality `abstention_reason`. Named calibration
+constants live in `application::query`:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `MIN_RETRIEVAL_SCORE` | `10` | Absolute selection floor. Equals `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` (6 + 4). The score is **additive** over framework/concept/language/residue, so this is a floor, not a structural framework+concept requirement: the common resolving shape is framework + concept, but concept + enough residue hits can also clear it. |
+| `MIN_RETRIEVAL_MARGIN` | `1` | The top candidate must beat any **competing family that itself clears `MIN_RETRIEVAL_SCORE`** by at least this score. A runner-up below the floor is not a competitor and never forces abstention. |
+| `MAX_RETRIEVAL_HYDRATIONS` | `5` | Defensive ceiling on top-tier candidates hydrated through the freshness gate (equals `FUZZY_FAMILY_CANDIDATE_LIMIT`). In practice the margin gate reduces the winning score tier to one family before hydration, so this bound does not bind. |
+
+A selection requires exactly two conditions: the top candidate clears
+`MIN_RETRIEVAL_SCORE`, **and** it carries a pattern-concept signal. Gates, in
+evaluation order, and their `abstention_reason` token:
+
+1. `no_candidate` — nothing scored a positive signal.
+2. `below_min_score` — top score `< MIN_RETRIEVAL_SCORE`. A bare concept (4),
+   bare framework filter (6), or bare language filter (2) always abstains here.
+3. `unsupported_target` — the top candidate cleared the floor on filters/residue
+   alone, with no pattern-concept signal (e.g. a framework filter plus residue
+   that substring-matches role tokens — a typo such as `framework:fastapi.rout`).
+4. `truncated_tie` — the ranking was truncated at K with a competitor tied at the
+   top score.
+5. `margin_too_close` — a competing family that itself clears `MIN_RETRIEVAL_SCORE`
+   is within `MIN_RETRIEVAL_MARGIN` of the top. (Each summary is one row per
+   family, so the runner-up is always a different family.)
+6. `stale_candidates` — hydration ran but the evidence-freshness gate rejected
+   every candidate.
+7. `hydration_ambiguous` — a defensive backstop for more than one hydrated
+   candidate surviving the single-fresh-family gate. The margin gate reduces the
+   winning score tier to a single family before hydration, so this is not reached
+   in practice; it keeps the single-fresh-family invariant explicit.
+
+When the gates pass, the winning candidate (the single member of the top score
+tier, after the margin gate) is hydrated through the existing
+`family_evidence_is_fresh` + single-fresh-family gates and returned as `Found`.
+Hydration is skipped entirely when a score/margin gate already abstains.
+
+If a resync lands between the exact layers and term retrieval, the search-summary
+projection may describe a newer generation than the exact layers abstained
+against. Rather than score and attribute a different generation, term retrieval
+detects the generation mismatch and returns the exact-layer `query target` block
+unchanged, so a re-query resolves consistently against a single generation.
+
+Because a `PARTIAL_CONTEXT` local-context resolution replaces the term-retrieval
+`UNKNOWN`, the `term_retrieval` route object and its `abstention_reason` are
+recorded only on `Found` and `UNKNOWN` outcomes; a query that abstains in term
+retrieval and then resolves to `PARTIAL_CONTEXT` carries the read-plan context
+instead. In the routed pipeline this is rare: term retrieval only claims
+non-path-shaped targets, which the local-context path does not resolve.
+
+### Route metadata
+
+Term-retrieval queries extend the `query_route` report with a source-free
+`term_retrieval` object (no raw target text is ever persisted): `route`
+(`term_retrieval_hydrate` | `term_retrieval_unknown`), `retrieved_summary_count`,
+`ranked_candidate_count`, `hydrated_candidate_count`, `retrieval_stage_count`,
+raw `top_score`/`margin`, low-cardinality `top_score_bucket`/`margin_bucket`,
+`truncated`, the selected candidate's typed `matched_signals`, and
+`abstention_reason` (one of the seven tokens above, or null when found). The
+top-level `query_route.route` token is unchanged (`discover_hydrate_compose` for a
+term-retrieval match, `discovery_unknown` for a term-retrieval abstention), and
+`hydrated_family_count` / `retrieval_stage_count` are surfaced at the
+`query_route` top level. The abstention reason is additionally rolled up in
+anonymous telemetry as the enum-only `by_abstention_reason` dimension.
+
+### Calibration summary
+
+Calibrated against the 73-query product-eval corpus (`query-corpus-v1.json`;
+42 retrieval + 25 abstention + 6 context after the gold adjudications). At
+`MIN_RETRIEVAL_SCORE = 10` (with `MIN_RETRIEVAL_MARGIN = 1`) hit@1 is **21/42**
+(up from the pre-routing 17/43) while holding every hard constraint — zero
+false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
+6/6 ambiguity precision, 14/14 candidate recall, and no regression among
+previously-matching exact/context queries. hit@1 is on a plateau across
+`MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regresses to 18/42 (the
+framework+concept anchor scores exactly 10). `10` is retained as the principled
+absolute floor: it equals `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` and keeps the
+identical-normalization abstention decoys (below) abstaining with the widest
+margin.
+
+Some natural-language retrieval queries deliberately abstain because they are
+indistinguishable, after normalization, from an intentional abstention decoy — for
+example `endpoint` shares its `{concept: route}` normalized form with the
+abstaining `How are API routes implemented?` and `handler`, so any resolver that
+serves one serves all three; and `unit test`/`test case`/`writing tests` normalize
+to `{concept: test}` (a bare concept, score 4) below the floor. These are missed
+hits, never constraint violations. The `repository` data-access concept and the
+dual `model` concept (validation model + data-access model) are now committed
+substrate, so `How do Prisma repositories work?` resolves and `How are models
+defined?` remains genuinely ambiguous with both model kinds reachable as
+candidates.
 
 ## Normalization
 
@@ -144,8 +266,9 @@ Ranks are 1-based positions. At most `MAX_RANKED_CANDIDATES = 16` candidates are
 retained; `FamilyCandidateRanking.truncated` flags when more scored above zero.
 
 Each retained candidate carries a typed, low-cardinality `MatchedSignals`
-breakdown (`framework_filter`, `concept`, `language_filter`, `residue_hits`) for
-the route-metadata explanation the next wave will render.
+breakdown (`framework_filter`, `concept`, `language_filter`, `residue_hits`) that
+the routed pipeline renders as the `term_retrieval.matched_signals` route
+metadata (see [Route metadata](#route-metadata)).
 
 ### Worked example
 

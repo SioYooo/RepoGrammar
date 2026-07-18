@@ -189,7 +189,18 @@ state that family ids are returned follow-up handles rather than required initia
 inputs. `selected_family_id` is present only when RepoGrammar actually selected
 one supported family. `candidate_family_ids` and `follow_up_family_ids` may be
 present on `PARTIAL_CONTEXT` or `UNKNOWN`; those ids are narrowing handles, not a
-family or conformance claim.
+family or conformance claim. When a natural-language, synonym, or
+framework-plus-concept target is resolved by the deterministic term-retrieval
+fallback, `query_route` additionally carries `hydrated_family_count`,
+`retrieval_stage_count`, and a source-free `term_retrieval` object with `route`
+(`term_retrieval_hydrate` | `term_retrieval_unknown`), `retrieved_summary_count`,
+`ranked_candidate_count`, `hydrated_candidate_count`, `retrieval_stage_count`,
+raw `top_score`/`margin`, `top_score_bucket`/`margin_bucket`, `truncated`,
+`matched_signals`, and `abstention_reason`. The `abstention_reason` vocabulary is
+`no_candidate`, `below_min_score`, `unsupported_target`, `margin_too_close`,
+`truncated_tie`, `stale_candidates`, and `hydration_ambiguous` (null when a family
+was found). These fields carry no raw target text and are null for exact/role/path
+routes.
 Matched family responses use the same output selection contract as the CLI:
 `compact` is the default and returns family summary, members, variation slots,
 unknowns, output metadata, and a `read_plan` without evidence records;

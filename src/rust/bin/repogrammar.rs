@@ -5284,6 +5284,99 @@ mod tests {
     }
 
     #[test]
+    fn term_retrieval_resolves_natural_language_fastapi_query_end_to_end() {
+        let workspace = TempWorkspace::new("term-retrieval-fastapi-nl");
+        copy_python_release_fixture("positive-strong-evidence", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // A natural-language target that names a framework and a pattern concept
+        // resolves to the single FastAPI route family via deterministic term
+        // retrieval, not through any exact-anchor layer.
+        let found = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["How are FastAPI routes implemented?", "--json"],
+            ),
+            &runtime,
+        );
+        let value = parse_machine_output("find", &found, &workspace);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(
+            value["family"]["family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        let route = &value["query_route"];
+        assert_eq!(route["hydrated_family_count"], 1);
+        assert!(
+            route["retrieval_stage_count"]
+                .as_u64()
+                .expect("stage count")
+                >= 3
+        );
+        let term = &route["term_retrieval"];
+        assert_eq!(term["route"], "term_retrieval_hydrate");
+        assert_eq!(term["abstention_reason"], Value::Null);
+        assert_eq!(term["matched_signals"]["concept"], true);
+        assert_eq!(term["matched_signals"]["framework_filter"], true);
+        assert!(
+            term["hydrated_candidate_count"]
+                .as_u64()
+                .expect("hydrated count")
+                <= 5
+        );
+
+        // Determinism: the same query twice yields byte-identical output.
+        let found_again = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["How are FastAPI routes implemented?", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(found, found_again, "term retrieval must be deterministic");
+
+        // A bare framework name is not a locatable pattern concept: it abstains
+        // with a low-cardinality route reason and never selects a family.
+        let bare = run_with_runtime(
+            cli_args("find", workspace.path(), &["fastapi", "--json"]),
+            &runtime,
+        );
+        let bare_value = parse_machine_output("find", &bare, &workspace);
+        assert_eq!(bare_value["status"], "UNKNOWN");
+        assert_eq!(bare_value["query_route"]["selected_family_id"], Value::Null);
+        let bare_reason = bare_value["query_route"]["term_retrieval"]["abstention_reason"]
+            .as_str()
+            .expect("abstention reason");
+        assert!(
+            ["below_min_score", "unsupported_target", "no_candidate"].contains(&bare_reason),
+            "unexpected abstention reason {bare_reason}"
+        );
+    }
+
+    #[test]
     fn python_release_fixture_exact_anchors_produce_family_without_worker() {
         for case in PYTHON_EXACT_ANCHOR_SMOKE_CASES {
             let workspace =

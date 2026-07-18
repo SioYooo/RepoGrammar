@@ -14,17 +14,17 @@ use crate::application::install::{
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
-    build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
-    family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
-    FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation,
-    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission,
-    RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics, ResolvedQueryTarget,
-    SelectedFamilyEvidence, SourceSpanRenderReport, TokenSavingReadiness, UnknownInventoryBucket,
-    UnknownInventoryReport,
+    build_read_plan, estimate_family_output_potential_token_savings,
+    family_query_abstention_reason, family_query_route_report, family_query_unknown_metric,
+    query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
+    select_family_evidence, validate_query_target, validate_query_token_budget, DiagnosticSignal,
+    FamilyDetailReport, FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport,
+    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport,
+    FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
+    ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute,
+    TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -1488,6 +1488,7 @@ fn record_cli_family_query_outcome(
         command_category,
         lookup_mode: family_query_lookup_mode(mode),
         unknowns: &unknowns,
+        abstention_reason: family_query_abstention_reason(report),
         read_plan_item_count: prepared_output.map(|output| output.read_plan.items.len()),
         source_spans_requested,
         source_spans_included: prepared_output
@@ -1514,6 +1515,7 @@ fn record_cli_family_query_fallback(
         command_category,
         lookup_mode: family_query_lookup_mode(mode),
         unknowns: &[],
+        abstention_reason: None,
         read_plan_item_count: None,
         source_spans_requested,
         source_spans_included: false,
@@ -2275,6 +2277,56 @@ fn push_query_route_human(output: &mut String, route: &FamilyQueryRouteReport) {
         ));
     }
     output.push_str(&format!("query_why_selected: {}\n", route.why_selected));
+    if let Some(term) = &route.term_retrieval {
+        push_term_retrieval_human(output, term, &route.candidate_family_ids);
+    }
+}
+
+fn push_term_retrieval_human(
+    output: &mut String,
+    term: &TermRetrievalRoute,
+    candidate_family_ids: &[String],
+) {
+    output.push_str(&format!("query_term_route: {}\n", term.route));
+    match (&term.abstention_reason, &term.matched_signals) {
+        (None, Some(signals)) => {
+            // Found: name the concept/framework signal that anchored the match.
+            let mut matched = Vec::new();
+            if signals.framework_filter {
+                matched.push("framework");
+            }
+            if signals.concept {
+                matched.push("concept");
+            }
+            if signals.language_filter {
+                matched.push("language");
+            }
+            if signals.residue_hits > 0 {
+                matched.push("term");
+            }
+            output.push_str(&format!(
+                "query_term_matched_signal: {}\n",
+                if matched.is_empty() {
+                    "none".to_string()
+                } else {
+                    matched.join("+")
+                }
+            ));
+        }
+        (Some(reason), _) => {
+            output.push_str(&format!(
+                "query_term_abstention_reason: {}\n",
+                reason.as_str()
+            ));
+            if !candidate_family_ids.is_empty() {
+                output.push_str(&format!(
+                    "query_term_candidate_family_ids: {}\n",
+                    candidate_family_ids.join(",")
+                ));
+            }
+        }
+        (None, None) => {}
+    }
 }
 
 fn push_unknown_human(output: &mut String, unknown: &FamilyQueryUnknown) {
@@ -2455,6 +2507,41 @@ fn query_route_json(route: &FamilyQueryRouteReport) -> serde_json::Value {
         "candidate_family_ids": route.candidate_family_ids,
         "follow_up_family_ids": route.follow_up_family_ids,
         "why_selected": route.why_selected,
+        // Numeric fields the product-eval harness reads directly; null unless the
+        // deterministic term-retrieval fallback produced this route.
+        "hydrated_family_count": route
+            .term_retrieval
+            .as_ref()
+            .map(|term| term.hydrated_candidate_count),
+        "retrieval_stage_count": route
+            .term_retrieval
+            .as_ref()
+            .map(|term| term.retrieval_stage_count),
+        "term_retrieval": route.term_retrieval.as_ref().map(term_retrieval_json),
+    })
+}
+
+/// Source-free JSON for a term-retrieval route. Shared shape with the MCP
+/// renderer; carries only enum tokens, counts, and small integer scores.
+pub(crate) fn term_retrieval_json(term: &TermRetrievalRoute) -> serde_json::Value {
+    json!({
+        "route": term.route,
+        "retrieved_summary_count": term.retrieved_summary_count,
+        "ranked_candidate_count": term.ranked_candidate_count,
+        "hydrated_candidate_count": term.hydrated_candidate_count,
+        "retrieval_stage_count": term.retrieval_stage_count,
+        "top_score": term.top_score,
+        "margin": term.margin,
+        "top_score_bucket": term.top_score_bucket,
+        "margin_bucket": term.margin_bucket,
+        "truncated": term.truncated,
+        "matched_signals": term.matched_signals.map(|signals| json!({
+            "framework_filter": signals.framework_filter,
+            "concept": signals.concept,
+            "language_filter": signals.language_filter,
+            "residue_hits": signals.residue_hits,
+        })),
+        "abstention_reason": term.abstention_reason.map(|reason| reason.as_str()),
     })
 }
 
@@ -9029,10 +9116,12 @@ mod tests {
         index_repository_with_discovery_parser_frameworks_and_store,
         sync_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
+    use crate::application::query::TermRetrievalAbstention;
     use crate::application::query::{
         list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
         FamilyFreshness, FamilySummary,
     };
+    use crate::application::query_terms::MatchedSignals;
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
         repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -9687,6 +9776,7 @@ mod tests {
                     affected_claim: "runtime_equivalence".to_string(),
                     recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
                 }],
+                term_retrieval: None,
             }
         }
 
@@ -9899,6 +9989,7 @@ mod tests {
                                 .to_string(),
                         ),
                     }],
+                    term_retrieval: None,
                 }))
             }
         }
@@ -11875,6 +11966,7 @@ mod tests {
                     "family:python:pytest_test:framework_pytest_test:evidence_freshness".to_string(),
                 recovery: Some("run repogrammar resync".to_string()),
             }],
+            term_retrieval: None,
         };
 
         let lookup = FamilyLookupReport::Unknown(report.clone());
@@ -18972,5 +19064,75 @@ mod tests {
 
         assert_eq!(output.status, 2);
         assert!(output.stderr.contains("unknown stats option: --mystery"));
+    }
+
+    #[test]
+    fn query_route_json_serializes_term_retrieval_metadata() {
+        let route = FamilyQueryRouteReport {
+            route: "discover_hydrate_compose",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["discover_candidates", "hydrate_bounded_candidates"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            follow_up_family_ids: vec![],
+            why_selected: "target resolved to one fresh candidate family",
+            term_retrieval: Some(TermRetrievalRoute {
+                route: "term_retrieval_hydrate",
+                retrieved_summary_count: 8,
+                ranked_candidate_count: 1,
+                hydrated_candidate_count: 1,
+                retrieval_stage_count: 5,
+                top_score: Some(10),
+                margin: None,
+                top_score_bucket: "at_or_above_min",
+                margin_bucket: "none",
+                matched_signals: Some(MatchedSignals {
+                    framework_filter: true,
+                    concept: true,
+                    language_filter: false,
+                    residue_hits: 0,
+                }),
+                truncated: false,
+                abstention_reason: None,
+            }),
+        };
+        let value = query_route_json(&route);
+        assert_eq!(value["hydrated_family_count"], 1);
+        assert_eq!(value["retrieval_stage_count"], 5);
+        let term = &value["term_retrieval"];
+        assert_eq!(term["route"], "term_retrieval_hydrate");
+        assert_eq!(term["abstention_reason"], serde_json::Value::Null);
+        assert_eq!(term["top_score"], 10);
+        assert_eq!(term["matched_signals"]["framework_filter"], true);
+        assert_eq!(term["matched_signals"]["concept"], true);
+    }
+
+    #[test]
+    fn query_route_json_omits_term_retrieval_for_exact_routes() {
+        let route = FamilyQueryRouteReport {
+            route: "exact_family_hydrate",
+            input_kind: "family_id_follow_up_handle",
+            pipeline: vec!["hydrate_exact_family", "compose_context_bundle"],
+            family_id_policy: "show_family_requires_exact_family_id",
+            candidate_limit: None,
+            selected_family_id: Some("family:python:fastapi_route".to_string()),
+            candidate_family_ids: vec!["family:python:fastapi_route".to_string()],
+            follow_up_family_ids: vec![],
+            why_selected: "exact family id was used as a follow-up handle",
+            term_retrieval: None,
+        };
+        let value = query_route_json(&route);
+        assert_eq!(value["hydrated_family_count"], serde_json::Value::Null);
+        assert_eq!(value["retrieval_stage_count"], serde_json::Value::Null);
+        assert_eq!(value["term_retrieval"], serde_json::Value::Null);
+        // The abstention enum vocabulary is exhaustive and stable.
+        assert_eq!(TermRetrievalAbstention::ALL.len(), 7);
     }
 }

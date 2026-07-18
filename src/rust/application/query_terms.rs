@@ -19,9 +19,11 @@
 //! total (it never errors on weird input) and bounded (input token count,
 //! residue-term count, and retained candidate count are all capped).
 //!
-//! NOT YET ROUTED: this is substrate. It is public and fully tested, but it is
-//! not wired into `fuzzy_family_match_set` or the lookup paths in this change.
-//! Wiring and abstention calibration land in the next change.
+//! ROUTED: this substrate is wired into the production lookup path by
+//! `application::query::run_term_retrieval` (invoked from
+//! `lookup_family_with_freshness_and_local_context`), which applies the calibrated
+//! absolute-score and margin abstention gates and bounded freshness hydration. See
+//! `docs/specifications/query-resolution.md` for the routed pipeline and gates.
 
 use crate::ports::family_store::IndexedFamilySearchSummaryRecord;
 use std::collections::BTreeSet;
@@ -162,7 +164,9 @@ pub const STOPWORDS: &[&str] = &[
     "the",
     "in",
     "this",
-    "repository",
+    // `repository` is intentionally NOT a stopword: it is a `CONCEPT_ALIASES`
+    // data-access term. A stopword entry here would shadow that alias (stopwords
+    // are checked first in `classify_term`), stranding repository-worded queries.
     "implemented",
     "defined",
     "structured",
@@ -265,10 +269,16 @@ pub const FRAMEWORK_ALIASES: &[(&str, &[&str])] = &[
 ];
 
 /// Concept aliases (`term` -> [`Concept`]). Follows the committed vocabulary:
-/// route/endpoint/api/rest/url/handler are route terms; model/schema/
-/// validator/validation are validation-model terms; transaction/session/db/
-/// database/orm/repository/query are data-access terms; test/spec/unittest are
-/// test terms.
+/// route/endpoint/api/rest/url/handler are route terms; schema/validator/
+/// validation are validation-model terms; transaction/session/db/database/orm/
+/// repository/query are data-access terms; test/spec/unittest are test terms.
+///
+/// A term may appear more than once to name multiple concepts:
+/// [`classify_term`] inserts **every** matching concept. Bare `model` is
+/// genuinely ambiguous — it denotes both validation models (Pydantic/Zod) and
+/// data-access ORM models (SQLAlchemy/Django) — so it maps to both concepts,
+/// keeping a bare `models` query ambiguous (it surfaces both kinds) while
+/// `validation`/`schema` remain validation-model-only disambiguators.
 pub const CONCEPT_ALIASES: &[(&str, Concept)] = &[
     ("route", Concept::Route),
     ("endpoint", Concept::Route),
@@ -278,6 +288,7 @@ pub const CONCEPT_ALIASES: &[(&str, Concept)] = &[
     ("handler", Concept::Route),
     ("fixture", Concept::Fixture),
     ("model", Concept::ValidationModel),
+    ("model", Concept::DataAccess),
     ("schema", Concept::ValidationModel),
     ("validator", Concept::ValidationModel),
     ("validation", Concept::ValidationModel),
@@ -589,8 +600,14 @@ fn classify_term(term: &str, normalized: &mut NormalizedQuery) {
         }
         return;
     }
-    if let Some((_, concept)) = CONCEPT_ALIASES.iter().find(|(alias, _)| *alias == term) {
+    // A term may name more than one concept (e.g. bare `model` denotes both a
+    // validation model and a data-access ORM model); insert every match.
+    let mut matched_concept = false;
+    for (_, concept) in CONCEPT_ALIASES.iter().filter(|(alias, _)| *alias == term) {
         normalized.concept_tokens.insert(*concept);
+        matched_concept = true;
+    }
+    if matched_concept {
         return;
     }
     if term.len() >= 2 {
@@ -782,6 +799,32 @@ mod tests {
         assert_eq!(
             normalized.concept_tokens,
             BTreeSet::from([Concept::DataAccess])
+        );
+    }
+
+    #[test]
+    fn normalization_maps_ambiguous_model_and_repository_concepts() {
+        // Bare `models` is genuinely ambiguous: it denotes both validation models
+        // and data-access ORM models, so it surfaces both concepts.
+        let models = normalize_query("How are models defined?");
+        assert_eq!(
+            models.concept_tokens,
+            BTreeSet::from([Concept::ValidationModel, Concept::DataAccess])
+        );
+        assert!(models.framework_filters.is_empty());
+        assert!(models.residue_terms.is_empty());
+        // `validation` and `schema` remain validation-model-only disambiguators.
+        let schema = normalize_query("schema validation");
+        assert_eq!(
+            schema.concept_tokens,
+            BTreeSet::from([Concept::ValidationModel])
+        );
+        // `repository`/`repositories` is a data-access concept, not a stopword.
+        let repos = normalize_query("How do Prisma repositories work?");
+        assert!(repos.concept_tokens.contains(&Concept::DataAccess));
+        assert_eq!(
+            repos.framework_filters,
+            BTreeSet::from(["prisma".to_string()])
         );
     }
 
@@ -1014,7 +1057,9 @@ mod tests {
             &["routes"],
         )];
         // A stopword-only query normalizes to empty and must not dump families.
-        let normalized = normalize_query("how is this repository structured");
+        // (`repository` is a data-access concept alias, not a stopword, so it is
+        // deliberately excluded from this all-stopword phrase.)
+        let normalized = normalize_query("how is this structured");
         assert!(normalized.is_empty());
         let ranking = score_family_candidates(&normalized, &summaries);
         assert!(ranking.candidates.is_empty());

@@ -195,8 +195,8 @@ pub trait FamilyStore {
     /// framework role, prevalence classification, support count, prevalence, and
     /// bounded repo-relative evidence-path components. Deterministic (`family_id`
     /// byte order) and generation-consistent, mirroring the evidence projection.
-    /// Backs deterministic term-based family retrieval; it is not yet routed into
-    /// the production fuzzy lookup path.
+    /// Backs the deterministic term-based family retrieval that the production
+    /// fuzzy lookup path invokes (see `application::query::run_term_retrieval`).
     fn list_active_family_search_summaries(
         &self,
     ) -> Result<ActiveFamilySearchSummaries, StoreError>;

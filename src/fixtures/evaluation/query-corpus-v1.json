@@ -443,7 +443,7 @@
       "mode": "compact",
       "expected": {
         "outcome": "ok",
-        "family_prefix": "family:python:pytest_fixture"
+        "family_prefix": "family:python:pytest_test"
       }
     },
     {
@@ -456,7 +456,7 @@
       "mode": "compact",
       "expected": {
         "outcome": "ok",
-        "family_prefix": "family:python:pytest_fixture"
+        "family_prefix": "family:python:pytest_test"
       }
     },
     {
@@ -508,7 +508,7 @@
       "mode": "compact",
       "expected": {
         "outcome": "ok",
-        "family_prefix": "family:python:pytest_fixture"
+        "family_prefix": "family:python:pytest_test"
       }
     },
     {
@@ -860,13 +860,16 @@
       "query_id": "ts-nl-express-routes",
       "fixture_id": "typescript-v0_2",
       "kind": "nl_pattern_question",
-      "intent": "retrieval",
+      "intent": "abstention",
       "operation": "find",
       "target": "How are Express routes registered?",
       "mode": "compact",
       "expected": {
-        "outcome": "ok",
-        "family_prefix": "family:typescript:express_route"
+        "outcome": "unknown",
+        "candidates_include": [
+          "family:typescript:express_route",
+          "family:javascript:express_route"
+        ]
       }
     },
     {
