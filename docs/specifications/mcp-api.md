@@ -217,9 +217,17 @@ When those same fuzzy operations can deterministically resolve the target to
 exactly one indexed repo-relative path or code unit in the active generation but
 no family evidence supports a claim for that target, MCP returns top-level
 `PARTIAL_CONTEXT`. This response contains `query_route`, `resolved_target`,
-metadata-only `output`, a target `read_plan`, optional `source_spans` only when
+metadata-only `output`, a target `read_plan`, an
+`estimated_potential_token_savings` block, optional `source_spans` only when
 `include_source_spans: true` succeeds, and a typed `InsufficientSupport`
-unknown for `pattern family evidence for resolved target`. `resolved_target`
+unknown for `pattern family evidence for resolved target`. The
+`estimated_potential_token_savings` block (at CLI parity) carries
+`outcome_shape: partial_context`, the resolved file's `language` scope, the
+estimated baseline/returned/potential token counts, `ESTIMATED` kind, and the
+not-measured caveat; the baseline is the estimated whole-file read the read plan
+displaces (from the indexed inventory's stored size), and an unavailable size
+yields null counts with an `unavailable_reason` rather than a guess.
+`resolved_target`
 preserves the raw target, resolved kind, repo-relative path, optional line,
 optional byte range, optional family/member ids, symbol hints, residue terms,
 candidate paths/ids, confidence, and match kind. It is local read-planning
@@ -231,7 +239,10 @@ certificate fields: `alignment_status`, `runtime_equivalence` (always
 resolved code-unit locator), and `alignment` (the computation — `outcome_reason`,
 `required_features_matched[]`, `static_deviations[]` with source-free token
 summaries, `legal_observed_variations[]`, `blocking_unknowns[]`, and
-`unresolved_runtime_obligations[]`, or `null` when abstaining). They must omit
+`unresolved_runtime_obligations[]`, or `null` when abstaining). A committed or
+partial certificate also carries the `estimated_potential_token_savings` block
+with `outcome_shape: alignment`; an abstaining certificate reports the null
+block. They must omit
 the legacy nested `check` advisory object and any proof-like fields such as
 `pass`, `conforms`, or `fail_on`. `static_deviations[].kind` is one of the
 required-feature violations (`required_mismatch`, `must_be_empty_violation`,
@@ -274,7 +285,11 @@ unknowns, output metadata, and a `read_plan` without evidence records;
 `evidence` adds budgeted repo-relative evidence metadata selected by
 deterministic greedy marginal coverage per estimated token cost; `deep` is
 accepted only as an explicit detail request and remains metadata-first unless
-`include_source_spans: true` is also provided. The `read_plan` is returned for
+`include_source_spans: true` is also provided. The inline `members` array is
+bounded exactly as on the CLI: outside `deep` mode it is capped at the first 20
+members in unchanged deterministic order, and every response carries the true
+`member_count` and a `members_truncated` flag so a large family never inflates a
+single MCP response; `deep` restores the full member list. The `read_plan` is returned for
 the existing `find_analogues`, `show_family`, `explain_deviation`, and
 `check_conformance` operations. It contains suggested target, canonical,
 support, and variation/exception spans by repo-relative path, strict content
@@ -294,7 +309,12 @@ estimated read-plan tokens, `estimated_potential_token_savings` with
 `measurement_kind: ESTIMATED`, covered claim labels, missing claim labels, and
 whether the rough budget was satisfied. `estimated_potential_token_savings` is
 a potential read-displacement estimate for the returned RepoGrammar metadata
-shape; it is not measured token savings and must carry a caveat saying so.
+shape; it is not measured token savings and must carry a caveat saying so. The
+same estimate is computed by a single query authority for every
+context-delivering outcome shape (found, partial_context, alignment) and each
+recorded event is attributed a low-cardinality `outcome_shape` and `language`
+token; see `docs/specifications/metrics.md` for the per-shape baseline/returned
+accounting.
 Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
 `support`, `contrast`, `variation`, and `exception`; selectors must consume those

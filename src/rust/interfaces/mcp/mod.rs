@@ -3,16 +3,18 @@
 use crate::application::conformance::AlignmentComputation;
 use crate::application::install::AGENT_PREFLIGHT_GATE;
 use crate::application::query::{
-    build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
-    family_query_unknown_metric, product_readiness_value, query_preflight,
-    read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
-    validate_query_target, validate_query_token_budget, AlignmentCertificateReport,
-    FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
-    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport,
-    TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
-    PRODUCT_SCHEMA_VERSION,
+    bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
+    estimate_family_output_potential_token_savings,
+    estimate_partial_context_potential_token_savings, family_query_route_report,
+    family_query_unknown_metric, found_outcome_token_savings, product_readiness_value,
+    query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
+    select_family_evidence, validate_query_target, validate_query_token_budget,
+    AlignmentCertificateReport, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
+    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
+    FamilyQueryUnknown, OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation,
+    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, ResolvedQueryTarget,
+    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES,
+    MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -24,7 +26,10 @@ use crate::application::telemetry::{
     FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
     FamilyQueryOutcomeRecord, FamilyQueryOutcomeStatus,
 };
-use crate::core::model::{FamilyConstraintProfile, FamilyPrevalence, FeatureConstraint};
+use crate::core::model::{
+    EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence, FeatureConstraint,
+    MeasurementKind,
+};
 use crate::error::RepoGrammarError;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
@@ -359,8 +364,10 @@ pub fn handle_context_call(
                     &read_plan,
                     source_spans.as_ref(),
                 );
-                let _ =
-                    record_estimated_potential_token_savings(request.clone(), &estimated_potential);
+                record_mcp_estimated_potential_token_savings(
+                    request.clone(),
+                    Some(found_outcome_token_savings(&family, estimated_potential)),
+                );
                 record_mcp_family_query_outcome(
                     request,
                     arguments.operation,
@@ -431,6 +438,14 @@ pub fn handle_context_call(
                 } else {
                     None
                 };
+                record_mcp_estimated_potential_token_savings(
+                    request.clone(),
+                    estimate_partial_context_potential_token_savings(
+                        &report,
+                        &read_plan,
+                        source_spans.as_ref(),
+                    ),
+                );
                 record_mcp_family_query_outcome(
                     request,
                     arguments.operation,
@@ -532,6 +547,14 @@ pub fn handle_context_call(
                     None
                 };
                 let outcome_status = alignment_outcome_status(certificate.alignment_status);
+                record_mcp_estimated_potential_token_savings(
+                    request.clone(),
+                    estimate_alignment_potential_token_savings(
+                        &certificate,
+                        &read_plan,
+                        source_spans.as_ref(),
+                    ),
+                );
                 record_mcp_family_query_outcome(
                     request,
                     arguments.operation,
@@ -624,6 +647,23 @@ fn record_mcp_family_query_outcome(
         source_span_omission_count: source_spans.map(|source_spans| source_spans.omissions.len()),
     };
     let _ = record_family_query_outcome(request, &record);
+}
+
+/// Record one all-scope potential-token-savings event through the telemetry
+/// authority. `None` (an abstention or a PARTIAL_CONTEXT/certificate with no
+/// stored file size) records nothing, keeping the query in the denominator only.
+fn record_mcp_estimated_potential_token_savings(
+    request: RepositoryStatusRequest,
+    savings: Option<OutcomeTokenSavings>,
+) {
+    if let Some(savings) = savings {
+        let _ = record_estimated_potential_token_savings(
+            request,
+            &savings.metric,
+            savings.shape.as_str(),
+            savings.language,
+        );
+    }
 }
 
 fn record_mcp_family_query_fallback(
@@ -1057,6 +1097,8 @@ fn family_detail_value(
         read_plan,
         source_spans,
     );
+    let (rendered_members, members_truncated) =
+        bounded_family_members(family, options.evidence_mode);
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
@@ -1087,7 +1129,9 @@ fn family_detail_value(
             "missing_claims": selected_evidence.missing_claims,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "members": family.members.iter().map(|member| {
+        "member_count": family.members.len(),
+        "members_truncated": members_truncated,
+        "members": rendered_members.iter().map(|member| {
             json!({
                 "family_id": member.family_id,
                 "code_unit_id": member.code_unit_id,
@@ -1131,7 +1175,8 @@ fn family_partial_context_value(
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
-    let value = json!({
+    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
+    json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -1148,11 +1193,41 @@ fn family_partial_context_value(
             "budget_satisfied": read_plan.budget_satisfied,
             "source_snippets_included": read_plan.source_snippets_included,
         },
+        "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "partial_context", "resolved file size unavailable; no estimate recorded"),
         "read_plan": read_plan_value(read_plan),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
-    });
-    value
+    })
+}
+
+/// The shared MCP `estimated_potential_token_savings` block, at CLI parity: the
+/// full estimate when available, otherwise an explicit no-estimate block that
+/// still carries the ESTIMATED caveat (never a guessed number).
+fn savings_block_value(
+    savings: Option<&OutcomeTokenSavings>,
+    outcome_shape: &str,
+    unavailable_reason: &str,
+) -> Value {
+    match savings {
+        Some(savings) => json!({
+            "outcome_shape": savings.shape.as_str(),
+            "language": savings.language,
+            "estimated_baseline_tokens": savings.metric.estimated_baseline_tokens,
+            "estimated_returned_tokens": savings.metric.estimated_returned_tokens,
+            "estimated_potential_token_savings": savings.metric.estimated_potential_token_savings,
+            "estimated_potential_token_savings_kind": savings.metric.measurement_kind.as_str(),
+            "estimated_potential_token_savings_caveat": savings.metric.caveat,
+        }),
+        None => json!({
+            "outcome_shape": outcome_shape,
+            "estimated_baseline_tokens": null,
+            "estimated_returned_tokens": null,
+            "estimated_potential_token_savings": null,
+            "estimated_potential_token_savings_kind": MeasurementKind::Estimated.as_str(),
+            "estimated_potential_token_savings_caveat": EstimatedPotentialTokenSavings::CAVEAT,
+            "unavailable_reason": unavailable_reason,
+        }),
+    }
 }
 
 /// Source-free MCP value for a static-alignment certificate. Mirrors the CLI
@@ -1165,6 +1240,7 @@ fn alignment_certificate_value(
     read_plan: &ReadPlan,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
+    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
@@ -1184,6 +1260,7 @@ fn alignment_certificate_value(
             .computation
             .as_deref()
             .map(alignment_computation_value),
+        "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "alignment", "abstaining certificate; no full read displaced"),
         "read_plan": read_plan_value(read_plan),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&certificate.unknowns),
@@ -1796,6 +1873,26 @@ mod tests {
             response["unknowns"][0]["affected_claim"],
             "pattern family evidence for resolved target"
         );
+        // MCP parity: a PARTIAL_CONTEXT response carries the same ESTIMATED
+        // savings block the CLI does. The 4 KiB resolved TypeScript file yields a
+        // nonzero whole-file baseline against the 20-byte read plan.
+        let savings = &response["estimated_potential_token_savings"];
+        assert_eq!(savings["outcome_shape"], "partial_context");
+        assert_eq!(savings["language"], "typescript/javascript");
+        assert!(
+            savings["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("savings")
+                > 0
+        );
+        assert_eq!(
+            savings["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(savings["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
     }
@@ -1858,6 +1955,11 @@ mod tests {
             .as_array()
             .expect("evidence")
             .is_empty());
+        // The member list is bounded metadata: the true total and the truncation
+        // flag ship alongside the (here single-member) array.
+        assert_eq!(response["member_count"], 1);
+        assert_eq!(response["members_truncated"], false);
+        assert_eq!(response["members"].as_array().expect("members").len(), 1);
         assert_eq!(response["read_plan"]["source_snippets_included"], false);
         assert_eq!(response["read_plan"]["requires_source_before_edit"], true);
         assert_eq!(
@@ -1883,6 +1985,65 @@ mod tests {
         );
         assert!(!text.contains("/tmp/repogrammar"));
         assert!(!text.contains("export const"));
+    }
+
+    #[test]
+    fn found_family_value_bounds_large_member_list_outside_deep_mode() {
+        // The recorded live hazard: a 123-member family inflating a single MCP
+        // response. Outside `--mode deep` the inline list is capped and the true
+        // total plus a truncation flag ship alongside it; deep mode restores the
+        // full deterministic list.
+        let mut family = family_detail();
+        let total = crate::application::query::MAX_RENDERED_FAMILY_MEMBERS + 103;
+        family.members = (0..total)
+            .map(|index| IndexedFamilyMemberRecord {
+                family_id: family.family_id.clone(),
+                code_unit_id: format!("unit:src/routes/a.ts#express_route:get:{index}"),
+                role: "framework:express.route_handler".to_string(),
+            })
+            .collect();
+        let options = FamilyOutputOptions::default();
+        let read_plan = build_read_plan(
+            &family,
+            Some("src/routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+            options,
+        );
+        let route = family_query_route_report(
+            &FamilyLookupReport::Found(family.clone()),
+            FamilyLookupMode::FuzzyQuery,
+        );
+
+        let value = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            options,
+            None,
+        );
+        assert_eq!(value["member_count"], total);
+        assert_eq!(value["members_truncated"], true);
+        assert_eq!(
+            value["members"].as_array().expect("members").len(),
+            crate::application::query::MAX_RENDERED_FAMILY_MEMBERS
+        );
+
+        let deep_options = FamilyOutputOptions {
+            evidence_mode: FamilyEvidenceMode::Deep,
+            ..options
+        };
+        let deep = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            deep_options,
+            None,
+        );
+        assert_eq!(deep["member_count"], total);
+        assert_eq!(deep["members_truncated"], false);
+        assert_eq!(deep["members"].as_array().expect("members").len(), total);
     }
 
     #[test]
@@ -2631,6 +2792,11 @@ mod tests {
                 budget_satisfied: true,
                 line_range_omissions: Vec::new(),
             },
+            // A 4 KiB TypeScript file resolves to a 20-byte read-plan span: the
+            // whole-file baseline (1024 tokens) far exceeds the returned read
+            // plan, so this PARTIAL_CONTEXT carries a nonzero savings estimate.
+            resolved_file_size_bytes: Some(4096),
+            resolved_file_language: "typescript".to_string(),
             unknowns: vec![FamilyQueryUnknown {
                 class: UnknownClass::Blocking,
                 reason: UnknownReasonCode::InsufficientSupport,

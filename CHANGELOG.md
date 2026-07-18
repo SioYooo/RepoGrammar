@@ -18,6 +18,22 @@
 
 ### Added
 
+- Extended estimated-potential token-savings accounting to every
+  context-delivering outcome. A single estimator authority records an
+  ESTIMATED event for found, partial-context, and committed-alignment
+  responses (savings = max(0, baseline - returned) under the existing
+  bytes/4 heuristic and caveat); abstentions and targets with no stored
+  size record no event rather than a guess. The local telemetry rollup
+  gains additive `by_outcome_shape` and `by_language` breakdowns behind
+  closed vocabularies (out-of-vocabulary languages coerce explicitly to
+  `unknown`, never dropped silently), `stats --json` reports an
+  `all_scope_token_savings` block with an honest
+  events-over-total-queries coverage ratio, and partial-context and
+  alignment responses now carry the estimate block on CLI and MCP —
+  with an explicit null and `unavailable_reason` when no estimate is
+  possible. Measured-savings claims remain exclusive to paired
+  experiments; nothing in this accounting can produce one.
+
 - Extended dependency-aware incremental sync to Python through stored
   module interface hashes. Each build records a deterministic interface
   hash per non-conftest Python module (schema v10
@@ -55,6 +71,17 @@
   pre-1.0 compatibility policy.
 
 ### Changed
+
+- Bounded inline family member lists and condensed the human stats
+  output. find/family/check responses now cap the inline `members`
+  array at 20 entries in deterministic order outside `--mode deep`,
+  with an honest `member_count` total and `members_truncated` flag
+  (`--mode deep` restores the full list) — the prior unbounded form
+  returned 75 KB for a 123-member family. The human `stats` panel
+  shrinks to a ~10-line lead block (readiness, inventory, family
+  coverage, the all-scope savings headline, scope note, and a `--json`
+  pointer); every previously emitted field remains available under
+  `stats --json`.
 
 - Narrowed the incremental-sync full-rebuild gate for content-only Rust
   and TypeScript/JavaScript source edits. Non-Python parser contexts

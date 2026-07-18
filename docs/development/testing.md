@@ -647,7 +647,8 @@ allowed.
   state, local-only `estimated_potential_token_savings` aggregate recording
   without upload queue entries or source/path/hash/query fields, stats reporting
   that aggregate as `ESTIMATED` while leaving measured `token_savings` null
-  without paired measurements, redacted research export,
+  without paired measurements, all-scope savings accounting (see below),
+  redacted research export,
   redacted experiment export without raw names/session ids/token counts, paired
   baseline/treatment token experiment recording, default-no experiment prompts,
   record-existing prompt no-extra-session wording, controlled-pair
@@ -657,6 +658,38 @@ allowed.
   reporting measured savings only when a valid paired measurement exists.
   Anonymous telemetry schema tests must cover bucketed experiment aggregate
   fields without raw token counts or user-provided experiment names.
+- All-scope estimated-potential-token-savings tests must cover the single
+  estimator authority per context-delivering outcome shape: found families
+  (unchanged), PARTIAL_CONTEXT read plans (whole-file baseline from the stored
+  inventory size, no event when the size is unavailable), committed/partial
+  alignment certificates (target file plus family evidence baseline, no event
+  when abstaining), and the `max(0, baseline - returned)` floor. They must cover
+  the additive local rollup: `by_outcome_shape` and `by_language` breakdown
+  accumulation, tolerated-when-absent parsing of a legacy rollup file written
+  before the breakdowns existed (keeping the `estimated-potential-token-savings.v1`
+  schema token), and an out-of-vocabulary language coercing to `unknown` rather
+  than dropping the event or writing an out-of-vocabulary key. A same-source
+  vocabulary test must pin the query-layer language producers
+  (`inventory_language_scope` plus the found-family `mixed` marker) to the single
+  authoritative `SAVINGS_LANGUAGE_KEYS` allowlist so the two cannot diverge.
+  Surface tests must assert the `estimated_potential_token_savings` block (with
+  `outcome_shape`, `language`, `ESTIMATED` kind, and the not-measured caveat) is
+  present on PARTIAL_CONTEXT and alignment responses on both CLI and MCP, and
+  that `stats --json` reports the additive `all_scope_token_savings` block
+  (`savings_events`/`total_queries` denominator plus `by_outcome_shape` and
+  `by_language`) while the concise human `stats` leads with the summary and moves
+  full detail behind `--json`. An end-to-end binary test must prove a
+  TypeScript-only repository records nonzero PARTIAL_CONTEXT savings where the
+  Python-scoped panel previously reported zero. Run these through
+  `cargo test --workspace --all-features` (unit estimator and telemetry cases,
+  `interfaces::cli::tests`, `interfaces::mcp::tests`, and the
+  `product_runtime_partial_context_records_nonzero_all_scope_token_savings`
+  binary test).
+- Found-family payload member lists must be bounded outside `--mode deep`: tests
+  must assert the inline `members` array is capped at `MAX_RENDERED_FAMILY_MEMBERS`
+  in unchanged deterministic order while `member_count` reports the true total and
+  `members_truncated` flags the cut, on both CLI JSON and MCP, with `--mode deep`
+  restoring the full list.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,

@@ -15,18 +15,21 @@ use crate::application::install::{
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
-    build_read_plan, estimate_family_output_potential_token_savings,
-    family_query_abstention_reason, family_query_route_report, family_query_unknown_metric,
+    bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
+    estimate_family_output_potential_token_savings,
+    estimate_partial_context_potential_token_savings, family_query_abstention_reason,
+    family_query_route_report, family_query_unknown_metric, found_outcome_token_savings,
     product_readiness_value, query_preflight, read_plan_with_rendered_spans,
     repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
     validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
     FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
     FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
     FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
-    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
-    ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute,
-    TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport, PRODUCT_SCHEMA_VERSION,
+    OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport,
+    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
+    RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
+    SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket,
+    UnknownInventoryReport, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -64,18 +67,18 @@ use crate::application::telemetry::{
     experiment_stop, export_anonymous_telemetry, family_query_outcome_rollup,
     latest_comparable_experiment_report, purge_telemetry, record_estimated_potential_token_savings,
     record_family_query_outcome, record_passive_diagnostics_rollup, research_export,
-    research_purge, set_anonymous_telemetry, set_research_trace, telemetry_disabled_by_environment,
-    telemetry_status, upload_anonymous_telemetry, validate_telemetry_endpoint,
-    EstimatedPotentialTokenSavingsRollup, ExperimentMode, ExperimentRecordRequest,
-    ExperimentStartRequest, ExperimentWorkflowMode, FamilyQueryCommandCategory,
-    FamilyQueryEntrypoint, FamilyQueryLookupMode, FamilyQueryOutcomeRecord,
-    FamilyQueryOutcomeRollup, FamilyQueryOutcomeStatus, MeasurementSource, TelemetryDiagnostics,
-    TelemetryExportReport, TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport,
-    TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
-    TelemetryUploadTransport, TestOutcome,
+    research_purge, savings_breakdown_map_json, set_anonymous_telemetry, set_research_trace,
+    telemetry_disabled_by_environment, telemetry_status, upload_anonymous_telemetry,
+    validate_telemetry_endpoint, EstimatedPotentialTokenSavingsRollup, ExperimentMode,
+    ExperimentRecordRequest, ExperimentStartRequest, ExperimentWorkflowMode,
+    FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
+    FamilyQueryOutcomeRecord, FamilyQueryOutcomeRollup, FamilyQueryOutcomeStatus,
+    MeasurementSource, SavingsBreakdown, TelemetryDiagnostics, TelemetryExportReport,
+    TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport, TelemetryUploadReceipt,
+    TelemetryUploadReport, TelemetryUploadRequest, TelemetryUploadTransport, TestOutcome,
 };
 use crate::core::model::{
-    EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence,
+    EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence, MeasurementKind,
 };
 use crate::error::RepoGrammarError;
 #[cfg(test)]
@@ -1476,15 +1479,68 @@ fn record_family_query_estimated_potential_token_savings(
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
 ) {
-    let FamilyLookupReport::Found(family) = report else {
-        return;
-    };
-    let output_components =
-        family_output_components(family, target, mode, options, prepared_output);
-    let _ = record_estimated_potential_token_savings(
-        request,
-        &output_components.estimated_potential_token_savings,
-    );
+    if let Some(savings) =
+        family_query_outcome_token_savings(report, target, mode, options, prepared_output)
+    {
+        let _ = record_estimated_potential_token_savings(
+            request,
+            &savings.metric,
+            savings.shape.as_str(),
+            savings.language,
+        );
+    }
+}
+
+/// The single all-scope potential-token-savings event for a lookup outcome, or
+/// `None` for an abstention (Unknown), a PARTIAL_CONTEXT with no stored file
+/// size, or an abstaining certificate. Delegates every estimate to the query
+/// authority; surfaces never reimplement the accounting from raw fields.
+fn family_query_outcome_token_savings(
+    report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> Option<OutcomeTokenSavings> {
+    match report {
+        FamilyLookupReport::Found(family) => {
+            let output_components =
+                family_output_components(family, target, mode, options, prepared_output);
+            Some(found_outcome_token_savings(
+                family,
+                output_components.estimated_potential_token_savings,
+            ))
+        }
+        FamilyLookupReport::PartialContext(report) => {
+            let read_plan = prepared_output
+                .map(|prepared| &prepared.read_plan)
+                .unwrap_or(&report.read_plan);
+            let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+            estimate_partial_context_potential_token_savings(report, read_plan, source_spans)
+        }
+        FamilyLookupReport::Alignment(certificate) => {
+            let read_plan = prepared_output
+                .map(|prepared| &prepared.read_plan)
+                .unwrap_or(&certificate.read_plan);
+            let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+            estimate_alignment_potential_token_savings(certificate, read_plan, source_spans)
+        }
+        FamilyLookupReport::Unknown(_) => None,
+    }
+}
+
+/// The shared `estimated_potential_token_savings` output block every
+/// context-delivering surface renders, carrying the ESTIMATED caveat verbatim.
+fn estimated_potential_token_savings_json(savings: &OutcomeTokenSavings) -> serde_json::Value {
+    json!({
+        "outcome_shape": savings.shape.as_str(),
+        "language": savings.language,
+        "estimated_baseline_tokens": savings.metric.estimated_baseline_tokens,
+        "estimated_returned_tokens": savings.metric.estimated_returned_tokens,
+        "estimated_potential_token_savings": savings.metric.estimated_potential_token_savings,
+        "estimated_potential_token_savings_kind": savings.metric.measurement_kind.as_str(),
+        "estimated_potential_token_savings_caveat": savings.metric.caveat,
+    })
 }
 
 fn record_cli_family_query_outcome(
@@ -2135,10 +2191,20 @@ fn family_lookup_human(
             if let Some(source_spans) = source_spans {
                 push_source_spans_human(&mut output, source_spans);
             }
-            for member in &family.members {
+            let (rendered_members, members_truncated) =
+                bounded_family_members(family, options.evidence_mode);
+            output.push_str(&format!("member_count: {}\n", family.members.len()));
+            for member in rendered_members {
                 output.push_str(&format!(
                     "member: {}\trole: {}\n",
                     member.code_unit_id, member.role
+                ));
+            }
+            if members_truncated {
+                output.push_str(&format!(
+                    "members_truncated: {} of {} shown; use --mode deep for the full list\n",
+                    rendered_members.len(),
+                    family.members.len()
                 ));
             }
             for evidence in &selected_evidence.evidence {
@@ -2264,9 +2330,11 @@ fn alignment_certificate_human(
             ));
         }
     }
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
+    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
-    if let Some(source_spans) = prepared_output.and_then(|prepared| prepared.source_spans.as_ref())
-    {
+    if let Some(source_spans) = source_spans {
         push_source_spans_human(&mut output, source_spans);
     }
     for unknown in &certificate.unknowns {
@@ -2396,6 +2464,8 @@ fn family_partial_context_human(
         snippets,
         read_plan.requires_source_before_edit
     );
+    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
+    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
     push_query_route_human(&mut output, route);
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
@@ -2405,6 +2475,30 @@ fn family_partial_context_human(
         push_unknown_human(&mut output, unknown);
     }
     output
+}
+
+/// The shared human `estimated_potential_token_savings` block every
+/// context-delivering surface renders, carrying the ESTIMATED caveat verbatim.
+/// `None` renders an explicit `unavailable` (never a guessed number).
+fn push_estimated_potential_token_savings_human(
+    output: &mut String,
+    savings: Option<&OutcomeTokenSavings>,
+) {
+    match savings {
+        Some(savings) => output.push_str(&format!(
+            "estimated_potential_token_savings: {}\nestimated_potential_token_savings_outcome_shape: {}\nestimated_potential_token_savings_language: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\n",
+            savings.metric.estimated_potential_token_savings,
+            savings.shape.as_str(),
+            savings.language,
+            savings.metric.measurement_kind.as_str(),
+            savings.metric.caveat,
+        )),
+        None => output.push_str(&format!(
+            "estimated_potential_token_savings: unavailable\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\n",
+            MeasurementKind::Estimated.as_str(),
+            ESTIMATED_TOKEN_SAVING_CAVEAT,
+        )),
+    }
 }
 
 fn family_unknown_human(
@@ -2570,6 +2664,7 @@ fn alignment_certificate_json(
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&certificate.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
     json!({
         "command": command,
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -2588,10 +2683,29 @@ fn alignment_certificate_json(
             .computation
             .as_deref()
             .map(alignment_computation_json),
+        "estimated_potential_token_savings": alignment_savings_json(savings.as_ref()),
         "read_plan": read_plan_json(read_plan),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&certificate.unknowns),
     })
+}
+
+/// The alignment certificate's savings block: the full estimate for a committed
+/// or partial certificate, otherwise a no-estimate block (an abstaining
+/// certificate displaces no full read) that still carries the ESTIMATED caveat.
+fn alignment_savings_json(savings: Option<&OutcomeTokenSavings>) -> serde_json::Value {
+    match savings {
+        Some(savings) => estimated_potential_token_savings_json(savings),
+        None => json!({
+            "outcome_shape": "alignment",
+            "estimated_baseline_tokens": null,
+            "estimated_returned_tokens": null,
+            "estimated_potential_token_savings": null,
+            "estimated_potential_token_savings_kind": MeasurementKind::Estimated.as_str(),
+            "estimated_potential_token_savings_caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+            "unavailable_reason": "abstaining certificate; no full read displaced",
+        }),
+    }
 }
 
 fn alignment_computation_json(computation: &AlignmentComputation) -> serde_json::Value {
@@ -2659,6 +2773,7 @@ fn family_partial_context_json(
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&report.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
     let value = json!({
         "command": command,
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -2675,11 +2790,30 @@ fn family_partial_context_json(
             "budget_satisfied": read_plan.budget_satisfied,
             "source_snippets_included": read_plan.source_snippets_included,
         },
+        "estimated_potential_token_savings": partial_context_savings_json(savings.as_ref()),
         "read_plan": read_plan_json(read_plan),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
     });
     json_line(value)
+}
+
+/// The PARTIAL_CONTEXT / alignment savings block: the full estimate when a
+/// stored file size was available, otherwise an explicit no-estimate block that
+/// still carries the ESTIMATED caveat (never a guessed number).
+fn partial_context_savings_json(savings: Option<&OutcomeTokenSavings>) -> serde_json::Value {
+    match savings {
+        Some(savings) => estimated_potential_token_savings_json(savings),
+        None => json!({
+            "outcome_shape": "partial_context",
+            "estimated_baseline_tokens": null,
+            "estimated_returned_tokens": null,
+            "estimated_potential_token_savings": null,
+            "estimated_potential_token_savings_kind": MeasurementKind::Estimated.as_str(),
+            "estimated_potential_token_savings_caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+            "unavailable_reason": "resolved file size unavailable; no estimate recorded",
+        }),
+    }
 }
 
 fn family_detail_json(
@@ -2697,6 +2831,8 @@ fn family_detail_json(
     let read_plan = &output_components.read_plan;
     let estimated_potential = &output_components.estimated_potential_token_savings;
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let (rendered_members, members_truncated) =
+        bounded_family_members(family, options.evidence_mode);
     json_line(json!({
         "command": command,
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -2726,7 +2862,9 @@ fn family_detail_json(
             "missing_claims": selected_evidence.missing_claims,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "members": family.members.iter().map(|member| {
+        "member_count": family.members.len(),
+        "members_truncated": members_truncated,
+        "members": rendered_members.iter().map(|member| {
             json!({
                 "family_id": member.family_id,
                 "code_unit_id": member.code_unit_id,
@@ -3109,17 +3247,6 @@ fn push_unknown_inventory_bucket_human(
         output.push_str(&format!(" {}={}", bucket.key, bucket.count));
     }
     output.push('\n');
-}
-
-fn telemetry_count_map_human(counts: &BTreeMap<String, u64>) -> String {
-    if counts.is_empty() {
-        return "none".to_string();
-    }
-    counts
-        .iter()
-        .map(|(key, count)| format!("{key}={count}"))
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 fn unknown_inventory_json(command: &str, report: &UnknownInventoryReport) -> String {
@@ -5176,7 +5303,10 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
     Ok(options)
 }
 
-const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = "estimated potential only; not measured token savings";
+// Alias the authoritative caveat from the measurement model so the CLI's
+// estimated-savings surfaces cannot drift a parallel literal from the value the
+// metric and MCP carry.
+const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = EstimatedPotentialTokenSavings::CAVEAT;
 const OFFICIAL_FAMILY_SCOPE: &str = "python_v0_1";
 const REPO_SHAPE_SCOPE: &str = "python_family_eligible_units";
 const PARTIAL_CONTEXT_RECOMMENDED_ACTION: &str =
@@ -5232,47 +5362,32 @@ fn stats_human(
     query_outcome_rollup: &FamilyQueryOutcomeRollup,
     unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
+    // Lead with the essentials (~10 lines): readiness, indexed inventory,
+    // family coverage, the all-scope estimated-savings headline, and the scope
+    // note with its next action. Every remaining metric, risk signal, and rollup
+    // stays available under `stats --json` (no JSON field is dropped).
     let mut output = format!(
-        "stats: repo-shape diagnostics\nofficial_family_scope: {}\nrepo_shape_scope: {}\nactive_generation: {}\nindexed_file_count: {}\nindexed_code_unit_count: {}\nsemantic_fact_count: {}\nrepository_readiness_state: {}\nquery_ready: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
+        "stats: repo-shape diagnostics\nofficial_family_scope: {}\trepo_shape_scope: {}\nreadiness: {}\tquery_ready: {}\nindexed: {} files\t{} code units\t{} semantic facts\nfamilies: {}\teligible_code_units: {}\tfamily_support_coverage: {}\ntoken_saving_readiness: {}\n",
         OFFICIAL_FAMILY_SCOPE,
         REPO_SHAPE_SCOPE,
-        report.active_generation,
+        readiness_state_value(readiness.state),
+        readiness.query_ready,
         report.indexed_file_count,
         report.indexed_code_unit_count,
         report.semantic_fact_count,
-        readiness_state_value(readiness.state),
-        readiness.query_ready,
-        report.eligible_code_units,
         report.family_count,
-        report.family_member_count,
-        report.covered_code_units,
-        optional_ratio_human(report.local_pattern_density),
+        report.eligible_code_units,
         optional_ratio_human(report.family_support_coverage),
-        optional_ratio_human(report.abstention_rate),
-        report.external_dependency_signal.as_str(),
-        report.thin_wrapper_risk.as_str(),
-        report.token_saving_risk.as_str(),
         report.token_saving_readiness.as_str(),
-        stats_blocking_reasons_human(report.blocking_reasons.iter().copied()),
-        estimated_rollup.total_estimated_potential_token_savings,
-        estimated_rollup.event_count,
-        ESTIMATED_TOKEN_SAVING_CAVEAT,
-        estimated_rollup.measurement_kind.as_str(),
-        estimated_rollup.caveat,
-        report.interpretation
     );
+    output.push_str(&stats_all_scope_savings_human(
+        estimated_rollup,
+        query_outcome_rollup,
+    ));
     output.push_str(&stats_scope_human(report));
-    if query_outcome_rollup.event_count > 0 {
-        output.push_str(&format!(
-            "query_outcome_events: {}\nquery_outcome_by_status: {}\nquery_outcome_by_entrypoint: {}\nquery_outcome_read_plans_returned: {}\nquery_outcome_source_spans_requested: {}\nquery_outcome_source_spans_included: {}\n",
-            query_outcome_rollup.event_count,
-            telemetry_count_map_human(&query_outcome_rollup.by_status),
-            telemetry_count_map_human(&query_outcome_rollup.by_entrypoint),
-            query_outcome_rollup.read_plan_returned_count,
-            query_outcome_rollup.source_spans_requested_count,
-            query_outcome_rollup.source_spans_included_count,
-        ));
-    }
+    output.push_str(
+        "detail: run `repogrammar stats --json` for full metrics, risk signals, blocking reasons, and per-language and per-outcome-shape breakdowns\n",
+    );
     if let Some(unknown_inventory) = unknown_inventory {
         output.push_str(&unknown_inventory_human(
             "stats_unknowns",
@@ -5360,6 +5475,7 @@ fn stats_json(
             "total_estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
             "caveat": estimated_rollup.caveat,
         },
+        "all_scope_token_savings": stats_all_scope_savings_json(estimated_rollup, query_outcome_rollup),
         "query_outcome_rollup": query_outcome_rollup_value(query_outcome_rollup),
         "measurement_status": measurement_status,
         "measurement_reason": measurement.and_then(|measurement| measurement.reason.as_deref()),
@@ -5457,6 +5573,67 @@ fn stats_tsjs_family_support(language: &RepoShapeLanguageDiagnostics) -> &'stati
     }
 }
 
+/// The additive all-scope estimated-potential-token-savings block: totals plus
+/// per-outcome-shape and per-language breakdowns, and the honest denominator
+/// `savings_events / total_queries` (savings events over every recorded query).
+/// Every value is ESTIMATED; the paired-experiment recorder remains the only
+/// path to a MEASURED claim. This block covers all indexed languages and all
+/// context-delivering outcome shapes; the `python_family_eligible_units`
+/// repo-shape block is the official-scope subset.
+fn stats_all_scope_savings_json(
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+) -> Value {
+    json!({
+        "measurement_kind": estimated_rollup.measurement_kind.as_str(),
+        "caveat": estimated_rollup.caveat,
+        "scope": "all_languages_all_outcome_shapes",
+        "savings_events": estimated_rollup.event_count,
+        "total_queries": query_outcome_rollup.event_count,
+        "estimated_baseline_tokens": estimated_rollup.total_estimated_baseline_tokens,
+        "estimated_returned_tokens": estimated_rollup.total_estimated_returned_tokens,
+        "estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
+        "by_outcome_shape": savings_breakdown_map_json(&estimated_rollup.by_outcome_shape),
+        "by_language": savings_breakdown_map_json(&estimated_rollup.by_language),
+        "note": "all-scope estimated potential across every indexed language and context-delivering outcome shape (found, partial_context, alignment); the python_family_eligible_units repo-shape block is the official-scope subset",
+    })
+}
+
+/// The compact all-scope estimated-savings headline for the concise human
+/// summary: the total (labeled ESTIMATED, never measured), the honest
+/// `savings_events / total_queries` denominator, and the per-outcome-shape and
+/// per-language breakdowns on one continuation line. The full block is in JSON.
+fn stats_all_scope_savings_human(
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+) -> String {
+    format!(
+        "estimated_potential_token_savings: {}\tmeasurement_kind: {}\tsavings_events: {} / queries: {}\tcaveat: {}\nall_scope_by_outcome_shape: {}\tby_language: {}\n",
+        estimated_rollup.total_estimated_potential_token_savings,
+        estimated_rollup.measurement_kind.as_str(),
+        estimated_rollup.event_count,
+        query_outcome_rollup.event_count,
+        estimated_rollup.caveat,
+        savings_breakdown_map_human(&estimated_rollup.by_outcome_shape),
+        savings_breakdown_map_human(&estimated_rollup.by_language),
+    )
+}
+
+fn savings_breakdown_map_human(map: &BTreeMap<String, SavingsBreakdown>) -> String {
+    if map.is_empty() {
+        return "none".to_string();
+    }
+    map.iter()
+        .map(|(key, breakdown)| {
+            format!(
+                "{key}=events:{},potential:{}",
+                breakdown.event_count, breakdown.estimated_potential_token_savings
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn query_outcome_rollup_value(rollup: &FamilyQueryOutcomeRollup) -> Value {
     json!({
         "schema_version": crate::application::telemetry::FAMILY_QUERY_OUTCOMES_SCHEMA_VERSION,
@@ -5537,18 +5714,6 @@ where
         output.push("no_paired_experiment");
     }
     output
-}
-
-fn stats_blocking_reasons_human<I>(reasons: I) -> String
-where
-    I: IntoIterator<Item = &'static str>,
-{
-    let reasons = stats_blocking_reasons(reasons, false);
-    if reasons.is_empty() {
-        "none".to_string()
-    } else {
-        reasons.join(",")
-    }
 }
 
 fn diagnostic_signal_json(signal: DiagnosticSignal) -> serde_json::Value {
@@ -13252,9 +13417,47 @@ mod tests {
         );
         assert_eq!(value["by_language"][1]["indexed_code_unit_count"], 0);
         assert!(value.get("unknown_inventory").is_none());
+        // The additive all-scope savings block is present with the ESTIMATED
+        // discipline intact, the savings_events / total_queries denominator, and
+        // the per-outcome-shape and per-language breakdown maps (empty here since
+        // no query has run in this repo yet).
+        let all_scope = &value["all_scope_token_savings"];
+        assert_eq!(all_scope["measurement_kind"], "ESTIMATED");
+        assert_eq!(all_scope["scope"], "all_languages_all_outcome_shapes");
+        assert_eq!(all_scope["savings_events"], 0);
+        assert_eq!(all_scope["total_queries"], 0);
+        assert_eq!(all_scope["estimated_potential_token_savings"], 0);
+        assert!(all_scope["by_outcome_shape"].is_object());
+        assert!(all_scope["by_language"].is_object());
+        assert!(all_scope["caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
+        assert!(all_scope["note"]
+            .as_str()
+            .expect("note")
+            .contains("official-scope subset"));
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+
+        // The human rendering leads with a concise summary (~10 lines): it keeps
+        // the readiness, inventory, family, scope, and all-scope savings
+        // essentials but drops the verbose per-metric dump behind `--json`.
+        let human = run_with_context_and_runtime(["stats"], workspace.path(), &env, &runtime);
+        assert_eq!(human.status, 0);
+        assert!(human.stdout.contains("stats: repo-shape diagnostics"));
+        assert!(human.stdout.contains("official_family_scope: python_v0_1"));
+        assert!(human
+            .stdout
+            .contains("estimated_potential_token_savings: 0"));
+        assert!(human.stdout.contains("all_scope_by_outcome_shape:"));
+        assert!(human.stdout.contains("run `repogrammar stats --json`"));
+        // Verbose per-metric lines moved behind --json.
+        assert!(!human.stdout.contains("local_pattern_density:"));
+        assert!(!human.stdout.contains("thin_wrapper_risk:"));
+        assert!(!human.stdout.contains("interpretation:"));
+        assert!(human.stdout.lines().count() <= 14);
     }
 
     #[test]
@@ -13672,6 +13875,21 @@ mod tests {
             value["unknowns"][0]["affected_claim"],
             "pattern family evidence for resolved target"
         );
+        // A PARTIAL_CONTEXT response now carries the ESTIMATED savings block with
+        // its caveat verbatim (never omitted), attributed to the resolved file's
+        // language and the partial_context outcome shape.
+        let savings = &value["estimated_potential_token_savings"];
+        assert_eq!(savings["outcome_shape"], "partial_context");
+        assert_eq!(savings["language"], "typescript/javascript");
+        assert!(savings["estimated_potential_token_savings"].is_number());
+        assert_eq!(
+            savings["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(savings["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
@@ -13690,6 +13908,28 @@ mod tests {
         assert_eq!(rollup["read_plan_returned_count"], 1);
         assert_eq!(rollup["read_plan_item_count_bucket"]["1-2"], 1);
         assert_eq!(rollup["by_reason_code"]["InsufficientSupport"], 1);
+        // The all-scope savings rollup recorded this PARTIAL_CONTEXT as an event
+        // under the partial_context outcome shape (proving partial-context read
+        // plans now accrue savings accounting, not just found families).
+        let savings_rollup_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("telemetry")
+            .join("local-metrics")
+            .join("estimated_potential_token_savings.json");
+        let savings_rollup: Value = serde_json::from_str(
+            &fs::read_to_string(savings_rollup_path).expect("savings rollup JSON"),
+        )
+        .expect("savings rollup");
+        assert_eq!(savings_rollup["event_count"], 1);
+        assert_eq!(
+            savings_rollup["by_outcome_shape"]["partial_context"]["event_count"],
+            1
+        );
+        assert_eq!(
+            savings_rollup["by_language"]["typescript/javascript"]["event_count"],
+            1
+        );
     }
 
     #[test]

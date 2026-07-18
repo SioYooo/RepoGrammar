@@ -963,14 +963,28 @@ full claim-input snapshots, or per-family detail. `stats` may report the
 repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
-It must also include `query_outcome_rollup`, a local-only source-free object
+This aggregate is all-scope: it sums savings events across every indexed
+language and every context-delivering outcome shape (found, PARTIAL_CONTEXT, and
+committed/partial alignment certificates), not only Python found families.
+`stats --json` must also include an `all_scope_token_savings` block with the
+same totals, `measurement_kind: ESTIMATED`, the caveat, the honest
+`savings_events` / `total_queries` denominator, and `by_outcome_shape` and
+`by_language` breakdown objects (each key mapping to `event_count` plus the
+estimated baseline/returned/potential token counts). All existing Python-scoped
+repo-shape fields are unchanged and remain the official-scope subset; the block
+carries a note pointing to that relationship. It must also include
+`query_outcome_rollup`, a local-only source-free object
 with `rollup_scope: local_query_outcomes`, aggregate event count, status,
 entrypoint, CLI command/MCP operation category, lookup-mode, typed UNKNOWN
 class/reason/mechanism/recovery buckets, read-plan count buckets, and
-source-span request/inclusion/omission buckets. `UNKNOWN`,
-`PARTIAL_CONTEXT`, and fallback query outcomes may be counted there, but they
-must not increment `estimated_potential_token_savings` events or be presented
-as successful family hits.
+source-span request/inclusion/omission buckets. `query_outcome_rollup` counts
+every outcome (including `UNKNOWN`, `PARTIAL_CONTEXT`, and fallback) and is the
+`total_queries` denominator; its counts are a distinct metric from
+`estimated_potential_token_savings` events and are not presented as successful
+family hits. The human `stats` output leads with a concise summary (readiness,
+indexed inventory, family coverage, the all-scope savings headline, and the
+scope note) and moves the full per-metric detail behind `--json`; no `--json`
+field is dropped.
 Measured `token_savings` remains `null` unless a comparable paired experiment
 exists. When only estimates exist, top-level `measurement_kind` must be
 `ESTIMATED`, `blocking_reasons` must include `no_paired_experiment`, and
@@ -1259,7 +1273,16 @@ but no family evidence supports a claim for that target, the command returns
 resolved target, a single target read-plan item, output metadata, and a typed
 `InsufficientSupport` unknown for `pattern family evidence for resolved target`.
 It is not family evidence, not conformance evidence, and not safe to treat as a
-supported pattern claim. Exact `family` and `member` lookups continue to return
+supported pattern claim. A `PARTIAL_CONTEXT` response also carries the
+`estimated_potential_token_savings` block (never omitted): `outcome_shape:
+partial_context`, the resolved file's `language` scope, the estimated
+baseline/returned/potential token counts, `ESTIMATED` kind, and the not-measured
+caveat. The baseline is the estimated whole-file read the read plan displaces,
+taken from the indexed file inventory's stored size; when that size is
+unavailable the block reports null counts with an `unavailable_reason` rather
+than a guessed number. Alignment (`check`) certificates carry the same block
+with `outcome_shape: alignment`; an abstaining certificate reports the null
+block. Exact `family` and `member` lookups continue to return
 typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `explain`, and `check` JSON outputs must include `query_route` with `route`,
 `input_kind`, `pipeline`, `family_id_policy`, `candidate_limit`,
@@ -1283,7 +1306,22 @@ abstention). See `docs/specifications/query-resolution.md`.
 Matched family output defaults to `--mode compact`: family
 id, classification, support, members, variation slots, a metadata-only
 `constraint_profile`, typed unknowns, selected output metadata, a `read_plan`,
-and no evidence records or source snippets. The `constraint_profile` object is
+and no evidence records or source snippets. The inline `members` array is
+bounded: outside `--mode deep` it is capped at the first 20 members in unchanged
+deterministic order, and the response always carries the true `member_count` and
+a `members_truncated` flag so a large family (family identity is metadata-first)
+never inflates a single response. `--mode deep` restores the full member list.
+A matched found-family response carries its estimate as scalar fields nested in
+the `output` object, not as a separate block: `estimated_evidence_tokens`,
+`estimated_read_plan_tokens`, `estimated_baseline_tokens`,
+`estimated_returned_tokens`, `estimated_potential_token_savings`,
+`estimated_potential_token_savings_kind` (`ESTIMATED`), and
+`estimated_potential_token_savings_caveat`. The found `output` block does not
+carry `outcome_shape` or `language`; those attribution tokens are recorded only
+in the local savings rollup, and the standalone
+`estimated_potential_token_savings` block that does surface `outcome_shape` and
+`language` appears only on `PARTIAL_CONTEXT` and alignment (`check`) responses.
+The `constraint_profile` object is
 the family's hydrated source-backed specification (`required_equal_features`,
 `allowed_variations`, `prohibited_or_blocking_features`, and
 `unresolved_obligations`, each a typed token or count; see

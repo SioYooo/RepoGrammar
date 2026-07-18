@@ -132,10 +132,24 @@ summary with a stale count is an honest freshness caveat, not an error.
 ## Token Savings
 
 `estimated_potential_token_savings` is an estimated local read-displacement
-diagnostic. It is not measured token savings and not a causal claim.
+diagnostic. It is not measured token savings and not a causal claim. Every value
+uses a coarse bytes/4 token heuristic over indexed metadata and stored file
+sizes; it is a rough potential estimate, not a tokenizer-accurate count.
+
+The estimate is all-scope: it covers every indexed language and every
+context-delivering outcome shape (found families, PARTIAL_CONTEXT read plans, and
+committed or partial alignment certificates), not only Python found families.
+Abstentions — typed `UNKNOWN`, out-of-scope certificates, and any resolved target
+whose stored file size is unavailable — deliver no read displacement and record
+no savings event; they are never counted as savings and never produce negative
+accounting. They are counted only in the query denominator, so the stats panel
+reports `savings_events / total_queries` honestly rather than implying every
+query saved tokens.
 
 Measured token-saving claims require paired baseline/treatment evidence with a
-comparable measurement source and valid treatment correctness.
+comparable measurement source and valid treatment correctness. The all-scope
+estimate adds no new path to a measured claim; the paired-experiment recorder
+remains the only source of measured savings.
 
 ## Telemetry
 
@@ -148,6 +162,13 @@ from local query diagnostics.
 
 These are intentional current behaviors or tracked deferrals, not defects:
 
+- **Found-family member lists are bounded.** Outside `--mode deep`, the inline
+  `members` array in find/family responses (CLI JSON and MCP) is capped at the
+  first 20 members in unchanged deterministic order to keep a large family (a
+  recorded case had 123 members) from inflating a single response and amplifying
+  compaction truncation. Family identity is metadata-first: the response always
+  reports the true `member_count` and a `members_truncated` flag, and `--mode
+  deep` returns the full list.
 - **File-discovery excludes are basename-based.** Common build/output/cache
   directory names (for example `generated`, `out`, `cache`, `env`, `build`,
   `dist`) are skipped at any depth. A real source directory that happens to use

@@ -396,6 +396,16 @@ pub struct FamilyPartialContextReport {
     pub resolved_target: ResolvedQueryTarget,
     pub read_plan: ReadPlan,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Stored full-file size (bytes) of the resolved target file, taken from the
+    /// index inventory (never a filesystem read). Carried so the all-scope
+    /// potential-token-savings estimator can compute the whole-file baseline a
+    /// PARTIAL_CONTEXT read plan displaces. `None` when the size was unavailable;
+    /// the accounting then records no event rather than guessing.
+    pub resolved_file_size_bytes: Option<u64>,
+    /// Raw indexed language of the resolved target file (e.g. `python`,
+    /// `typescript`), normalized to a low-cardinality scope token when the
+    /// savings event is attributed. Empty when unknown.
+    pub resolved_file_language: String,
 }
 
 /// A source-backed static-alignment certificate for the `check` operation.
@@ -429,6 +439,19 @@ pub struct AlignmentCertificateReport {
     pub read_plan: ReadPlan,
     /// Typed reasons carried for an abstaining or partial certificate.
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Stored full-file size (bytes) of the resolved target file, from the index
+    /// inventory (never a filesystem read). Feeds the target-file component of
+    /// the alignment potential-token-savings baseline. `None` for an abstaining
+    /// certificate or when the size was unavailable (no savings event then).
+    pub resolved_target_file_size_bytes: Option<u64>,
+    /// Raw indexed language of the resolved target, for savings attribution.
+    /// Empty for an abstaining certificate or when unknown.
+    pub resolved_target_language: String,
+    /// The comparison family's evidence-record baseline in estimated tokens
+    /// (the same all-evidence sum the found-family baseline uses). Carried so the
+    /// alignment savings estimator does not re-hydrate the family. `0` when no
+    /// family was compared.
+    pub family_evidence_baseline_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3198,6 +3221,17 @@ fn check_static_alignment(
     let mut unknowns = family.unknowns.clone();
     unknowns.extend(alignment_blocking_query_unknowns(&computation, &family_id));
 
+    // Stored full-file size of the resolved target file (never a filesystem
+    // read), plus the comparison family's evidence baseline, feed the all-scope
+    // potential-token-savings accounting for this certificate.
+    let resolved_target_file_size_bytes = snapshot
+        .files
+        .iter()
+        .find(|file| file.path == unit.path)
+        .map(|file| file.size_bytes);
+    let family_evidence_baseline_tokens =
+        usize_to_u64_saturating(all_family_evidence_tokens(&family));
+
     Ok(FamilyLookupReport::Alignment(Box::new(
         AlignmentCertificateReport {
             active_generation,
@@ -3209,6 +3243,9 @@ fn check_static_alignment(
             computation: Some(Box::new(computation)),
             read_plan,
             unknowns,
+            resolved_target_file_size_bytes,
+            resolved_target_language: unit.language.clone(),
+            family_evidence_baseline_tokens,
         },
     )))
 }
@@ -3538,6 +3575,11 @@ fn alignment_abstain(
         computation: None,
         read_plan,
         unknowns,
+        // An abstaining certificate never displaces a full read, so it carries
+        // no savings baseline and produces no potential-token-savings event.
+        resolved_target_file_size_bytes: None,
+        resolved_target_language: String::new(),
+        family_evidence_baseline_tokens: 0,
     }))
 }
 
@@ -3614,6 +3656,10 @@ fn alignment_out_of_scope(
                 "the target code unit has no supported framework role or family of its key; no static-alignment claim is possible".to_string(),
             ),
         }],
+        // Out-of-scope is an abstention: no comparison family, no savings event.
+        resolved_target_file_size_bytes: None,
+        resolved_target_language: String::new(),
+        family_evidence_baseline_tokens: 0,
     }))
 }
 
@@ -4133,6 +4179,8 @@ fn add_local_context_fallback(
                     active_generation: files.generation_id,
                     resolved_target,
                     read_plan: report.read_plan,
+                    resolved_file_size_bytes: report.resolved_file_size_bytes,
+                    resolved_file_language: report.resolved_file_language,
                     unknowns: vec![FamilyQueryUnknown {
                         class: UnknownClass::Blocking,
                         reason: UnknownReasonCode::InsufficientSupport,
@@ -4187,6 +4235,8 @@ fn family_evidence_insufficient_for_local_context(report: &FamilyUnknownReport) 
 struct LocalContextReport {
     resolved_target: ResolvedQueryTarget,
     read_plan: ReadPlan,
+    resolved_file_size_bytes: Option<u64>,
+    resolved_file_language: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4400,6 +4450,8 @@ fn resolve_local_context(
         LocalContextReport {
             resolved_target,
             read_plan,
+            resolved_file_size_bytes: Some(file.size_bytes),
+            resolved_file_language: file.language.clone(),
         },
     )))
 }
@@ -4963,16 +5015,9 @@ pub fn estimate_family_output_potential_token_savings(
     read_plan: &ReadPlan,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> EstimatedPotentialTokenSavings {
-    let all_family_evidence_tokens = family
-        .evidence
-        .iter()
-        .map(estimated_evidence_tokens)
-        .sum::<usize>();
-    let source_span_tokens = source_spans
-        .map(|spans| spans.policy.estimated_tokens)
-        .unwrap_or(0);
+    let source_span_tokens = source_span_estimated_tokens(source_spans);
     let estimated_baseline_tokens =
-        all_family_evidence_tokens.saturating_add(read_plan.estimated_tokens);
+        all_family_evidence_tokens(family).saturating_add(read_plan.estimated_tokens);
     let estimated_returned_tokens = selected_evidence
         .estimated_tokens
         .saturating_add(read_plan.estimated_tokens)
@@ -4983,8 +5028,218 @@ pub fn estimate_family_output_potential_token_savings(
     )
 }
 
+/// Estimated tokens of the family's full evidence set (every evidence record's
+/// metadata), the baseline a found-family or alignment response displaces.
+fn all_family_evidence_tokens(family: &FamilyDetailReport) -> usize {
+    family
+        .evidence
+        .iter()
+        .map(estimated_evidence_tokens)
+        .sum::<usize>()
+}
+
+fn source_span_estimated_tokens(source_spans: Option<&SourceSpanRenderReport>) -> usize {
+    source_spans
+        .map(|spans| spans.policy.estimated_tokens)
+        .unwrap_or(0)
+}
+
 fn usize_to_u64_saturating(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+// ---------------------------------------------------------------------------
+// All-scope potential-token-savings accounting.
+//
+// One authority computes the ESTIMATED POTENTIAL token savings for every
+// context-delivering outcome shape (found family, PARTIAL_CONTEXT read plan, and
+// static-alignment certificate). It never produces a MEASURED claim: every value
+// is an estimate under the fixed bytes/4 heuristic with the standing caveat, and
+// paired-experiment measurement remains the only path to measured savings.
+// Abstentions and missing-size cases record no event (never negative accounting)
+// and are counted only in the query denominator by the outcome telemetry.
+// ---------------------------------------------------------------------------
+
+/// The context-delivering outcome shape a potential-token-savings event belongs
+/// to. This is deliberately narrower than the query-outcome status: it names only
+/// the shapes that displace source reading and therefore carry a savings event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavingsOutcomeShape {
+    Found,
+    PartialContext,
+    Alignment,
+}
+
+impl SavingsOutcomeShape {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Found => "found",
+            Self::PartialContext => "partial_context",
+            Self::Alignment => "alignment",
+        }
+    }
+}
+
+/// A single all-scope potential-token-savings event: the estimate plus the
+/// outcome shape and the low-cardinality language token it is attributed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeTokenSavings {
+    pub shape: SavingsOutcomeShape,
+    pub language: &'static str,
+    pub metric: EstimatedPotentialTokenSavings,
+}
+
+/// Estimated tokens of reading a whole file of `size_bytes`, under the shared
+/// bytes/4 heuristic (minimum one token for a non-empty inventory entry).
+fn estimated_full_file_tokens(size_bytes: u64) -> u64 {
+    size_bytes.div_ceil(4).max(1)
+}
+
+/// Estimated token cost of an alignment certificate body (the source-free
+/// computation the certificate returns), under the shared bytes/4 heuristic.
+fn estimated_alignment_certificate_tokens(computation: &AlignmentComputation) -> usize {
+    let mut bytes = computation.outcome_reason.len() + computation.status.as_token().len();
+    for matched in &computation.required_features_matched {
+        bytes += matched.prefix.len()
+            + matched.expected_summary.len()
+            + matched.satisfied_summary.len()
+            + 16;
+    }
+    for deviation in &computation.static_deviations {
+        bytes += deviation.prefix.len()
+            + deviation.expected_summary.len()
+            + deviation.observed_summary.len()
+            + deviation.semantics_token.len()
+            + 16;
+    }
+    for variation in &computation.legal_observed_variations {
+        bytes += variation.dimension.len() + variation.observed_profile.len() + 8;
+    }
+    bytes += (computation.blocking_unknowns.len()
+        + computation.unresolved_runtime_obligations.len())
+        * 32;
+    bytes.div_ceil(4).max(1)
+}
+
+/// Maximum family members rendered inline in a found-family payload outside
+/// `--mode deep`. A large family (recorded live: 123 members) otherwise inflates
+/// a single response into tens of kilobytes and amplifies compaction truncation;
+/// the identity of the family is metadata-first, so the inline list is bounded
+/// and the true total is always reported alongside a truncation flag.
+pub const MAX_RENDERED_FAMILY_MEMBERS: usize = 20;
+
+/// Bound the rendered member list: the full deterministic list in `Deep` mode,
+/// otherwise the first [`MAX_RENDERED_FAMILY_MEMBERS`] in unchanged order.
+/// Returns the slice to render and whether it was truncated. The caller reports
+/// the true total (`family.members.len()`) so a bounded response never hides the
+/// family's real size.
+pub fn bounded_family_members(
+    family: &FamilyDetailReport,
+    mode: FamilyEvidenceMode,
+) -> (&[IndexedFamilyMemberRecord], bool) {
+    if mode == FamilyEvidenceMode::Deep || family.members.len() <= MAX_RENDERED_FAMILY_MEMBERS {
+        (family.members.as_slice(), false)
+    } else {
+        (&family.members[..MAX_RENDERED_FAMILY_MEMBERS], true)
+    }
+}
+
+/// Wrap a found-family estimate with its outcome shape and language attribution.
+pub fn found_outcome_token_savings(
+    family: &FamilyDetailReport,
+    metric: EstimatedPotentialTokenSavings,
+) -> OutcomeTokenSavings {
+    OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::Found,
+        language: found_family_language_scope(family),
+        metric,
+    }
+}
+
+/// Estimate the potential token savings a PARTIAL_CONTEXT read plan delivers:
+/// the whole-file read it displaces (baseline) against the returned read-plan
+/// metadata plus any rendered source spans. Returns `None` — recording no event
+/// rather than guessing — when the resolved file size was unavailable.
+pub fn estimate_partial_context_potential_token_savings(
+    report: &FamilyPartialContextReport,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Option<OutcomeTokenSavings> {
+    let size_bytes = report.resolved_file_size_bytes?;
+    let baseline = estimated_full_file_tokens(size_bytes);
+    let returned = usize_to_u64_saturating(
+        read_plan
+            .estimated_tokens
+            .saturating_add(source_span_estimated_tokens(source_spans)),
+    );
+    Some(OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::PartialContext,
+        language: inventory_language_scope(&report.resolved_file_language),
+        metric: EstimatedPotentialTokenSavings::new(baseline, returned),
+    })
+}
+
+/// Estimate the potential token savings a static-alignment certificate delivers:
+/// the whole target-file read plus the comparison family's evidence (baseline)
+/// against the certificate body, read-plan metadata, and any rendered source
+/// spans (returned). Returns `None` for an abstaining certificate (no family
+/// compared) or when the target file size was unavailable.
+pub fn estimate_alignment_potential_token_savings(
+    certificate: &AlignmentCertificateReport,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Option<OutcomeTokenSavings> {
+    let computation = certificate.computation.as_deref()?;
+    let size_bytes = certificate.resolved_target_file_size_bytes?;
+    let baseline = estimated_full_file_tokens(size_bytes)
+        .saturating_add(certificate.family_evidence_baseline_tokens);
+    let returned = usize_to_u64_saturating(
+        estimated_alignment_certificate_tokens(computation)
+            .saturating_add(read_plan.estimated_tokens)
+            .saturating_add(source_span_estimated_tokens(source_spans)),
+    );
+    Some(OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::Alignment,
+        language: inventory_language_scope(&certificate.resolved_target_language),
+        metric: EstimatedPotentialTokenSavings::new(baseline, returned),
+    })
+}
+
+/// Low-cardinality language scope a found family is attributed to, derived from
+/// its evidence file extensions: one known scope, `mixed` for several, or
+/// `unknown` when no evidence extension maps to a known language.
+fn found_family_language_scope(family: &FamilyDetailReport) -> &'static str {
+    let mut known: Vec<&'static str> = family
+        .evidence
+        .iter()
+        .map(|evidence| inventory_language_scope(raw_language_for_path(&evidence.path)))
+        .filter(|scope| *scope != "unknown")
+        .collect();
+    known.sort_unstable();
+    known.dedup();
+    match known.as_slice() {
+        [] => "unknown",
+        [single] => single,
+        _ => "mixed",
+    }
+}
+
+/// Map a repo-relative path's extension to a raw indexed-language token, or the
+/// empty string when the extension does not map to a known language. Kept small
+/// and deterministic; the raw token is normalized through
+/// [`inventory_language_scope`] to a low-cardinality savings scope.
+fn raw_language_for_path(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("py" | "pyi") => "python",
+        Some("ts" | "tsx" | "mts" | "cts") => "typescript",
+        Some("js" | "jsx" | "mjs" | "cjs") => "javascript",
+        Some("rs") => "rust",
+        Some("java") => "java",
+        Some("cs") => "csharp",
+        Some("c" | "h") => "c",
+        Some("cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx") => "cpp",
+        _ => "",
+    }
 }
 
 fn render_source_span_item(
@@ -10223,6 +10478,232 @@ mod tests {
             Some(&rendered),
         );
         assert_eq!(saturated.estimated_potential_token_savings, 0);
+    }
+
+    fn partial_context_report_for(
+        size_bytes: Option<u64>,
+        language: &str,
+        read_plan_estimated_tokens: usize,
+    ) -> FamilyPartialContextReport {
+        let read_plan = ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: read_plan_estimated_tokens,
+            source_snippets_included: false,
+            requires_source_before_edit: true,
+            selection_strategy: "deterministic_local_context_v1",
+            budget_satisfied: true,
+            line_range_omissions: Vec::new(),
+        };
+        FamilyPartialContextReport {
+            active_generation: "gen-000001".to_string(),
+            resolved_target: empty_resolved_target("src/routes/a.ts"),
+            read_plan,
+            resolved_file_size_bytes: size_bytes,
+            resolved_file_language: language.to_string(),
+            unknowns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn partial_context_savings_estimate_uses_whole_file_baseline() {
+        // A 4 KiB TypeScript file (baseline 1024 tokens) resolved to a 30-token
+        // read plan yields a nonzero PARTIAL_CONTEXT savings event: exactly the
+        // v0.2.2 field case that previously recorded zero.
+        let report = partial_context_report_for(Some(4096), "typescript", 30);
+        let savings =
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .expect("partial context savings event");
+        assert_eq!(savings.shape, SavingsOutcomeShape::PartialContext);
+        assert_eq!(savings.language, "typescript/javascript");
+        assert_eq!(savings.metric.estimated_baseline_tokens, 1024);
+        assert_eq!(savings.metric.estimated_returned_tokens, 30);
+        assert_eq!(savings.metric.estimated_potential_token_savings, 994);
+        assert!(savings.metric.caveat.contains("not measured token savings"));
+    }
+
+    #[test]
+    fn partial_context_savings_none_when_size_unavailable() {
+        // No stored size means no event rather than a guessed baseline.
+        let report = partial_context_report_for(None, "python", 30);
+        assert!(
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn partial_context_savings_floors_at_zero() {
+        // A read plan larger than the whole-file baseline never reports negative
+        // savings; the estimate saturates to zero.
+        let report = partial_context_report_for(Some(8), "python", 10_000);
+        let savings =
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .expect("event recorded");
+        assert_eq!(savings.metric.estimated_potential_token_savings, 0);
+    }
+
+    fn alignment_certificate_for(
+        computation: Option<AlignmentComputation>,
+        size_bytes: Option<u64>,
+        family_evidence_baseline_tokens: u64,
+    ) -> AlignmentCertificateReport {
+        let read_plan = ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: 40,
+            source_snippets_included: false,
+            requires_source_before_edit: true,
+            selection_strategy: "deterministic_local_context_v1",
+            budget_satisfied: true,
+            line_range_omissions: Vec::new(),
+        };
+        AlignmentCertificateReport {
+            active_generation: "gen-000001".to_string(),
+            alignment_status: AlignmentStatus::StaticallyAligned,
+            target_relationship: None,
+            selected_family_id: Some("family:python:fastapi_route:fastapi".to_string()),
+            candidate_family_ids: Vec::new(),
+            resolved_target: empty_resolved_target("app/routes.py"),
+            computation: computation.map(Box::new),
+            read_plan,
+            unknowns: Vec::new(),
+            resolved_target_file_size_bytes: size_bytes,
+            resolved_target_language: "python".to_string(),
+            family_evidence_baseline_tokens,
+        }
+    }
+
+    fn sample_alignment_computation() -> AlignmentComputation {
+        AlignmentComputation {
+            status: AlignmentStatus::StaticallyAligned,
+            required_features_matched: Vec::new(),
+            static_deviations: Vec::new(),
+            legal_observed_variations: Vec::new(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "every required constraint matched".to_string(),
+        }
+    }
+
+    #[test]
+    fn alignment_savings_estimated_for_committed_certificate() {
+        // baseline = whole target file (4 KiB → 1024 tokens) + family evidence
+        // baseline (200); returned = certificate body + read plan.
+        let certificate =
+            alignment_certificate_for(Some(sample_alignment_computation()), Some(4096), 200);
+        let savings =
+            estimate_alignment_potential_token_savings(&certificate, &certificate.read_plan, None)
+                .expect("alignment savings event");
+        assert_eq!(savings.shape, SavingsOutcomeShape::Alignment);
+        assert_eq!(savings.language, "python");
+        assert_eq!(savings.metric.estimated_baseline_tokens, 1024 + 200);
+        assert!(savings.metric.estimated_potential_token_savings > 0);
+    }
+
+    #[test]
+    fn alignment_savings_none_for_abstaining_certificate() {
+        // No computation (an abstention) and no target size both suppress the
+        // event: an abstention displaces no full read.
+        let no_computation = alignment_certificate_for(None, Some(4096), 200);
+        assert!(estimate_alignment_potential_token_savings(
+            &no_computation,
+            &no_computation.read_plan,
+            None
+        )
+        .is_none());
+        let no_size = alignment_certificate_for(Some(sample_alignment_computation()), None, 200);
+        assert!(
+            estimate_alignment_potential_token_savings(&no_size, &no_size.read_plan, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn found_outcome_savings_attributes_language_scope() {
+        let python =
+            family_detail_with_evidence(vec![family_evidence("app/routes.py", 0, "canonical")]);
+        assert_eq!(
+            found_outcome_token_savings(&python, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "python"
+        );
+        let tsjs = family_detail_with_evidence(vec![
+            family_evidence("src/a.ts", 0, "canonical"),
+            family_evidence("src/b.jsx", 1, "support"),
+        ]);
+        assert_eq!(
+            found_outcome_token_savings(&tsjs, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "typescript/javascript"
+        );
+        let mixed = family_detail_with_evidence(vec![
+            family_evidence("app/routes.py", 0, "canonical"),
+            family_evidence("src/a.ts", 1, "support"),
+        ]);
+        assert_eq!(
+            found_outcome_token_savings(&mixed, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "mixed"
+        );
+    }
+
+    #[test]
+    fn savings_language_producers_stay_in_vocab() {
+        // The savings language producers (`inventory_language_scope` for found
+        // evidence paths, partial-context files, and alignment targets, plus the
+        // found-family `mixed` marker) and the telemetry allowlist
+        // `SAVINGS_LANGUAGE_KEYS` must stay a single vocabulary. This test pins
+        // them same-source so a scope added to one without the other fails CI
+        // rather than silently degrading events to `unknown` at runtime.
+        use crate::application::telemetry::SAVINGS_LANGUAGE_KEYS;
+        let raw_languages = [
+            "python",
+            "typescript",
+            "typescript-react",
+            "tsx",
+            "javascript",
+            "javascript-react",
+            "jsx",
+            "c",
+            "cpp",
+            "cpp-config",
+            "rust",
+            "java",
+            "csharp",
+            "totally-unindexed-language",
+        ];
+        let mut produced: BTreeSet<&'static str> = raw_languages
+            .iter()
+            .map(|raw| inventory_language_scope(raw))
+            .collect();
+        // Found families spanning several languages attribute to `mixed`.
+        produced.insert("mixed");
+        let vocab: BTreeSet<&str> = SAVINGS_LANGUAGE_KEYS.iter().copied().collect();
+        let produced_str: BTreeSet<&str> = produced.iter().copied().collect();
+        assert_eq!(
+            vocab, produced_str,
+            "savings language vocabulary and its producers diverged",
+        );
+    }
+
+    #[test]
+    fn bounded_family_members_caps_outside_deep_mode() {
+        let mut detail =
+            family_detail_with_evidence(vec![family_evidence("app/routes.py", 0, "canonical")]);
+        detail.members = (0..MAX_RENDERED_FAMILY_MEMBERS + 3)
+            .map(|index| IndexedFamilyMemberRecord {
+                family_id: detail.family_id.clone(),
+                code_unit_id: format!("unit:app/routes.py#handler:{index}"),
+                role: "framework:fastapi.route_handler".to_string(),
+            })
+            .collect();
+
+        let (compact, truncated) = bounded_family_members(&detail, FamilyEvidenceMode::Compact);
+        assert_eq!(compact.len(), MAX_RENDERED_FAMILY_MEMBERS);
+        assert!(truncated);
+
+        let (deep, deep_truncated) = bounded_family_members(&detail, FamilyEvidenceMode::Deep);
+        assert_eq!(deep.len(), MAX_RENDERED_FAMILY_MEMBERS + 3);
+        assert!(!deep_truncated);
     }
 
     #[test]

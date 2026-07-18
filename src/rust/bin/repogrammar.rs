@@ -9405,6 +9405,168 @@ export function HomeScreen() {
     }
 
     #[test]
+    fn product_runtime_partial_context_records_nonzero_all_scope_token_savings() {
+        // The v0.2.2 field regression: a TypeScript-only repository reported 0
+        // token savings because only Python found-family events accrued. A
+        // PARTIAL_CONTEXT read plan over a substantial TS file displaces a
+        // whole-file read, so it must now record a nonzero ESTIMATED savings
+        // event end to end — across the response, the local rollup, and stats.
+        let workspace = TempWorkspace::new("product-runtime-partial-context-savings");
+        fs::create_dir_all(workspace.path().join("src/service")).expect("create service dir");
+        // A ~900-byte plain TypeScript module: no framework role, so it resolves
+        // to a PARTIAL_CONTEXT read plan rather than any pattern family.
+        fs::write(
+            workspace.path().join("src/service/user_service.ts"),
+            r#"export interface UserRecord {
+  id: string;
+  displayName: string;
+  email: string;
+  createdAtEpochSeconds: number;
+}
+
+export class UserService {
+  private readonly records: Map<string, UserRecord> = new Map();
+
+  public upsert(record: UserRecord): UserRecord {
+    this.records.set(record.id, record);
+    return record;
+  }
+
+  public findById(id: string): UserRecord | undefined {
+    return this.records.get(id);
+  }
+
+  public removeById(id: string): boolean {
+    return this.records.delete(id);
+  }
+
+  public listSortedByName(): UserRecord[] {
+    return Array.from(this.records.values()).sort((left, right) =>
+      left.displayName.localeCompare(right.displayName),
+    );
+  }
+}
+"#,
+        )
+        .expect("write ts module");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let resync = run_with_runtime(
+            cli_args(
+                "resync",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("resync", &resync, &workspace)["status"],
+            "complete"
+        );
+
+        let found = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["src/service/user_service.ts", "--json"],
+            ),
+            &runtime,
+        );
+        let value = parse_machine_output("find", &found, &workspace);
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        let savings = &value["estimated_potential_token_savings"];
+        assert_eq!(savings["outcome_shape"], "partial_context");
+        assert_eq!(savings["language"], "typescript/javascript");
+        let potential = savings["estimated_potential_token_savings"]
+            .as_u64()
+            .expect("estimated potential");
+        assert!(
+            potential > 0,
+            "PARTIAL_CONTEXT over a whole TS file must estimate nonzero savings: {value}"
+        );
+        assert_eq!(
+            savings["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(savings["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
+
+        // The local all-scope rollup recorded the event under the partial_context
+        // outcome shape and the typescript/javascript language, with matching
+        // nonzero potential.
+        let rollup_path = workspace
+            .path()
+            .join(".repogrammar")
+            .join("telemetry")
+            .join("local-metrics")
+            .join("estimated_potential_token_savings.json");
+        let rollup: Value =
+            serde_json::from_str(&fs::read_to_string(&rollup_path).expect("savings rollup"))
+                .expect("savings rollup JSON");
+        assert!(rollup["event_count"].as_u64().expect("event count") >= 1);
+        assert_eq!(
+            rollup["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("partial context potential"),
+            potential
+        );
+        assert!(
+            rollup["by_language"]["typescript/javascript"]["event_count"]
+                .as_u64()
+                .expect("tsjs event count")
+                >= 1
+        );
+
+        // Stats surfaces the same all-scope savings totals, proving the panel is
+        // no longer Python-scoped: a TS-only repo now reports nonzero savings.
+        let stats = run_with_runtime(cli_args("stats", workspace.path(), &["--json"]), &runtime);
+        let stats_payload = parse_machine_output("stats", &stats, &workspace);
+        let all_scope = &stats_payload["all_scope_token_savings"];
+        assert_eq!(all_scope["measurement_kind"], "ESTIMATED");
+        assert!(
+            all_scope["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("all-scope potential")
+                > 0
+        );
+        assert!(
+            all_scope["savings_events"]
+                .as_u64()
+                .expect("savings events")
+                >= 1
+        );
+        assert!(
+            all_scope["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("stats partial context potential")
+                > 0
+        );
+
+        // The concise human stats leads with the all-scope savings headline.
+        let stats_human = run_with_runtime(cli_args("stats", workspace.path(), &[]), &runtime);
+        assert_eq!(
+            stats_human.status, 0,
+            "stats stderr: {}",
+            stats_human.stderr
+        );
+        assert!(stats_human
+            .stdout
+            .contains("estimated_potential_token_savings:"));
+        assert!(stats_human.stdout.contains("all_scope_by_outcome_shape: "));
+        assert_no_output_leakage("stats", &stats_human.stdout, &workspace);
+    }
+
+    #[test]
     fn product_runtime_prunes_inactive_generations_and_preserves_active_status() {
         let workspace = TempWorkspace::new("product-runtime-prune");
         let runtime = ProductCliRuntime;
