@@ -43,9 +43,12 @@ The resulting ownership states are intentionally distinct:
 - `Malformed`: the receipt or successful native response cannot be recognized;
   preserve and refuse automatic overwrite.
 
-An exact native not-found response means absent. A failed probe with unexpected
-output remains unknown and blocks setup because native state could not be
-inspected safely. Setup may continue repository-only for a successfully probed
+An allowlisted native not-found response means absent. Codex requires its exact
+not-found sentence. Claude Code accepts the exact server-name sentence followed
+by either its legacy add-command guidance or its current configured-server
+inventory prefix; arbitrary suffixes remain rejected. A failed probe with
+unexpected output remains unknown and blocks setup because native state could
+not be inspected safely. Setup may continue repository-only for a successfully probed
 but unrecognized malformed configuration and recommends `repogrammar doctor`.
 The install service snapshots an `OwnedOutdated` integration before removing
 and re-adding it, and restores the exact native entry, receipt, receipt backup,

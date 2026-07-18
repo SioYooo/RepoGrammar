@@ -2332,19 +2332,15 @@ fn classify_native_agent_probe(
 ) -> Result<NativeMcpServerState, RepoGrammarError> {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    let expected = match target {
-        AgentTarget::Codex => format!("Error: No MCP server named '{MCP_SERVER_NAME}' found."),
-        AgentTarget::ClaudeCode => {
-            format!("No MCP server named \"{MCP_SERVER_NAME}\". Run `claude mcp add` to add one.")
-        }
-        _ => {
-            return Err(RepoGrammarError::InvalidInput(
-                "native MCP probe requires a live agent target".to_string(),
-            ));
-        }
-    };
+    if !matches!(target, AgentTarget::Codex | AgentTarget::ClaudeCode) {
+        return Err(RepoGrammarError::InvalidInput(
+            "native MCP probe requires a live agent target".to_string(),
+        ));
+    }
     if !success {
-        return if stdout.trim() == expected || stderr.trim() == expected {
+        return if native_probe_reports_not_found(target, stdout.trim())
+            || native_probe_reports_not_found(target, stderr.trim())
+        {
             Ok(NativeMcpServerState::NotFound)
         } else {
             Err(RepoGrammarError::InvalidInput(format!(
@@ -2363,6 +2359,26 @@ fn classify_native_agent_probe(
         NativeMcpServerState::Malformed,
         NativeMcpServerState::Present,
     ))
+}
+
+fn native_probe_reports_not_found(target: AgentTarget, output: &str) -> bool {
+    match target {
+        AgentTarget::Codex => {
+            output == format!("Error: No MCP server named '{MCP_SERVER_NAME}' found.")
+        }
+        AgentTarget::ClaudeCode => {
+            let prefix = format!("No MCP server named \"{MCP_SERVER_NAME}\".");
+            if output == prefix {
+                return true;
+            }
+            let Some(suffix) = output.strip_prefix(&format!("{prefix} ")) else {
+                return false;
+            };
+            suffix == "Run `claude mcp add` to add one."
+                || suffix.starts_with("Configured servers:")
+        }
+        _ => false,
+    }
 }
 
 fn parse_codex_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeMcpServerConfig> {
@@ -12547,6 +12563,29 @@ pythonpath = ["src"]
         )
         .expect("exact Claude absence");
         assert_eq!(claude_absent, NativeMcpServerState::NotFound);
+
+        let current_claude_absent = classify_native_agent_probe(
+            AgentTarget::ClaudeCode,
+            InstallScope::Global,
+            false,
+            b"No MCP server named \"repogrammar\". Configured servers: codegraph, planbridge\n",
+            b"",
+        )
+        .expect("current Claude absence with server inventory");
+        assert_eq!(current_claude_absent, NativeMcpServerState::NotFound);
+
+        let claude_unexpected = classify_native_agent_probe(
+            AgentTarget::ClaudeCode,
+            InstallScope::Global,
+            false,
+            b"No MCP server named \"repogrammar\". Permission denied\n",
+            b"",
+        )
+        .expect_err("unknown Claude suffix must fail closed");
+        assert_eq!(
+            claude_unexpected.to_string(),
+            "native claude-code MCP probe failed"
+        );
 
         let codex_present = classify_native_agent_probe(
             AgentTarget::Codex,
