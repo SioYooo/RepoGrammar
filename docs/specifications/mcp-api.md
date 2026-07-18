@@ -514,19 +514,24 @@ prompt-output, or Meaning Contract qualification, conformance, or drift. A
 mixed contract task remains covered even when its immediate target is an exact
 file, YAML, configuration, or generated prompt.
 
-The first call for covered work is `repogrammar_context` with
-`operation: "find_analogues"`, `target: "<the repo-relative path, symbol/member
-id, framework role, or concrete code-work question from the task>"`, and
-`mode: "compact"`. It occurs before CodeGraph or source search/read. Agents must
-use the returned `read_plan` before editing and treat included line-numbered
-`source_spans` as already read. They may fall back when RepoGrammar is
-unavailable or explicitly returns `UNKNOWN`, `FALLBACK`, stale, omitted, or
-insufficient evidence, and must state that reason before doing so. CodeGraph may
-then provide exact source or call-path detail that RepoGrammar did not supply.
-Agents must not repeat an identical RepoGrammar call unless the target or
-indexed evidence changed. Agents use `show_family` only with exact family ids
-returned earlier and leave `include_source_spans` unset unless bounded source
-is explicitly needed.
+Before the first call, the agent builds one precision-first target in this
+strict order: exact repo-relative path or locator, exact `unit:`/member/symbol,
+exact framework role, then a concise pattern question only when no stronger
+anchor is available. It must not replace a concrete locus with broad task or
+governance prose. A prose target preserves any task-provided language/framework
+and a supported concept (`route`, `fixture`, `validation model`, `data access`,
+or `test`). The agent then calls `find_analogues` in compact mode once for that
+target before CodeGraph or source search/read.
+
+Agents use the returned `read_plan` before editing and treat included
+line-numbered `source_spans` as already read. They state the reason before
+falling back on unavailable, `FALLBACK`, stale, omitted, or insufficient
+evidence. On `UNKNOWN`, exactly one returned candidate family id may be inspected
+once with exact `show_family` as candidate context only, never as selected-family
+or conformance proof; multiple candidates require a stronger target or fallback.
+A given target is called only once; a materially narrower locator is a new
+target. Agents leave `include_source_spans` unset unless bounded source is
+explicitly needed.
 
 Pure prose documentation, operational release/Git/environment/credential
 inspection, syntax-only YAML/configuration validation, and exact one-symbol,

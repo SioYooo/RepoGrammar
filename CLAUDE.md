@@ -64,3 +64,21 @@
 
 - Work is complete only when implementation, tests, relevant documentation, mirrored-guide equality, verification, and atomic commits are complete.
 - Final reports must include the branch, commit hash, changed documentation, verification commands and results, and remaining risks or `UNKNOWN`s.
+
+<!-- BEGIN REPOGRAMMAR MANAGED SECTION -->
+<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 3 -->
+## RepoGrammar pre-flight gate
+
+RepoGrammar MCP is read-only. Read mandatory repository authority and instruction documents first. Then, when `.repogrammar/` exists, use this gate when planning or executing an implementation, fix, refactor, test, or diagnosis that requires a repository-local contract or convention, repeated implementation, framework role, or analogue comparison. For a covered task, run it before any non-trivial code location is sought and before any code-search or source-reading tool.
+
+Covered cases include root-cause diagnosis or repair and schema, protocol, API, prompt-output, or Meaning Contract qualification, conformance, or drift. A YAML prompt or qualification output checked against a repeated Meaning Contract is covered; neither its file type nor an exact file target exempts mixed work.
+
+1. Build one precise target in this order: exact repo-relative path or locator; exact `unit:`/member/symbol; exact framework role; only then a concise pattern question. Never replace a concrete locus with broad task or governance prose. A prose target retains any language/framework named by the task plus a supported concept such as route, fixture, validation model, data access, or test.
+2. Call `repogrammar_context` once for that target with `operation: "find_analogues"` and `mode: "compact"`.
+3. Consume the returned `read_plan`; line-numbered `source_spans` included in the result are already read.
+4. If the tool is unavailable or explicitly reports `FALLBACK`, stale, omitted, or insufficient evidence, state that reason before CodeGraph. On `UNKNOWN`, exactly one returned candidate family id may be inspected once with `show_family` as candidate context only, never as selected-family or conformance proof; with multiple candidates, narrow using a stronger target or state the fallback reason. Use ordinary search/read only when CodeGraph is unavailable or still insufficient.
+
+Never use CodeGraph first for covered work merely because exact source or call-path detail will be needed later. Call a given target only once; a materially narrower locator is a new target. Treat returned family ids as follow-up handles, not proof. Do not request `include_source_spans` by default and do not run `repogrammar stats` in normal agent loops.
+
+Skip this gate for pure documentation or prose; operational release, git, environment, or credential inspection; syntax-only YAML or configuration validation; and an exact one-symbol, file, or call-path lookup, but only when no repository contract, convention, repeated implementation, framework role, analogue comparison, code-behavior diagnosis, or implementation decision is involved. Never initialize, resync, or start autosync silently; those writes require user or project-policy permission. If `.repogrammar/` does not exist, skip RepoGrammar for that repository.
+<!-- END REPOGRAMMAR MANAGED SECTION -->

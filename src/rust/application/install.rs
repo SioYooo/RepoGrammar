@@ -1941,10 +1941,11 @@ pub const MANAGED_INSTRUCTION_BEGIN: &str = "<!-- BEGIN REPOGRAMMAR MANAGED SECT
 /// Exact end marker for the RepoGrammar managed instruction section.
 pub const MANAGED_INSTRUCTION_END: &str = "<!-- END REPOGRAMMAR MANAGED SECTION -->";
 /// Exact content revision for the current managed instruction section. Version
-/// 2 is the first branch-local candidate with an explicit version marker; the
-/// previously installed unversioned and v1 bodies are allowlisted below.
-pub const MANAGED_INSTRUCTION_VERSION: u32 = 2;
-const MANAGED_INSTRUCTION_VERSION_MARKER: &str = "<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 2 -->";
+/// 3 adds precision-first target construction and bounded candidate-context
+/// follow-up. Previously shipped v2, v1, and unversioned bodies are allowlisted
+/// below for exact, reversible refresh.
+pub const MANAGED_INSTRUCTION_VERSION: u32 = 3;
+const MANAGED_INSTRUCTION_VERSION_MARKER: &str = "<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 3 -->";
 
 /// Canonical agent pre-flight contract shared by managed instruction files and
 /// the MCP initialize response. It is deliberately repository-agnostic and
@@ -1956,12 +1957,12 @@ RepoGrammar MCP is read-only. Read mandatory repository authority and instructio
 
 Covered cases include root-cause diagnosis or repair and schema, protocol, API, prompt-output, or Meaning Contract qualification, conformance, or drift. A YAML prompt or qualification output checked against a repeated Meaning Contract is covered; neither its file type nor an exact file target exempts mixed work.
 
-1. Call `repogrammar_context` once with `operation: \"find_analogues\"`, `target: \"<the concrete repo-relative path, symbol/member id, framework role, or code-work question from the task>\"`, and `mode: \"compact\"`.
-2. Consume the returned `read_plan`; line-numbered `source_spans` included in the result are already read.
-3. If the tool is unavailable or the result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or insufficient evidence, stop. State that fallback reason before proceeding, then use CodeGraph for exact source or call-path detail; use ordinary search/read only when CodeGraph is unavailable or still insufficient.
-4. Otherwise, consume the supported `read_plan` first, then use CodeGraph only for exact source or call-path detail that RepoGrammar did not supply.
+1. Build one precise target in this order: exact repo-relative path or locator; exact `unit:`/member/symbol; exact framework role; only then a concise pattern question. Never replace a concrete locus with broad task or governance prose. A prose target retains any language/framework named by the task plus a supported concept such as route, fixture, validation model, data access, or test.
+2. Call `repogrammar_context` once for that target with `operation: \"find_analogues\"` and `mode: \"compact\"`.
+3. Consume the returned `read_plan`; line-numbered `source_spans` included in the result are already read.
+4. If the tool is unavailable or explicitly reports `FALLBACK`, stale, omitted, or insufficient evidence, state that reason before CodeGraph. On `UNKNOWN`, exactly one returned candidate family id may be inspected once with `show_family` as candidate context only, never as selected-family or conformance proof; with multiple candidates, narrow using a stronger target or state the fallback reason. Use ordinary search/read only when CodeGraph is unavailable or still insufficient.
 
-Never use CodeGraph first for covered work merely because exact source or call-path detail will be needed later. Do not repeat the same RepoGrammar call unless the target or indexed evidence changed. Treat returned family ids as follow-up handles and use `show_family` only with an exact id returned earlier. Do not request `include_source_spans` by default and do not run `repogrammar stats` in normal agent loops.
+Never use CodeGraph first for covered work merely because exact source or call-path detail will be needed later. Call a given target only once; a materially narrower locator is a new target. Treat returned family ids as follow-up handles, not proof. Do not request `include_source_spans` by default and do not run `repogrammar stats` in normal agent loops.
 
 Skip this gate for pure documentation or prose; operational release, git, environment, or credential inspection; syntax-only YAML or configuration validation; and an exact one-symbol, file, or call-path lookup, but only when no repository contract, convention, repeated implementation, framework role, analogue comparison, code-behavior diagnosis, or implementation decision is involved. Never initialize, resync, or start autosync silently; those writes require user or project-policy permission. If `.repogrammar/` does not exist, skip RepoGrammar for that repository.";
 
@@ -1969,6 +1970,7 @@ Skip this gate for pure documentation or prose; operational release, git, enviro
 pub enum ManagedInstructionState {
     Missing,
     Current,
+    OutdatedV2,
     OutdatedV1,
     OutdatedGlobalV0,
     Foreign,
@@ -1980,7 +1982,7 @@ impl ManagedInstructionState {
         match self {
             Self::Missing => "missing",
             Self::Current => "current",
-            Self::OutdatedV1 | Self::OutdatedGlobalV0 => "outdated",
+            Self::OutdatedV2 | Self::OutdatedV1 | Self::OutdatedGlobalV0 => "outdated",
             Self::Foreign => "foreign",
             Self::Malformed => "malformed",
         }
@@ -1989,6 +1991,7 @@ impl ManagedInstructionState {
     pub fn content_version(self) -> Option<u32> {
         match self {
             Self::Current => Some(MANAGED_INSTRUCTION_VERSION),
+            Self::OutdatedV2 => Some(2),
             Self::OutdatedV1 => Some(1),
             Self::OutdatedGlobalV0 => Some(0),
             Self::Missing | Self::Foreign | Self::Malformed => None,
@@ -2148,6 +2151,31 @@ pub fn managed_instruction_block() -> String {
     )
 }
 
+/// Exact previously shipped v2 gate. Keeping this separate from the current
+/// authority makes a byte-exact v2 block refreshable without accepting edited
+/// or partially upgraded marker bodies as RepoGrammar-owned.
+const LEGACY_AGENT_PREFLIGHT_GATE_V2: &str = "\
+## RepoGrammar pre-flight gate
+
+RepoGrammar MCP is read-only. Read mandatory repository authority and instruction documents first. Then, when `.repogrammar/` exists, use this gate when planning or executing an implementation, fix, refactor, test, or diagnosis that requires a repository-local contract or convention, repeated implementation, framework role, or analogue comparison. For a covered task, run it before any non-trivial code location is sought and before any code-search or source-reading tool.
+
+Covered cases include root-cause diagnosis or repair and schema, protocol, API, prompt-output, or Meaning Contract qualification, conformance, or drift. A YAML prompt or qualification output checked against a repeated Meaning Contract is covered; neither its file type nor an exact file target exempts mixed work.
+
+1. Call `repogrammar_context` once with `operation: \"find_analogues\"`, `target: \"<the concrete repo-relative path, symbol/member id, framework role, or code-work question from the task>\"`, and `mode: \"compact\"`.
+2. Consume the returned `read_plan`; line-numbered `source_spans` included in the result are already read.
+3. If the tool is unavailable or the result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or insufficient evidence, stop. State that fallback reason before proceeding, then use CodeGraph for exact source or call-path detail; use ordinary search/read only when CodeGraph is unavailable or still insufficient.
+4. Otherwise, consume the supported `read_plan` first, then use CodeGraph only for exact source or call-path detail that RepoGrammar did not supply.
+
+Never use CodeGraph first for covered work merely because exact source or call-path detail will be needed later. Do not repeat the same RepoGrammar call unless the target or indexed evidence changed. Treat returned family ids as follow-up handles and use `show_family` only with an exact id returned earlier. Do not request `include_source_spans` by default and do not run `repogrammar stats` in normal agent loops.
+
+Skip this gate for pure documentation or prose; operational release, git, environment, or credential inspection; syntax-only YAML or configuration validation; and an exact one-symbol, file, or call-path lookup, but only when no repository contract, convention, repeated implementation, framework role, analogue comparison, code-behavior diagnosis, or implementation decision is involved. Never initialize, resync, or start autosync silently; those writes require user or project-policy permission. If `.repogrammar/` does not exist, skip RepoGrammar for that repository.";
+
+fn legacy_managed_instruction_block_v2() -> String {
+    format!(
+        "{MANAGED_INSTRUCTION_BEGIN}\n<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 2 -->\n{LEGACY_AGENT_PREFLIGHT_GATE_V2}\n{MANAGED_INSTRUCTION_END}"
+    )
+}
+
 /// Exact previously shipped managed block. Only this known legacy body is
 /// eligible for automatic refresh; an arbitrary body between RepoGrammar's
 /// markers is treated as foreign drift and preserved.
@@ -2265,6 +2293,8 @@ fn classify_managed_instruction_contents(contents: &str) -> ManagedInstructionSt
     let section = contents[start..end].trim_end_matches('\n');
     if section == managed_instruction_block() {
         ManagedInstructionState::Current
+    } else if section == legacy_managed_instruction_block_v2() {
+        ManagedInstructionState::OutdatedV2
     } else if section == legacy_managed_instruction_block_v1() {
         ManagedInstructionState::OutdatedV1
     } else if section == legacy_managed_instruction_block_global_v0() {
@@ -2667,6 +2697,7 @@ fn managed_instruction_refusal(
         ManagedInstructionState::Malformed => Some(ManagedInstructionRefusal::MalformedSection),
         ManagedInstructionState::Missing
         | ManagedInstructionState::Current
+        | ManagedInstructionState::OutdatedV2
         | ManagedInstructionState::OutdatedV1
         | ManagedInstructionState::OutdatedGlobalV0 => None,
     }
@@ -2740,7 +2771,8 @@ pub fn manage_instruction_file(
             if request.dry_run {
                 let disposition = match (inspection.state, inspection.file_exists) {
                     (
-                        ManagedInstructionState::OutdatedV1
+                        ManagedInstructionState::OutdatedV2
+                        | ManagedInstructionState::OutdatedV1
                         | ManagedInstructionState::OutdatedGlobalV0,
                         _,
                     ) => ManagedInstructionDisposition::WouldReplace,
@@ -2866,7 +2898,9 @@ pub fn write_managed_instruction_section(
     let state = classify_managed_instruction_contents(&existing);
     let (next, action) = match state {
         ManagedInstructionState::Current => return Ok(InstructionAction::Unchanged),
-        ManagedInstructionState::OutdatedV1 | ManagedInstructionState::OutdatedGlobalV0 => {
+        ManagedInstructionState::OutdatedV2
+        | ManagedInstructionState::OutdatedV1
+        | ManagedInstructionState::OutdatedGlobalV0 => {
             let (start, end) =
                 managed_instruction_span(&existing)?.ok_or_else(malformed_managed_section_error)?;
             let mut next = String::with_capacity(existing.len());
@@ -2943,6 +2977,7 @@ pub fn remove_managed_instruction_section(
     let (start, end) = match state {
         ManagedInstructionState::Missing => return Ok(InstructionAction::NotPresent),
         ManagedInstructionState::Current
+        | ManagedInstructionState::OutdatedV2
         | ManagedInstructionState::OutdatedV1
         | ManagedInstructionState::OutdatedGlobalV0 => {
             managed_instruction_span(&existing)?.ok_or_else(malformed_managed_section_error)?
@@ -4360,7 +4395,7 @@ mod tests {
         assert!(created.contains("operation: \"find_analogues\""));
         assert!(created.contains("mode: \"compact\""));
         assert!(created.contains("include_source_spans"));
-        assert!(created.contains("State that fallback reason"));
+        assert!(created.contains("state that reason before CodeGraph"));
         assert!(created.contains("CodeGraph"));
         assert!(created.contains("repogrammar stats"));
         assert!(created.contains("Never initialize"));
@@ -4389,7 +4424,7 @@ mod tests {
         let replace_path = dir.file("REPLACE.md");
         let seeded = format!(
             "# Top\n\n{}\n\n# Bottom\n",
-            legacy_managed_instruction_block_v1()
+            include_str!("../../fixtures/instructions/managed-v2.md").trim_end()
         );
         fs::write(&replace_path, &seeded).expect("seed replace content");
         assert_eq!(
@@ -4428,6 +4463,29 @@ mod tests {
         assert!(gate.contains(
             "an exact one-symbol, file, or call-path lookup, but only when no repository contract"
         ));
+        let path_priority = gate
+            .find("exact repo-relative path or locator")
+            .expect("path priority");
+        let unit_priority = gate
+            .find("exact `unit:`/member/symbol")
+            .expect("unit priority");
+        let role_priority = gate
+            .find("exact framework role")
+            .expect("framework-role priority");
+        let prose_priority = gate
+            .find("only then a concise pattern question")
+            .expect("prose priority");
+        assert!(path_priority < unit_priority);
+        assert!(unit_priority < role_priority);
+        assert!(role_priority < prose_priority);
+        assert!(gate.contains("Never replace a concrete locus with broad task or governance prose"));
+        assert!(gate.contains("retains any language/framework named by the task"));
+        assert!(gate.contains("route, fixture, validation model, data access, or test"));
+        assert!(gate.contains("Call a given target only once"));
+        assert!(gate.contains("exactly one returned candidate family id may be inspected once"));
+        assert!(gate.contains("with `show_family` as candidate context only"));
+        assert!(gate.contains("never as selected-family or conformance proof"));
+        assert!(gate.contains("with multiple candidates, narrow using a stronger target"));
 
         let authority = gate
             .find("Read mandatory repository authority and instruction documents first")
@@ -4762,7 +4820,14 @@ mod tests {
         let dir = TempDir::new("instruction-inspection");
         let deployed_global_v0 = include_str!("../../fixtures/instructions/managed-global-v0.md");
         let legacy_v1 = include_str!("../../fixtures/instructions/managed-legacy-v1.md");
+        let legacy_v2 = include_str!("../../fixtures/instructions/managed-v2.md");
         assert!(managed_instruction_block().contains(MANAGED_INSTRUCTION_VERSION_MARKER));
+        assert_eq!(
+            legacy_v2.trim_end(),
+            legacy_managed_instruction_block_v2(),
+            "the fixed v2 fixture must match the exact shipped allowlist"
+        );
+        assert!(!legacy_managed_instruction_block_v2().contains(MANAGED_INSTRUCTION_VERSION_MARKER));
         assert!(!legacy_managed_instruction_block_v1().contains(MANAGED_INSTRUCTION_VERSION_MARKER));
         assert!(!legacy_managed_instruction_block_global_v0()
             .contains(MANAGED_INSTRUCTION_VERSION_MARKER));
@@ -4783,6 +4848,39 @@ mod tests {
                 .expect("inspect current")
                 .state,
             ManagedInstructionState::Current
+        );
+
+        let outdated_v2 = dir.file("OUTDATED-V2.md");
+        fs::write(&outdated_v2, legacy_v2).expect("seed independent legacy v2 fixture");
+        let outdated_v2_inspection =
+            inspect_managed_instruction_file(&outdated_v2).expect("inspect outdated v2");
+        assert_eq!(
+            outdated_v2_inspection.state,
+            ManagedInstructionState::OutdatedV2
+        );
+        assert_eq!(outdated_v2_inspection.state.content_version(), Some(2));
+        assert_eq!(
+            write_managed_instruction_section(&outdated_v2).expect("refresh v2"),
+            InstructionAction::Replaced
+        );
+        assert_eq!(
+            inspect_managed_instruction_file(&outdated_v2)
+                .expect("inspect refreshed v2")
+                .state,
+            ManagedInstructionState::Current
+        );
+
+        let drifted_v2 = dir.file("DRIFTED-V2.md");
+        fs::write(
+            &drifted_v2,
+            legacy_v2.replacen("concrete repo-relative path", "broad prose", 1),
+        )
+        .expect("seed one-phrase v2 drift");
+        assert_eq!(
+            inspect_managed_instruction_file(&drifted_v2)
+                .expect("inspect drifted v2")
+                .state,
+            ManagedInstructionState::Foreign
         );
 
         let outdated = dir.file("OUTDATED.md");
@@ -4840,7 +4938,7 @@ mod tests {
         fs::write(
             &drifted,
             format!("{}\n", managed_instruction_block())
-                .replace("State that fallback reason", "Silently use any fallback"),
+                .replace("Call a given target only once", "Call a given target twice"),
         )
         .expect("seed drifted");
         assert_eq!(

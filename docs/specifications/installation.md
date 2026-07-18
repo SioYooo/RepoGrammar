@@ -463,8 +463,10 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
-The current managed content version is `2`. The block and MCP initialize
-guidance share one authoritative pre-flight contract. After mandatory
+The current managed content version is `3`; exact version `2` content remains a
+known outdated body eligible for automatic refresh, alongside the earlier v1
+and unversioned bodies. The block and MCP initialize guidance share one
+authoritative pre-flight contract. After mandatory
 repository authority and instruction documents have been read, the gate applies
 when `.repogrammar/` exists and an implementation, fix, refactor, test, or
 diagnosis requires a repository-local contract or convention, repeated
@@ -474,21 +476,30 @@ Contract qualification, conformance, or drift. File type and an exact target do
 not exempt a mixed task, such as a YAML-generated prompt that must conform to a
 repeated Meaning Contract.
 
-For covered work the agent calls `repogrammar_context` exactly once before
-CodeGraph or source search/read, with `operation: "find_analogues"`, a target
-built from the concrete repo-relative path, symbol/member id, framework role,
-or code-work question in the task, and `mode: "compact"`. It consumes the
-returned `read_plan` and may fall back when the tool is unavailable or the
-result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or
-insufficient evidence. The agent records that fallback reason before
-proceeding and does not repeat an identical context call unless the target or
-indexed evidence changed. CodeGraph may then supply exact source or call-path
-detail not supplied by RepoGrammar.
+For covered work the agent builds one precision-first target before calling
+`repogrammar_context`: exact repo-relative path or locator first, then exact
+`unit:`/member/symbol, then exact framework role, and only then a concise
+pattern question. It must not replace a concrete locus with broad task or
+governance prose. A prose target preserves any task-provided language/framework
+plus a supported concept (`route`, `fixture`, `validation model`, `data access`,
+or `test`). The agent calls `find_analogues` in compact mode once for that
+target, consumes its `read_plan`, and never repeats the same target; a materially
+narrower locator is a new target.
 
-Instruction-file synchronization does not guarantee hot reload for agent
-sessions that are already running. After a successful live `repogrammar
-instructions sync`, the CLI recommends starting a new coding-agent session; an
-older session may retain the instruction snapshot it loaded at startup.
+When the tool is unavailable or reports `FALLBACK`, stale, omitted, or
+insufficient evidence, the agent records that reason before proceeding. On
+`UNKNOWN`, exactly one returned candidate family id may be inspected once with
+`show_family` as candidate context only; it is not a selected family or
+conformance proof. Multiple candidates require a stronger target or source/
+CodeGraph fallback. CodeGraph may then supply exact source or call-path detail
+not supplied by RepoGrammar.
+
+Neither a successful live install nor instruction-file synchronization can hot
+swap an agent session that is already running. After a successful live
+`repogrammar install` or `repogrammar instructions sync`, the CLI recommends
+restarting the coding-agent session. Already-open Codex or Claude MCP child
+processes continue running the binary they started with, and an older session
+may retain the instruction snapshot it loaded at startup.
 
 The gate is skipped for pure prose documentation; operational release, Git,
 environment, or credential inspection; syntax-only YAML or configuration
@@ -502,13 +513,13 @@ The installer must not overwrite unrelated user instructions. `uninstall`
 reverses only RepoGrammar's own managed write. If a file has a malformed or
 incomplete managed section, the installer must stop and direct the user to a
 manual repair workflow. A complete marker pair alone is not proof of ownership:
-only the exact current content or an exact previously shipped legacy body is
-recognized. A modified or unknown body inside the reserved markers is
+only the exact current content or an exact previously shipped body, including
+v2, is recognized. A modified or unknown body inside the reserved markers is
 `foreign`; it is preserved and refused for automatic refresh or removal. The
-managed block also treats returned family ids as follow-up handles, uses
-`show_family` only with an exact returned id, avoids `include_source_spans` and
-`repogrammar stats` by default, and never silently initializes, resyncs, or
-starts autosync.
+managed block treats returned family ids as follow-up handles rather than proof,
+permits only the one-candidate `UNKNOWN` inspection above, avoids
+`include_source_spans` and `repogrammar stats` by default, and never silently
+initializes, resyncs, or starts autosync.
 
 The managed instruction writer is implemented as a reversible, idempotent
 operation:
