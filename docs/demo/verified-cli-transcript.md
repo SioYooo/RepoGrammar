@@ -1,7 +1,11 @@
 # Verified CLI Transcript
 
 This transcript backs the terminal visual in the root README. It was captured
-on 2026-07-16 from commit `73770e6` with the current debug binary:
+on 2026-07-16 from commit `73770e6` with the current debug binary. It is a
+historical record: no result line has been rewritten since capture, so the
+`check` output shows the legacy `CONTEXT_ONLY` advisory form that later
+releases replaced with static-alignment certificates (an alignment-status
+token plus `runtime_equivalence: "UNKNOWN"`).
 
 ```text
 repogrammar 0.2.0-preview.0

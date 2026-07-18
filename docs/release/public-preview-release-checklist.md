@@ -71,7 +71,9 @@ this historical preview; they must not be followed for a future release.
    `running: true` and `startup_state: "ready"` after at least three poll
    intervals, the edit must activate a new generation, and stop must remove
    daemon lock/readiness ownership. `find` must select the Pydantic family;
-   `check` must remain `CONTEXT_ONLY` with `advisory_status: "UNKNOWN"`.
+   `check` must return a static-alignment token (`STATICALLY_ALIGNED`,
+   `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`, or
+   `UNKNOWN`) with `runtime_equivalence: "UNKNOWN"`.
 5. For both Linux archives, preserve the highest imported GLIBC symbol version
    reported by the workflow and independently inspect the downloaded binary.
    Reject an x86_64 requirement above 2.35 or arm64 requirement above 2.39.

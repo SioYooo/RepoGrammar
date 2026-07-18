@@ -94,8 +94,9 @@ pattern question they already have. RepoGrammar discovers bounded candidates
 and returns family context, provenance metadata, variation/exception coverage,
 unknowns, and a hash-checked read plan.
 
-`repogrammar check` deliberately returns `CONTEXT_ONLY` and keeps runtime
-equivalence advisory `UNKNOWN` when it is not proved. Unresolvable targets
+`repogrammar check` deliberately returns a static-alignment certificate and
+keeps `runtime_equivalence: "UNKNOWN"` at all times — static family evidence is
+never promoted to runtime proof. Unresolvable targets
 return a typed reason such as `InsufficientSupport` and recommend ordinary
 source fallback.
 

@@ -1188,8 +1188,25 @@ fn smoke_packaged_artifact(
         "packaged check",
         &["check", "--project", &project, "--json", "schemas.py"],
     )?;
-    if check["status"] != "CONTEXT_ONLY" || check["check"]["advisory_status"] != "UNKNOWN" {
-        return Err("packaged check did not preserve advisory UNKNOWN".to_string());
+    // The packaged `check` now emits a static-alignment certificate, never the
+    // deprecated `CONTEXT_ONLY`/nested-advisory shape. Assert the stable key
+    // faces: `status` is one of the five static-alignment tokens, the
+    // runtime-equivalence obligation is held explicitly `UNKNOWN`, the schema
+    // version is stamped, and no legacy nested advisory `check` object leaks.
+    let check_status_is_static_alignment = matches!(
+        check["status"].as_str().unwrap_or_default(),
+        "STATICALLY_ALIGNED"
+            | "STATIC_DEVIATION"
+            | "PARTIAL_ALIGNMENT"
+            | "INSUFFICIENT_EVIDENCE"
+            | "UNKNOWN"
+    );
+    if !check_status_is_static_alignment
+        || check["runtime_equivalence"] != "UNKNOWN"
+        || check["schema_version"] != "product-schemas.v1"
+        || check.get("check").is_some()
+    {
+        return Err("packaged check did not emit a static-alignment certificate".to_string());
     }
 
     let stopped = smoke.run_json(
@@ -2346,12 +2363,17 @@ impl EvalOutcome {
     }
 
     /// Maps a product query `status` string onto the coarse retrieval outcome.
-    /// `CONTEXT_ONLY` is the `check` operation's context-success status: a single
-    /// family was discovered and hydrated (route `discover_hydrate_compose`), so
-    /// it is treated as `ok` on the retrieval axis while conformance stays
-    /// advisory. Any unrecognized status is conservatively reported as fallback.
+    /// Retrieval-shaped successes (`ok`/`OK`) are `ok` on the retrieval axis, and
+    /// static-alignment certificates carry their own tokens (handled below via
+    /// `AlignmentStatus::outcome_class`). The legacy `CONTEXT_ONLY` token is
+    /// retained for historical-telemetry tolerance only: the live `check`
+    /// operation no longer emits it (it now returns a static-alignment
+    /// certificate). Any unrecognized status is conservatively reported as
+    /// fallback.
     fn classify_status(status: &str) -> Self {
         match status {
+            // `ok`/`OK` are retrieval successes; `CONTEXT_ONLY` is legacy
+            // historical tolerance only (no live operation emits it anymore).
             "ok" | "OK" | "CONTEXT_ONLY" => EvalOutcome::Ok,
             // Static-alignment certificates commit a compared answer, so a
             // committed certificate (aligned or a definite deviation) is `ok`, a

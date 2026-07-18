@@ -150,12 +150,12 @@ only removes ids already carried by `follow_up_family_ids`.
 
 ### Calibration summary
 
-Calibrated against the 73-query product-eval corpus (`query-corpus-v1.json`;
-42 retrieval + 25 abstention + 6 context after the gold adjudications). At
+Calibrated against the 79-query product-eval corpus (`query-corpus-v1.json`;
+42 retrieval + 25 abstention + 12 context after the gold adjudications). At
 `MIN_RETRIEVAL_SCORE = 10` (with `MIN_RETRIEVAL_MARGIN = 1`) hit@1 is **21/42**
 (up from the pre-routing 17/43) while holding every hard constraint — zero
 false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
-6/6 ambiguity precision, 14/14 candidate recall, and no regression among
+6/6 ambiguity precision, 13/14 candidate recall, and no regression among
 previously-matching exact/context queries. hit@1 is on a plateau across
 `MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regresses to 18/42 (the
 framework+concept anchor scores exactly 10). `10` is retained as the principled

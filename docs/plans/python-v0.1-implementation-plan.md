@@ -230,7 +230,8 @@ Non-goals: new top-level graph commands, automatic user-code edits, runtime
 trace by default, or source snippets in compact/evidence output.
 
 Validation gate: human and JSON outputs distinguish fallback, stale evidence,
-typed `UNKNOWN`, `CONTEXT_ONLY`, and confident family classifications.
+typed `UNKNOWN`, static-alignment certificate statuses (formerly the legacy
+`CONTEXT_ONLY` advisory), and confident family classifications.
 
 Current slice: CLI and MCP now share compact/evidence/deep output selection for
 stored family evidence metadata and include read plans for matched families.

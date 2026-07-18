@@ -491,9 +491,10 @@ allowed.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
-  no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
-  `check_conformance` with `CONTEXT_ONLY` context success when conformance is
-  unproven, exact `show_family` target handling, compact/evidence/deep output
+  no-active-generation fallback, active-generation typed `UNKNOWN`,
+  static-alignment `check_conformance` certificates (alignment-status tokens
+  with `runtime_equivalence: "UNKNOWN"`; typed abstention when conformance
+  evidence is insufficient), exact `show_family` target handling, compact/evidence/deep output
   mode serialization, target and token-budget validation, metadata-only greedy
   evidence selection, metadata-only default read plans for all supported
   operations, explicit `include_source_spans` validation and rendering, stale

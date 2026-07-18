@@ -1395,9 +1395,11 @@ orthogonal to `--mode`, which selects evidence detail; the two never interact.
 It defaults to `standard`, the current byte-stable structured payload, and is
 additive under `product-schemas.v1`: `minimal` opts into the lean shape and
 `full` retains every diagnostic field. `standard` and `full` emit byte-identical
-output (equal to the pre-precision response); each precision slice suppresses
-its demoted fields only at `minimal`, and every removal is a demotion `full`
-restores. An unrecognized value is rejected rather than silently defaulted. At
+output (equal to this development line's pre-precision response, which already
+carries the inline-member cap — byte-stable against the pre-precision shape, not
+identical to v0.2.2); each precision slice suppresses its demoted fields only at
+`minimal`, and every removal is a demotion `full` restores. An unrecognized value
+is rejected rather than silently defaulted. At
 `minimal` the `query_route` object keeps only `route` and `follow_up_family_ids`
 (dropping the duplicate `candidate_family_ids` on a matched family, retaining it
 as a recovery handle on `PARTIAL_CONTEXT`/`UNKNOWN`/conformance abstentions) and

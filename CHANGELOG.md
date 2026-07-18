@@ -19,10 +19,12 @@
 
 - Aligned the autosync change fingerprint with the manual discovery
   manifest. The fingerprint now evaluates gitignore through one batched
-  git check-ignore subprocess per pass (measured about ten milliseconds
-  for six hundred candidates, roughly one percent of the default poll
-  interval) with the same warning fallback as discovery, and git-ignored
-  supported files no longer trigger spurious syncs or count toward the
+  git check-ignore subprocess per pass (an ad-hoc local measurement
+  observed roughly ten milliseconds for six hundred candidates, a small
+  fraction of the default poll interval, but this is not a committed,
+  reproducible benchmark) with the same warning fallback as discovery,
+  and git-ignored supported files no longer trigger spurious syncs or
+  count toward the
   fingerprint's accepted-limit ceilings, so autosync and manual sync
   agree on whether a repository fits the accepted limits. Skipped-path
   counts are logged as bounded path-free counters, and the remaining
@@ -37,10 +39,15 @@
   orthogonal to `--mode`: `mode` selects how much evidence the
   resolver gathers, `verbosity` selects the response field density the
   serializers emit. `standard` (the default) and `full` are
-  byte-identical to the pre-change response (golden tests pin them to
-  captured pre-change bytes on both surfaces); precision slices
-  suppress demoted diagnostic fields only at `minimal`. Invalid values
-  are explicit protocol errors, never a silent fallback.
+  byte-identical to this development line's pre-precision response
+  (golden tests pin them to captured pre-change bytes on both surfaces)
+  — not to v0.2.2, because that pre-precision baseline was captured
+  after the inline-member cap of 20 (a declared v0.2.2 default-shape
+  change; see its own CHANGELOG entry). Relative to v0.2.2 the only
+  default-tier changes are that member cap plus purely additive new
+  fields. Precision slices suppress demoted diagnostic fields only at
+  `minimal`. Invalid values are explicit protocol errors, never a
+  silent fallback.
 
 - Realized the lean `verbosity: minimal` tier across the query
   serializers, additive under `product-schemas.v1` with `standard` and
@@ -258,7 +265,7 @@
   longer credit uncommitted candidate lists. Measured on the corpus
   after integration: product hit@1 21/42 with mrr 0.500 and zero
   abstention-gold selections; the token-overlap control reaches hit@1
-  11/42 with 3 abstention-gold selections.
+  11/42 with 4 abstention-gold selections.
 
 ### Changed
 
@@ -319,10 +326,10 @@
   targets abstain with a typed `UNKNOWN` and a low-cardinality `abstention_reason`
   (`no_candidate`, `below_min_score`, `unsupported_target`, `margin_too_close`,
   `truncated_tie`, `stale_candidates`, `hydration_ambiguous`). Calibrated on the
-  73-query product-eval corpus (42 retrieval + 25 abstention + 6 context), this
+  79-query product-eval corpus (42 retrieval + 25 abstention + 12 context), this
   raises hit@1 to 21/42 (from the pre-routing 17/43) while holding zero
   false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
-  6/6 ambiguity precision, and 14/14 candidate recall with no regression among
+  6/6 ambiguity precision, and 13/14 candidate recall with no regression among
   previously-matching exact/context queries. The committed retrieval vocabulary
   also treats `repository` as a data-access concept (previously shadowed by a
   stopword) and `model` as both a validation-model and a data-access concept, so
@@ -337,7 +344,9 @@
   `repo-guard product-eval` command that indexes committed fixtures in isolated
   temporary workspaces and drives the product binary through
   `src/fixtures/evaluation/query-corpus-v1.json`, writing machine-readable
-  output. The Phase 2 corpus expands to 73 gold-labeled queries over python-v0_1,
+  output. The Phase 2 corpus expands to 73 gold-labeled queries (later grown to
+  79 with 12 context queries as alignment and context coverage landed; the
+  committed corpus file is authoritative) over python-v0_1,
   typescript-v0_2, and a zero-family fixture, each tagged with a measurement
   `intent` (`retrieval`/`abstention`/`context`) and, where relevant, a
   `candidates_include` gold set; new coverage adds `path:line`/`path:start-end`

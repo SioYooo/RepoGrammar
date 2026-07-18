@@ -38,8 +38,10 @@ The current input schema is intentionally small:
   `mode`, which selects evidence detail. It is additive under
   `product-schemas.v1`: `standard` is the current, byte-stable response shape,
   `minimal` opts into the lean shape, and `full` retains every diagnostic field.
-  `standard` and `full` are byte-identical to each other and to the
-  pre-precision response; each precision slice suppresses its demoted fields
+  `standard` and `full` are byte-identical to each other and to this
+  development line's pre-precision response — which already carries the
+  inline-member cap, so this is byte-stability against the pre-precision shape,
+  not identity with v0.2.2; each precision slice suppresses its demoted fields
   only at `minimal`, and every removal is a demotion `full` restores. The
   current `minimal` reductions are the `query_route` slimming, the
   `resolved_target`/certificate dedup, and the `read_plan`/`source_spans`
