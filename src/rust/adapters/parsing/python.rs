@@ -10,7 +10,7 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParser,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -32,7 +32,13 @@ const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 1;
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
 // bounded, but leave enough room for the bundled worker to analyze itself.
 const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_PYTHON_FRONTEND_INPUT_BYTES: usize = 1024 * 1024;
+/// Per-request byte cap for a `parse_document` payload. When the whole-project
+/// context (every `.py` text) pushes the serialized request past this cap,
+/// `serialize_parse_request` silently drops the context and the worker parses the
+/// target file without cross-module resolution. The incremental-sync preflight
+/// reads this cap to keep the Python context-payload regime stable (see
+/// `application::indexing`'s `python_context_budget_is_safe`).
+pub(crate) const MAX_PYTHON_FRONTEND_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_PYTHON_FRONTEND_FACTS: usize = 2_000;
 const MAX_PYTHON_FACT_TEXT_BYTES: usize = 2_048;
 const MAX_PYTHON_FACT_TARGET_BYTES: usize = 256;
@@ -126,6 +132,10 @@ impl SourceParser for PythonAstParser {
             });
         }
         Ok(report)
+    }
+
+    fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
+        self.extract_interface(path, text)
     }
 }
 
@@ -234,6 +244,30 @@ impl PythonAstParser {
             response,
             context_omitted,
         })
+    }
+
+    /// Single-file interface probe: one bounded worker call returning the
+    /// deterministic interface hash of `text` at `path`, with no whole-project
+    /// context. Any failure mode — request too large, worker unavailable,
+    /// timeout, contract mismatch, malformed response — maps to
+    /// [`PythonInterfaceProbe::Unverified`] so the incremental-sync preflight
+    /// falls back to a full rebuild rather than guessing an interface.
+    fn extract_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
+        let payload = json!({
+            "protocol_version": PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION,
+            "contract_revision": PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "extract_interface",
+            "path": path,
+            "text": text,
+        })
+        .to_string();
+        if payload.len() > MAX_PYTHON_FRONTEND_INPUT_BYTES {
+            return PythonInterfaceProbe::Unverified;
+        }
+        match self.run_worker_request(&payload, false) {
+            Ok(response) => parse_extract_interface_response(path, &response),
+            Err(_) => PythonInterfaceProbe::Unverified,
+        }
     }
 
     fn run_worker_request(
@@ -433,6 +467,70 @@ fn parse_document_payload(
         );
     }
     payload
+}
+
+/// Validate an `extract_interface` worker response into a probe result. Treats
+/// every malformed, error, or off-contract response as `Unverified` (untrusted
+/// worker output must never be promoted to a computed interface) and never
+/// returns an error, so the preflight can only ever read a hash or fall back to
+/// a full rebuild.
+fn parse_extract_interface_response(path: &str, response: &str) -> PythonInterfaceProbe {
+    if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
+        return PythonInterfaceProbe::Unverified;
+    }
+    let mut lines = response.lines().filter(|line| !line.trim().is_empty());
+    let (Some(line), None) = (lines.next(), lines.next()) else {
+        return PythonInterfaceProbe::Unverified;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return PythonInterfaceProbe::Unverified;
+    };
+    let Some(object) = value.as_object() else {
+        return PythonInterfaceProbe::Unverified;
+    };
+    if object.get("protocol_version").and_then(Value::as_u64)
+        != Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+        || object.get("contract_revision").and_then(Value::as_u64)
+            != Some(PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION)
+        || object.get("mode").and_then(Value::as_str) != Some("extract_interface")
+        || object.get("path").and_then(Value::as_str) != Some(path)
+    {
+        return PythonInterfaceProbe::Unverified;
+    }
+    if validate_allowed_keys(
+        object,
+        &[
+            "protocol_version",
+            "contract_revision",
+            "mode",
+            "path",
+            "interface_hash",
+        ],
+        "python interface probe response",
+    )
+    .is_err()
+    {
+        return PythonInterfaceProbe::Unverified;
+    }
+    match object.get("interface_hash").and_then(Value::as_str) {
+        Some(hash) if is_sha256_interface_hash(hash) => {
+            PythonInterfaceProbe::Computed(hash.to_string())
+        }
+        _ => PythonInterfaceProbe::Unverified,
+    }
+}
+
+/// The interface hash is `sha256:` followed by 64 lowercase hex digits, matching
+/// the worker's `hashlib.sha256(...).hexdigest()`. Validated because worker
+/// output is untrusted input that is persisted verbatim.
+fn is_sha256_interface_hash(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn parse_worker_response(
@@ -1780,6 +1878,51 @@ mod tests {
                 PathBuf::from("/opt/repogrammar/workers/python/worker.py"),
                 PathBuf::from("/opt/repogrammar/bin/workers/python/worker.py"),
             ]
+        );
+    }
+
+    #[test]
+    fn extract_python_interface_is_stable_across_body_edits_and_changes_on_symbols() {
+        let parser = PythonAstParser::default();
+        let base = parser.extract_python_interface(
+            "app.py",
+            "def current_tenant() -> str:\n    return \"default\"\n",
+        );
+        let body_edit = parser.extract_python_interface(
+            "app.py",
+            "def current_tenant() -> str:\n    return \"primary\"\n",
+        );
+        let symbol_added = parser.extract_python_interface(
+            "app.py",
+            "def current_tenant() -> str:\n    return \"default\"\n\n\ndef added() -> int:\n    return 1\n",
+        );
+        let PythonInterfaceProbe::Computed(base_hash) = base else {
+            panic!("expected a computed interface hash for a valid module");
+        };
+        assert!(base_hash.starts_with("sha256:"));
+        assert_eq!(
+            body_edit,
+            PythonInterfaceProbe::Computed(base_hash.clone()),
+            "a body-only edit must not change the interface hash"
+        );
+        assert_ne!(
+            symbol_added,
+            PythonInterfaceProbe::Computed(base_hash),
+            "adding a top-level symbol must change the interface hash"
+        );
+    }
+
+    #[test]
+    fn extract_python_interface_is_unverified_when_worker_is_unavailable() {
+        // A missing interpreter must degrade to `Unverified` (the sync preflight
+        // then falls back to a full rebuild) rather than panicking or guessing.
+        let parser = PythonAstParser::with_worker(
+            "repogrammar-nonexistent-python-interpreter",
+            source_checkout_python_worker_script(),
+        );
+        assert_eq!(
+            parser.extract_python_interface("app.py", "x = 1\n"),
+            PythonInterfaceProbe::Unverified
         );
     }
 

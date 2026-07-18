@@ -18,6 +18,23 @@
 
 ### Added
 
+- Extended dependency-aware incremental sync to Python through stored
+  module interface hashes. Each build records a deterministic interface
+  hash per non-conftest Python module (schema v10
+  `python_module_interfaces` table, `extract_interface` worker mode),
+  and a content-only Python module edit now reparses just the touched
+  files when every modified module's interface hash is unchanged.
+  Interface-affecting edits, conftest/config changes, adds/removes,
+  missing stored hashes (`python_interface_unverified`), and any
+  manifest whose estimated whole-project context payload approaches the
+  frontend request cap on either the base or current side
+  (`python_context_budget`, a conservative sizes-only bound with 2x
+  escaping headroom) fall back to a full rebuild, so copied-forward
+  facts can never diverge from a clean rebuild through the
+  context-omission channel. The interface probe stops at the first
+  unverified module, and the sync-equivalence oracle grows to 13
+  scenarios covering both gate directions.
+
 - Decomposed product readiness and stamped schema versions on every
   structured payload. A single readiness authority reports
   independently-truthful dimensions - repository state, active index,

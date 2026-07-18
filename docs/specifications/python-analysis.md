@@ -92,6 +92,24 @@ The current implementation covers a bounded static CPython `ast` slice only:
   the same release, without source, paths, environment values, or raw worker
   payloads. This tuple does not version the separate project-config mode or
   public semantic-worker-compatible mode;
+- a single-file `extract_interface` worker mode used by the incremental-sync
+  preflight. Given one module's path and text (no whole-project context), it
+  returns exactly one bounded, source-free response carrying a deterministic
+  `interface_hash`: the `sha256:`-prefixed hash of the module's *interface
+  projection* — its top-level symbol surface (`ClassDef`/`FunctionDef`/
+  `AsyncFunctionDef`/assignment targets other than `__all__`, name → `TYPE`|
+  `SYMBOL`), its literal `__all__` set or a non-literal/absent marker, and, for a
+  package `__init__`, its top-level re-export `ImportFrom` items in source order.
+  This projection is exactly the cross-module surface `build_module_symbol_index`
+  exposes to other files, so two files with an equal hash are interchangeable to
+  every other module's parse. A syntactically invalid module projects to a
+  distinct unparseable marker (the symbol indexer skips it, so it contributes
+  nothing). The mode shares the `contract_revision=1` tuple: an old host never
+  sends it, and a mismatched revision receives the same low-cardinality rejection
+  as parse-document so the Rust caller treats the probe as unverified and rebuilds
+  fully rather than guessing. Build-time storage of these hashes and the preflight
+  gate that consumes them are specified in
+  `docs/specifications/indexing-pipeline.md`;
 - source-ordered per-name module-scope event histories and immutable AST range
   caching for bounded large-module analysis. Point-in-source framework alias
   and assignment-role queries use read-only history views instead of rescanning

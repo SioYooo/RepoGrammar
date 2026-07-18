@@ -1223,34 +1223,51 @@ reproducible in the clean rebuild. Every v1 scenario is worker-less, so that
 provider bucket is empty by construction; the rule is applied rather than
 blanket-ignored.
 
-Each scenario declares an `expected_outcome` (`EQUAL` or `FELL_BACK`) and, for a
-fallback, an `expected_fallback_reason`; a scenario `pass` requires the observed
-outcome and reason to match. This makes the exit-0 gate non-trivial: an
-unexpected `EQUAL` (a gate that silently regressed to the incremental path), an
-unexpected fallback (a misfiring preflight), a wrong fallback reason, or any
-`INEQUAL` all fail. The run writes `<output-dir>/sync-equivalence.json`
-(`schema: sync-equivalence.v1`): per scenario the observed `sync_mode`,
-`fallback_reason`, `equal`, `outcome`, `expected_outcome`,
+Each scenario declares an `expected_outcome` (`EQUAL` or `FELL_BACK`), for a
+fallback an `expected_fallback_reason`, and optionally an
+`expected_reparsed_files` count; a scenario `pass` requires the observed outcome,
+reason, and (when declared) reparsed count to match. This makes the exit-0 gate
+non-trivial: an unexpected `EQUAL` (a gate that silently regressed to the
+incremental path), an unexpected fallback (a misfiring preflight), a wrong
+fallback reason, a file-local path that reparsed more files than the single
+edited one, or any `INEQUAL` all fail. The run writes
+`<output-dir>/sync-equivalence.json` (`schema: sync-equivalence.v1`): per
+scenario the observed `sync_mode`, `fallback_reason`, `reparsed_files`,
+`expected_reparsed_files`, `equal`, `outcome`, `expected_outcome`,
 `expected_fallback_reason`, `pass`, and per-surface bounded diff samples. The
 exit status is `0` only when every requested scenario passes.
 
 The committed v1 scenarios are `java_edit`, `csharp_edit`, `docs_noop`,
-`java_add`, `java_delete`, `rs_content_edit`, and `tsjs_content_edit`
-(incremental paths, expected `EQUAL`); `tsjs_add`, `rs_add`, `mocharc_remove`,
-and `python_edit` (expected `FELL_BACK` via `project_context_changed`). The
-`rs_content_edit` and `tsjs_content_edit` scenarios are the end-to-end proof of
-the content-only Rust/TS-JS fast path: each edits one test-function body (a Rust
-test fn under `service/rust/`, a TS ambient test under `web/`), and the
-incremental generation must be canonically equal to a clean rebuild — the
-incremental sync reparses exactly the edited file. Their `tsjs_add`/`rs_add`
-counterparts confirm the gate still falls back when a source file is *added*
-(the path set grows, which can change how other files resolve). The fixture
-carries ambient TS tests under `web/` that form runner families only while the
-root `.mocharc.json` is present, so the `mocharc_remove` scenario is the
-end-to-end regression for the Mocha-runner-config gate fix: if that gate
-regressed, the removal would run incrementally, copy forward the stale flag-on
-TS families, and diverge from the clean rebuild — a real inequality on top of the
-expected-outcome check.
+`java_add`, `java_delete`, `rs_content_edit`, `tsjs_content_edit`, and
+`python_body_edit` (incremental paths, expected `EQUAL`); `tsjs_add`, `rs_add`,
+`mocharc_remove`, and `python_conftest_edit` (expected `FELL_BACK` via
+`project_context_changed`); and `python_interface_edit` (expected `FELL_BACK` via
+`python_interface_changed`). The `rs_content_edit`, `tsjs_content_edit`, and
+`python_body_edit` scenarios are the end-to-end proof of the content-only
+file-local fast paths: each edits one function body (a Rust test fn under
+`service/rust/`, a TS ambient test under `web/`, a Python function under
+`analytics/`), and the incremental generation must be canonically equal to a
+clean rebuild while reparsing exactly one file (`expected_reparsed_files: 1`).
+`python_body_edit` is specifically the proof of the Python interface-hash gate:
+the body edit leaves `analytics/app.py`'s interface projection unchanged, so only
+that module reparses while its sibling `analytics/conftest.py` copies forward.
+`python_interface_edit` adds a top-level function to the same module, changing its
+interface hash, and must fall back with `python_interface_changed`;
+`python_conftest_edit` edits `analytics/conftest.py`'s body and must fall back
+with `project_context_changed` regardless of interface hash, proving the conftest
+carve-out. The interface-hash gate's third condition — the Python context-payload
+regime must stay safely under the worker's ~1 MiB per-request cap on both
+manifests, else it falls back with `python_context_budget` — is covered by
+`application::indexing` unit tests with an injected small cap rather than an
+oracle scenario, since a near-cap committed fixture would need ~1 MiB of Python
+source. The `tsjs_add`/`rs_add` counterparts confirm the gate still falls back
+when a source file is *added* (the path set grows, which can change how other
+files resolve). The fixture carries ambient TS tests under `web/` that form runner
+families only while the root `.mocharc.json` is present, so the `mocharc_remove`
+scenario is the end-to-end regression for the Mocha-runner-config gate fix: if
+that gate regressed, the removal would run incrementally, copy forward the stale
+flag-on TS families, and diverge from the clean rebuild — a real inequality on top
+of the expected-outcome check.
 
 ## Required local gate
 

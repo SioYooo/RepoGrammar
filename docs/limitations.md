@@ -190,25 +190,43 @@ These are intentional current behaviors or tracked deferrals, not defects:
   and concurrent mount-topology changes remain outside it. The ADR, aggregate
   bounds, and existing symlink tests do not claim concurrent filesystem safety;
   the completion review remains incomplete.
-- **Source-inventory incremental sync is content-only for Rust and TS/JS.** A
-  content-only edit of a Rust or TS/JS source file (same path, changed hash, no
-  add/remove) takes the incremental copy-forward path: those parsers consume only
-  their own discovered path set plus root configuration, never another file's
-  text, so exactly the edited file is reparsed. Any Python source change (Python
-  parsing consumes other modules' and `conftest.py` text), any add/remove/rename
-  of a Python, TS/JS, or Rust source file (it changes the language's path set),
-  and any add/edit/remove of a project-config file still force a full-rebuild
-  `sync`. That gate also forces a full rebuild when a Mocha runner config
-  (`.mocharc.json/.jsonc/.cjs/.yml/.yaml`) changes, since these flip the global
-  TS/JS test-runner flag, and when the base generation's stored engine version
-  differs from the running binary, so a post-upgrade `sync` never copies forward
-  facts produced by an older engine. A configured semantic worker still forces a
-  full rebuild every run; the content-only fast path applies to worker-less
+- **Source-inventory incremental sync is content-only for Rust and TS/JS, and
+  interface-hash-gated for Python.** A content-only edit of a Rust or TS/JS source
+  file (same path, changed hash, no add/remove) takes the incremental copy-forward
+  path: those parsers consume only their own discovered path set plus root
+  configuration, never another file's text, so exactly the edited file is
+  reparsed. A content-only edit of a `.py` module also takes that fast path when
+  its interface projection (top-level symbols, literal `__all__`, `__init__`
+  re-exports) is unchanged — the interface is the only channel by which a module's
+  text reaches another module's parse. The preflight decides this by comparing a
+  freshly probed interface hash against a per-module hash persisted at build time
+  (schema v10 `python_module_interfaces`). A changed interface falls back with
+  `python_interface_changed`; an unverifiable one (worker error/timeout, or a
+  build-time probe failure left no stored hash) falls back with
+  `python_interface_unverified`; and a Python edit whose whole-project context
+  payload approaches the worker's per-request byte cap on either the base or the
+  current manifest falls back with `python_context_budget`, since the worker would
+  silently drop that context and change how sibling modules parse. Any
+  add/remove/rename of a Python, TS/JS, or Rust source file (it changes the
+  language's path set), any `conftest.py` edit (it
+  alters ancestor fixture context), and any add/edit/remove of a project-config
+  file still force a full-rebuild `sync`. That gate also forces a full rebuild when
+  a Mocha runner config (`.mocharc.json/.jsonc/.cjs/.yml/.yaml`) changes, since
+  these flip the global TS/JS test-runner flag, and when the base generation's
+  stored engine version differs from the running binary, so a post-upgrade `sync`
+  never copies forward facts produced by an older engine. A configured semantic
+  worker still forces a full rebuild every run; the fast paths apply to worker-less
   operation. Every gate rule is guarded by the `repo-guard sync-equivalence`
-  oracle. Java, C#, and C/C++ file-local edits and inventory-only tokens also
-  take the incremental path (their parsers ignore project context). Deeper
-  narrowing — content-only Python edits, and adds/removes that only touch an
-  isolated path — remains future work.
+  oracle. Java, C#, and C/C++ file-local edits and inventory-only tokens also take
+  the incremental path (their parsers ignore project context). Two further items
+  remain. First, this is the sound conservative core of the Python gate: an
+  interface *change* falls back to a full rebuild rather than computing a
+  reverse-import invalidation closure that would reparse only the affected
+  importers. Second, a full build issues one extra bounded worker call per `.py`
+  module to compute and store its interface hash, so a full rebuild's Python
+  worker-spawn count is higher than before; folding this into the existing
+  parse-document response is a future optimization. Adds/removes that only touch
+  an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
   signal reports at most `partial` in `0.2.2`; a dedicated `ready`
   band is deferred.

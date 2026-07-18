@@ -26,8 +26,8 @@ use crate::ports::index_store::{
     IndexCompactRequest, IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout,
     IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
-    RepoShapeLanguageStats, StorageCleanReport, StorageCleanRequest, StorageInspection,
-    STORAGE_SCHEMA_VERSION,
+    PythonModuleInterfaceRecord, PythonModuleInterfaceStore, RepoShapeLanguageStats,
+    StorageCleanReport, StorageCleanRequest, StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -1091,6 +1091,39 @@ impl GenerationEngineStampStore for SqliteIndexStore {
             .optional()
             .map(Option::flatten)
             .map_err(sql_unavailable)
+    }
+}
+
+impl PythonModuleInterfaceStore for SqliteIndexStore {
+    fn active_python_module_interfaces(
+        &self,
+    ) -> Result<Vec<PythonModuleInterfaceRecord>, IndexStoreError> {
+        self.ensure_layout()?;
+        let Some(connection) = self.try_open_mutable_database_read_only()? else {
+            return Ok(Vec::new());
+        };
+        let Some(generation_id) = active_generation_id(&connection)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = connection
+            .prepare(
+                "SELECT path, interface_hash FROM python_module_interfaces \
+                 WHERE generation_id = ?1 ORDER BY path",
+            )
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map(params![generation_id], |row| {
+                Ok(PythonModuleInterfaceRecord {
+                    path: row.get::<_, String>(0)?,
+                    interface_hash: row.get::<_, String>(1)?,
+                })
+            })
+            .map_err(sql_unavailable)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row.map_err(sql_unavailable)?);
+        }
+        Ok(records)
     }
 }
 
@@ -2237,6 +2270,32 @@ impl SqliteGenerationWriteSession {
         self.note_rows(1)
     }
 
+    fn write_python_module_interface(
+        &mut self,
+        path: &str,
+        interface_hash: &str,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(path)?;
+        validate_index_text_field(interface_hash, "python module interface hash")?;
+        self.ensure_batch()?;
+        // Keyed to the file row (FK): a module interface must never outlive its
+        // `indexed_files` row, so require it explicitly for a typed error rather
+        // than a raw constraint failure.
+        if indexed_file_metadata(&self.connection, self.generation_id(), path)?.is_none() {
+            return Err(invalid_record(
+                "python module interface must reference an indexed file in the same generation",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO python_module_interfaces (generation_id, path, interface_hash) \
+                 VALUES (?1, ?2, ?3)",
+                params![self.generation.generation_id, path, interface_hash],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
     #[cfg(test)]
     fn check_after_rows_fault(&mut self) -> Result<(), IndexStoreError> {
         if let Some(InjectedWriteFault::AfterRows(threshold)) = self.injected_fault {
@@ -2373,6 +2432,15 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_family_constraint_profile(record)
             .map_err(family_store_error)
+    }
+
+    fn record_python_module_interface(
+        &mut self,
+        path: &str,
+        interface_hash: &str,
+    ) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_python_module_interface(path, interface_hash)
     }
 
     fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
@@ -4460,7 +4528,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'family_constraint_profiles_v9', datetime('now'))",
+             VALUES (?1, 'python_module_interfaces_v10', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -5799,6 +5867,15 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         minimum_foreign_key_rows: 2,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
+    RequiredTableSchema {
+        name: "python_module_interfaces",
+        columns: &["generation_id", "path", "interface_hash"],
+        primary_key_columns: &["generation_id", "path"],
+        // One `index_generations` mapping plus the two-column `indexed_files`
+        // mapping.
+        minimum_foreign_key_rows: 3,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
 ];
 
 const INITIAL_SCHEMA: &str = r#"
@@ -5964,6 +6041,15 @@ CREATE TABLE IF NOT EXISTS derived_record_dependencies (
 
 CREATE INDEX IF NOT EXISTS idx_derived_record_dependencies_path
 ON derived_record_dependencies(generation_id, path, content_hash);
+
+CREATE TABLE IF NOT EXISTS python_module_interfaces (
+    generation_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    interface_hash TEXT NOT NULL CHECK (interface_hash <> ''),
+    PRIMARY KEY (generation_id, path),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS dirty_records (
     generation_id TEXT NOT NULL,
@@ -9381,6 +9467,120 @@ mod tests {
 
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
         assert!(format!("{error:?}").contains("storage schema version"));
+    }
+
+    #[test]
+    fn schema_creates_python_module_interfaces_table_at_current_version() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-schema");
+        let store = store(&workspace);
+        store
+            .prepare_next_generation()
+            .expect("prepare generation creates the mutable database");
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        assert_eq!(
+            stored_schema_version(&connection).expect("read schema version"),
+            Some(STORAGE_SCHEMA_VERSION)
+        );
+        assert!(required_schema_is_present(&connection).expect("required schema present"));
+        let table_present: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'python_module_interfaces'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query sqlite_master");
+        assert_eq!(table_present, 1);
+    }
+
+    #[test]
+    fn python_module_interfaces_round_trip_through_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-round-trip");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        {
+            let mut session = store
+                .open_generation_write_session(&generation)
+                .expect("open write session");
+            session
+                .record_indexed_file(&file("pkg/app.py"))
+                .expect("record app.py");
+            session
+                .record_indexed_file(&file("pkg/other.py"))
+                .expect("record other.py");
+            session
+                .record_python_module_interface("pkg/app.py", "sha256:aaa")
+                .expect("record app interface");
+            session
+                .record_python_module_interface("pkg/other.py", "sha256:bbb")
+                .expect("record other interface");
+            session.finish().expect("finish session");
+        }
+        store
+            .validate_generation(&generation)
+            .expect("validate generation with interface rows");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        // Rows load in path order for the active generation only.
+        assert_eq!(
+            store
+                .active_python_module_interfaces()
+                .expect("load interfaces"),
+            vec![
+                PythonModuleInterfaceRecord {
+                    path: "pkg/app.py".to_string(),
+                    interface_hash: "sha256:aaa".to_string(),
+                },
+                PythonModuleInterfaceRecord {
+                    path: "pkg/other.py".to_string(),
+                    interface_hash: "sha256:bbb".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn active_python_module_interfaces_is_empty_without_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-empty");
+        let store = store(&workspace);
+        assert!(store
+            .active_python_module_interfaces()
+            .expect("load interfaces with no generation")
+            .is_empty());
+    }
+
+    #[test]
+    fn python_module_interface_requires_an_indexed_file_row() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-fk");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut session = store
+            .open_generation_write_session(&generation)
+            .expect("open write session");
+        let error = session
+            .record_python_module_interface("pkg/missing.py", "sha256:aaa")
+            .expect_err("interface for a missing file row must be rejected");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn python_module_interface_rejects_empty_hash() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-empty-hash");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut session = store
+            .open_generation_write_session(&generation)
+            .expect("open write session");
+        session
+            .record_indexed_file(&file("pkg/app.py"))
+            .expect("record app.py");
+        let error = session
+            .record_python_module_interface("pkg/app.py", "")
+            .expect_err("an empty interface hash must be rejected");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
     }
 
     #[test]

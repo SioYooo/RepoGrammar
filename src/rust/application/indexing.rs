@@ -5,7 +5,9 @@ use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
-use crate::adapters::parsing::python::python_project_config_parser_method;
+use crate::adapters::parsing::python::{
+    python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
+};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
@@ -40,11 +42,12 @@ use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
     IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord, PythonModuleInterfaceStore,
+    STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -362,7 +365,10 @@ pub fn sync_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + GenerationEngineStampStore + GenerationWriteStore),
+    store: &(impl IndexStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     sync_repository_with_optional_semantic_worker(
@@ -595,6 +601,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
           + FamilyStore
           + FamilyConstraintProfileStore
           + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
           + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
@@ -629,6 +636,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
           + FamilyStore
           + FamilyConstraintProfileStore
           + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
           + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
@@ -813,6 +821,7 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
+        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
         indexed_units += parse_outcome.indexed_units;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
@@ -1123,7 +1132,10 @@ fn sync_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &(impl IndexStore + GenerationEngineStampStore + GenerationWriteStore),
+    store: &(impl IndexStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -1194,22 +1206,36 @@ fn sync_repository_with_optional_semantic_worker(
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
     let delta = compute_sync_delta(&snapshot, &report);
-    if sync_delta_touches_project_context(&delta) {
-        let sync_report = sync_fallback_report(
-            Some(snapshot.generation_id.clone()),
-            &report,
-            Some(&delta),
-            "project_context_changed",
-        );
-        return index_repository_full_after_discovery(
-            request,
-            report,
-            &mut runtime,
-            Some(sync_report),
-        );
+    let decision = classify_sync_context_gate(
+        &request,
+        &delta,
+        &snapshot.files,
+        &report.files,
+        runtime.source_store,
+        runtime.parser,
+        runtime.store,
+    )?;
+    match decision {
+        SyncContextDecision::FullRebuild(reason) => {
+            let sync_report = sync_fallback_report(
+                Some(snapshot.generation_id.clone()),
+                &report,
+                Some(&delta),
+                reason,
+            );
+            index_repository_full_after_discovery(request, report, &mut runtime, Some(sync_report))
+        }
+        SyncContextDecision::Incremental(base_interfaces) => {
+            index_repository_incremental_after_discovery(
+                request,
+                report,
+                snapshot,
+                delta,
+                base_interfaces,
+                &mut runtime,
+            )
+        }
     }
-
-    index_repository_incremental_after_discovery(request, report, snapshot, delta, &mut runtime)
 }
 
 struct IncrementalSyncPreflight {
@@ -1351,6 +1377,7 @@ fn index_repository_incremental_after_discovery<SourceStoreImpl, SourceParserImp
     report: FileDiscoveryReport,
     snapshot: ActiveClaimInputSnapshot,
     delta: SyncDelta,
+    base_python_interfaces: BTreeMap<String, String>,
     runtime: &mut IndexingRuntime<'_, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>,
 ) -> Result<IndexingOutcome, RepoGrammarError>
 where
@@ -1384,6 +1411,21 @@ where
     let mut stored_files = 0usize;
     for file in &delta.unchanged_files {
         crate::application::storage::record_indexed_file(session.as_mut(), file)?;
+        // Copy the Python interface hash forward for every unchanged `.py` module.
+        // Reaching this path guaranteed every modified module's interface was
+        // unchanged and no `.py` was added or removed, so an unchanged module's
+        // stored hash equals what a full rebuild would recompute (identical
+        // content, identical engine). A module with no stored hash (its build-time
+        // probe failed) is simply skipped; the next sync treats the gap as
+        // `python_interface_unverified` and rebuilds.
+        if file.language == DiscoveredLanguage::Python.as_str() {
+            if let Some(interface_hash) = base_python_interfaces.get(&file.path) {
+                session
+                    .as_mut()
+                    .record_python_module_interface(&file.path, interface_hash)
+                    .map_err(index_store_error)?;
+            }
+        }
         stored_files += 1;
         emit_progress(
             progress,
@@ -1548,6 +1590,12 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
+        // A reparsed `.py` module stores its freshly probed interface hash, exactly
+        // as a full rebuild would. Modified modules reached here only with an
+        // unchanged interface, so the fresh hash equals the copied-forward base
+        // hash of an unchanged module — both paths converge on the full-rebuild
+        // interface table.
+        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
@@ -1814,7 +1862,231 @@ fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
         .map_or(records.len(), |index| index.saturating_add(1))
 }
 
-fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
+/// The incremental-sync context gate decision. Either the delta only touches
+/// file-local and interface-stable inputs and the incremental path is safe
+/// (carrying the base generation's Python interface hashes for copy-forward), or
+/// some change forces a full rebuild with a specific, observable reason.
+enum SyncContextDecision {
+    /// Proceed incrementally. Holds the base generation's `path -> interface_hash`
+    /// map so unchanged Python modules copy their hash forward unchanged.
+    Incremental(BTreeMap<String, String>),
+    /// Rebuild fully. The reason string flows verbatim into
+    /// `IndexingSyncReport.fallback_reason`.
+    FullRebuild(&'static str),
+}
+
+/// Decide whether a computed delta can take the incremental path.
+///
+/// Ordering (first hit wins):
+/// 1. Any add/remove of a project-context path, or any modified config /
+///    `conftest.py` / non-file-local change other than an interface-eligible
+///    Python module edit, forces a full rebuild (`project_context_changed`) —
+///    unchanged from the pre-existing gate.
+/// 2. Otherwise, when the delta modifies any interface-eligible Python module,
+///    the Python context-payload regime is checked: if the whole-project
+///    `parse_document` context could cross the worker's per-request cap (and be
+///    silently dropped) on either the base or the current manifest, a full
+///    rebuild is forced (`python_context_budget`). See
+///    `python_context_budget_is_safe`.
+/// 3. Then every modified interface-eligible Python module is probed: its current
+///    interface hash is compared against the base generation's stored hash. A
+///    missing stored hash or an unverifiable probe yields
+///    `python_interface_unverified`; a differing hash yields
+///    `python_interface_changed`; all-unchanged proceeds incrementally.
+///
+/// `python_interface_unverified` is checked before `python_interface_changed` so
+/// an unprovable module dominates a provably-changed one; both force a full
+/// rebuild, so the precedence is diagnostic only. The probe loop short-circuits
+/// on the first unverified module, since that outcome is already fixed.
+fn classify_sync_context_gate(
+    request: &IndexingRequest,
+    delta: &SyncDelta,
+    base_files: &[IndexedFileRecord],
+    current_files: &[DiscoveredFile],
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    store: &impl PythonModuleInterfaceStore,
+) -> Result<SyncContextDecision, RepoGrammarError> {
+    if sync_delta_forces_full_context_excluding_python_modules(delta) {
+        return Ok(SyncContextDecision::FullRebuild("project_context_changed"));
+    }
+    // The base generation's stored interface hashes are both the comparison
+    // baseline for modified modules and the copy-forward source for unchanged
+    // modules on the incremental path, so load them once here.
+    let base_interfaces = store
+        .active_python_module_interfaces()
+        .map_err(index_store_error)?
+        .into_iter()
+        .map(|record| (record.path, record.interface_hash))
+        .collect::<BTreeMap<_, _>>();
+    let eligible_modules = delta
+        .modified_files
+        .iter()
+        .filter(|file| is_interface_eligible_python_module(file))
+        .collect::<Vec<_>>();
+    // Only a Python *module* modification changes the Python context-payload
+    // sizes; adds/removes and conftest/config edits already fell back above, and a
+    // delta with no modified Python module leaves the sizes byte-identical, so the
+    // budget need only be checked when there is at least one eligible module.
+    if !eligible_modules.is_empty()
+        && !python_context_budget_is_safe(
+            base_files,
+            current_files,
+            MAX_PYTHON_FRONTEND_INPUT_BYTES,
+        )
+    {
+        return Ok(SyncContextDecision::FullRebuild("python_context_budget"));
+    }
+    let mut saw_unverified = false;
+    let mut saw_changed = false;
+    for file in eligible_modules {
+        let Some(base_hash) = base_interfaces.get(&file.path) else {
+            // No stored interface: a build-time probe failed for this module (a
+            // base generation on an older schema is rejected earlier by the
+            // preflight `unsupported_storage_schema` gate, so it never reaches
+            // here). The edit cannot be proven file-local.
+            saw_unverified = true;
+            break;
+        };
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        match parser.extract_python_interface(&file.path, &source.text) {
+            PythonInterfaceProbe::Computed(current_hash) => {
+                if &current_hash != base_hash {
+                    saw_changed = true;
+                }
+            }
+            PythonInterfaceProbe::Unverified => {
+                // Unverified dominates; the decision is fixed, so stop probing.
+                saw_unverified = true;
+                break;
+            }
+        }
+    }
+    if saw_unverified {
+        return Ok(SyncContextDecision::FullRebuild(
+            "python_interface_unverified",
+        ));
+    }
+    if saw_changed {
+        return Ok(SyncContextDecision::FullRebuild("python_interface_changed"));
+    }
+    Ok(SyncContextDecision::Incremental(base_interfaces))
+}
+
+/// Whether the Python whole-project `parse_document` context stays safely under
+/// the worker's per-request byte cap on *both* the base and the current manifest.
+///
+/// The worker ships every `.py` module's text (`module_files`, and every
+/// `conftest.py` again in `conftest_files`) alongside each target document.
+/// `serialize_parse_request` silently drops that context when the serialized
+/// request exceeds [`MAX_PYTHON_FRONTEND_INPUT_BYTES`], so a target parsed near
+/// the cap loses cross-module resolution. A size-changing `.py` edit — even an
+/// interface-stable one — can flip that regime, which would make an incremental
+/// sync's copied-forward sibling facts (parsed under the base regime) diverge
+/// from a clean rebuild's (parsed under the current regime). Requiring both
+/// manifests safely under the cap keeps every module's parse context-complete in
+/// both regimes, so copy-forward matches a clean rebuild.
+///
+/// The estimate is a conservative upper bound from manifest sizes only (no file
+/// reads): raw byte sizes plus fixed per-entry and envelope overhead, then a 2x
+/// escaping-headroom factor. JSON string escaping of valid Python source is at
+/// most ~2x (newlines, quotes, and backslashes each encode to two bytes;
+/// control-char-dense content fails Python tokenization), so `raw * 2 < cap`
+/// implies the real serialized request is under the cap.
+fn python_context_budget_is_safe(
+    base_files: &[IndexedFileRecord],
+    current_files: &[DiscoveredFile],
+    max_request_bytes: usize,
+) -> bool {
+    let cap = max_request_bytes as u128;
+    let base = python_context_request_raw_estimate(
+        base_files
+            .iter()
+            .filter(|file| file.language == DiscoveredLanguage::Python.as_str())
+            .map(|file| {
+                (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    is_python_conftest_path(&file.path),
+                )
+            }),
+    );
+    let current = python_context_request_raw_estimate(
+        current_files
+            .iter()
+            .filter(|file| file.language == DiscoveredLanguage::Python)
+            .map(|file| {
+                (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    is_python_conftest_path(&file.path),
+                )
+            }),
+    );
+    base.saturating_mul(PYTHON_CONTEXT_ESCAPE_HEADROOM) < cap
+        && current.saturating_mul(PYTHON_CONTEXT_ESCAPE_HEADROOM) < cap
+}
+
+/// Fixed overhead (bytes) of a `parse_document` request envelope minus the
+/// Python context payload: protocol/contract/mode/path/content-hash/revision keys
+/// and the surrounding JSON structure. Generously over-estimated.
+const PYTHON_CONTEXT_ENVELOPE_OVERHEAD: u128 = 4096;
+/// Fixed JSON overhead (bytes) charged per `.py` module for its `module_files`
+/// object braces, keys, and quotes.
+const PYTHON_CONTEXT_PER_FILE_OVERHEAD: u128 = 64;
+/// Multiplier applied to the raw estimate to bound JSON string escaping of valid
+/// Python source before comparing against the request cap.
+const PYTHON_CONTEXT_ESCAPE_HEADROOM: u128 = 2;
+
+/// Conservative raw byte estimate of the largest `parse_document` request over a
+/// Python file set (each item is `(path, size_bytes, is_conftest)`). Sums the
+/// `module_files` payload (every text once), the `conftest_files` payload
+/// (conftest text a second time), the `module_paths` list, one target document's
+/// text, and fixed overhead. Escaping headroom is applied by the caller.
+fn python_context_request_raw_estimate<'a>(
+    files: impl Iterator<Item = (&'a str, u64, bool)>,
+) -> u128 {
+    let mut total = PYTHON_CONTEXT_ENVELOPE_OVERHEAD;
+    let mut max_file = 0u128;
+    for (path, size, is_conftest) in files {
+        let size = u128::from(size);
+        let path_len = path.len() as u128;
+        // `module_files` entry {"path":...,"text":...} plus the `module_paths`
+        // entry: the text once, the path twice, and per-file structural overhead.
+        total = total.saturating_add(size + 2 * path_len + 2 * PYTHON_CONTEXT_PER_FILE_OVERHEAD);
+        if is_conftest {
+            // conftest text is shipped a second time in `conftest_files`.
+            total = total.saturating_add(size + path_len + PYTHON_CONTEXT_PER_FILE_OVERHEAD);
+        }
+        max_file = max_file.max(size);
+    }
+    // The target document's own text is shipped once more in the envelope.
+    total.saturating_add(max_file)
+}
+
+/// A modified file is interface-eligible only when it is a discovered Python
+/// module (`DiscoveredLanguage::Python`, so not a `*Config` classification such
+/// as root `setup.py`/`setup.cfg`/`pyproject.toml`) and not a `conftest.py`.
+/// `conftest.py` alters ancestor fixture context for a whole subtree, and root
+/// configs alter source roots — neither is captured by a module's interface
+/// projection, so both keep full-rebuild behavior regardless of interface.
+fn is_interface_eligible_python_module(file: &DiscoveredFile) -> bool {
+    file.language == DiscoveredLanguage::Python && !is_python_conftest_path(&file.path)
+}
+
+/// The syntactic half of the context gate: every project-context change that
+/// forces a full rebuild *except* an interface-eligible Python module edit
+/// (which the caller resolves with an interface probe). This is the pre-existing
+/// `sync_delta_touches_project_context` behavior with modified Python modules
+/// carved out for the interface check.
+fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) -> bool {
     // Adds and removes of a project-context path change that language's discovered
     // path set (Python module index, Rust `mod` candidates, TS/JS import
     // resolution), which can alter how *other* files parse, so they always force a
@@ -1833,13 +2105,17 @@ fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
         )
         .any(sync_path_requires_full_project_context);
     // A content-only modification (same path present in both manifests, changed
-    // hash) forces a full rebuild only when the edit could still change another
-    // file's parse. See `modified_file_requires_full_project_context`.
+    // hash) forces a full rebuild when the edit could still change another file's
+    // parse (see `modified_file_requires_full_project_context`), unless it is an
+    // interface-eligible Python module — those defer to the interface probe.
     let modified = delta
         .modified_files
         .iter()
         .filter(|file| !discovered_language_is_inventory_only(file.language))
-        .any(modified_file_requires_full_project_context);
+        .any(|file| {
+            modified_file_requires_full_project_context(file)
+                && !is_interface_eligible_python_module(file)
+        });
     added_or_removed || modified
 }
 
@@ -2415,6 +2691,32 @@ fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact])
         }
     }
     roots.into_iter().collect()
+}
+
+/// Record the interface hash of a just-parsed `.py` module (schema v10
+/// `python_module_interfaces`), so a later sync can decide whether an edit to it
+/// is file-local. Uses the same worker probe the preflight uses, so build-time
+/// and preflight hashes are computed by identical code. Non-Python files store
+/// nothing. An `Unverified` probe during a build is not fatal — the module keeps
+/// no stored hash and the next sync conservatively rebuilds — so a transient
+/// worker hiccup can never corrupt the build.
+fn record_python_module_interface_if_python(
+    session: &mut dyn GenerationWriteSession,
+    parser: &impl SourceParser,
+    file: &DiscoveredFile,
+    text: &str,
+) -> Result<(), RepoGrammarError> {
+    if file.language != DiscoveredLanguage::Python {
+        return Ok(());
+    }
+    if let PythonInterfaceProbe::Computed(interface_hash) =
+        parser.extract_python_interface(&file.path, text)
+    {
+        session
+            .record_python_module_interface(&file.path, &interface_hash)
+            .map_err(index_store_error)?;
+    }
+    Ok(())
 }
 
 fn record_parse_report(
@@ -5218,6 +5520,402 @@ mod tests {
         assert_eq!(report.modified_files, 1);
     }
 
+    fn gate_discovered_file(path: &str, language: DiscoveredLanguage) -> DiscoveredFile {
+        DiscoveredFile {
+            path: path.to_string(),
+            language,
+            content_hash: crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            size_bytes: 1,
+        }
+    }
+
+    struct GateStubSourceStore;
+    impl SourceStore for GateStubSourceStore {
+        fn read_source(
+            &self,
+            request: SourceReadRequest,
+        ) -> Result<crate::ports::source_store::SourceText, SourceStoreError> {
+            Ok(crate::ports::source_store::SourceText {
+                path: request.path,
+                content_hash: request.expected_content_hash,
+                text: String::new(),
+            })
+        }
+    }
+
+    struct GateStubParser {
+        probes: BTreeMap<String, PythonInterfaceProbe>,
+    }
+    impl SourceParser for GateStubParser {
+        fn parse(&self, _document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            unreachable!("the context gate never calls parse")
+        }
+        fn extract_python_interface(&self, path: &str, _text: &str) -> PythonInterfaceProbe {
+            self.probes
+                .get(path)
+                .cloned()
+                .unwrap_or(PythonInterfaceProbe::Unverified)
+        }
+    }
+
+    struct GateStubInterfaceStore {
+        records: Vec<crate::ports::index_store::PythonModuleInterfaceRecord>,
+    }
+    impl PythonModuleInterfaceStore for GateStubInterfaceStore {
+        fn active_python_module_interfaces(
+            &self,
+        ) -> Result<Vec<crate::ports::index_store::PythonModuleInterfaceRecord>, IndexStoreError>
+        {
+            Ok(self.records.clone())
+        }
+    }
+
+    fn gate_interface_record(
+        path: &str,
+        hash: &str,
+    ) -> crate::ports::index_store::PythonModuleInterfaceRecord {
+        crate::ports::index_store::PythonModuleInterfaceRecord {
+            path: path.to_string(),
+            interface_hash: hash.to_string(),
+        }
+    }
+
+    fn indexed_from_discovered(file: &DiscoveredFile) -> IndexedFileRecord {
+        IndexedFileRecord {
+            path: file.path.clone(),
+            content_hash: file.content_hash.clone(),
+            size_bytes: file.size_bytes,
+            language: file.language.as_str().to_string(),
+        }
+    }
+
+    fn run_gate(
+        modified: Vec<DiscoveredFile>,
+        added: Vec<DiscoveredFile>,
+        base: Vec<crate::ports::index_store::PythonModuleInterfaceRecord>,
+        probes: BTreeMap<String, PythonInterfaceProbe>,
+    ) -> SyncContextDecision {
+        // The synthetic manifests keep the Python context payload tiny (the stub
+        // files default to 1 byte), so the budget gate is trivially safe and these
+        // cases exercise the interface logic only. The near-cap regime is covered
+        // separately by the `python_context_budget_*` tests.
+        let current_files: Vec<DiscoveredFile> =
+            modified.iter().chain(added.iter()).cloned().collect();
+        let base_files: Vec<IndexedFileRecord> =
+            modified.iter().map(indexed_from_discovered).collect();
+        let delta = SyncDelta {
+            added_files: added,
+            modified_files: modified,
+            removed_files: Vec::new(),
+            unchanged_files: Vec::new(),
+        };
+        classify_sync_context_gate(
+            &IndexingRequest::new("/repo"),
+            &delta,
+            &base_files,
+            &current_files,
+            &GateStubSourceStore,
+            &GateStubParser { probes },
+            &GateStubInterfaceStore { records: base },
+        )
+        .expect("gate classification")
+    }
+
+    fn probe_map(
+        entries: &[(&str, PythonInterfaceProbe)],
+    ) -> BTreeMap<String, PythonInterfaceProbe> {
+        entries
+            .iter()
+            .map(|(path, probe)| ((*path).to_string(), probe.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn gate_python_body_edit_stable_interface_is_incremental() {
+        // A modified `.py` whose probed interface equals its stored base hash is a
+        // body-only edit: file-local, incremental.
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(decision, SyncContextDecision::Incremental(_)));
+    }
+
+    #[test]
+    fn gate_python_interface_edit_falls_back_changed() {
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:def".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_python_unverifiable_probe_falls_back_unverified() {
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[("app.py", PythonInterfaceProbe::Unverified)]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    #[test]
+    fn gate_python_missing_base_hash_falls_back_unverified() {
+        // No stored interface (base predates schema v10): cannot prove file-local.
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            Vec::new(),
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    #[test]
+    fn gate_modified_conftest_falls_back_without_probing_interface() {
+        // A conftest edit is excluded from the interface fast path and forces a
+        // full rebuild even though its interface hash would be probed as stable.
+        // The stub parser would panic-return `Unverified` for an unmapped path, so
+        // an `Incremental`/`unverified` outcome here would prove the conftest was
+        // wrongly interface-probed; `project_context_changed` proves it was not.
+        let decision = run_gate(
+            vec![gate_discovered_file(
+                "pkg/conftest.py",
+                DiscoveredLanguage::Python,
+            )],
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("project_context_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_added_python_module_falls_back_project_context() {
+        let decision = run_gate(
+            Vec::new(),
+            vec![gate_discovered_file(
+                "new_module.py",
+                DiscoveredLanguage::Python,
+            )],
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("project_context_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_mixed_python_body_and_rust_content_edit_is_incremental() {
+        // A stable-interface `.py` edit plus a file-local Rust content edit are
+        // both incremental; the Rust file never reaches the interface probe.
+        let decision = run_gate(
+            vec![
+                gate_discovered_file("app.py", DiscoveredLanguage::Python),
+                gate_discovered_file("lib.rs", DiscoveredLanguage::Rust),
+            ],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(decision, SyncContextDecision::Incremental(_)));
+    }
+
+    #[test]
+    fn gate_mixed_unverified_dominates_changed() {
+        // With one unverifiable module and one provably-changed module, the
+        // unverified reason wins (documented precedence); both force a full
+        // rebuild.
+        let decision = run_gate(
+            vec![
+                gate_discovered_file("a.py", DiscoveredLanguage::Python),
+                gate_discovered_file("b.py", DiscoveredLanguage::Python),
+            ],
+            Vec::new(),
+            vec![
+                gate_interface_record("a.py", "sha256:aaa"),
+                gate_interface_record("b.py", "sha256:bbb"),
+            ],
+            probe_map(&[
+                ("a.py", PythonInterfaceProbe::Unverified),
+                (
+                    "b.py",
+                    PythonInterfaceProbe::Computed("sha256:changed".into()),
+                ),
+            ]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    fn gate_discovered_file_sized(
+        path: &str,
+        language: DiscoveredLanguage,
+        size_bytes: u64,
+    ) -> DiscoveredFile {
+        DiscoveredFile {
+            size_bytes,
+            ..gate_discovered_file(path, language)
+        }
+    }
+
+    #[test]
+    fn gate_python_modification_over_context_budget_falls_back_before_probing() {
+        // A Python module large enough to push the whole-project `parse_document`
+        // context across the real 1 MiB cap forces a full rebuild on the budget
+        // gate, before the interface is even probed (the stub parser would report a
+        // matching hash, which must not win). This closes the context-omission
+        // channel where a size change flips how sibling modules parse.
+        let decision = run_gate(
+            vec![gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                2 * 1024 * 1024,
+            )],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_context_budget")
+        ));
+    }
+
+    fn budget_base(path: &str, size: u64) -> IndexedFileRecord {
+        IndexedFileRecord {
+            path: path.to_string(),
+            content_hash: crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            size_bytes: size,
+            language: DiscoveredLanguage::Python.as_str().to_string(),
+        }
+    }
+
+    #[test]
+    fn python_context_budget_is_safe_under_and_over_an_injected_cap() {
+        let cap = 100_000usize;
+        // Both manifests comfortably under the cap after the 2x escaping headroom.
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 20_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                20_000
+            )],
+            cap,
+        ));
+        // The current manifest grew past the cap: the current-regime parses could
+        // drop context, so a size-stable copy-forward would diverge — unsafe.
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("app.py", 20_000)],
+            &[
+                gate_discovered_file_sized("app.py", DiscoveredLanguage::Python, 20_000),
+                gate_discovered_file_sized("extra.py", DiscoveredLanguage::Python, 20_000),
+            ],
+            cap,
+        ));
+        // Regime flip the other way: the base manifest was over the cap while the
+        // current one is under — also unsafe (the copied base facts were parsed
+        // context-omitted).
+        assert!(!python_context_budget_is_safe(
+            &[
+                budget_base("app.py", 20_000),
+                budget_base("extra.py", 20_000),
+            ],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                20_000
+            )],
+            cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_ignores_non_python_manifest_bytes() {
+        // A large Rust or config file does not enter the Python context payload, so
+        // it must not trip the Python budget.
+        let cap = 100_000usize;
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 10_000)],
+            &[
+                gate_discovered_file_sized("app.py", DiscoveredLanguage::Python, 10_000),
+                gate_discovered_file_sized("huge.rs", DiscoveredLanguage::Rust, 10_000_000),
+            ],
+            cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_counts_conftest_text_twice() {
+        // conftest text ships in both `module_files` and `conftest_files`, so a
+        // conftest of a given size consumes more budget than a plain module of the
+        // same size. At a cap tuned between the two, the module is safe and the
+        // conftest is not.
+        let cap = 210_000usize;
+        assert!(python_context_budget_is_safe(
+            &[budget_base("pkg/app.py", 50_000)],
+            &[gate_discovered_file_sized(
+                "pkg/app.py",
+                DiscoveredLanguage::Python,
+                50_000
+            )],
+            cap,
+        ));
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("pkg/conftest.py", 50_000)],
+            &[gate_discovered_file_sized(
+                "pkg/conftest.py",
+                DiscoveredLanguage::Python,
+                50_000
+            )],
+            cap,
+        ));
+    }
+
     #[test]
     fn language_is_file_local_source_covers_rust_and_tsjs_only() {
         for language in [
@@ -5350,6 +6048,211 @@ mod tests {
         assert_eq!(report.reparsed_files, 1);
     }
 
+    const PY_APP_BODY_DEFAULT: &str =
+        "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
+
+    #[test]
+    fn python_body_edit_stable_interface_takes_incremental_fast_path() {
+        // A Python function-body edit that leaves the module's top-level symbol
+        // surface unchanged has a stable interface hash, so the preflight keeps it
+        // on the file-local incremental path: only the edited module is reparsed
+        // and its sibling module copies forward.
+        let workspace = TempWorkspace::new("indexing-python-body-edit-fast-path");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        fs::write(
+            workspace.path().join("helpers.py"),
+            "def helper() -> int:\n    return 1\n",
+        )
+        .expect("write sibling Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"primary\"\n\n\ndef list_ids() -> list[int]:\n    return []\n",
+        )
+        .expect("edit Python body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python body edit");
+        let report = synced.sync_report.expect("Python body edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn python_interface_edit_forces_full_rebuild_fallback() {
+        // Adding a top-level function changes the module's exported symbol surface,
+        // so its interface hash changes and the preflight falls back to a full
+        // rebuild with the specific `python_interface_changed` reason.
+        let workspace = TempWorkspace::new("indexing-python-interface-edit-fallback");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n\n\ndef added_public() -> int:\n    return 2\n",
+        )
+        .expect("add a top-level Python function");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python interface edit");
+        let report = synced
+            .sync_report
+            .expect("Python interface edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("python_interface_changed")
+        );
+    }
+
+    #[test]
+    fn python_conftest_edit_forces_full_rebuild_fallback() {
+        // A `conftest.py` edit alters ancestor fixture context for its subtree,
+        // which the module interface projection does not model, so it always forces
+        // a full rebuild regardless of interface hash.
+        let workspace = TempWorkspace::new("indexing-python-conftest-edit-fallback");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        fs::write(
+            workspace.path().join("conftest.py"),
+            "import pytest\n\n\n@pytest.fixture\ndef tenant() -> str:\n    return \"default\"\n",
+        )
+        .expect("write conftest");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture with conftest");
+
+        fs::write(
+            workspace.path().join("conftest.py"),
+            "import pytest\n\n\n@pytest.fixture\ndef tenant() -> str:\n    return \"primary\"\n",
+        )
+        .expect("edit conftest body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after conftest edit");
+        let report = synced.sync_report.expect("conftest edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+    }
+
+    #[test]
+    fn repeated_python_body_edits_stay_incremental() {
+        // The interface hash is copied forward for unchanged modules and rewritten
+        // for reparsed modules, so a second body edit still finds a stored base
+        // hash and stays incremental — the fast path does not decay after one sync.
+        let workspace = TempWorkspace::new("indexing-python-repeated-body-edit");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        for body in ["one", "two"] {
+            fs::write(
+                workspace.path().join("app.py"),
+                format!(
+                    "def current_tenant() -> str:\n    return \"{body}\"\n\n\ndef list_ids() -> list[int]:\n    return []\n"
+                ),
+            )
+            .expect("edit Python body");
+            let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+                request(),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &parser,
+                &detector,
+                &store,
+            )
+            .expect("sync after Python body edit");
+            let report = synced.sync_report.expect("Python body edit sync report");
+            assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+            assert_eq!(report.fallback_reason, None);
+            assert_eq!(report.reparsed_files, 1);
+        }
+    }
+
     #[test]
     fn added_rust_source_forces_full_rebuild() {
         // Adding a Rust source file grows `rust_module_paths`, which can change how
@@ -5453,11 +6356,14 @@ mod tests {
     }
 
     #[test]
-    fn python_content_edit_still_forces_full_rebuild() {
-        // The narrowing must not relax Python: its parser consumes the text of
-        // every module (`python_module_files`), so even a content-only Python edit
-        // can change another file's parse and must keep forcing a full rebuild.
-        let workspace = TempWorkspace::new("indexing-python-content-edit-fallback");
+    fn python_stable_interface_content_edit_takes_incremental_fast_path() {
+        // S2b narrows the S2 rule that any Python edit forces a full rebuild: a
+        // content-only edit whose module interface projection (top-level symbols,
+        // `__all__`, `__init__` re-exports) is unchanged is provably file-local,
+        // because the interface is the only channel by which the module's text
+        // reaches another file's parse. The same edit that S2 rebuilt fully now
+        // stays incremental under the interface gate.
+        let workspace = TempWorkspace::new("indexing-python-content-edit-incremental");
         fs::write(
             workspace.path().join("app.py"),
             "def value():\n    return \"default\"\n",
@@ -5495,12 +6401,10 @@ mod tests {
         )
         .expect("sync after Python content edit");
         let report = synced.sync_report.expect("Python edit sync report");
-        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
-        assert_eq!(
-            report.fallback_reason.as_deref(),
-            Some("project_context_changed")
-        );
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
         assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
     }
 
     #[test]

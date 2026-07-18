@@ -1179,12 +1179,14 @@ edit is invisible to polling until another change or a manual `sync` runs; the
 authoritative `sync` always recomputes content hashes. Incremental `sync`
 copy-forwards unchanged active records into a new building generation only
 after the project-context gate passes. A content-only edit of a Rust or TS/JS
-source file takes the incremental fast path; adding or removing any
-project-context source file, editing any `.py` source (including `conftest.py`),
-and adding, editing, or removing any project-config file fall back to a full
-rebuild (see the gate table below). Current inventory-only Go, PHP, Ruby, and
-Swift source/config tokens are the explicit exceptions described above. When
-safe, incremental `sync`
+source file takes the incremental fast path, as does a content-only edit of a
+`.py` module whose interface projection is unchanged (see the Python
+interface-hash gate below). Adding or removing any project-context source file,
+editing any `.py` module whose interface changed or could not be verified,
+editing any `conftest.py`, and adding, editing, or removing any project-config
+file fall back to a full rebuild (see the gate table below). Current
+inventory-only Go, PHP, Ruby, and Swift source/config tokens are the explicit
+exceptions described above. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
@@ -1203,9 +1205,13 @@ appears in both the base and the current manifest with a changed content hash
 | Change class | Paths | Sync outcome |
 |---|---|---|
 | Content-only modify | `.rs`/`.ts`/`.tsx`/`.js`/`.jsx` source | incremental — reparse the edited file only |
-| Content-only modify | `.py` source, `conftest.py` | full-rebuild fallback |
-| Content-only modify | any discovered project-config file | full-rebuild fallback |
-| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or any project-config file | full-rebuild fallback |
+| Content-only modify | `.py` module, interface hash unchanged, context payload safely under cap | incremental — reparse the edited file only |
+| Content-only modify | `.py` module, interface hash changed | full-rebuild fallback (`python_interface_changed`) |
+| Content-only modify | `.py` module, interface unverifiable (worker error/timeout, or a build-time probe failure left no stored hash) | full-rebuild fallback (`python_interface_unverified`) |
+| Content-only modify | `.py` module, whole-project context payload near/over the worker request cap on either manifest | full-rebuild fallback (`python_context_budget`) |
+| Content-only modify | `conftest.py` | full-rebuild fallback (`project_context_changed`) |
+| Content-only modify | any discovered project-config file | full-rebuild fallback (`project_context_changed`) |
+| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or any project-config file | full-rebuild fallback (`project_context_changed`) |
 | Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
 
 The content-only Rust and TS/JS fast path is sound because their parsers consume
@@ -1217,14 +1223,69 @@ edit (same path, changed hash, no add/remove) leaves every language path set and
 every root configuration byte-identical, so it cannot change how any other file
 parses. Exactly the edited file is reparsed with the freshly rebuilt full
 context, every unchanged file copies forward, and derived support and families
-still recompute globally over the merged fact set. Python is excluded because its
-parser consumes the text of every module (`python_module_files`) and every
-`conftest.py` (`python_conftest_files`), so a Python edit can change another
-file's parse. Adds and removes change the path set itself — Python module
-identity, Rust `mod` candidate resolution, TS/JS import specifier resolution — and
-therefore still force a full rebuild. A configured semantic worker still forces a
-full rebuild every run (`semantic_worker_requires_full_rebuild`); the fast path
-applies to worker-less operation.
+still recompute globally over the merged fact set. Adds and removes change the
+path set itself — Python module identity, Rust `mod` candidate resolution, TS/JS
+import specifier resolution — and therefore still force a full rebuild. A
+configured semantic worker still forces a full rebuild every run
+(`semantic_worker_requires_full_rebuild`); the fast path applies to worker-less
+operation. That rule covers the semantic worker only — the Python interface probe
+below reuses the frontend parse worker and never runs when a semantic worker is
+configured, because the semantic-worker fallback fires first in preflight.
+
+### Python interface-hash gate
+
+Python is the only language whose parser consumes other files' text: each
+module's parse depends on a per-module *interface projection* of every other
+module — its top-level symbol surface, its literal `__all__` (or a non-literal
+marker), and, for a package `__init__`, its re-export `ImportFrom` items. This
+projection is the sole channel by which a module's text reaches another module's
+parse (`python_module_files`; see `docs/specifications/python-analysis.md`).
+Therefore a content-only `.py` edit is provably file-local **iff** the module's
+interface projection is byte-identical before and after the edit, the file is not
+a `conftest.py`, no add/remove/rename occurred, **and** the whole-project Python
+context payload stays safely under the worker's per-request byte cap on both the
+base and the current manifest (see the payload-regime condition below).
+
+To decide this before parsing, indexing persists each Python module's interface
+hash at build time (schema v10 `python_module_interfaces`, computed by the
+frontend worker's `extract_interface` mode) and, at sync preflight for a
+Python-modified delta, re-probes each modified module's current interface hash
+with one bounded worker call per file. When every modified module's hash equals
+its stored base hash, the cross-file context every *other* module sees is
+byte-identical, so the modified modules reparse in isolation (with the freshly
+rebuilt full context) and every unchanged module — including its interface hash —
+copies forward, matching a clean full rebuild exactly. A changed hash falls back
+with `python_interface_changed`; a hash that cannot be computed or has no stored
+base falls back with `python_interface_unverified` (a stored hash is absent only
+when a module's build-time interface probe failed — a base generation on an older
+schema is rejected earlier by the preflight `unsupported_storage_schema` gate and
+never reaches here). The probe never guesses an interface.
+
+**Payload-regime condition.** The frontend `parse_document` request ships every
+`.py` module's text as whole-project context (`module_files`, plus every
+`conftest.py` again in `conftest_files`). When the serialized request exceeds the
+worker's per-request byte cap, that context is *silently dropped* and the target
+is parsed without cross-module resolution. A size-changing `.py` edit — even an
+interface-stable one — can therefore flip whether sibling modules are parsed with
+or without context, which would make an incremental sync's copied-forward sibling
+facts (parsed under the base regime) diverge from a clean rebuild's (parsed under
+the current regime). The gate closes this by requiring the aggregate Python
+context payload to stay safely under the cap on **both** the base and the current
+manifest, estimated conservatively from manifest sizes alone (no file reads): raw
+byte sizes plus fixed per-entry/envelope overhead, times a 2x headroom that
+bounds JSON escaping of valid source. If either manifest is near or over the cap,
+the sync falls back with `python_context_budget`. The check runs only when the
+delta modifies a Python module, since adds/removes and conftest/config edits
+already fall back and a delta with no modified module leaves the sizes
+byte-identical.
+
+This wave implements the sound conservative core only: an interface-changed edit
+falls back to a full rebuild rather than computing a reverse-import invalidation
+closure. `conftest.py` is deliberately excluded because it alters ancestor
+pytest-fixture context for a whole subtree, which the module interface projection
+does not model, and root `setup.py`/`setup.cfg`/`pyproject.toml` are discovered
+as project config (not modules), so both keep full-rebuild behavior regardless of
+any interface hash.
 
 The config set that forces a full rebuild on any add, modify, or remove covers
 root `package.json`, `tsconfig.json`, `jsconfig.json`,
@@ -1250,10 +1311,14 @@ The full-rebuild fallback reason vocabulary reported on
 `IndexingSyncReport.fallback_reason` is: `legacy_or_empty_storage_layout`,
 `unsupported_storage_schema`, `missing_active_generation`,
 `active_dirty_records`, `semantic_worker_requires_full_rebuild`,
-`engine_version_changed` (preflight, in that order), and
-`project_context_changed` (the post-delta project-context gate). Each fallback
-is a valid, recorded outcome; the incremental path is entered only when none
-apply.
+`engine_version_changed` (preflight, in that order), `project_context_changed`
+(the post-delta project-context gate), and — when the only project-context change
+is a modified `.py` module — `python_context_budget` (the payload-regime check,
+evaluated first), then `python_interface_changed` or `python_interface_unverified`
+(the Python interface-hash gate; `python_interface_unverified` is checked before
+`python_interface_changed`, so an unverifiable module dominates a provably-changed
+one). Each fallback is a valid, recorded outcome; the incremental path is entered
+only when none apply.
 
 Every narrowing of this gate is guarded by the incremental/full-build
 equivalence oracle: for an active state and a scripted patch, `repo-guard

@@ -3697,6 +3697,11 @@ struct SyncEquivalenceScenario {
     apply: fn(&Path) -> Result<(), String>,
     expected_outcome: &'static str,
     expected_fallback_reason: Option<&'static str>,
+    /// When set, the observed `reparsed_files` in the sync report must match
+    /// exactly. Used to prove a file-local incremental path reparsed only the
+    /// edited file(s) rather than silently rebuilding more; `None` skips the
+    /// check (e.g. every full-rebuild fallback, which reparses everything).
+    expected_reparsed_files: Option<usize>,
 }
 
 const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
@@ -3706,6 +3711,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_java_edit,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "csharp_edit",
@@ -3713,6 +3719,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_csharp_edit,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "docs_noop",
@@ -3720,6 +3727,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_docs_noop,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "java_add",
@@ -3727,6 +3735,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_java_add,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "java_delete",
@@ -3734,6 +3743,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_java_delete,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "rs_content_edit",
@@ -3741,6 +3751,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_rs_content_edit,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: Some(1),
     },
     SyncEquivalenceScenario {
         id: "tsjs_content_edit",
@@ -3748,6 +3759,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_tsjs_content_edit,
         expected_outcome: "EQUAL",
         expected_fallback_reason: None,
+        expected_reparsed_files: Some(1),
     },
     SyncEquivalenceScenario {
         id: "tsjs_add",
@@ -3755,6 +3767,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_tsjs_add,
         expected_outcome: "FELL_BACK",
         expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "rs_add",
@@ -3762,6 +3775,7 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_rs_add,
         expected_outcome: "FELL_BACK",
         expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
         id: "mocharc_remove",
@@ -3769,13 +3783,34 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         apply: patch_mocharc_remove,
         expected_outcome: "FELL_BACK",
         expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
     },
     SyncEquivalenceScenario {
-        id: "python_edit",
-        patch_summary: "modify a Python body (forces full rebuild today: recorded fallback)",
-        apply: patch_python_edit,
+        id: "python_body_edit",
+        patch_summary:
+            "modify a Python function body (interface unchanged: file-local incremental)",
+        apply: patch_python_body_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        // Only the edited module is reparsed; the sibling conftest copies forward.
+        expected_reparsed_files: Some(1),
+    },
+    SyncEquivalenceScenario {
+        id: "python_interface_edit",
+        patch_summary: "add a top-level Python function (interface changes: fallback)",
+        apply: patch_python_interface_edit,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("python_interface_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "python_conftest_edit",
+        patch_summary:
+            "modify a conftest.py body (fixture context: fallback regardless of interface)",
+        apply: patch_python_conftest_edit,
         expected_outcome: "FELL_BACK",
         expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
     },
 ];
 
@@ -3877,10 +3912,42 @@ fn patch_mocharc_remove(project: &Path) -> Result<(), String> {
         .map_err(|_| "could not delete scenario file '.mocharc.json'".to_string())
 }
 
-fn patch_python_edit(project: &Path) -> Result<(), String> {
+fn patch_python_body_edit(project: &Path) -> Result<(), String> {
+    // A function-body edit that leaves every top-level symbol, `__all__`, and
+    // `__init__` re-export untouched: the module interface hash is stable, so the
+    // edit is provably file-local. Only `analytics/app.py` reparses; its sibling
+    // `analytics/conftest.py` copies forward, and the result must equal a clean
+    // rebuild exactly.
     sync_equivalence_replace_once(
         project,
         "analytics/app.py",
+        "return \"default\"",
+        "return \"primary\"",
+    )
+}
+
+fn patch_python_interface_edit(project: &Path) -> Result<(), String> {
+    // Adding a top-level function changes `analytics/app.py`'s exported symbol
+    // surface, so the interface hash changes and the preflight must fall back to
+    // a full rebuild rather than reparse the file in isolation (another module
+    // could resolve the new symbol).
+    sync_equivalence_replace_once(
+        project,
+        "analytics/app.py",
+        "def current_tenant() -> str:",
+        "def new_public_helper() -> int:\n    return 0\n\n\ndef current_tenant() -> str:",
+    )
+}
+
+fn patch_python_conftest_edit(project: &Path) -> Result<(), String> {
+    // A `conftest.py` edit alters ancestor pytest-fixture context for its whole
+    // subtree, which the module interface projection deliberately does not model,
+    // so a conftest change always forces a full rebuild regardless of its
+    // interface hash. This is the safety carve-out that keeps the interface fast
+    // path sound.
+    sync_equivalence_replace_once(
+        project,
+        "analytics/conftest.py",
         "return \"default\"",
         "return \"primary\"",
     )
@@ -4407,6 +4474,8 @@ struct SyncEquivalenceScenarioResult {
     patch_summary: &'static str,
     sync_mode: String,
     fallback_reason: Option<String>,
+    reparsed_files: Option<u64>,
+    expected_reparsed_files: Option<usize>,
     equal: bool,
     outcome: &'static str,
     expected_outcome: &'static str,
@@ -4478,10 +4547,16 @@ fn sync_equivalence_compare(
 fn sync_equivalence_scenario_passes(
     outcome: &str,
     fallback_reason: Option<&str>,
+    reparsed_files: Option<u64>,
     expected_outcome: &str,
     expected_fallback_reason: Option<&str>,
+    expected_reparsed_files: Option<usize>,
 ) -> bool {
-    outcome == expected_outcome && fallback_reason == expected_fallback_reason
+    let reparsed_ok = match expected_reparsed_files {
+        Some(expected) => reparsed_files == Some(expected as u64),
+        None => true,
+    };
+    outcome == expected_outcome && fallback_reason == expected_fallback_reason && reparsed_ok
 }
 
 fn run_sync_equivalence_scenario(
@@ -4505,6 +4580,9 @@ fn run_sync_equivalence_scenario(
         .get("fallback_reason")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let reparsed_files = sync_value
+        .get("reparsed_files")
+        .and_then(serde_json::Value::as_u64);
     let incremental_dump = incremental_workspace.dump_state()?;
 
     // Workspace C: patch first, then a clean full build over the same worktree.
@@ -4527,14 +4605,18 @@ fn run_sync_equivalence_scenario(
     let pass = sync_equivalence_scenario_passes(
         outcome,
         fallback_reason.as_deref(),
+        reparsed_files,
         scenario.expected_outcome,
         scenario.expected_fallback_reason,
+        scenario.expected_reparsed_files,
     );
     Ok(SyncEquivalenceScenarioResult {
         id: scenario.id,
         patch_summary: scenario.patch_summary,
         sync_mode,
         fallback_reason,
+        reparsed_files,
+        expected_reparsed_files: scenario.expected_reparsed_files,
         equal,
         outcome,
         expected_outcome: scenario.expected_outcome,
@@ -4570,6 +4652,8 @@ fn sync_equivalence_report(
                 "patch_summary": result.patch_summary,
                 "sync_mode": result.sync_mode,
                 "fallback_reason": result.fallback_reason,
+                "reparsed_files": result.reparsed_files,
+                "expected_reparsed_files": result.expected_reparsed_files,
                 "equal": result.equal,
                 "outcome": result.outcome,
                 "expected_outcome": result.expected_outcome,
@@ -9115,42 +9199,69 @@ verify-stable-release-evidence --evidence-dir evidence
 
     #[test]
     fn sync_equivalence_scenario_pass_gate_is_not_trivially_satisfiable() {
-        // Expected EQUAL, incremental path: passes.
+        // Expected EQUAL, incremental path, no reparsed-count expectation: passes.
         assert!(sync_equivalence_scenario_passes(
-            "EQUAL", None, "EQUAL", None
+            "EQUAL", None, None, "EQUAL", None, None
         ));
         // Expected FELL_BACK with a reason: passes on the exact reason.
         assert!(sync_equivalence_scenario_passes(
             "FELL_BACK",
             Some("project_context_changed"),
+            None,
             "FELL_BACK",
             Some("project_context_changed"),
+            None,
+        ));
+        // Expected EQUAL with a reparsed-count expectation that matches: passes.
+        assert!(sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            Some(1),
+            "EQUAL",
+            None,
+            Some(1),
         ));
         // Gate regression: an expected fallback silently ran incrementally and
         // was (vacuously) EQUAL — must FAIL.
         assert!(!sync_equivalence_scenario_passes(
             "EQUAL",
             None,
+            None,
             "FELL_BACK",
             Some("project_context_changed"),
+            None,
         ));
         // Preflight misfire: an expected-incremental scenario fell back — fail.
         assert!(!sync_equivalence_scenario_passes(
             "FELL_BACK",
             Some("engine_version_changed"),
+            None,
             "EQUAL",
+            None,
             None,
         ));
         // Right outcome, wrong reason — fail.
         assert!(!sync_equivalence_scenario_passes(
             "FELL_BACK",
             Some("engine_version_changed"),
+            None,
             "FELL_BACK",
             Some("project_context_changed"),
+            None,
+        ));
+        // Right outcome, but reparsed more files than the file-local path should —
+        // fail (this is what catches a fast path that silently reparsed too much).
+        assert!(!sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            Some(3),
+            "EQUAL",
+            None,
+            Some(1),
         ));
         // Any inequality — fail regardless of expectation.
         assert!(!sync_equivalence_scenario_passes(
-            "INEQUAL", None, "EQUAL", None
+            "INEQUAL", None, None, "EQUAL", None, None
         ));
     }
 
@@ -9254,7 +9365,15 @@ verify-stable-release-evidence --evidence-dir evidence
                 "tsjs_add" => assert!(project.join("web/payments.test.ts").is_file()),
                 "rs_add" => assert!(project.join("service/rust/extra_service.rs").is_file()),
                 "mocharc_remove" => assert!(!project.join(".mocharc.json").exists()),
-                "python_edit" => assert!(read("analytics/app.py").contains("return \"primary\"")),
+                "python_body_edit" => {
+                    assert!(read("analytics/app.py").contains("return \"primary\""))
+                }
+                "python_interface_edit" => {
+                    assert!(read("analytics/app.py").contains("def new_public_helper()"))
+                }
+                "python_conftest_edit" => {
+                    assert!(read("analytics/conftest.py").contains("return \"primary\""))
+                }
                 "java_add" => {
                     assert!(project.join("service/java/ExtraServiceTest.java").is_file())
                 }

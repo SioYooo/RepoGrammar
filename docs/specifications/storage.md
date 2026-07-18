@@ -574,11 +574,30 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `9`. Existing pre-release schema `1`
-through `8` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `10`. Existing pre-release schema `1`
+through `9` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
+Schema `10` adds the `python_module_interfaces` table, which persists one Python
+module interface hash per indexed `.py` module for the incremental-sync
+interface-hash gate (see `docs/specifications/indexing-pipeline.md`). Each row is
+path-keyed and generation-scoped with `PRIMARY KEY (generation_id, path)` and
+cascades from both `index_generations` and `indexed_files`:
+
+- `generation_id` `TEXT NOT NULL`;
+- `path` `TEXT NOT NULL` — the module's repo-relative path;
+- `interface_hash` `TEXT NOT NULL` (`CHECK <> ''`) — the `sha256:`-prefixed hash
+  of the module's interface projection (top-level symbols, literal `__all__`,
+  `__init__` re-exports), computed by the frontend worker's `extract_interface`
+  mode. A full build stores one row per discovered `.py` module (including
+  `conftest.py`); an incremental sync copies unchanged modules' rows forward and
+  rewrites reparsed modules' rows, converging on the full-rebuild table. A module
+  whose hash could not be computed during a build simply has no row, and the next
+  sync treats the gap as `python_interface_unverified`. Like `v9`, this is a
+  constants-only migration: `CREATE TABLE IF NOT EXISTS` plus a version stamp, so
+  the mutable database is recreated on the first full rebuild rather than altered.
+
 Schema `9` adds the `family_constraint_profiles` table, which persists one
 `FamilyConstraintProfile` per family (see the domain model). Each row is
 family-keyed and generation-scoped with `PRIMARY KEY (generation_id, family_id)`

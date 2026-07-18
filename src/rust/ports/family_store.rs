@@ -344,6 +344,17 @@ pub trait GenerationWriteSession {
         record: &IndexedFamilyConstraintProfileRecord,
     ) -> Result<(), StoreError>;
 
+    /// Record a Python module's interface hash (schema v10
+    /// `python_module_interfaces`) for `path` in this generation. `path` must be
+    /// a `.py` file already recorded via `record_indexed_file`; the incremental
+    /// preflight reads these hashes to decide whether a later `.py` edit is
+    /// file-local.
+    fn record_python_module_interface(
+        &mut self,
+        path: &str,
+        interface_hash: &str,
+    ) -> Result<(), IndexStoreError>;
+
     /// Commit any open batch and checkpoint the write-ahead log at a pipeline
     /// phase boundary, bounding WAL growth to roughly one phase rather than the
     /// whole build. The production pipelines call it after the file/unit/IR write

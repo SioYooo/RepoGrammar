@@ -72,6 +72,25 @@ pub enum ParseError {
     Internal(String),
 }
 
+/// Result of the single-file Python interface probe the incremental-sync
+/// preflight runs on a modified `.py` module before deciding whether the edit is
+/// file-local. The interface projection (top-level symbols, literal `__all__`,
+/// `__init__` re-exports) is the exact channel by which one module's text
+/// reaches another module's parse, so an unchanged hash proves the edit cannot
+/// affect any other file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PythonInterfaceProbe {
+    /// The worker computed the module interface hash for the supplied file
+    /// content. The preflight compares it against the base generation's stored
+    /// hash.
+    Computed(String),
+    /// The interface could not be computed — the parser does not analyze Python,
+    /// or the worker errored, timed out, or reported a contract mismatch. The
+    /// preflight treats this as `python_interface_unverified` and falls back to a
+    /// full rebuild; it never guesses an interface.
+    Unverified,
+}
+
 pub trait SourceParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError>;
 
@@ -81,5 +100,15 @@ pub trait SourceParser {
         _context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
         self.parse(document)
+    }
+
+    /// Compute the file-local Python interface hash for `text` at `path`. The
+    /// default is the conservative-safe answer for any parser that does not
+    /// analyze Python (`Unverified` forces a full rebuild); only the Python
+    /// frontend overrides it with a computed hash. This is deliberately *not* an
+    /// unsound silent fallback: the preflight routes `Unverified` to an explicit
+    /// full rebuild, never to the incremental path.
+    fn extract_python_interface(&self, _path: &str, _text: &str) -> PythonInterfaceProbe {
+        PythonInterfaceProbe::Unverified
     }
 }

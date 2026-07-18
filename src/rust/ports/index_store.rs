@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 9;
+pub const STORAGE_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -300,6 +300,29 @@ pub trait GenerationRetentionStore {
 /// no active generation to read a stamp from.
 pub trait GenerationEngineStampStore {
     fn active_generation_engine_version(&self) -> Result<Option<String>, IndexStoreError>;
+}
+
+/// One recorded Python module interface hash: the `interface_hash` the frontend
+/// worker produced for `path`'s content when it was last indexed (schema v10
+/// `python_module_interfaces`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonModuleInterfaceRecord {
+    pub path: String,
+    pub interface_hash: String,
+}
+
+/// Reads the active generation's stored Python module interface hashes. The
+/// incremental-sync preflight compares them against freshly probed hashes for
+/// modified `.py` modules: an unchanged hash proves the edit is file-local, a
+/// changed one forces a full rebuild (`python_interface_changed`), and a missing
+/// one forces a full rebuild (`python_interface_unverified` — a module's
+/// build-time interface probe failed; a base generation on an older schema is
+/// rejected earlier by the preflight schema gate, never here). Returns an empty
+/// list when there is no active generation.
+pub trait PythonModuleInterfaceStore {
+    fn active_python_module_interfaces(
+        &self,
+    ) -> Result<Vec<PythonModuleInterfaceRecord>, IndexStoreError>;
 }
 
 pub trait IndexMaintenanceStore {

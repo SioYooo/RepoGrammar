@@ -4287,3 +4287,131 @@ assert self_response["diagnostics"] == []
 assert len(self_response["units"]) > 100
 assert 1_000 < len(self_response["facts"]) <= 2_000
 assert_no_fact_source_payloads(self_response["facts"])
+
+# `interface_hash` is the deterministic hash carried by the parse_document
+# response's untouched contract? No: the interface probe is a separate mode so
+# parse_document's response shape is unchanged (regression guard).
+assert "interface_hash" not in self_response
+
+
+def extract_interface_hash(path: str, text: str):
+    messages = run_worker_exact(
+        {
+            "protocol_version": 1,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "extract_interface",
+            "path": path,
+            "text": text,
+        }
+    )
+    assert len(messages) == 1, messages
+    response = messages[0]
+    assert response["protocol_version"] == 1
+    assert response["contract_revision"] == PARSE_DOCUMENT_CONTRACT_REVISION
+    assert response["mode"] == "extract_interface"
+    assert response["path"] == path
+    interface = response["interface_hash"]
+    assert isinstance(interface, str) and interface.startswith("sha256:")
+    return interface
+
+
+# A body-only edit leaves the module interface projection — and its hash —
+# byte-identical, which is exactly what lets the Rust preflight keep the edit on
+# the file-local incremental path.
+interface_base = extract_interface_hash(
+    "analytics/app.py",
+    "def current_tenant() -> str:\n    return \"default\"\n",
+)
+interface_body_edit = extract_interface_hash(
+    "analytics/app.py",
+    "def current_tenant() -> str:\n    return \"primary\"\n",
+)
+assert interface_base == interface_body_edit
+
+# The same source hashes identically across independent worker processes: the
+# projection uses `hashlib`, not the salted builtin `hash`.
+assert (
+    extract_interface_hash(
+        "analytics/app.py",
+        "def current_tenant() -> str:\n    return \"default\"\n",
+    )
+    == interface_base
+)
+
+# Adding a top-level function changes the exported symbol surface, so the hash
+# must change and the Rust preflight must fall back to a full rebuild.
+interface_added_symbol = extract_interface_hash(
+    "analytics/app.py",
+    "def current_tenant() -> str:\n    return \"default\"\n\n\ndef extra() -> int:\n    return 1\n",
+)
+assert interface_added_symbol != interface_base
+
+# A literal `__all__` edit changes star-import expansion for other modules, so
+# it is part of the interface.
+interface_all_a = extract_interface_hash("pkg/api.py", "__all__ = [\"a\"]\na = 1\nb = 2\n")
+interface_all_ab = extract_interface_hash("pkg/api.py", "__all__ = [\"a\", \"b\"]\na = 1\nb = 2\n")
+assert interface_all_a != interface_all_ab
+
+# A non-literal `__all__` is distinct from a literal one (star expansion becomes
+# empty), and both are captured in the interface.
+interface_all_dynamic = extract_interface_hash("pkg/api.py", "__all__ = compute()\na = 1\nb = 2\n")
+assert interface_all_dynamic != interface_all_a
+
+# For a package `__init__`, the raw re-export ImportFrom items are part of the
+# interface: changing a re-exported name changes the package re-export closure.
+interface_init_foo = extract_interface_hash("pkg/__init__.py", "from .mod import foo\n")
+interface_init_bar = extract_interface_hash("pkg/__init__.py", "from .mod import bar\n")
+assert interface_init_foo != interface_init_bar
+
+# A module that no longer parses contributes nothing to the symbol index, so its
+# interface projection is a distinct unparseable marker rather than the previous
+# valid surface.
+interface_valid = extract_interface_hash("pkg/mod.py", "def keep() -> int:\n    return 1\n")
+interface_broken = extract_interface_hash("pkg/mod.py", "def keep(:\n")
+assert interface_valid != interface_broken
+
+# A host that predates the mode, or one on a mismatched contract revision,
+# receives a single bounded rejection envelope that never echoes the path or the
+# source. The Rust caller treats this as "interface unverified" and rebuilds.
+extract_mismatch = run_worker_exact(
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION + 1,
+        "mode": "extract_interface",
+        "path": "private.py",
+        "text": "SECRET_SOURCE = True\n",
+    }
+)
+assert extract_mismatch == [
+    {
+        "protocol_version": 1,
+        "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+        "mode": "extract_interface",
+        "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+    }
+]
+assert "private.py" not in json.dumps(extract_mismatch)
+assert "SECRET_SOURCE" not in json.dumps(extract_mismatch)
+
+# An unexpected extra field is a protocol violation: the worker exits non-zero
+# with no NDJSON, so the host never mistakes a malformed request for a result.
+extract_extra_field = subprocess.run(
+    [sys.executable, str(WORKER)],
+    input=json.dumps(
+        {
+            "protocol_version": 1,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "extract_interface",
+            "path": "a.py",
+            "text": "x = 1\n",
+            "unexpected": True,
+        }
+    )
+    + "\n",
+    text=True,
+    capture_output=True,
+    check=False,
+    timeout=15,
+)
+assert extract_extra_field.returncode == 2
+assert extract_extra_field.stdout == ""

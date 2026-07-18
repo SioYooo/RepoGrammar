@@ -147,6 +147,15 @@ impl GenerationWriteSession for FakeWriteSession {
         Ok(())
     }
 
+    fn record_python_module_interface(
+        &mut self,
+        _path: &str,
+        _interface_hash: &str,
+    ) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
     fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
         self.transactions += 1;
         self.checkpoints += 1;
