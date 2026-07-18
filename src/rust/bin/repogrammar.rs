@@ -3500,7 +3500,19 @@ mod tests {
 
     fn assert_unknown_query_json(command: &str, value: &Value) {
         assert_eq!(value["command"], command);
-        if matches!(command, "find" | "explain" | "check") && value["status"] == "PARTIAL_CONTEXT" {
+        if command == "check" {
+            // The static-alignment check never returns UNKNOWN/PARTIAL_CONTEXT; a
+            // target with no comparison family abstains with INSUFFICIENT_EVIDENCE
+            // and never surfaces a selected family or a runtime-equivalence claim.
+            assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+            assert_eq!(value["implemented"], true);
+            assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+            assert!(value["selected_family_id"].is_null());
+            assert!(value["alignment"].is_null());
+            assert!(value.get("check").is_none());
+            return;
+        }
+        if matches!(command, "find" | "explain") && value["status"] == "PARTIAL_CONTEXT" {
             assert_eq!(value["implemented"], true);
             assert_eq!(value["read_plan"]["source_snippets_included"], false);
             assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
@@ -3515,6 +3527,33 @@ mod tests {
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
+    /// Assert a static-alignment certificate for a target that is a clean member
+    /// of its comparison family: statically aligned, MEMBER relationship, the
+    /// selected family surfaced on the route, no deviations, and the
+    /// runtime-equivalence obligation carried but never discharged.
+    fn assert_member_statically_aligned(value: &Value, family_id: &str) {
+        assert_eq!(value["command"], "check");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["status"], "STATICALLY_ALIGNED");
+        assert_eq!(value["alignment_status"], "STATICALLY_ALIGNED");
+        assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+        assert_eq!(value["target_relationship"], "MEMBER");
+        assert_eq!(value["selected_family_id"], family_id);
+        assert_eq!(value["query_route"]["selected_family_id"], family_id);
+        // No runtime-conformance verdict leaks.
+        assert!(value.get("check").is_none());
+        assert!(value["alignment"]["pass"].is_null());
+        assert!(value["alignment"]["conforms"].is_null());
+        assert!(value["alignment"]["static_deviations"]
+            .as_array()
+            .expect("static deviations")
+            .is_empty());
+        assert!(!value["alignment"]["unresolved_runtime_obligations"]
+            .as_array()
+            .expect("unresolved runtime obligations")
+            .is_empty());
+    }
+
     fn assert_no_claim_payload(command: &str, value: &Value) {
         if let Some(families) = value.get("families") {
             assert!(
@@ -3522,7 +3561,20 @@ mod tests {
                 "{command} UNKNOWN leaked families: {value}"
             );
         }
-        let forbidden_fields: &[&str] = if value["status"] == "PARTIAL_CONTEXT" {
+        let forbidden_fields: &[&str] = if command == "check" {
+            // A static-alignment certificate is always structured (read_plan,
+            // resolved target locator) but never carries a family claim, an
+            // evidence bundle, or a runtime-conformance verdict.
+            &[
+                "family",
+                "member",
+                "members",
+                "variation_slots",
+                "evidence",
+                "output",
+                "check",
+            ]
+        } else if value["status"] == "PARTIAL_CONTEXT" {
             &["family", "member", "members", "variation_slots", "evidence"]
         } else {
             &[
@@ -3998,6 +4050,27 @@ mod tests {
 
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
         assert_eq!(value["command"], command);
+        if command == "check" {
+            // A stale target must abstain: the static-alignment check verifies the
+            // target file's freshness first and reports INSUFFICIENT_EVIDENCE with a
+            // StaleEvidence reason, never fabricating an alignment from stale facts.
+            // The affected claim names the stale target file, not the family.
+            let _ = family_id;
+            assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+            assert_eq!(value["implemented"], true);
+            assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+            assert!(value["selected_family_id"].is_null());
+            assert!(value["alignment"].is_null());
+            assert!(value.get("check").is_none());
+            assert_eq!(value["unknowns"][0]["class"], "blocking_unknown");
+            assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
+            assert!(value["unknowns"][0]["affected_claim"]
+                .as_str()
+                .expect("affected claim")
+                .ends_with(":evidence_freshness"));
+            assert_eq!(value["unknowns"][0]["recovery"], "run repogrammar resync");
+            return;
+        }
         assert_eq!(value["status"], "UNKNOWN");
         assert_eq!(value["implemented"], true);
         assert!(
@@ -4919,8 +4992,8 @@ mod tests {
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        // users.ts is a member of the express family, so it statically aligns.
+        assert_member_statically_aligned(&check_json, &family_id);
 
         fs::write(
             workspace.path().join("users.ts"),
@@ -5550,21 +5623,15 @@ mod tests {
                 assert_python_exact_anchor_family_detail(command, &value, *case);
             }
 
+            // A check target must pin exactly one code unit; the member evidence
+            // file holds several member units, so certify a specific member by its
+            // unit id. The pinned member statically aligns with its own family.
             let check = run_with_runtime(
-                cli_args("check", workspace.path(), &[case.evidence_path, "--json"]),
+                cli_args("check", workspace.path(), &[&member_id, "--json"]),
                 &runtime,
             );
             let check_json = parse_machine_output("check", &check, &workspace);
-            assert_eq!(check_json["status"], "CONTEXT_ONLY");
-            assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
-            assert_eq!(
-                check_json["check"]["reason"],
-                "runtime equivalence remains unproven"
-            );
-            assert!(check_json["check"].get("fail_on").is_none());
-            assert!(check_json["check"].get("pass").is_none());
-            assert!(check_json["check"].get("conforms").is_none());
-            assert_python_exact_anchor_family_detail("check", &check_json, *case);
+            assert_member_statically_aligned(&check_json, case.family_id);
 
             let family_auto_evidence = run_with_runtime(
                 cli_args(
@@ -7425,7 +7492,8 @@ mod tests {
             .iter()
             .all(|member| member["role"] == "framework:express.route_handler"));
 
-        // find resolves the family; check stays advisory CONTEXT_ONLY.
+        // find resolves the family; check statically aligns a pinned member unit
+        // (app.ts holds several member routes, so a path-only check is ambiguous).
         let find = run_with_runtime(
             cli_args("find", workspace.path(), &["app.ts", "--json"]),
             &runtime,
@@ -7433,13 +7501,16 @@ mod tests {
         let find_json = parse_machine_output("find", &find, &workspace);
         assert_eq!(find_json["status"], "ok");
         assert_eq!(find_json["family"]["family_id"], family_id);
+        let member_id = detail_json["members"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = run_with_runtime(
-            cli_args("check", workspace.path(), &["app.ts", "--json"]),
+            cli_args("check", workspace.path(), &[&member_id, "--json"]),
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        assert_member_statically_aligned(&check_json, &family_id);
 
         // Default MCP output is also source-free.
         let default_mcp = mcp_context_payload(
@@ -8876,13 +8947,18 @@ mod tests {
             serde_json::json!(["canonical", "support"])
         );
 
+        // routes.py holds several member routes; pin one member unit so the check
+        // resolves unambiguously. The pinned member statically aligns.
+        let member_id = evidence_json["evidence"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = run_with_runtime(
-            cli_args("check", workspace.path(), &["routes.py", "--json"]),
+            cli_args("check", workspace.path(), &[&member_id, "--json"]),
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        assert_member_statically_aligned(&check_json, &family_id);
 
         fs::write(
             workspace.path().join("routes.py"),
@@ -9158,7 +9234,12 @@ export function HomeScreen() {
             &runtime,
         );
         let check_payload = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_payload["status"], "PARTIAL_CONTEXT");
+        // An unsupported React Native screen has no comparison family: the
+        // static-alignment check abstains with INSUFFICIENT_EVIDENCE but still
+        // returns a source-reading plan for the resolved target file.
+        assert_eq!(check_payload["status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(check_payload["runtime_equivalence"], "UNKNOWN");
+        assert!(check_payload["selected_family_id"].is_null());
         assert_eq!(
             check_payload["read_plan"]["requires_source_before_edit"],
             true
@@ -11619,8 +11700,10 @@ pythonpath = ["src"]
         let payload: Value = serde_json::from_str(payload_text).expect("tool payload JSON");
 
         assert!(
-            payload["status"] == "UNKNOWN" || payload["status"] == "PARTIAL_CONTEXT",
-            "MCP path query should return UNKNOWN or source-free partial context: {payload}"
+            payload["status"] == "UNKNOWN"
+                || payload["status"] == "PARTIAL_CONTEXT"
+                || payload["status"] == "INSUFFICIENT_EVIDENCE",
+            "MCP path query should return UNKNOWN, source-free partial context, or an abstaining alignment certificate: {payload}"
         );
         assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
         assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
@@ -11688,17 +11771,21 @@ pythonpath = ["src"]
         assert_eq!(explain["status"], "ok");
         assert_python_exact_anchor_family_detail("explain", &explain, case);
 
+        // Pin one member unit (the evidence file holds several), so the check
+        // resolves unambiguously to a MEMBER + STATICALLY_ALIGNED certificate.
+        let member_id = show["members"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = mcp_context_payload(
             &runtime,
             &workspace,
             serde_json::json!({
                 "operation": "check_conformance",
-                "target": case.evidence_path,
+                "target": member_id,
             }),
         );
-        assert_eq!(check["status"], "CONTEXT_ONLY");
-        assert_eq!(check["check"]["advisory_status"], "UNKNOWN");
-        assert_python_exact_anchor_family_detail("check", &check, case);
+        assert_member_statically_aligned(&check, case.family_id);
 
         let input = format!(
             "{}\n{}\n{}\n",

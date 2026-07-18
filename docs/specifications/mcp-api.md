@@ -80,14 +80,20 @@ CLI equivalent: `repogrammar explain`.
 
 ### check_conformance
 
-Check whether a target conforms to a selected family or abstain with a reason.
-In the current v0.1 candidate, matched family context is not proof of runtime
-equivalence. `check_conformance` must therefore return top-level
-`CONTEXT_ONLY` or typed `UNKNOWN` when conformance is unproven, and its nested
-check result must remain advisory `UNKNOWN`.
-The initial target may be a path, symbol/member id, framework role, or pattern
-question. RepoGrammar discovers and hydrates bounded candidate families
-internally, then returns any exact family ids as follow-up handles.
+Return a source-backed *static-alignment* certificate for a target, or abstain
+with a typed reason. This is not a runtime-conformance verdict: matched family
+context is never proof of runtime equivalence. `check_conformance` resolves the
+target to a specific indexed code unit, selects a comparison family (the unit's
+own family when it is a member, otherwise the single fresh ready family of its
+`(language, kind, role)` key), and statically compares the target's indexed
+feature profile against that family's constraint profile. The top-level `status`
+is a static-alignment token (`STATICALLY_ALIGNED`, `STATIC_DEVIATION`,
+`PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`, or `UNKNOWN`) — never
+`PASS`/`FAIL`/`CONFORMS` and never the legacy `CONTEXT_ONLY` advisory — and every
+certificate carries `runtime_equivalence: "UNKNOWN"`. A stale, ambiguous,
+unindexed, or family-less target abstains with `INSUFFICIENT_EVIDENCE` and never
+surfaces a selected family. The initial target may be a path, path:line locator,
+or `unit:` member id.
 
 CLI equivalent: `repogrammar check`.
 
@@ -177,10 +183,24 @@ optional byte range, optional family/member ids, symbol hints, residue terms,
 candidate paths/ids, confidence, and match kind. It is local read-planning
 context, not family evidence or conformance evidence. Exact `show_family`
 lookups still require an exact family id and return typed `UNKNOWN` when that
-family id is missing. `check_conformance` responses that return
-`PARTIAL_CONTEXT` remain advisory: the nested `check` object must keep
-`advisory_status: UNKNOWN`, explain that runtime equivalence remains unproven,
-and omit proof-like fields such as `pass`, `conforms`, or `fail_on`.
+family id is missing. `check_conformance` responses carry the static-alignment
+certificate fields: `alignment_status`, `runtime_equivalence` (always
+`"UNKNOWN"`), `target_relationship`, `selected_family_id`, `target` (the
+resolved code-unit locator), and `alignment` (the computation — `outcome_reason`,
+`required_features_matched[]`, `static_deviations[]` with source-free token
+summaries, `legal_observed_variations[]`, `blocking_unknowns[]`, and
+`unresolved_runtime_obligations[]`, or `null` when abstaining). They must omit
+the legacy nested `check` advisory object and any proof-like fields such as
+`pass`, `conforms`, or `fail_on`. `static_deviations[].kind` is one of the
+required-feature violations (`required_mismatch`, `must_be_empty_violation`,
+`missing_required_core`, `prohibited_presence`) or a non-violating partial signal
+(`unobserved_variation`, `truncated_observation`, `blocking_suppressed_requirement`)
+that forces `PARTIAL_ALIGNMENT`, never `STATIC_DEVIATION`. `selected_family_id` is
+`null` for every abstaining outcome, and `COMPETING_PATTERN` is a reserved
+`target_relationship` token no current path emits. `check_conformance` resolves
+the target to exactly one code unit honoring a `path:line`, `path:byte-range`, or
+`unit:` locator; a path-only target that names a file with more than one
+family-eligible unit abstains with `INSUFFICIENT_EVIDENCE` and candidate unit ids.
 All family lookup responses include `query_route`, a source-free route metadata
 object with `route`, `input_kind`, `pipeline`, `family_id_policy`,
 `candidate_limit`, `selected_family_id`, `candidate_family_ids`,

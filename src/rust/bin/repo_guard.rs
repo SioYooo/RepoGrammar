@@ -2347,8 +2347,16 @@ impl EvalOutcome {
     fn classify_status(status: &str) -> Self {
         match status {
             "ok" | "OK" | "CONTEXT_ONLY" => EvalOutcome::Ok,
-            "PARTIAL_CONTEXT" => EvalOutcome::PartialContext,
-            "UNKNOWN" => EvalOutcome::Unknown,
+            // Static-alignment certificates commit a compared answer, so a
+            // committed certificate (aligned or a definite deviation) is `ok`, a
+            // partial alignment maps to partial context, and an abstaining
+            // certificate maps to unknown. This mirrors
+            // `AlignmentStatus::outcome_class`, so a committed retrieval-intent
+            // check query keeps its MRR credit instead of being zeroed as a
+            // fallback.
+            "STATICALLY_ALIGNED" | "STATIC_DEVIATION" => EvalOutcome::Ok,
+            "PARTIAL_CONTEXT" | "PARTIAL_ALIGNMENT" => EvalOutcome::PartialContext,
+            "UNKNOWN" | "INSUFFICIENT_EVIDENCE" => EvalOutcome::Unknown,
             _ => EvalOutcome::Fallback,
         }
     }
@@ -2430,6 +2438,11 @@ struct EvalExpected {
     candidates_include: Option<Vec<String>>,
     unknown_reason: Option<String>,
     route: Option<String>,
+    /// First-class matcher for the static-alignment certificate's
+    /// `alignment_status` token (e.g. `STATICALLY_ALIGNED`, `STATIC_DEVIATION`,
+    /// `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`). A mismatch is a query
+    /// mismatch, so alignment golds are enforced rather than decorative.
+    alignment_status: Option<String>,
 }
 
 impl EvalExpected {
@@ -2455,6 +2468,7 @@ impl EvalExpected {
             candidates_include,
             unknown_reason: optional_object_string(object, "unknown_reason")?,
             route: optional_object_string(object, "route")?,
+            alignment_status: optional_object_string(object, "alignment_status")?,
         })
     }
 
@@ -2462,6 +2476,12 @@ impl EvalExpected {
         let mut map = serde_json::Map::new();
         if let Some(outcome) = self.outcome {
             map.insert("outcome".to_string(), outcome.as_str().into());
+        }
+        if let Some(alignment_status) = &self.alignment_status {
+            map.insert(
+                "alignment_status".to_string(),
+                alignment_status.clone().into(),
+            );
         }
         if let Some(family) = &self.family {
             map.insert("family".to_string(), family.clone().into());
@@ -2500,6 +2520,9 @@ struct EvalActual {
     retrieval_stage_count: Option<u64>,
     unknown_reason: Option<String>,
     active_generation: Option<String>,
+    /// The static-alignment certificate's `alignment_status` token, when the
+    /// query drove the `check` operation. `None` for other operations.
+    alignment_status: Option<String>,
 }
 
 impl EvalActual {
@@ -2544,6 +2567,10 @@ impl EvalActual {
             .get("active_generation")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let alignment_status = value
+            .get("alignment_status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         Ok(Self {
             outcome: EvalOutcome::classify_status(status),
             route,
@@ -2554,6 +2581,7 @@ impl EvalActual {
             retrieval_stage_count,
             unknown_reason,
             active_generation,
+            alignment_status,
         })
     }
 
@@ -2568,6 +2596,7 @@ impl EvalActual {
             "retrieval_stage_count": self.retrieval_stage_count,
             "unknown_reason": self.unknown_reason,
             "active_generation": self.active_generation,
+            "alignment_status": self.alignment_status,
         })
     }
 }
@@ -2794,6 +2823,11 @@ fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<St
             mismatches.push("route".to_string());
         }
     }
+    if let Some(alignment_status) = &expected.alignment_status {
+        if actual.alignment_status.as_deref() != Some(alignment_status.as_str()) {
+            mismatches.push("alignment_status".to_string());
+        }
+    }
     (mismatches.is_empty(), mismatches)
 }
 
@@ -3010,6 +3044,7 @@ fn baseline_actual(selection: BaselineSelection, active_generation: Option<Strin
         retrieval_stage_count: None,
         unknown_reason: None,
         active_generation,
+        alignment_status: None,
     }
 }
 
@@ -8054,6 +8089,54 @@ verify-stable-release-evidence --evidence-dir evidence
             EvalOutcome::classify_status("SOMETHING_ELSE"),
             EvalOutcome::Fallback
         );
+        // Static-alignment certificates classify honestly: a committed certificate
+        // (aligned or a definite deviation) is `ok`, a partial alignment is partial
+        // context, and an abstaining certificate is unknown — never fallback, so a
+        // committed retrieval-intent check query keeps its MRR credit.
+        assert_eq!(
+            EvalOutcome::classify_status("STATICALLY_ALIGNED"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("STATIC_DEVIATION"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("PARTIAL_ALIGNMENT"),
+            EvalOutcome::PartialContext
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("INSUFFICIENT_EVIDENCE"),
+            EvalOutcome::Unknown
+        );
+    }
+
+    #[test]
+    fn product_eval_alignment_status_is_a_first_class_matcher() {
+        // A declared alignment_status gold must be enforced: a mismatch is a query
+        // mismatch, and the actual reads the certificate's alignment_status field.
+        let value = serde_json::json!({
+            "status": "STATIC_DEVIATION",
+            "alignment_status": "STATIC_DEVIATION",
+            "query_route": {"selected_family_id": "family:python:fastapi_route"},
+        });
+        let actual = EvalActual::from_query_json(&value).expect("parses");
+        assert_eq!(actual.alignment_status.as_deref(), Some("STATIC_DEVIATION"));
+
+        let aligned_gold = EvalExpected {
+            alignment_status: Some("STATICALLY_ALIGNED".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, mismatches) = evaluate_match(&aligned_gold, &actual);
+        assert!(!matched);
+        assert!(mismatches.contains(&"alignment_status".to_string()));
+
+        let deviation_gold = EvalExpected {
+            alignment_status: Some("STATIC_DEVIATION".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, _) = evaluate_match(&deviation_gold, &actual);
+        assert!(matched);
     }
 
     fn sample_found_actual() -> EvalActual {
@@ -8071,6 +8154,7 @@ verify-stable-release-evidence --evidence-dir evidence
             retrieval_stage_count: None,
             unknown_reason: None,
             active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
         }
     }
 
@@ -8085,6 +8169,7 @@ verify-stable-release-evidence --evidence-dir evidence
             retrieval_stage_count: None,
             unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
         }
     }
 
@@ -8165,6 +8250,7 @@ verify-stable-release-evidence --evidence-dir evidence
             retrieval_stage_count: None,
             unknown_reason: Some("StaleEvidence".to_string()),
             active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
         };
         let (is_match, _) = evaluate_match(&expected, &stale);
         assert!(is_match);
@@ -8225,6 +8311,7 @@ verify-stable-release-evidence --evidence-dir evidence
             retrieval_stage_count: None,
             unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
         };
         let (is_match, mismatch_fields) = evaluate_match(&expected, &actual);
         let entry = serde_json::json!({

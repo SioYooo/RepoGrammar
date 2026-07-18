@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- Upgraded check/check_conformance from an advisory no-op into
+  source-backed static alignment certificates. The target resolves to
+  exactly one code unit (unit ids and path:line / byte-range locators
+  pin the innermost containing unit; a path-only target with several
+  eligible units abstains with candidate unit ids; there is no silent
+  canonical fallback), its freshness is verified before any
+  certificate, and its features are extracted by the same authority
+  family induction uses. Certificates compare the target against the
+  family constraint profile per semantics token and report
+  STATICALLY_ALIGNED, STATIC_DEVIATION, PARTIAL_ALIGNMENT,
+  INSUFFICIENT_EVIDENCE, or UNKNOWN with matched constraints,
+  deviations, legal observed variations, blocking unknowns, unresolved
+  runtime obligations, and a target relationship (member, near-miss,
+  exception on source-backed negative evidence, blocked-unknown,
+  out-of-scope); absence-driven requirement failures under a blocking
+  unknown report PARTIAL_ALIGNMENT rather than a fabricated deviation,
+  truncated variation enumerations never claim a profile was never
+  observed, abstaining certificates never surface a selected family,
+  and runtime equivalence remains the literal UNKNOWN in every
+  certificate.
+
 ### Fixed
 
 - Closed two incremental-sync correctness gaps and added the

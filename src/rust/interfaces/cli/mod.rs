@@ -1,6 +1,7 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
 use crate::application::autosync::{AutosyncReport, AutosyncSettings};
+use crate::application::conformance::AlignmentComputation;
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
     binary_name, known_agent_targets, manage_instruction_file, normalize_concrete_targets,
@@ -17,14 +18,15 @@ use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings,
     family_query_abstention_reason, family_query_route_report, family_query_unknown_metric,
     query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget, DiagnosticSignal,
-    FamilyDetailReport, FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport,
-    FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport,
-    FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport,
-    IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
-    ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute,
-    TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
+    select_family_evidence, validate_query_target, validate_query_token_budget,
+    AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
+    FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
+    FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation,
+    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission,
+    RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics, ResolvedQueryTarget,
+    SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness,
+    UnknownInventoryBucket, UnknownInventoryReport,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -640,7 +642,7 @@ fn full_usage() -> String {
         "  explain [target] [--include-variations] [--include-exceptions] [--json]",
         "      Explain whether a target is a legal variation, exception, incompatibility, or UNKNOWN.",
         "  check [target] [--mode compact|evidence|deep] [--json]",
-        "      Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+        "      Report a source-backed static-alignment certificate; runtime equivalence stays UNKNOWN.",
         "  files [--project <path>] [--json]",
         "      Read active indexed file inventory.",
         "  units [--project <path>] [--json]",
@@ -860,7 +862,7 @@ pub fn command_usage(command: &str) -> Option<String> {
         "check" => Some(query_usage(
             "check",
             "repogrammar check [target] [options]",
-            "Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+            "Report a source-backed static-alignment certificate for a target; runtime equivalence stays UNKNOWN.",
         )),
         "files" => Some(help_text(&[
             "Usage: repogrammar files [--project <path>] [--json]",
@@ -1414,7 +1416,10 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
     match command {
         "family" => FamilyLookupMode::ExactFamilyId,
         "member" => FamilyLookupMode::ExactMemberId,
-        "find" | "explain" | "check" => FamilyLookupMode::FuzzyQuery,
+        // `check` runs the static-alignment flow; `find`/`explain` stay on the
+        // shared fuzzy family-resolution pipeline.
+        "check" => FamilyLookupMode::Conformance,
+        "find" | "explain" => FamilyLookupMode::FuzzyQuery,
         _ => FamilyLookupMode::FuzzyQuery,
     }
 }
@@ -1437,6 +1442,8 @@ fn prepare_family_output(
         FamilyLookupReport::Found(family) => build_read_plan(family, target, mode, options),
         FamilyLookupReport::PartialContext(report) => report.read_plan.clone(),
         FamilyLookupReport::Unknown(_) => return Ok(None),
+        // The certificate already carries its comparison-family read plan.
+        FamilyLookupReport::Alignment(certificate) => certificate.read_plan.clone(),
     };
     let mut read_plan = runtime.enrich_read_plan_line_ranges(request.clone(), &base_read_plan)?;
     let source_spans = if include_source_spans {
@@ -1541,7 +1548,10 @@ fn family_query_lookup_mode(mode: FamilyLookupMode) -> FamilyQueryLookupMode {
     match mode {
         FamilyLookupMode::ExactFamilyId => FamilyQueryLookupMode::ExactFamily,
         FamilyLookupMode::ExactMemberId => FamilyQueryLookupMode::ExactMember,
-        FamilyLookupMode::FuzzyQuery => FamilyQueryLookupMode::Fuzzy,
+        // The conformance check runs on the shared fuzzy resolution pipeline.
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            FamilyQueryLookupMode::Fuzzy
+        }
     }
 }
 
@@ -1550,6 +1560,26 @@ fn family_query_outcome_status(report: &FamilyLookupReport) -> FamilyQueryOutcom
         FamilyLookupReport::Found(_) => FamilyQueryOutcomeStatus::Found,
         FamilyLookupReport::PartialContext(_) => FamilyQueryOutcomeStatus::PartialContext,
         FamilyLookupReport::Unknown(_) => FamilyQueryOutcomeStatus::Unknown,
+        // Telemetry follows the alignment status, not the presence of a family:
+        // a committed certificate (STATICALLY_ALIGNED/STATIC_DEVIATION) is Found,
+        // a PARTIAL_ALIGNMENT is partial context, and every abstaining certificate
+        // (INSUFFICIENT_EVIDENCE/UNKNOWN) is Unknown — abstentions are never Found.
+        FamilyLookupReport::Alignment(certificate) => {
+            alignment_outcome_status(certificate.alignment_status)
+        }
+    }
+}
+
+/// Map an alignment status onto the query-outcome telemetry bucket via the core
+/// commitment-class authority, so an abstaining certificate is never Found.
+fn alignment_outcome_status(
+    status: crate::core::policy::alignment::AlignmentStatus,
+) -> FamilyQueryOutcomeStatus {
+    use crate::core::policy::alignment::AlignmentOutcomeClass;
+    match status.outcome_class() {
+        AlignmentOutcomeClass::Committed => FamilyQueryOutcomeStatus::Found,
+        AlignmentOutcomeClass::Partial => FamilyQueryOutcomeStatus::PartialContext,
+        AlignmentOutcomeClass::Abstained => FamilyQueryOutcomeStatus::Unknown,
     }
 }
 
@@ -1567,6 +1597,7 @@ fn family_query_report_unknowns(report: &FamilyLookupReport) -> &[FamilyQueryUnk
         FamilyLookupReport::Found(report) => &report.unknowns,
         FamilyLookupReport::PartialContext(report) => &report.unknowns,
         FamilyLookupReport::Unknown(report) => &report.unknowns,
+        FamilyLookupReport::Alignment(certificate) => &certificate.unknowns,
     }
 }
 
@@ -2005,7 +2036,13 @@ fn family_lookup_human(
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
 ) -> String {
-    if matches!(command, "find" | "explain" | "check")
+    // The static-alignment certificate has its own actionable, result-first
+    // rendering and never falls back to the family-context human surface.
+    if let FamilyLookupReport::Alignment(certificate) = report {
+        let route = family_query_route_report(report, mode);
+        return alignment_certificate_human(command, certificate, &route, options, prepared_output);
+    }
+    if matches!(command, "find" | "explain")
         && options.evidence_mode == FamilyEvidenceMode::Compact
         && !options.include_variations
         && !options.include_exceptions
@@ -2029,29 +2066,16 @@ fn family_lookup_human(
             } else {
                 "not_included"
             };
-            let mut output = if command == "check" {
-                format!(
-                    "{command}: CONTEXT_ONLY\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
-                    family.active_generation,
-                    family.family_id,
-                    family.classification,
-                    family.support,
-                    selected_evidence.mode.as_str(),
-                    selected_evidence.estimated_tokens,
-                    snippets
-                )
-            } else {
-                format!(
-                    "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
-                    family.active_generation,
-                    family.family_id,
-                    family.classification,
-                    family.support,
-                    selected_evidence.mode.as_str(),
-                    selected_evidence.estimated_tokens,
-                    snippets
-                )
-            };
+            let mut output = format!(
+                "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
+                family.active_generation,
+                family.family_id,
+                family.classification,
+                family.support,
+                selected_evidence.mode.as_str(),
+                selected_evidence.estimated_tokens,
+                snippets
+            );
             output.push_str(&format!(
                 "prevalence: {}\n",
                 family.prevalence.classification_reason
@@ -2101,10 +2125,6 @@ fn family_lookup_human(
             if let Some(source_spans) = source_spans {
                 push_source_spans_human(&mut output, source_spans);
             }
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            }
             for member in &family.members {
                 output.push_str(&format!(
                     "member: {}\trole: {}\n",
@@ -2139,7 +2159,113 @@ fn family_lookup_human(
             family_partial_context_human(command, report, &route, options, prepared_output)
         }
         FamilyLookupReport::Unknown(report) => family_unknown_human(command, report, &route),
+        FamilyLookupReport::Alignment(_) => unreachable!("alignment handled above"),
     }
+}
+
+/// Actionable, result-first human rendering of a static-alignment certificate.
+/// It leads with the alignment status and explicitly separates static alignment
+/// from runtime conformance, which stays UNKNOWN.
+fn alignment_certificate_human(
+    command: &str,
+    certificate: &AlignmentCertificateReport,
+    route: &FamilyQueryRouteReport,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> String {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&certificate.read_plan);
+    let mut output = format!(
+        "{command}: {}\nresult: static alignment only; runtime conformance is NOT proven\nactive_generation: {}\n",
+        certificate.alignment_status.as_token(),
+        certificate.active_generation
+    );
+    output.push_str(&format!(
+        "alignment_status: {}\n",
+        certificate.alignment_status.as_token()
+    ));
+    output.push_str("runtime_equivalence: UNKNOWN\n");
+    if let Some(relationship) = certificate.target_relationship {
+        output.push_str(&format!(
+            "target_relationship: {}\n",
+            relationship.as_token()
+        ));
+    }
+    if let Some(family_id) = &certificate.selected_family_id {
+        output.push_str(&format!("selected_family: {family_id}\n"));
+    }
+    output.push_str(&format!(
+        "target: {}\tcode_unit_id: {}\tbyte_range: {}\n",
+        certificate.resolved_target.path,
+        certificate
+            .resolved_target
+            .code_unit_id
+            .as_deref()
+            .unwrap_or("none"),
+        certificate
+            .resolved_target
+            .byte_range
+            .map(|(start, end)| format!("{start}-{end}"))
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    push_query_route_human(&mut output, route);
+    if let Some(computation) = certificate.computation.as_deref() {
+        output.push_str(&format!("outcome_reason: {}\n", computation.outcome_reason));
+        for matched in &computation.required_features_matched {
+            output.push_str(&format!(
+                "required_matched: {}\tsemantics: {}\texpected: {}\tsatisfied: {}\n",
+                matched.prefix,
+                matched.semantics.as_token(),
+                matched.expected_summary,
+                matched.satisfied_summary
+            ));
+        }
+        for deviation in &computation.static_deviations {
+            output.push_str(&format!(
+                "static_deviation: {}\tkind: {}\tsemantics: {}\texpected: {}\tobserved: {}\n",
+                deviation.prefix,
+                deviation.kind.as_token(),
+                deviation.semantics_token,
+                deviation.expected_summary,
+                deviation.observed_summary
+            ));
+        }
+        for variation in &computation.legal_observed_variations {
+            output.push_str(&format!(
+                "legal_observed_variation: {}\tobserved_profile: {}\n",
+                variation.dimension, variation.observed_profile
+            ));
+        }
+        for unknown in &computation.blocking_unknowns {
+            output.push_str(&format!(
+                "blocking_unknown: {}\treason: {}\taffected_claim: {}\n",
+                unknown.class.as_protocol_str(),
+                unknown.reason.as_protocol_str(),
+                unknown.affected_claim
+            ));
+        }
+        for obligation in &computation.unresolved_runtime_obligations {
+            output.push_str(&format!(
+                "unresolved_runtime_obligation: {}\treason: {}\taffected_claim: {}\n",
+                obligation.class.as_protocol_str(),
+                obligation.reason.as_protocol_str(),
+                obligation.affected_claim
+            ));
+        }
+    }
+    push_read_plan_human(&mut output, read_plan, options.evidence_mode);
+    if let Some(source_spans) = prepared_output.and_then(|prepared| prepared.source_spans.as_ref())
+    {
+        push_source_spans_human(&mut output, source_spans);
+    }
+    for unknown in &certificate.unknowns {
+        push_unknown_human(&mut output, unknown);
+    }
+    output.push_str(
+        "next: read the contrast witness before applying; static alignment does not prove runtime behavior\n",
+    );
+    output
 }
 
 fn family_lookup_compact_human(
@@ -2150,11 +2276,7 @@ fn family_lookup_compact_human(
     match report {
         FamilyLookupReport::Found(family) => {
             let read_plan = prepared_output.map(|prepared| &prepared.read_plan);
-            let mut output = if command == "check" {
-                "check: CONTEXT_ONLY\n".to_string()
-            } else {
-                format!("{command}: pattern family found\n")
-            };
+            let mut output = format!("{command}: pattern family found\n");
             output.push_str(&format!(
                 "pattern: {}\n",
                 human_family_label(&family.family_id, &family.classification)
@@ -2165,10 +2287,7 @@ fn family_lookup_compact_human(
             ));
             output.push_str("why: compatible indexed evidence supports this pattern group\n");
             push_compact_read_plan_human(&mut output, read_plan);
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            } else if !family.unknowns.is_empty() {
+            if !family.unknowns.is_empty() {
                 output.push_str("unverified: some dynamic or runtime behavior remains unproven\n");
             }
             output.push_str(
@@ -2181,16 +2300,11 @@ fn family_lookup_compact_human(
                 .map(|prepared| &prepared.read_plan)
                 .unwrap_or(&report.read_plan);
             let mut output = format!(
-                "{command}: PARTIAL_CONTEXT\nresult: local read plan only; no family or conformance conclusion\ntarget: {}\n",
+                "{command}: PARTIAL_CONTEXT\nresult: local read plan only; no family conclusion\ntarget: {}\n",
                 report.resolved_target.path
             );
             push_compact_read_plan_human(&mut output, Some(read_plan));
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            } else {
-                output.push_str("unverified: pattern-family evidence is insufficient\n");
-            }
+            output.push_str("unverified: pattern-family evidence is insufficient\n");
             output.push_str("next: read the suggested span, then narrow the target if needed\n");
             output
         }
@@ -2206,12 +2320,10 @@ fn family_lookup_compact_human(
             let mut output = format!(
                 "{command}: Cannot verify safely\nreason: available evidence is insufficient for a supported pattern claim\n"
             );
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-            }
             output.push_str(&format!("next: {next}\n"));
             output
         }
+        FamilyLookupReport::Alignment(_) => unreachable!("alignment handled by the full renderer"),
     }
 }
 
@@ -2278,12 +2390,6 @@ fn family_partial_context_human(
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
         push_source_spans_human(&mut output, source_spans);
-    }
-    if command == "check" {
-        output.push_str("advisory_status: UNKNOWN\n");
-        // Use the same `reason:` key as the Found branch and the JSON output so
-        // scraping `check` text is consistent across match and partial-context.
-        output.push_str("reason: runtime equivalence remains unproven\n");
     }
     for unknown in &report.unknowns {
         push_unknown_human(&mut output, unknown);
@@ -2430,7 +2536,104 @@ fn family_lookup_json(
             "query_route": query_route_json(&route),
             "unknowns": unknowns_json(&report.unknowns),
         })),
+        FamilyLookupReport::Alignment(certificate) => json_line(alignment_certificate_json(
+            command,
+            certificate,
+            &route,
+            prepared_output,
+        )),
     }
+}
+
+/// Source-free JSON for a static-alignment certificate. The top-level `status`
+/// is the alignment status token; `runtime_equivalence` is always `UNKNOWN`. The
+/// `query_route` carries the selected/candidate family ids so downstream tooling
+/// reads the selection exactly as it does for other operations.
+fn alignment_certificate_json(
+    command: &str,
+    certificate: &AlignmentCertificateReport,
+    route: &FamilyQueryRouteReport,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> serde_json::Value {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&certificate.read_plan);
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    json!({
+        "command": command,
+        "status": certificate.alignment_status.as_token(),
+        "implemented": true,
+        "active_generation": certificate.active_generation,
+        "query_route": query_route_json(route),
+        "alignment_status": certificate.alignment_status.as_token(),
+        "runtime_equivalence": "UNKNOWN",
+        "target_relationship": certificate
+            .target_relationship
+            .map(|relationship| relationship.as_token()),
+        "selected_family_id": certificate.selected_family_id,
+        "target": resolved_target_json(&certificate.resolved_target),
+        "alignment": certificate
+            .computation
+            .as_deref()
+            .map(alignment_computation_json),
+        "read_plan": read_plan_json(read_plan),
+        "source_spans": source_spans_json(source_spans),
+        "unknowns": unknowns_json(&certificate.unknowns),
+    })
+}
+
+fn alignment_computation_json(computation: &AlignmentComputation) -> serde_json::Value {
+    json!({
+        "outcome_reason": computation.outcome_reason,
+        "required_features_matched": computation
+            .required_features_matched
+            .iter()
+            .map(|matched| json!({
+                "prefix": matched.prefix,
+                "semantics": matched.semantics.as_token(),
+                "expected_summary": matched.expected_summary,
+                "satisfied_summary": matched.satisfied_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "static_deviations": computation
+            .static_deviations
+            .iter()
+            .map(|deviation| json!({
+                "prefix": deviation.prefix,
+                "kind": deviation.kind.as_token(),
+                "semantics_token": deviation.semantics_token,
+                "expected_summary": deviation.expected_summary,
+                "observed_summary": deviation.observed_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "legal_observed_variations": computation
+            .legal_observed_variations
+            .iter()
+            .map(|variation| json!({
+                "dimension": variation.dimension,
+                "observed_profile": variation.observed_profile,
+            }))
+            .collect::<Vec<_>>(),
+        "blocking_unknowns": computation
+            .blocking_unknowns
+            .iter()
+            .map(alignment_typed_unknown_json)
+            .collect::<Vec<_>>(),
+        "unresolved_runtime_obligations": computation
+            .unresolved_runtime_obligations
+            .iter()
+            .map(alignment_typed_unknown_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn alignment_typed_unknown_json(unknown: &crate::core::model::TypedUnknown) -> serde_json::Value {
+    json!({
+        "class": unknown.class.as_protocol_str(),
+        "reason": unknown.reason.as_protocol_str(),
+        "affected_claim": unknown.affected_claim,
+        "recovery": unknown.recovery,
+    })
 }
 
 fn family_partial_context_json(
@@ -2444,7 +2647,7 @@ fn family_partial_context_json(
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&report.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let mut value = json!({
+    let value = json!({
         "command": command,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
@@ -2463,9 +2666,6 @@ fn family_partial_context_json(
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
     });
-    if command == "check" {
-        value["check"] = check_advisory_json();
-    }
     json_line(value)
 }
 
@@ -2484,14 +2684,9 @@ fn family_detail_json(
     let read_plan = &output_components.read_plan;
     let estimated_potential = &output_components.estimated_potential_token_savings;
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let check = if command == "check" {
-        Some(check_advisory_json())
-    } else {
-        None
-    };
     json_line(json!({
         "command": command,
-        "status": if command == "check" { "CONTEXT_ONLY" } else { "ok" },
+        "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
         "query_route": query_route_json(route),
@@ -2550,7 +2745,6 @@ fn family_detail_json(
         "read_plan": read_plan_json(read_plan),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
-        "check": check,
     }))
 }
 
@@ -2650,13 +2844,6 @@ fn resolved_target_json(target: &ResolvedQueryTarget) -> serde_json::Value {
         "candidate_code_unit_ids": target.candidate_code_unit_ids,
         "confidence": target.confidence,
         "match_kind": target.match_kind,
-    })
-}
-
-fn check_advisory_json() -> serde_json::Value {
-    json!({
-        "advisory_status": "UNKNOWN",
-        "reason": "runtime equivalence remains unproven",
     })
 }
 
@@ -9176,7 +9363,8 @@ mod tests {
     };
     use crate::application::query::TermRetrievalAbstention;
     use crate::application::query::{
-        list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
+        list_code_units, list_families, list_indexed_files,
+        lookup_family_with_freshness_and_local_context, lookup_family_with_local_context,
         FamilyFreshness, FamilySummary,
     };
     use crate::application::query_terms::MatchedSignals;
@@ -10075,7 +10263,9 @@ mod tests {
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let matched = match mode {
-                FamilyLookupMode::FuzzyQuery => target == Some("src/routes/a.ts"),
+                FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+                    target == Some("src/routes/a.ts")
+                }
                 FamilyLookupMode::ExactFamilyId => {
                     target == Some("family:typescript:express_route:express")
                 }
@@ -10596,6 +10786,21 @@ mod tests {
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
+            // The conformance check needs the freshness gate and a source store,
+            // exactly like production; other modes keep the source-store-free path.
+            if mode == FamilyLookupMode::Conformance {
+                return lookup_family_with_freshness_and_local_context(
+                    crate::application::query::FamilyEvidenceFreshnessRequest {
+                        repository_root: request.path.clone(),
+                        max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    },
+                    &store,
+                    &store,
+                    &FilesystemSourceStore,
+                    target,
+                    mode,
+                );
+            }
             lookup_family_with_local_context(&store, &store, target, mode)
         }
 
@@ -13466,16 +13671,18 @@ mod tests {
         );
 
         assert_eq!(output.status, 0);
-        let value: Value = serde_json::from_str(output.stdout.trim()).expect("partial check JSON");
-        assert_eq!(value["status"], "PARTIAL_CONTEXT");
-        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
-        assert_eq!(
-            value["check"]["reason"],
-            "runtime equivalence remains unproven"
-        );
-        assert!(value["check"].get("fail_on").is_none());
-        assert!(value["check"].get("pass").is_none());
-        assert!(value["check"].get("conforms").is_none());
+        let value: Value =
+            serde_json::from_str(output.stdout.trim()).expect("check certificate JSON");
+        // A target with no comparison family abstains with a static-alignment
+        // certificate: INSUFFICIENT_EVIDENCE, no selected family, runtime
+        // equivalence explicitly UNKNOWN, and never a legacy advisory block.
+        assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(value["alignment_status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+        assert!(value["selected_family_id"].is_null());
+        assert!(value["alignment"].is_null());
+        assert!(value.get("check").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
     }
 
     #[test]
@@ -13933,65 +14140,45 @@ mod tests {
         }
     }
 
-    #[test]
-    fn family_check_json_is_context_only_when_conformance_is_unproven() {
-        let workspace = TempWorkspace::new("cli-family-check-json");
-        let env = |_: &str| None;
-        let runtime = FamilyQueryRuntime;
-
-        let output = run_with_context_and_runtime(
-            ["check", "src/routes/a.ts", "--json"],
-            workspace.path(),
-            &env,
-            &runtime,
-        );
-
-        assert_eq!(output.status, 0);
-        assert!(output.stderr.is_empty());
-        let value: Value = serde_json::from_str(output.stdout.trim()).expect("check JSON");
-        assert_eq!(value["command"], "check");
-        assert_eq!(value["status"], "CONTEXT_ONLY");
-        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
-        assert_eq!(value["read_plan"]["source_snippets_included"], false);
-        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
-        assert_eq!(
-            value["check"]["reason"],
-            "runtime equivalence remains unproven"
-        );
-        assert!(value["check"].get("fail_on").is_none());
-        assert!(value["check"].get("pass").is_none());
-        assert!(value["check"].get("conforms").is_none());
-    }
+    // The static-alignment check JSON surface is covered end-to-end by
+    // `family_check_json_partial_context_remains_advisory_without_proof_fields`
+    // (abstaining certificate) and the binary integration tests
+    // (STATICALLY_ALIGNED members). `check` never returns the legacy
+    // `CONTEXT_ONLY` advisory, so the former advisory-shape test was removed.
 
     #[test]
-    fn family_check_human_remains_advisory_when_runtime_equivalence_is_unknown() {
+    fn family_check_human_reports_static_alignment_certificate_not_advisory() {
         let workspace = TempWorkspace::new("cli-family-check-human");
         let env = |_: &str| None;
-        let runtime = FamilyQueryRuntime;
-
-        let output = run_with_context_and_runtime(
-            ["check", "src/routes/a.ts"],
-            workspace.path(),
-            &env,
-            &runtime,
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(
+            run_with_context(["init", "--state-only"], workspace.path(), &env).status,
+            0
         );
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let output =
+            run_with_context_and_runtime(["check", "a.ts"], workspace.path(), &env, &runtime);
 
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
-        assert!(output.stdout.lines().count() <= 20);
-        assert!(output.stdout.contains("check: CONTEXT_ONLY"));
-        assert!(output.stdout.contains("advisory_status: UNKNOWN"));
+        // The check leads with the static-alignment result and explicitly
+        // separates static alignment from runtime conformance.
+        assert!(output.stdout.contains("check: INSUFFICIENT_EVIDENCE"));
         assert!(output
             .stdout
+            .contains("result: static alignment only; runtime conformance is NOT proven"));
+        assert!(output.stdout.contains("runtime_equivalence: UNKNOWN"));
+        // The legacy advisory vocabulary is gone.
+        assert!(!output.stdout.contains("CONTEXT_ONLY"));
+        assert!(!output.stdout.contains("advisory_status"));
+        assert!(!output
+            .stdout
             .contains("runtime equivalence remains unproven"));
-        for internal in [
-            "cluster_",
-            "query_pipeline:",
-            "query_candidate_family_ids:",
-            "query_candidate_limit:",
-        ] {
-            assert!(!output.stdout.contains(internal), "leaked {internal}");
-        }
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));

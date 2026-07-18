@@ -1,13 +1,15 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
+use crate::application::conformance::AlignmentComputation;
 use crate::application::install::AGENT_PREFLIGHT_GATE;
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
     family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
     repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
-    FamilyQueryUnknown, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    validate_query_token_budget, AlignmentCertificateReport, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
     ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport,
     TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
 };
@@ -448,6 +450,76 @@ pub fn handle_context_call(
                     "unknowns": unknowns_value(&report.unknowns),
                 }))
             }
+            Ok(FamilyLookupReport::Alignment(certificate)) => {
+                let route = family_query_route_report(
+                    &FamilyLookupReport::Alignment(certificate.clone()),
+                    lookup_mode_for_operation(arguments.operation),
+                );
+                let mut read_plan = match runtime
+                    .enrich_read_plan_line_ranges(request.clone(), &certificate.read_plan)
+                {
+                    Ok(read_plan) => read_plan,
+                    Err(_) => {
+                        record_mcp_family_query_fallback(
+                            request,
+                            arguments.operation,
+                            arguments.include_source_spans,
+                        );
+                        return Ok(fallback_value(
+                            arguments.operation,
+                            repository_status_unavailable_fallback(
+                                QueryPreflightOperation::PatternFamilyQuery,
+                            ),
+                        ));
+                    }
+                };
+                let source_spans = if arguments.include_source_spans {
+                    match runtime.render_source_spans(
+                        request.clone(),
+                        &read_plan,
+                        true,
+                        arguments.output_options.token_budget,
+                    ) {
+                        Ok(source_spans) => {
+                            read_plan = read_plan_with_rendered_spans(&read_plan, &source_spans);
+                            Some(source_spans)
+                        }
+                        Err(_) => {
+                            record_mcp_family_query_fallback(
+                                request,
+                                arguments.operation,
+                                arguments.include_source_spans,
+                            );
+                            return Ok(fallback_value(
+                                arguments.operation,
+                                repository_status_unavailable_fallback(
+                                    QueryPreflightOperation::PatternFamilyQuery,
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let outcome_status = alignment_outcome_status(certificate.alignment_status);
+                record_mcp_family_query_outcome(
+                    request,
+                    arguments.operation,
+                    outcome_status,
+                    &certificate.unknowns,
+                    None,
+                    Some(&read_plan),
+                    source_spans.as_ref(),
+                    arguments.include_source_spans,
+                );
+                Ok(alignment_certificate_value(
+                    arguments.operation,
+                    &certificate,
+                    &route,
+                    &read_plan,
+                    source_spans.as_ref(),
+                ))
+            }
             Err(_) => {
                 record_mcp_family_query_fallback(
                     request,
@@ -465,12 +537,27 @@ pub fn handle_context_call(
     }
 }
 
+/// Map an alignment status onto the query-outcome telemetry bucket via the core
+/// commitment-class authority, so an abstaining certificate is never Found.
+fn alignment_outcome_status(
+    status: crate::core::policy::alignment::AlignmentStatus,
+) -> FamilyQueryOutcomeStatus {
+    use crate::core::policy::alignment::AlignmentOutcomeClass;
+    match status.outcome_class() {
+        AlignmentOutcomeClass::Committed => FamilyQueryOutcomeStatus::Found,
+        AlignmentOutcomeClass::Partial => FamilyQueryOutcomeStatus::PartialContext,
+        AlignmentOutcomeClass::Abstained => FamilyQueryOutcomeStatus::Unknown,
+    }
+}
+
 fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
     match operation {
         McpOperation::ShowFamily => FamilyLookupMode::ExactFamilyId,
-        McpOperation::FindAnalogues
-        | McpOperation::ExplainDeviation
-        | McpOperation::CheckConformance => FamilyLookupMode::FuzzyQuery,
+        McpOperation::FindAnalogues | McpOperation::ExplainDeviation => {
+            FamilyLookupMode::FuzzyQuery
+        }
+        // check_conformance runs the static-alignment flow.
+        McpOperation::CheckConformance => FamilyLookupMode::Conformance,
     }
 }
 
@@ -538,7 +625,9 @@ fn family_query_lookup_mode(mode: FamilyLookupMode) -> FamilyQueryLookupMode {
     match mode {
         FamilyLookupMode::ExactFamilyId => FamilyQueryLookupMode::ExactFamily,
         FamilyLookupMode::ExactMemberId => FamilyQueryLookupMode::ExactMember,
-        FamilyLookupMode::FuzzyQuery => FamilyQueryLookupMode::Fuzzy,
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            FamilyQueryLookupMode::Fuzzy
+        }
     }
 }
 
@@ -914,15 +1003,10 @@ fn family_detail_value(
         read_plan,
         source_spans,
     );
-    let check = if operation == McpOperation::CheckConformance {
-        Some(check_advisory_value())
-    } else {
-        None
-    };
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
-        "status": if operation == McpOperation::CheckConformance { "CONTEXT_ONLY" } else { "ok" },
+        "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
         "query_route": query_route_value(route),
@@ -981,7 +1065,6 @@ fn family_detail_value(
         "read_plan": read_plan_value(read_plan),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
-        "check": check,
     })
 }
 
@@ -993,7 +1076,7 @@ fn family_partial_context_value(
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
-    let mut value = json!({
+    let value = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "status": "PARTIAL_CONTEXT",
@@ -1013,10 +1096,95 @@ fn family_partial_context_value(
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
     });
-    if operation == McpOperation::CheckConformance {
-        value["check"] = check_advisory_value();
-    }
     value
+}
+
+/// Source-free MCP value for a static-alignment certificate. Mirrors the CLI
+/// JSON shape: the `status` is the alignment token, `runtime_equivalence` is
+/// always `UNKNOWN`, and `query_route` carries the selected/candidate family ids.
+fn alignment_certificate_value(
+    operation: McpOperation,
+    certificate: &AlignmentCertificateReport,
+    route: &FamilyQueryRouteReport,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Value {
+    json!({
+        "operation": operation.as_str(),
+        "command": operation.cli_command(),
+        "status": certificate.alignment_status.as_token(),
+        "implemented": true,
+        "active_generation": certificate.active_generation,
+        "query_route": query_route_value(route),
+        "alignment_status": certificate.alignment_status.as_token(),
+        "runtime_equivalence": "UNKNOWN",
+        "target_relationship": certificate
+            .target_relationship
+            .map(|relationship| relationship.as_token()),
+        "selected_family_id": certificate.selected_family_id,
+        "target": resolved_target_value(&certificate.resolved_target),
+        "alignment": certificate
+            .computation
+            .as_deref()
+            .map(alignment_computation_value),
+        "read_plan": read_plan_value(read_plan),
+        "source_spans": source_spans_value(source_spans),
+        "unknowns": unknowns_value(&certificate.unknowns),
+    })
+}
+
+fn alignment_computation_value(computation: &AlignmentComputation) -> Value {
+    json!({
+        "outcome_reason": computation.outcome_reason,
+        "required_features_matched": computation
+            .required_features_matched
+            .iter()
+            .map(|matched| json!({
+                "prefix": matched.prefix,
+                "semantics": matched.semantics.as_token(),
+                "expected_summary": matched.expected_summary,
+                "satisfied_summary": matched.satisfied_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "static_deviations": computation
+            .static_deviations
+            .iter()
+            .map(|deviation| json!({
+                "prefix": deviation.prefix,
+                "kind": deviation.kind.as_token(),
+                "semantics_token": deviation.semantics_token,
+                "expected_summary": deviation.expected_summary,
+                "observed_summary": deviation.observed_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "legal_observed_variations": computation
+            .legal_observed_variations
+            .iter()
+            .map(|variation| json!({
+                "dimension": variation.dimension,
+                "observed_profile": variation.observed_profile,
+            }))
+            .collect::<Vec<_>>(),
+        "blocking_unknowns": computation
+            .blocking_unknowns
+            .iter()
+            .map(alignment_typed_unknown_value)
+            .collect::<Vec<_>>(),
+        "unresolved_runtime_obligations": computation
+            .unresolved_runtime_obligations
+            .iter()
+            .map(alignment_typed_unknown_value)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn alignment_typed_unknown_value(unknown: &crate::core::model::TypedUnknown) -> Value {
+    json!({
+        "class": unknown.class.as_protocol_str(),
+        "reason": unknown.reason.as_protocol_str(),
+        "affected_claim": unknown.affected_claim,
+        "recovery": unknown.recovery,
+    })
 }
 
 fn query_route_value(route: &FamilyQueryRouteReport) -> Value {
@@ -1084,13 +1252,6 @@ fn resolved_target_value(target: &ResolvedQueryTarget) -> Value {
         "candidate_code_unit_ids": target.candidate_code_unit_ids,
         "confidence": target.confidence,
         "match_kind": target.match_kind,
-    })
-}
-
-fn check_advisory_value() -> Value {
-    json!({
-        "advisory_status": "UNKNOWN",
-        "reason": "runtime equivalence remains unproven",
     })
 }
 
@@ -1505,50 +1666,33 @@ mod tests {
         assert!(!text.contains("export const"));
     }
 
-    #[test]
-    fn check_conformance_partial_context_remains_advisory_without_proof_fields() {
-        let runtime = FakeMcpRuntime::ready_partial_context();
-
-        let response = handle_context_call(
-            &runtime,
-            &context(),
-            &json!({"operation": "check_conformance", "target": "src/routes/a.ts missing_family"}),
-        )
-        .expect("partial check response");
-
-        assert_eq!(response["status"], "PARTIAL_CONTEXT");
-        assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
-        assert_eq!(
-            response["check"]["reason"],
-            "runtime equivalence remains unproven"
-        );
-        assert!(response["check"].get("fail_on").is_none());
-        assert!(response["check"].get("pass").is_none());
-        assert!(response["check"].get("conforms").is_none());
-    }
+    // `check_conformance` now returns a static-alignment certificate and never
+    // the legacy `PARTIAL_CONTEXT`/advisory shape, so the former advisory
+    // partial-context test was removed. The static-alignment abstention surface
+    // is covered end-to-end by the binary integration tests.
 
     #[test]
     fn active_family_compact_response_has_no_absolute_path_source_snippet_or_evidence() {
         let runtime = FakeMcpRuntime::ready_found();
 
+        // This exercises the family-detail compact rendering and its source-free
+        // guarantees; `find_analogues` is the operation that returns family
+        // detail (`check_conformance` now returns a static-alignment certificate).
         let response = handle_context_call(
             &runtime,
             &context(),
-            &json!({"operation": "check_conformance", "target": "src/routes/a.ts"}),
+            &json!({"operation": "find_analogues", "target": "src/routes/a.ts"}),
         )
         .expect("family response");
         let text = response.to_string();
 
-        assert_eq!(response["status"], "CONTEXT_ONLY");
+        assert_eq!(response["status"], "ok");
         assert_eq!(response["query_route"]["route"], "discover_hydrate_compose");
         assert_eq!(
             response["query_route"]["follow_up_family_ids"],
             json!(["family:typescript:express_route:express"])
         );
-        assert_eq!(response["check"]["advisory_status"], "UNKNOWN");
-        assert!(response["check"].get("fail_on").is_none());
-        assert!(response["check"].get("pass").is_none());
-        assert!(response["check"].get("conforms").is_none());
+        assert!(response["check"].is_null());
         assert_eq!(response["output"]["mode"], "compact");
         assert_eq!(response["output"]["estimated_evidence_tokens"], 0);
         assert!(
@@ -1812,7 +1956,10 @@ mod tests {
             &json!({"operation": "check_conformance", "target": "src/routes/a.ts"}),
         )
         .expect("found response");
-        assert_eq!(found["status"], "CONTEXT_ONLY");
+        // This exercises the query-outcome telemetry rollup: the fake returns a
+        // resolved family report so the check_conformance category records a
+        // `found` outcome.
+        assert_eq!(found["status"], "ok");
 
         let partial = handle_context_call(
             &FakeMcpRuntime::ready_partial_context(),

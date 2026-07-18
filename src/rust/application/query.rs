@@ -1,7 +1,11 @@
 //! Query use-case boundary for finding repository analogues.
 
+use crate::application::conformance::{
+    compute_alignment, AlignmentComputation, TargetFeatureProfile,
+};
 use crate::application::family::{
-    classify_unknown_family_effect, FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
+    classify_unknown_family_effect, extract_target_unit_features,
+    FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
 };
 use crate::application::providers::provider_recovery_code;
 use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
@@ -17,10 +21,12 @@ use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
-    ClaimImpact, ContentHash, EstimatedPotentialTokenSavings, FactCertainty,
-    FamilyConstraintProfile, FamilyPrevalence, ResolutionClass, SemanticFactKind,
-    SemanticObligation, UnknownClass, UnknownReasonCode,
+    ClaimImpact, CodeUnitId, ContentHash, EstimatedPotentialTokenSavings, Evidence, FactCertainty,
+    FactOrigin, FamilyConstraintProfile, FamilyPrevalence, Provenance, RepositoryRevision,
+    ResolutionClass, SemanticFact, SemanticFactKind, SemanticObligation, SourceRange, SymbolId,
+    UnknownClass, UnknownReasonCode,
 };
+use crate::core::policy::alignment::{AlignmentStatus, TargetRelationship};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
@@ -390,11 +396,46 @@ pub struct FamilyPartialContextReport {
     pub unknowns: Vec<FamilyQueryUnknown>,
 }
 
+/// A source-backed static-alignment certificate for the `check` operation.
+///
+/// It reports how a resolved target code unit statically aligns with a selected
+/// pattern family's constraint profile. It is deliberately never a
+/// runtime-conformance verdict: `runtime_equivalence` is always `UNKNOWN` and the
+/// family's runtime obligation is carried verbatim in the computation. Every
+/// value is source-free.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignmentCertificateReport {
+    pub active_generation: String,
+    /// The top-level static-alignment outcome (may be an abstaining status when
+    /// no family could be selected).
+    pub alignment_status: AlignmentStatus,
+    /// How the target relates to the comparison family, when one was selected.
+    pub target_relationship: Option<TargetRelationship>,
+    /// The comparison family, when one was confidently selected. `None` for every
+    /// abstaining outcome, so an abstention never surfaces a chosen family.
+    pub selected_family_id: Option<String>,
+    /// Bounded candidate family ids (e.g. the competing families that made a
+    /// selection ambiguous, or the single selected family).
+    pub candidate_family_ids: Vec<String>,
+    /// The resolved target locator (code unit id, path, byte range).
+    pub resolved_target: ResolvedQueryTarget,
+    /// The alignment computation, present only when a family was selected and
+    /// compared. Boxed so the (large) computation does not inflate every variant.
+    pub computation: Option<Box<AlignmentComputation>>,
+    /// Evidence read plan for the comparison family or the resolved target,
+    /// including the contrast witness when a family was selected.
+    pub read_plan: ReadPlan,
+    /// Typed reasons carried for an abstaining or partial certificate.
+    pub unknowns: Vec<FamilyQueryUnknown>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FamilyLookupReport {
     Found(FamilyDetailReport),
     PartialContext(Box<FamilyPartialContextReport>),
     Unknown(FamilyUnknownReport),
+    /// A static-alignment certificate produced by `FamilyLookupMode::Conformance`.
+    Alignment(Box<AlignmentCertificateReport>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -843,16 +884,24 @@ pub enum FamilyLookupMode {
     ExactFamilyId,
     ExactMemberId,
     FuzzyQuery,
+    /// Static-alignment check. Resolves the target to a specific code unit,
+    /// selects a comparison family, and returns a `FamilyLookupReport::Alignment`
+    /// certificate. Never emits a runtime-conformance verdict.
+    Conformance,
 }
 
 pub fn family_query_route_report(
     report: &FamilyLookupReport,
     mode: FamilyLookupMode,
 ) -> FamilyQueryRouteReport {
+    if let FamilyLookupReport::Alignment(certificate) = report {
+        return alignment_query_route_report(certificate);
+    }
     let selected_family_id = match report {
         FamilyLookupReport::Found(family) => Some(family.family_id.clone()),
         FamilyLookupReport::PartialContext(report) => report.resolved_target.family_id.clone(),
         FamilyLookupReport::Unknown(_) => None,
+        FamilyLookupReport::Alignment(_) => unreachable!("handled above"),
     };
     let candidate_family_ids = report_candidate_family_ids(report);
     let follow_up_family_ids =
@@ -886,7 +935,36 @@ fn report_term_retrieval(report: &FamilyLookupReport) -> Option<&TermRetrievalRo
     match report {
         FamilyLookupReport::Found(family) => family.term_retrieval.as_ref(),
         FamilyLookupReport::Unknown(unknown) => unknown.term_retrieval.as_ref(),
-        FamilyLookupReport::PartialContext(_) => None,
+        FamilyLookupReport::PartialContext(_) | FamilyLookupReport::Alignment(_) => None,
+    }
+}
+
+/// Build the query route for a static-alignment certificate directly from the
+/// certificate's own selection metadata. `check` never routes through the fuzzy
+/// term-retrieval layers, so the route names the conformance pipeline.
+fn alignment_query_route_report(
+    certificate: &AlignmentCertificateReport,
+) -> FamilyQueryRouteReport {
+    let candidate_family_ids = normalized_family_ids(certificate.candidate_family_ids.clone());
+    let follow_up_family_ids = family_id_handles(
+        &candidate_family_ids,
+        certificate.selected_family_id.as_ref(),
+    );
+    FamilyQueryRouteReport {
+        route: "conformance_static_alignment",
+        input_kind: "conformance_target_code_unit",
+        pipeline: vec![
+            "resolve_target_code_unit",
+            "select_comparison_family",
+            "compute_static_alignment",
+        ],
+        family_id_policy: "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+        candidate_limit: Some(FUZZY_FAMILY_CANDIDATE_LIMIT),
+        selected_family_id: certificate.selected_family_id.clone(),
+        candidate_family_ids,
+        follow_up_family_ids,
+        why_selected: "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN",
+        term_retrieval: None,
     }
 }
 
@@ -898,6 +976,10 @@ fn query_route_name(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'st
         (FamilyLookupReport::PartialContext(_), _) => "partial_context_read_plan",
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => "discovery_unknown",
         (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
+        // The alignment route is built directly by `alignment_query_route_report`;
+        // these arms only satisfy exhaustiveness for the conformance mode.
+        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => "conformance_static_alignment",
     }
 }
 
@@ -906,12 +988,13 @@ fn query_route_input_kind(mode: FamilyLookupMode) -> &'static str {
         FamilyLookupMode::FuzzyQuery => "path_symbol_role_or_pattern_target",
         FamilyLookupMode::ExactFamilyId => "family_id_follow_up_handle",
         FamilyLookupMode::ExactMemberId => "member_or_code_unit_follow_up_handle",
+        FamilyLookupMode::Conformance => "conformance_target_code_unit",
     }
 }
 
 fn query_route_family_id_policy(mode: FamilyLookupMode) -> &'static str {
     match mode {
-        FamilyLookupMode::FuzzyQuery => {
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
             "family_ids_are_returned_follow_up_handles_not_required_initial_inputs"
         }
         FamilyLookupMode::ExactFamilyId => "show_family_requires_exact_family_id",
@@ -949,6 +1032,13 @@ fn query_route_pipeline(report: &FamilyLookupReport, mode: FamilyLookupMode) -> 
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::ExactMemberId) => {
             vec!["resolve_exact_member", "abstain"]
         }
+        (FamilyLookupReport::Unknown(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => vec![
+            "resolve_target_code_unit",
+            "select_comparison_family",
+            "compute_static_alignment",
+        ],
     }
 }
 
@@ -969,6 +1059,10 @@ fn query_route_why(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'sta
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => {
             "candidate discovery or local target resolution could not produce a single supported family without overclaiming"
         }
+        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => {
+            "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN"
+        }
         (FamilyLookupReport::Unknown(_), _) => {
             "exact follow-up handle did not resolve to a supported fresh family"
         }
@@ -987,6 +1081,9 @@ fn report_candidate_family_ids(report: &FamilyLookupReport) -> Vec<String> {
         }
         FamilyLookupReport::Unknown(report) => {
             normalized_family_ids(report.candidate_family_ids.clone())
+        }
+        FamilyLookupReport::Alignment(certificate) => {
+            normalized_family_ids(certificate.candidate_family_ids.clone())
         }
     }
 }
@@ -2477,7 +2574,11 @@ fn bounded_family_matches(
     match mode {
         FamilyLookupMode::ExactFamilyId => exact_family_match_set(store, target),
         FamilyLookupMode::ExactMemberId => exact_member_match_set(store, target),
-        FamilyLookupMode::FuzzyQuery => fuzzy_family_match_set(store, target),
+        // Conformance resolves through the shared fuzzy pipeline before the
+        // alignment layer runs, so it shares the fuzzy match set here.
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            fuzzy_family_match_set(store, target)
+        }
     }
 }
 
@@ -2838,6 +2939,11 @@ pub fn lookup_family_with_freshness_and_local_context(
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
+    // The conformance check resolves the target and comparison family through the
+    // same shared pipeline, then layers the static-alignment certificate on top.
+    if mode == FamilyLookupMode::Conformance {
+        return check_static_alignment(request, index_store, family_store, source_store, target);
+    }
     // Exact authority + role/evidence fuzzy layers run first and unchanged.
     let report =
         lookup_family_with_freshness(request.clone(), family_store, source_store, target, mode)?;
@@ -2848,6 +2954,773 @@ pub fn lookup_family_with_freshness_and_local_context(
     // The existing local-context read-plan fallback still applies where its
     // preconditions hold (path-shaped targets, or term retrieval that abstained).
     add_local_context_fallback(index_store, report, target, mode)
+}
+
+// ---------------------------------------------------------------------------
+// Static-alignment check (`check` operation).
+//
+// `check` upgrades the advisory no-op into a source-backed static-alignment
+// certificate. It reuses the shared lookup pipeline to resolve the TARGET to a
+// specific code unit and select a comparison family, extracts the target's
+// feature profile with the SAME authority family induction uses, and delegates
+// the alignment decision to `conformance::compute_alignment`. It NEVER claims
+// runtime equivalence: `runtime_equivalence` stays `UNKNOWN` in every certificate
+// and the family's runtime obligation is carried verbatim.
+// ---------------------------------------------------------------------------
+
+/// Resolve a target to a static-alignment certificate.
+///
+/// This is deliberately NOT the fuzzy family lookup: it resolves the target to
+/// exactly one code unit honoring any `path:line` / `path:byte-range` locator or
+/// `unit:` member id, verifies that unit's file is fresh, then decides membership
+/// directly (`find_active_families_by_member`) or, for a non-member, selects the
+/// single fresh ready family of the unit's key. There is no canonical-member
+/// fallback: a target that does not pin exactly one unit abstains.
+fn check_static_alignment(
+    request: FamilyEvidenceFreshnessRequest,
+    index_store: &impl IndexStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    target: Option<&str>,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let snapshot = index_store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    let active_generation = snapshot.generation_id.clone();
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::Unknown,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown("check target")],
+            empty_resolved_target(""),
+        ));
+    };
+
+    // (1) Resolve the target to exactly one code unit, honoring its locator.
+    let unit = match resolve_conformance_target_unit(
+        &request,
+        source_store,
+        target,
+        &snapshot.files,
+        &snapshot.units,
+    )? {
+        ConformanceUnitResolution::Resolved(unit) => unit,
+        ConformanceUnitResolution::Stale { path } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![stale_evidence_unknown(format!("{path}:evidence_freshness"))],
+                conformance_locator_target(target, "code_unit", &path, Vec::new(), Vec::new()),
+            ));
+        }
+        ConformanceUnitResolution::AmbiguousUnits {
+            path,
+            candidate_unit_ids,
+        } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![candidate_unit_ambiguity_unknown(
+                    "check target code unit ambiguity",
+                    &candidate_unit_ids,
+                )],
+                conformance_locator_target(target, "path", &path, Vec::new(), candidate_unit_ids),
+            ));
+        }
+        ConformanceUnitResolution::AmbiguousFiles { candidate_paths } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![candidate_unit_ambiguity_unknown(
+                    "check target path ambiguity",
+                    &candidate_paths,
+                )],
+                conformance_locator_target(target, "path", "", candidate_paths, Vec::new()),
+            ));
+        }
+        ConformanceUnitResolution::Unresolved { reason } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::Unknown,
+                empty_alignment_read_plan(),
+                vec![FamilyQueryUnknown {
+                    class: UnknownClass::Blocking,
+                    reason: UnknownReasonCode::InsufficientSupport,
+                    affected_claim: "check target resolution".to_string(),
+                    recovery: Some(format!("{reason}; use an exact repo-relative path, path:line, path:byte-range, or unit: member id")),
+                }],
+                empty_resolved_target(target),
+            ));
+        }
+    };
+
+    let facts = snapshot_semantic_facts(&snapshot)?;
+    let units = &snapshot.units;
+
+    // (2) Extract the target's feature profile with the family-induction authority.
+    let Some(target_features) = extract_target_unit_features(units, &facts, &unit.id) else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown("check target features")],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+
+    // A target with no single framework role, or a non-eligible kind, is out of
+    // family scope: there is no key to select a comparison family from.
+    if target_features.framework_role_key.is_none()
+        || !crate::application::family::family_eligible_kind(&unit.kind)
+    {
+        return Ok(alignment_out_of_scope(
+            active_generation,
+            local_context_read_plan_for_unit(unit),
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
+
+    // (3) Membership: the unit's own family, else the single ready family of key.
+    let member_candidates = family_store
+        .find_active_families_by_member(&unit.id)
+        .map_err(family_store_error)?;
+    let mut member_family_ids: Vec<String> = member_candidates
+        .candidates
+        .iter()
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+    member_family_ids.sort();
+    member_family_ids.dedup();
+
+    let (family_id, is_member) = if member_family_ids.len() == 1 {
+        (
+            member_family_ids.into_iter().next().expect("one family"),
+            true,
+        )
+    } else if member_family_ids.is_empty() {
+        match select_comparison_family_by_key(family_store, &target_features)? {
+            KeyFamilySelection::One(family_id) => (family_id, false),
+            KeyFamilySelection::None => {
+                return Ok(alignment_out_of_scope(
+                    active_generation,
+                    local_context_read_plan_for_unit(unit),
+                    resolved_target_for_unit(target, unit, None),
+                ));
+            }
+            KeyFamilySelection::Ambiguous(candidates) => {
+                let mut resolved = resolved_target_for_unit(target, unit, None);
+                resolved.candidate_family_ids = candidates.clone();
+                return Ok(alignment_abstain(
+                    active_generation,
+                    AlignmentStatus::InsufficientEvidence,
+                    empty_alignment_read_plan(),
+                    vec![candidate_ambiguity_unknown(
+                        "check comparison family ambiguity",
+                        &candidates,
+                    )],
+                    resolved,
+                ));
+            }
+        }
+    } else {
+        let mut resolved = resolved_target_for_unit(target, unit, None);
+        resolved.candidate_family_ids = member_family_ids.clone();
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![candidate_ambiguity_unknown(
+                "check target family ambiguity",
+                &member_family_ids,
+            )],
+            resolved,
+        ));
+    };
+
+    // (4) Hydrate the comparison family, verify its evidence freshness, compare.
+    let Some(active_family) = family_store
+        .show_family(&family_id)
+        .map_err(family_store_error)?
+    else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown(
+                "check comparison family hydration",
+            )],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+    if !family_evidence_is_fresh(&request, source_store, &active_family)? {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![stale_evidence_unknown(format!(
+                "{family_id}:evidence_freshness"
+            ))],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
+    let profile = hydrated_constraint_profile(family_store, &family_id)?;
+    let family = family_detail(active_family, profile);
+    let Some(profile) = family.constraint_profile.as_deref() else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown(format!(
+                "{family_id}:constraint_profile"
+            ))],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+
+    let computation = compute_alignment(profile, &target_features);
+    let relationship = if is_member {
+        TargetRelationship::Member
+    } else {
+        classify_nonmember_relationship(&computation, &target_features)
+    };
+    let read_plan = build_read_plan(
+        &family,
+        Some(target),
+        FamilyLookupMode::FuzzyQuery,
+        alignment_output_options(),
+    );
+    let mut unknowns = family.unknowns.clone();
+    unknowns.extend(alignment_blocking_query_unknowns(&computation, &family_id));
+
+    Ok(FamilyLookupReport::Alignment(Box::new(
+        AlignmentCertificateReport {
+            active_generation,
+            alignment_status: computation.status,
+            target_relationship: Some(relationship),
+            selected_family_id: Some(family_id.clone()),
+            candidate_family_ids: vec![family_id.clone()],
+            resolved_target: resolved_target_for_unit(target, unit, Some(family_id)),
+            computation: Some(Box::new(computation)),
+            read_plan,
+            unknowns,
+        },
+    )))
+}
+
+/// The result of resolving a `check` target to exactly one indexed code unit.
+#[derive(Debug)]
+enum ConformanceUnitResolution<'a> {
+    /// Exactly one code unit was pinned and its file is fresh.
+    Resolved(&'a IndexedCodeUnitRecord),
+    /// The target file is stale; abstain rather than certify from stale facts.
+    Stale { path: String },
+    /// A path-only target names a file with more than one family-eligible unit and
+    /// no locator to disambiguate.
+    AmbiguousUnits {
+        path: String,
+        candidate_unit_ids: Vec<String>,
+    },
+    /// The target matched more than one indexed file.
+    AmbiguousFiles { candidate_paths: Vec<String> },
+    /// No indexed file/unit matched, or no unit contains the locator.
+    Unresolved { reason: &'static str },
+}
+
+/// Maximum candidate ids surfaced on an ambiguous conformance resolution.
+const CONFORMANCE_AMBIGUITY_CANDIDATE_CAP: usize = 8;
+
+/// Resolve a `check` target to exactly one indexed code unit, honoring the
+/// locator. Never falls back to a canonical member: an under-specified target
+/// resolves to an ambiguity or an unresolved verdict, not an arbitrary unit.
+fn resolve_conformance_target_unit<'a>(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    target: &str,
+    files: &[IndexedFileRecord],
+    units: &'a [IndexedCodeUnitRecord],
+) -> Result<ConformanceUnitResolution<'a>, RepoGrammarError> {
+    // (1) An exact `unit:` member id pins one unit directly.
+    if let Some(unit) = units.iter().find(|unit| unit.id == target) {
+        return Ok(
+            if verify_evidence_path(request, source_store, &unit.path, &unit.content_hash)?
+                == EvidencePathVerdict::Fresh
+            {
+                ConformanceUnitResolution::Resolved(unit)
+            } else {
+                ConformanceUnitResolution::Stale {
+                    path: unit.path.clone(),
+                }
+            },
+        );
+    }
+
+    // (2) Resolve the target file and any path locator.
+    let mut file_matches: Vec<(&IndexedFileRecord, TargetPathMatch)> = files
+        .iter()
+        .filter_map(|file| target_path_match(target, &file.path).map(|matched| (file, matched)))
+        .collect();
+    file_matches.sort_by(|(left_file, left), (right_file, right)| {
+        (left.rank, left_file.path.as_str()).cmp(&(right.rank, right_file.path.as_str()))
+    });
+    file_matches.dedup_by(|(left, _), (right, _)| left.path == right.path);
+    if file_matches.is_empty() {
+        return Ok(ConformanceUnitResolution::Unresolved {
+            reason: "check target matched no indexed file",
+        });
+    }
+    let best_rank = file_matches[0].1.rank;
+    let best_paths: Vec<String> = file_matches
+        .iter()
+        .filter(|(_, matched)| matched.rank == best_rank)
+        .map(|(file, _)| file.path.clone())
+        .collect();
+    if best_paths.len() > 1 {
+        return Ok(ConformanceUnitResolution::AmbiguousFiles {
+            candidate_paths: best_paths
+                .into_iter()
+                .take(CONFORMANCE_AMBIGUITY_CANDIDATE_CAP)
+                .collect(),
+        });
+    }
+    let (file, path_match) = file_matches[0];
+
+    // (3) The target file must be fresh before any certificate is considered.
+    if verify_evidence_path(request, source_store, &file.path, &file.content_hash)?
+        != EvidencePathVerdict::Fresh
+    {
+        return Ok(ConformanceUnitResolution::Stale {
+            path: file.path.clone(),
+        });
+    }
+
+    // (4) The locator's byte anchor, mapping a line locator through source.
+    let anchor: Option<(usize, usize)> = if let Some(range) = path_match.byte_range {
+        Some(range)
+    } else if let Some(line) = path_match.line {
+        conformance_source_text(request, source_store, file)?
+            .and_then(|text| line_start_byte(&text, line))
+            .map(|byte| (byte, byte))
+    } else {
+        None
+    };
+
+    let mut units_in_file: Vec<&IndexedCodeUnitRecord> =
+        units.iter().filter(|unit| unit.path == file.path).collect();
+    if units_in_file.is_empty() {
+        return Ok(ConformanceUnitResolution::Unresolved {
+            reason: "check target file has no indexed code unit",
+        });
+    }
+
+    // (5a) A locator pins the innermost code unit containing it.
+    if let Some((start, end)) = anchor {
+        let mut containing: Vec<&IndexedCodeUnitRecord> = units_in_file
+            .iter()
+            .copied()
+            .filter(|unit| unit.start_byte <= start && end <= unit.end_byte)
+            .collect();
+        if containing.is_empty() {
+            return Ok(ConformanceUnitResolution::Unresolved {
+                reason: "no indexed code unit contains the target locator",
+            });
+        }
+        containing.sort_by(|left, right| {
+            (
+                left.end_byte - left.start_byte,
+                left.start_byte,
+                left.id.as_str(),
+            )
+                .cmp(&(
+                    right.end_byte - right.start_byte,
+                    right.start_byte,
+                    right.id.as_str(),
+                ))
+        });
+        return Ok(ConformanceUnitResolution::Resolved(containing[0]));
+    }
+
+    // (5b) A path-only target pins the single family-eligible unit; more than one
+    // is ambiguous, and zero surfaces the widest unit for an out-of-scope verdict.
+    let mut eligible: Vec<&IndexedCodeUnitRecord> = units_in_file
+        .iter()
+        .copied()
+        .filter(|unit| crate::application::family::family_eligible_kind(&unit.kind))
+        .collect();
+    match eligible.len() {
+        1 => Ok(ConformanceUnitResolution::Resolved(eligible[0])),
+        0 => {
+            units_in_file.sort_by(|left, right| {
+                (
+                    right.end_byte - right.start_byte,
+                    left.start_byte,
+                    left.id.as_str(),
+                )
+                    .cmp(&(
+                        left.end_byte - left.start_byte,
+                        right.start_byte,
+                        right.id.as_str(),
+                    ))
+            });
+            Ok(ConformanceUnitResolution::Resolved(units_in_file[0]))
+        }
+        _ => {
+            eligible.sort_by(|left, right| {
+                (left.start_byte, left.id.as_str()).cmp(&(right.start_byte, right.id.as_str()))
+            });
+            Ok(ConformanceUnitResolution::AmbiguousUnits {
+                path: file.path.clone(),
+                candidate_unit_ids: eligible
+                    .iter()
+                    .map(|unit| unit.id.clone())
+                    .take(CONFORMANCE_AMBIGUITY_CANDIDATE_CAP)
+                    .collect(),
+            })
+        }
+    }
+}
+
+/// The comparison family selected by a non-member target's `(language, kind,
+/// role)` key.
+enum KeyFamilySelection {
+    One(String),
+    None,
+    Ambiguous(Vec<String>),
+}
+
+fn select_comparison_family_by_key(
+    family_store: &impl FamilyStore,
+    target_features: &TargetFeatureProfile,
+) -> Result<KeyFamilySelection, RepoGrammarError> {
+    let Some(role_key) = target_features.framework_role_key.as_deref() else {
+        return Ok(KeyFamilySelection::None);
+    };
+    let summaries = family_store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    let mut key_candidates: Vec<String> = summaries
+        .families
+        .iter()
+        .filter(|summary| {
+            summary.language == target_features.language
+                && summary.code_unit_kind == target_features.code_unit_kind
+                && summary.framework_role == role_key
+        })
+        .map(|summary| summary.family_id.clone())
+        .collect();
+    key_candidates.sort();
+    key_candidates.dedup();
+    Ok(match key_candidates.len() {
+        0 => KeyFamilySelection::None,
+        1 => KeyFamilySelection::One(key_candidates.into_iter().next().expect("one candidate")),
+        _ => KeyFamilySelection::Ambiguous(key_candidates),
+    })
+}
+
+/// 1-based line number to the byte offset of that line's start, or `None` when
+/// the line is out of range.
+fn line_start_byte(text: &str, line: usize) -> Option<usize> {
+    if line == 0 {
+        return None;
+    }
+    if line == 1 {
+        return Some(0);
+    }
+    let mut seen = 1usize;
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            seen += 1;
+            if seen == line {
+                return Some(index + 1);
+            }
+        }
+    }
+    None
+}
+
+/// Read the target file's source text for line-to-byte mapping, or `None` when it
+/// is missing, changed, too large, or non-UTF-8.
+fn conformance_source_text(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    file: &IndexedFileRecord,
+) -> Result<Option<String>, RepoGrammarError> {
+    match source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: file.path.clone(),
+        expected_content_hash: file.content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    }) {
+        Ok(source) if source.path == file.path && source.content_hash == file.content_hash => {
+            Ok(Some(source.text))
+        }
+        Ok(_)
+        | Err(SourceStoreError::Missing(_))
+        | Err(SourceStoreError::HashMismatch(_))
+        | Err(SourceStoreError::TooLarge(_))
+        | Err(SourceStoreError::NonUtf8(_))
+        | Err(SourceStoreError::Unavailable(_)) => Ok(None),
+        Err(SourceStoreError::InvalidRequest(_)) => Err(RepoGrammarError::InvalidInput(
+            "check target source request is invalid".to_string(),
+        )),
+    }
+}
+
+/// The non-member relationship classification. Membership is decided upstream (a
+/// member always compares against its own family), so the axis here is: blocked,
+/// a source-backed exception (required violation against the only ready family of
+/// its key), or a near miss. `COMPETING_PATTERN` is intentionally not emitted —
+/// a member's own family is always the comparison family, so it is reserved.
+fn classify_nonmember_relationship(
+    computation: &AlignmentComputation,
+    target: &TargetFeatureProfile,
+) -> TargetRelationship {
+    if !target.blocking_unknowns.is_empty() {
+        TargetRelationship::BlockedUnknown
+    } else if computation.status == AlignmentStatus::StaticDeviation {
+        // Source-backed negative evidence against the only ready family of its key.
+        TargetRelationship::Exception
+    } else {
+        TargetRelationship::NearMiss
+    }
+}
+
+fn alignment_output_options() -> FamilyOutputOptions {
+    FamilyOutputOptions::default()
+}
+
+/// Query-surface blocking unknowns derived from an alignment computation, so the
+/// certificate's `unknowns` list carries the target's blocking obligations.
+fn alignment_blocking_query_unknowns(
+    computation: &AlignmentComputation,
+    family_id: &str,
+) -> Vec<FamilyQueryUnknown> {
+    computation
+        .blocking_unknowns
+        .iter()
+        .map(|unknown| FamilyQueryUnknown {
+            class: unknown.class,
+            reason: unknown.reason,
+            affected_claim: format!("{family_id}:target:{}", unknown.affected_claim),
+            recovery: unknown.recovery.clone(),
+        })
+        .collect()
+}
+
+/// Build an abstaining certificate. An abstention NEVER surfaces a selected
+/// family (the field is structurally `None`), so it can never be telemetered as a
+/// resolved outcome. Candidate family ids are only diagnostic breadcrumbs carried
+/// on the resolved target.
+fn alignment_abstain(
+    active_generation: String,
+    status: AlignmentStatus,
+    read_plan: ReadPlan,
+    unknowns: Vec<FamilyQueryUnknown>,
+    resolved_target: ResolvedQueryTarget,
+) -> FamilyLookupReport {
+    debug_assert!(
+        status.is_abstaining(),
+        "alignment_abstain requires an abstaining status"
+    );
+    let candidate_family_ids = normalized_family_ids(resolved_target.candidate_family_ids.clone());
+    FamilyLookupReport::Alignment(Box::new(AlignmentCertificateReport {
+        active_generation,
+        alignment_status: status,
+        target_relationship: None,
+        selected_family_id: None,
+        candidate_family_ids,
+        resolved_target,
+        computation: None,
+        read_plan,
+        unknowns,
+    }))
+}
+
+/// A blocking `UNKNOWN` naming the ambiguous candidate unit ids or paths that a
+/// conformance target failed to disambiguate. Deterministic and source-free.
+fn candidate_unit_ambiguity_unknown(
+    affected_claim: impl Into<String>,
+    candidates: &[String],
+) -> FamilyQueryUnknown {
+    let mut candidates = candidates.to_vec();
+    candidates.sort();
+    candidates.dedup();
+    let candidate_list = if candidates.is_empty() {
+        "none".to_string()
+    } else {
+        candidates.join(", ")
+    };
+    FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::InsufficientSupport,
+        affected_claim: affected_claim.into(),
+        recovery: Some(format!(
+            "narrow the check target to one code unit with a path:line, path:byte-range, or unit: locator; candidates: {candidate_list}"
+        )),
+    }
+}
+
+/// A resolved-target locator for an abstaining conformance outcome, carrying the
+/// candidate paths/unit ids as diagnostic breadcrumbs (never a selected family).
+fn conformance_locator_target(
+    target: &str,
+    kind: &'static str,
+    path: &str,
+    candidate_paths: Vec<String>,
+    candidate_code_unit_ids: Vec<String>,
+) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind,
+        path: path.to_string(),
+        line: None,
+        byte_range: None,
+        family_id: None,
+        code_unit_id: None,
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths,
+        candidate_family_ids: Vec::new(),
+        candidate_code_unit_ids,
+        confidence: "none",
+        match_kind: "conformance_target",
+    }
+}
+
+fn alignment_out_of_scope(
+    active_generation: String,
+    read_plan: ReadPlan,
+    resolved_target: ResolvedQueryTarget,
+) -> FamilyLookupReport {
+    FamilyLookupReport::Alignment(Box::new(AlignmentCertificateReport {
+        active_generation,
+        alignment_status: AlignmentStatus::InsufficientEvidence,
+        target_relationship: Some(TargetRelationship::OutOfScope),
+        selected_family_id: None,
+        candidate_family_ids: Vec::new(),
+        resolved_target,
+        computation: None,
+        read_plan,
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "check target family scope".to_string(),
+            recovery: Some(
+                "the target code unit has no supported framework role or family of its key; no static-alignment claim is possible".to_string(),
+            ),
+        }],
+    }))
+}
+
+fn resolved_target_for_unit(
+    target: &str,
+    unit: &IndexedCodeUnitRecord,
+    family_id: Option<String>,
+) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind: "code_unit",
+        path: unit.path.clone(),
+        line: None,
+        byte_range: Some((unit.start_byte, unit.end_byte)),
+        family_id: family_id.clone(),
+        code_unit_id: Some(unit.id.clone()),
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths: vec![unit.path.clone()],
+        candidate_family_ids: family_id.into_iter().collect(),
+        candidate_code_unit_ids: vec![unit.id.clone()],
+        confidence: "high",
+        match_kind: "conformance_target",
+    }
+}
+
+fn empty_resolved_target(target: &str) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind: "unresolved",
+        path: String::new(),
+        line: None,
+        byte_range: None,
+        family_id: None,
+        code_unit_id: None,
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths: Vec::new(),
+        candidate_family_ids: Vec::new(),
+        candidate_code_unit_ids: Vec::new(),
+        confidence: "none",
+        match_kind: "unresolved",
+    }
+}
+
+fn empty_alignment_read_plan() -> ReadPlan {
+    ReadPlan {
+        items: Vec::new(),
+        estimated_tokens: 0,
+        source_snippets_included: false,
+        requires_source_before_edit: false,
+        selection_strategy: "conformance_no_read_plan",
+        budget_satisfied: true,
+        line_range_omissions: Vec::new(),
+    }
+}
+
+/// Reconstruct the active generation's typed [`SemanticFact`]s from the stored
+/// records, exactly as the incremental indexing path does, so the target feature
+/// extractor sees the same facts family induction saw.
+fn snapshot_semantic_facts(
+    snapshot: &crate::ports::index_store::ActiveClaimInputSnapshot,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    snapshot
+        .semantic_facts
+        .iter()
+        .map(semantic_fact_from_index_record)
+        .collect()
+}
+
+fn semantic_fact_from_index_record(
+    record: &IndexedSemanticFactRecord,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let kind = SemanticFactKind::parse_protocol_str(&record.kind).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact kind is invalid".to_string())
+    })?;
+    let certainty = FactCertainty::parse_protocol_str(&record.certainty).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact certainty is invalid".to_string())
+    })?;
+    Ok(SemanticFact {
+        kind,
+        subject: record.subject.clone(),
+        target: record
+            .target
+            .as_ref()
+            .map(SymbolId::new)
+            .transpose()
+            .map_err(RepoGrammarError::InvalidInput)?,
+        origin: FactOrigin {
+            engine: record.origin_engine.clone(),
+            engine_version: record.origin_engine_version.clone(),
+            method: record.origin_method.clone(),
+        },
+        certainty,
+        evidence: Evidence::new(
+            CodeUnitId::new(record.code_unit_id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(record.start_byte, record.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &record.path,
+                record.content_hash.clone(),
+                RepositoryRevision::new("UNKNOWN").expect("UNKNOWN is a valid revision marker"),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            &record.note,
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions: record.assumptions.clone(),
+    })
 }
 
 /// Deterministic, dependency-free term-retrieval fallback. It runs only for a
@@ -4369,9 +5242,11 @@ fn target_evidence<'a>(
             .evidence
             .iter()
             .find(|evidence| evidence.code_unit_id == target),
-        FamilyLookupMode::FuzzyQuery => family.evidence.iter().find(|evidence| {
-            evidence.code_unit_id == target || path_matches_target(&evidence.path, target)
-        }),
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            family.evidence.iter().find(|evidence| {
+                evidence.code_unit_id == target || path_matches_target(&evidence.path, target)
+            })
+        }
     }
 }
 
@@ -4877,7 +5752,7 @@ fn family_target_match(
             .iter()
             .any(|member| member.code_unit_id == target)
             .then_some(TargetMatchKind::ExactMemberId),
-        FamilyLookupMode::FuzzyQuery => {
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
             if family.family.family_id == target {
                 Some(TargetMatchKind::ExactFamilyId)
             } else if family
@@ -5157,6 +6032,269 @@ mod tests {
         IndexedIrNodeRecord, RepoShapeLanguageStats, StorageInspection,
     };
     use crate::ports::source_store::SourceText;
+
+    fn nonmember_target(blocking: bool) -> TargetFeatureProfile {
+        TargetFeatureProfile {
+            code_unit_id: "unit:target".to_string(),
+            language: "python".to_string(),
+            code_unit_kind: "function".to_string(),
+            framework_role: Some("framework_fastapi_route".to_string()),
+            framework_role_key: Some("framework:fastapi.route".to_string()),
+            feature_tokens: BTreeSet::new(),
+            variation_profiles: BTreeMap::new(),
+            blocking_unknowns: if blocking {
+                vec![crate::core::model::TypedUnknown::new(
+                    UnknownClass::Blocking,
+                    UnknownReasonCode::DynamicImport,
+                    "unit:target:membership",
+                    None,
+                )
+                .expect("valid unknown")]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    fn computation_with(status: AlignmentStatus) -> AlignmentComputation {
+        AlignmentComputation {
+            status,
+            required_features_matched: Vec::new(),
+            static_deviations: Vec::new(),
+            legal_observed_variations: Vec::new(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn nonmember_satisfying_required_is_a_near_miss() {
+        // A non-member that statically aligns but was never admitted (e.g.
+        // sub-support) is a NEAR_MISS, never a member.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::StaticallyAligned),
+            &nonmember_target(false),
+        );
+        assert_eq!(relationship, TargetRelationship::NearMiss);
+    }
+
+    #[test]
+    fn nonmember_with_required_violation_is_a_source_backed_exception() {
+        // A required-feature violation against the only ready family of the key
+        // is source-backed negative evidence: EXCEPTION.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::StaticDeviation),
+            &nonmember_target(false),
+        );
+        assert_eq!(relationship, TargetRelationship::Exception);
+    }
+
+    #[test]
+    fn nonmember_blocked_by_unknown_is_blocked_unknown() {
+        // A blocking unknown that prevented membership dominates the relationship.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::PartialAlignment),
+            &nonmember_target(true),
+        );
+        assert_eq!(relationship, TargetRelationship::BlockedUnknown);
+    }
+
+    // ---- Locator-honoring conformance target resolution -------------------
+
+    struct AlwaysFreshSourceStore;
+    impl SourceStore for AlwaysFreshSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            // Echo the expected hash so the read is always fresh; text has three
+            // lines so a line locator maps deterministically.
+            Ok(SourceText {
+                path: request.path,
+                content_hash: request.expected_content_hash,
+                text: "first\nsecond\nthird\n".to_string(),
+            })
+        }
+    }
+
+    struct StaleSourceStore;
+    impl SourceStore for StaleSourceStore {
+        fn read_source(&self, _request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            Err(SourceStoreError::HashMismatch(
+                "changed on disk".to_string(),
+            ))
+        }
+    }
+
+    fn conformance_hash() -> ContentHash {
+        ContentHash::new(format!("sha256:{}", "a".repeat(64))).expect("valid hash")
+    }
+
+    fn conformance_unit(kind: &str, start: usize, end: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:routes.py#{kind}:{start}-{end}"),
+            path: "routes.py".to_string(),
+            language: "python".to_string(),
+            kind: kind.to_string(),
+            start_byte: start,
+            end_byte: end,
+            content_hash: conformance_hash(),
+        }
+    }
+
+    fn conformance_fixture() -> (
+        FamilyEvidenceFreshnessRequest,
+        Vec<IndexedFileRecord>,
+        Vec<IndexedCodeUnitRecord>,
+    ) {
+        let request = FamilyEvidenceFreshnessRequest {
+            repository_root: "/repo".to_string(),
+            max_file_bytes: 1024,
+        };
+        let files = vec![IndexedFileRecord {
+            path: "routes.py".to_string(),
+            content_hash: conformance_hash(),
+            size_bytes: 200,
+            language: "python".to_string(),
+        }];
+        let units = vec![
+            conformance_unit("module", 0, 200),
+            conformance_unit("fastapi_route", 10, 50),
+            conformance_unit("fastapi_route", 60, 100),
+            conformance_unit("function", 110, 150),
+        ];
+        (request, files, units)
+    }
+
+    fn resolved_unit_id<'a>(resolution: &ConformanceUnitResolution<'a>) -> &'a str {
+        match resolution {
+            ConformanceUnitResolution::Resolved(unit) => unit.id.as_str(),
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conformance_locator_pins_the_containing_member_not_an_arbitrary_one() {
+        let (request, files, units) = conformance_fixture();
+        // A byte-range locator on the first member resolves that member.
+        let first = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:10-50",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&first),
+            "unit:routes.py#fastapi_route:10-50"
+        );
+        // A locator on the SECOND member resolves the second member, never the
+        // first or a canonical fallback.
+        let second = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:60-100",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&second),
+            "unit:routes.py#fastapi_route:60-100"
+        );
+        // An inner byte position pins the innermost containing unit, not the module.
+        let inner = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:65-70",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&inner),
+            "unit:routes.py#fastapi_route:60-100"
+        );
+    }
+
+    #[test]
+    fn conformance_locator_to_non_member_helper_resolves_the_helper_unit() {
+        let (request, files, units) = conformance_fixture();
+        // The helper is not family-eligible, but the locator still pins it (the
+        // caller then reports OUT_OF_SCOPE) — it is never redirected to a member.
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:110-150",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&resolution),
+            "unit:routes.py#function:110-150"
+        );
+    }
+
+    #[test]
+    fn conformance_path_only_multi_member_target_is_ambiguous() {
+        let (request, files, units) = conformance_fixture();
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        match resolution {
+            ConformanceUnitResolution::AmbiguousUnits {
+                candidate_unit_ids, ..
+            } => {
+                assert_eq!(
+                    candidate_unit_ids,
+                    vec![
+                        "unit:routes.py#fastapi_route:10-50".to_string(),
+                        "unit:routes.py#fastapi_route:60-100".to_string(),
+                    ]
+                );
+            }
+            other => panic!("expected AmbiguousUnits, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conformance_stale_target_abstains_before_any_certificate() {
+        let (request, files, units) = conformance_fixture();
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &StaleSourceStore,
+            "routes.py:60-100",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert!(matches!(
+            resolution,
+            ConformanceUnitResolution::Stale { .. }
+        ));
+    }
+
+    #[test]
+    fn conformance_locator_with_no_containing_unit_is_unresolved() {
+        let (request, files, units) = conformance_fixture();
+        // A byte range in a gap between units resolves nothing (no canonical fallback).
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:151-199",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        // The module unit contains 151-199, so it resolves to module (out of scope
+        // downstream), never to a member; a truly out-of-range locator is unresolved.
+        assert_eq!(resolved_unit_id(&resolution), "unit:routes.py#module:0-200");
+    }
 
     struct FakeStore {
         facts: Vec<IndexedSemanticFactRecord>,
@@ -9410,6 +10548,7 @@ mod tests {
                 unknown.term_retrieval.clone().expect("unknown term route")
             }
             FamilyLookupReport::PartialContext(_) => panic!("unexpected partial context"),
+            FamilyLookupReport::Alignment(_) => panic!("unexpected alignment certificate"),
         }
     }
 

@@ -91,9 +91,18 @@ It is exact-family-id only and is intended for family ids returned by earlier
 operation.
 
 `repogrammar check` is the CLI equivalent of the `check_conformance` operation.
-Because this slice does not prove runtime equivalence, a matched `check`
-response must use `CONTEXT_ONLY` for machine-readable context success and keep
-the conformance result advisory `UNKNOWN`.
+It is a source-backed *static-alignment* check, not a runtime-conformance
+verdict. It resolves the target to a specific indexed code unit, selects a
+comparison pattern family (the unit's own family when it is a member, otherwise
+the single fresh ready family of the unit's `(language, kind, role)` key), and
+compares the target's indexed feature profile against that family's constraint
+profile. The top-level `status` is one of the static-alignment tokens
+`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
+`INSUFFICIENT_EVIDENCE`, or `UNKNOWN` — never `PASS`/`FAIL`/`CONFORMS` and never
+the legacy `CONTEXT_ONLY` advisory. Every certificate carries
+`runtime_equivalence: "UNKNOWN"`; static alignment never proves runtime
+equivalence. A stale, ambiguous, unindexed, or family-less target abstains with
+`INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
 
 All query commands must support:
 
@@ -1254,13 +1263,53 @@ covers any dimension it solely represents. `exception` evidence remains unlinked
 in this slice.
 `--mode deep` is accepted as an explicit detail request, but it remains
 metadata-first and does not imply source output without `--include-source-spans`.
-None of these modes may include absolute paths. `check` is advisory in this
-slice: it may return matched family context as `CONTEXT_ONLY` or resolved local
-context as `PARTIAL_CONTEXT`, but the check-specific conformance status remains
-`UNKNOWN` with reason `runtime equivalence remains unproven`. The advisory
-`check` object must not contain proof-like fields such as `pass`, `conforms`, or
-`fail_on`. Matched family detail unknowns scope the runtime-equivalence gap to
-the concrete family id, for example `<family_id>:runtime_equivalence`.
+None of these modes may include absolute paths. `check` returns a static
+alignment certificate. Its top-level `status` is the alignment status token
+(`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
+`INSUFFICIENT_EVIDENCE`, or `UNKNOWN`) and the JSON carries these fields:
+
+- `alignment_status` — the same token as `status`.
+- `runtime_equivalence` — always the literal `"UNKNOWN"`; static alignment
+  never proves runtime equivalence.
+- `target_relationship` — `MEMBER`, `NEAR_MISS`, `BLOCKED_UNKNOWN`,
+  `OUT_OF_SCOPE`, or `EXCEPTION` (null while abstaining before a family is
+  compared). `COMPETING_PATTERN` is a reserved token that no current path emits
+  (a member always compares against its own family).
+- `selected_family_id` and `query_route.selected_family_id` — the comparison
+  family, present only when one was confidently selected; `null` for every
+  abstaining outcome.
+- `target` — the resolved code-unit locator (id, path, byte range).
+- `alignment` — the computation, or `null` when abstaining: `outcome_reason`,
+  `required_features_matched[]` (`prefix`, `semantics`, `expected_summary`,
+  `satisfied_summary`), `static_deviations[]` (`prefix`, `kind`,
+  `semantics_token`, `expected_summary`, `observed_summary`),
+  `legal_observed_variations[]`, `blocking_unknowns[]`, and
+  `unresolved_runtime_obligations[]` (always non-empty — it carries the
+  runtime-equivalence obligation verbatim).
+- `read_plan` — the comparison family's evidence read plan, leading with the
+  contrast witness.
+
+Deviation `observed_summary` and `expected_summary` values are RepoGrammar
+feature TOKENS, never repository source text. The certificate must not contain
+proof-like fields such as `pass`, `conforms`, or `fail_on`, and must not contain
+the legacy `check` advisory object. The `static_deviations[].kind` vocabulary is
+`required_mismatch`, `must_be_empty_violation`, `missing_required_core`, and
+`prohibited_presence` (required-feature *violations* that force
+`STATIC_DEVIATION`), plus three non-violating partial-alignment signals:
+`unobserved_variation` (a value never observed among an untruncated enumeration —
+explicitly *unobserved*, never *illegal*), `truncated_observation` (not among an
+enumeration that was truncated at the cap, so "never observed" is unprovable), and
+`blocking_suppressed_requirement` (an absence-driven required check that a blocking
+unknown plausibly suppressed). Under a target blocking unknown, absence-driven
+required checks route to `PARTIAL_ALIGNMENT`, while presence-driven violations
+(prohibited presence, a present-but-wrong value, a must-be-empty value) still
+deviate. Resolution is locator-first: a path-only target that names a file with
+more than one family-eligible unit is ambiguous and abstains with
+`INSUFFICIENT_EVIDENCE` and candidate unit ids; narrow it with a `path:line`,
+`path:byte-start-byteend`, or `unit:` locator. The static-alignment computation is
+the single authority for this decision (`application::conformance`); `explain`
+remains on the shared fuzzy family-resolution surface and presents family
+context, while `check` is the operation that emits the alignment certificate.
 
 Before public pattern-family detail or target-specific claim output is returned,
 stored family evidence must be fresh against the current repository source

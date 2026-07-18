@@ -50,6 +50,54 @@ conventions, or promoting package/config presence into family evidence. Improve
 an `UNKNOWN` only with source-backed positive and negative evidence that keeps
 false certainty controlled.
 
+## Static Alignment Is Not Runtime Conformance
+
+The `check` operation (CLI `check`, MCP `check_conformance`) returns a *static
+alignment* certificate. It compares a target code unit's indexed feature profile
+against a pattern family's source-backed constraint profile. It does **not**
+prove that the target behaves equivalently at runtime.
+
+A `STATICALLY_ALIGNED` result means only that the target matches every required
+feature the family authority derived and exhibits no deviation and no blocking
+unknown. It does **not** prove:
+
+- runtime equivalence, identical control flow, or identical side effects — the
+  certificate always reports `runtime_equivalence: UNKNOWN` and carries the
+  family's runtime-equivalence obligation as an unresolved obligation;
+- semantic correctness — structural token alignment is not a proof of behavior,
+  and Tree-sitter-derived features are a candidate-generation layer, not a
+  semantic oracle;
+- coverage of dynamic behavior the analyzer marked `UNKNOWN` (dynamic imports,
+  monkey-patching, fixture/dependency injection, framework magic);
+- that a `PARTIAL_ALIGNMENT` or `unobserved_variation` result is a defect — an
+  unobserved variation is a value the family has simply never seen, not an
+  illegal one.
+
+Static alignment is deliberately conservative rather than confident:
+
+- **Observed-profile truncation.** Observed-profile enumerations are capped, so a
+  target profile that is not among a *truncated* enumeration is reported as a
+  `truncated_observation` (a partial signal), not `unobserved_variation` — "never
+  observed" cannot be proven from a truncated set.
+- **Blocking-unknown precedence.** When a target carries a blocking unknown, an
+  absence-driven required check (a required value simply missing) does not become
+  a `STATIC_DEVIATION`; it is a `blocking_suppressed_requirement` routing to
+  `PARTIAL_ALIGNMENT`, because the blocking unknown may itself be why the feature
+  is absent from the static view. Only presence-driven violations (a prohibited or
+  wrong value that is definitely present) deviate under a blocking unknown.
+- **Under-specified targets abstain.** A path-only `check` target that names a
+  file with more than one family-eligible code unit is ambiguous and abstains with
+  `INSUFFICIENT_EVIDENCE`; `check` never certifies an arbitrary unit on the user's
+  behalf. Narrow the target with a `path:line`, `path:byte-range`, or `unit:`
+  locator.
+
+Because static alignment operates on the indexed generation, a stale target must
+abstain rather than align: `check` reuses the freshness machinery and returns
+`INSUFFICIENT_EVIDENCE` (with a `StaleEvidence` reason) for a target whose source
+changed after indexing, instead of fabricating a deviation from stale facts. A
+target with no comparison family, an ambiguous family key, or an unsupported role
+also abstains with `INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
+
 ## Source Text
 
 RepoGrammar returns metadata by default. Source text is opt-in through:

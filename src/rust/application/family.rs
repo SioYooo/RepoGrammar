@@ -916,6 +916,132 @@ pub fn family_constraint_profile_record(
     }
 }
 
+/// Extract the indexed feature profile of one code unit for static-alignment
+/// checking, reusing the SAME authorities that build a family's constraint
+/// profile: the per-unit feature map ([`family_features_by_unit`]), the
+/// per-language variation-prefix tables, the pytest fixture-context special case,
+/// and the typed blocking-unknown vocabulary. This never re-parses source; it
+/// projects the already-indexed facts of the active generation exactly as family
+/// induction did, so a member's profile matches its family's constraints by
+/// construction.
+///
+/// Returns `None` only when the unit id is absent from the generation. A unit
+/// that is present but not family-eligible (or carries no framework role) still
+/// yields a profile whose `framework_role` is `None`, so the caller can classify
+/// it as out of scope rather than silently dropping it.
+pub fn extract_target_unit_features(
+    units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+    target_unit_id: &str,
+) -> Option<crate::application::conformance::TargetFeatureProfile> {
+    let unit = units.iter().find(|unit| unit.id == target_unit_id)?;
+    // Every helper filters the fact kinds it needs internally, so passing the
+    // full fact list reproduces exactly what `build_family_claims_from_input`
+    // computed for this generation.
+    let role_by_unit = framework_roles_by_unit(facts);
+    let support_targets_by_unit = eligible_support_by_unit(units, facts, &role_by_unit);
+    let features_by_unit =
+        family_features_by_unit(units, facts, &role_by_unit, &support_targets_by_unit);
+    let blocking_by_unit = family_blocking_unknowns_by_unit(units, facts, &role_by_unit);
+
+    let evidence = FamilyEvidence {
+        code_unit_id: unit.id.clone(),
+        path: unit.path.clone(),
+        content_hash: unit.content_hash.clone(),
+        start_byte: unit.start_byte,
+        end_byte: unit.end_byte,
+        support_targets: support_targets_by_unit
+            .get(&unit.id)
+            .map(|targets| targets.iter().cloned().collect())
+            .unwrap_or_default(),
+    };
+
+    let mut feature_tokens: BTreeSet<String> =
+        features_by_unit.get(&unit.id).cloned().unwrap_or_default();
+
+    let original_role = role_by_unit
+        .get(&unit.id)
+        .and_then(single_framework_role)
+        .map(str::to_string);
+    let stable_role = prefixed_features(&evidence, &features_by_unit, "framework_role:")
+        .into_iter()
+        .next();
+
+    // Mirror the pytest characteristic special case: family induction binds
+    // `fixture_context_nonbuiltin:` from the non-builtin fixture context, a
+    // synthetic prefix that is not otherwise a stored feature token. Inject it so
+    // the alignment comparator can strip it uniformly like any other prefix.
+    if unit.language == "python"
+        && matches!(
+            stable_role.as_deref(),
+            Some("framework_pytest_test") | Some("framework_pytest_fixture")
+        )
+    {
+        for value in non_builtin_pytest_fixture_context(&evidence, &features_by_unit) {
+            feature_tokens.insert(format!("fixture_context_nonbuiltin:{value}"));
+        }
+    }
+
+    // Render the target's profile for every variation dimension of its role,
+    // using the same prefix tables and rendering the family uses, so the strings
+    // compare directly against the family's observed profiles.
+    let mut variation_profiles: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(role) = original_role.as_deref() {
+        for (dimension, prefixes) in variation_feature_prefixes(&unit.language, role) {
+            let rendered = prefixed_feature_profile(&evidence, &features_by_unit, prefixes)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(",");
+            variation_profiles.insert((*dimension).to_string(), rendered);
+        }
+    }
+
+    // Mirror induction's `is_blocked` rule: a per-unit blocking unknown, plus the
+    // repository-level rust build-variant ambiguity that blocks every rust unit.
+    let mut claim_blockers: Vec<ClaimUnknown> =
+        blocking_by_unit.get(&unit.id).cloned().unwrap_or_default();
+    if unit.language == "rust" {
+        claim_blockers.extend(rust_repository_blocking_unknowns(facts));
+    }
+    // Never drop a blocking signal: if a reconstructed unknown fails revalidation
+    // (only possible on an empty affected claim, which induction never emits) fall
+    // back to a conservative valid blocker so the target stays classified as
+    // blocked rather than being silently upgraded toward alignment.
+    let blocking_unknowns = claim_blockers
+        .into_iter()
+        .map(|unknown| {
+            let class = unknown.class;
+            let reason = unknown.reason;
+            crate::core::model::TypedUnknown::new(
+                class,
+                reason,
+                unknown.affected_claim,
+                unknown.recovery,
+            )
+            .unwrap_or_else(|_| {
+                crate::core::model::TypedUnknown::new(
+                    class,
+                    reason,
+                    "unit:blocking_membership",
+                    None,
+                )
+                .expect("sentinel affected claim is non-empty")
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Some(crate::application::conformance::TargetFeatureProfile {
+        code_unit_id: unit.id.clone(),
+        language: unit.language.clone(),
+        code_unit_kind: unit.kind.clone(),
+        framework_role: stable_role,
+        framework_role_key: original_role,
+        feature_tokens,
+        variation_profiles,
+        blocking_unknowns,
+    })
+}
+
 fn family_non_blocking_unknowns_for_evidence(
     family_id: &str,
     evidence: &[FamilyEvidence],

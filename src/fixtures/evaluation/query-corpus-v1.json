@@ -258,11 +258,13 @@
       "kind": "check_conformance",
       "intent": "retrieval",
       "operation": "check",
-      "target": "sqlalchemy-model-strong-evidence/models.py",
+      "target": "sqlalchemy-model-strong-evidence/models.py:36-119",
       "mode": "compact",
+      "comment": "A byte-range locator pins the User model member unit (the file holds three model units, so a path-only check is ambiguous). It is a member of the sqlalchemy_model family, so the check commits STATICALLY_ALIGNED and surfaces that family, preserving hit@1. The harness classifies STATICALLY_ALIGNED as a committed 'ok' outcome, so this retrieval-intent query scores reciprocal-rank 1.0 (no MRR zeroing); alignment_status is a first-class gold.",
       "expected": {
         "outcome": "ok",
-        "family_prefix": "family:python:sqlalchemy_model"
+        "family_prefix": "family:python:sqlalchemy_model",
+        "alignment_status": "STATICALLY_ALIGNED"
       }
     },
     {
@@ -1005,9 +1007,103 @@
       "operation": "check",
       "target": "strings.py",
       "mode": "compact",
+      "comment": "strings.py carries no supported framework role and no family of its key, so the static-alignment check abstains OUT_OF_SCOPE with INSUFFICIENT_EVIDENCE and never selects a family. The harness classifies INSUFFICIENT_EVIDENCE as unknown; alignment_status carries the exact OUT_OF_SCOPE verdict.",
       "expected": {
-        "outcome": "partial_context",
-        "route": "partial_context_read_plan"
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE"
+      }
+    },
+    {
+      "query_id": "py-check-fastapi-member-aligned",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "positive-strong-evidence/routes.py:55-107",
+      "mode": "compact",
+      "comment": "Exact member: a byte-range locator pins one fastapi_route member unit, which is a member of the fastapi_route family, so the check commits STATICALLY_ALIGNED with a MEMBER relationship. family_prefix is safe (the selected family matches by construction, so this never counts as a false family).",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "alignment_status": "STATICALLY_ALIGNED"
+      }
+    },
+    {
+      "query_id": "py-check-pytest-member-aligned",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "pytest-strong-evidence/test_api.py:0-58",
+      "mode": "compact",
+      "comment": "Exact member of the pytest_test family (byte-range locator pins one test unit); STATICALLY_ALIGNED with the pytest fixture-context characteristic constraint satisfied.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pytest_test",
+        "alignment_status": "STATICALLY_ALIGNED"
+      }
+    },
+    {
+      "query_id": "py-check-sqlalchemy-repo-member-aligned",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "sqlalchemy-strong-evidence/repository.py:116-216",
+      "mode": "compact",
+      "comment": "Exact member of a sqlalchemy_repository_method family (byte-range locator pins one repository-method unit); STATICALLY_ALIGNED with the support-family MustContain core satisfied.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "alignment_status": "STATICALLY_ALIGNED"
+      }
+    },
+    {
+      "query_id": "py-check-fastapi-legal-variation",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "fastapi-route-variation/routes.py:80-138",
+      "mode": "compact",
+      "comment": "Legal variation: a fastapi_route member (byte-range locator) whose variation-dimension profile (route method / effect marker) was observed among the family's members, so the check reports STATICALLY_ALIGNED and records the profile as a legal_observed_variation rather than a deviation.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "alignment_status": "STATICALLY_ALIGNED"
+      }
+    },
+    {
+      "query_id": "py-check-ambiguous-competing-app",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "fastapi-basic/app.py",
+      "mode": "compact",
+      "comment": "Ambiguous path-only target: app.py holds several fastapi_route member units and no locator disambiguates them, so the check abstains with INSUFFICIENT_EVIDENCE and candidate unit ids, never surfacing a selected family (so no false-family and no selected-on-abstention). The harness classifies INSUFFICIENT_EVIDENCE as unknown.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE"
+      }
+    },
+    {
+      "query_id": "py-check-required-feature-deletion-stale",
+      "fixture_id": "python-v0_1",
+      "kind": "check_conformance",
+      "intent": "context",
+      "operation": "check",
+      "target": "sqlalchemy-model-strong-evidence/models.py:36-119",
+      "mode": "compact",
+      "mutation": {
+        "kind": "append_line",
+        "path": "sqlalchemy-model-strong-evidence/models.py",
+        "line": "# mutation appended after indexing to perturb the member evidence"
+      },
+      "comment": "Required-feature deletion / stale target: the harness resyncs first, then appends a line to the member file, so its indexed content hash no longer matches. The static-alignment check verifies the target file's freshness first (reusing the shared verify primitive) and abstains with INSUFFICIENT_EVIDENCE (StaleEvidence) rather than fabricating a STATIC_DEVIATION from stale facts. This is the honest, calibrated outcome for an append-only, resync-before-mutation harness; true feature-deletion deviations and blocking-suppressed requirements are exercised by the compute_alignment unit tests. The harness classifies INSUFFICIENT_EVIDENCE as unknown.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE"
       }
     }
   ]

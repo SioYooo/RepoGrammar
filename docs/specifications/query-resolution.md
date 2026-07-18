@@ -298,3 +298,94 @@ order with no float-edge ambiguity (coverage compared with `f64::total_cmp`, ids
 by byte order). All bounds — token count, token length, residue count, residue
 hits scored, path components projected, and retained candidates — are fixed named
 constants.
+
+## Static-alignment check resolution
+
+The `check` operation (CLI `check`, MCP `check_conformance`,
+`FamilyLookupMode::Conformance`) reuses this resolution pipeline and layers a
+source-backed static-alignment certificate on top. It is implemented in
+`application::query::check_static_alignment` and decides the alignment with the
+single authority `application::conformance::compute_alignment`. It never proves
+runtime equivalence: every certificate carries `runtime_equivalence: UNKNOWN`.
+
+Resolution proceeds in three deterministic stages:
+
+1. **Locator-honoring target resolution.** `check` resolves the target to exactly
+   one indexed code unit — it does not delegate unit selection to the fuzzy family
+   lookup, and there is no canonical-member fallback:
+
+   - a `unit:` member id pins that unit directly;
+   - a `path:byte-start-byteend` or `path:line` locator pins the *innermost* code
+     unit that contains the location (a `path:line` locator is mapped to a byte
+     offset by reading the target source);
+   - a path-only target pins the file's single family-eligible unit; a file with
+     more than one family-eligible unit is **ambiguous** and abstains with
+     `INSUFFICIENT_EVIDENCE` and candidate unit ids (narrow with a locator);
+   - the target file's content hash is verified against the store first (reusing
+     the shared `verify_evidence_path` primitive); a stale file abstains with
+     `INSUFFICIENT_EVIDENCE`/`StaleEvidence` before any certificate is built;
+   - a target that matches no indexed file/unit, or whose locator contains no unit,
+     abstains without a certificate.
+
+2. **Comparison-family selection.** When the resolved unit is a member
+   (`find_active_families_by_member`), its own family is the comparison family
+   (`MEMBER`). When it is a non-member, the single fresh ready family of its
+   `(language, kind, role)` key is selected from the source-free
+   `list_active_family_search_summaries` projection. Multiple plausible families
+   abstain with `INSUFFICIENT_EVIDENCE` and candidate ids; no family for the key,
+   or a target with no supported role or non-eligible kind, abstains
+   `OUT_OF_SCOPE`; a stale comparison family abstains with `StaleEvidence`. A
+   selected family is **never** surfaced for an abstaining outcome (the field is
+   structurally `None`), so an abstention is never telemetered as a resolved
+   outcome.
+
+3. **Feature extraction and alignment.** The target's feature profile is extracted
+   by the SAME family-induction authority that built the family's constraint
+   profile (`family::extract_target_unit_features`, reusing the per-unit feature
+   map, the per-language characteristic/variation prefix tables, the typed
+   blocking-unknown vocabulary, and the repository-level rust build-variant
+   blocker — source is never re-parsed). `compute_alignment` then compares the
+   profile against the family's constraint profile and returns the deterministic
+   outcome:
+
+   - any required-feature *violation* or a prohibited-presence match →
+     `STATIC_DEVIATION`;
+   - else a blocking unknown, a non-violating deviation signal (an unobserved or
+     truncated variation, or a blocking-suppressed requirement), or degraded
+     extraction → `PARTIAL_ALIGNMENT`;
+   - else every required constraint matched with no deviation →
+     `STATICALLY_ALIGNED`;
+   - no or ambiguous family → `INSUFFICIENT_EVIDENCE`; otherwise `UNKNOWN`.
+
+### Deviation precedence under blocking unknowns
+
+A blocking unknown on the target plausibly suppressed a feature from the static
+view, so an **absence-driven** required check must not fabricate a
+`STATIC_DEVIATION` from an incomplete view. **Presence-driven** checks — a value
+that is definitely present and wrong or prohibited — still deviate:
+
+| Constraint | Failure shape | With blocking unknown | Without blocking unknown |
+| --- | --- | --- | --- |
+| `Equal` | observed empty (absence) | `blocking_suppressed_requirement` → PARTIAL | `required_mismatch` → DEVIATION |
+| `Equal` | observed present but different (presence) | `required_mismatch` → DEVIATION | `required_mismatch` → DEVIATION |
+| `MustContain` | core missing (absence) | `blocking_suppressed_requirement` → PARTIAL | `missing_required_core` → DEVIATION |
+| `EqualEmpty` | value present (presence) | `must_be_empty_violation` → DEVIATION | `must_be_empty_violation` → DEVIATION |
+| `ProhibitedPresence` | value present (presence) | `prohibited_presence` → DEVIATION | `prohibited_presence` → DEVIATION |
+
+### Variation truncation
+
+Observed-profile enumerations are capped (`CONSTRAINT_OBSERVED_PROFILE_CAP`). When
+a dimension's enumeration was truncated, a target profile that is not among the
+enumerated profiles cannot be proven "never observed": it is reported as a
+`truncated_observation` deviation (a partial-alignment signal, never a violation),
+distinct from `unobserved_variation` which asserts the value was genuinely never
+observed among an untruncated enumeration.
+
+The non-member relationship is classified deterministically as `BLOCKED_UNKNOWN`
+(a blocking unknown prevented membership), `EXCEPTION` (a required-feature
+violation against the only ready family of its key — source-backed negative
+evidence), or `NEAR_MISS` (satisfies every required constraint but was not
+admitted); `OUT_OF_SCOPE` names an unsupported kind/role. `COMPETING_PATTERN` is
+**reserved and not yet emitted**: a member always compares against its own family,
+so no current path constructs it. Deviation summaries are RepoGrammar feature
+TOKENS, never repository source text.

@@ -428,10 +428,44 @@ provenance must not be treated as fresh evidence.
 A counterexample is a source-backed implementation that resembles a family but
 violates a meaningful rule. Counterexample storage is deferred.
 
-## CompatibilityResult
+## Static alignment
 
-Compatibility expresses whether a target can be compared to a family:
-compatible, incompatible with reason, or unknown with reason.
+Static alignment expresses how a target code unit relates to a pattern family's
+source-backed `FamilyConstraintProfile`. It is a *structural* comparison over
+indexed feature tokens and never a runtime-conformance verdict; the
+runtime-equivalence obligation is always reported as an unresolved obligation and
+the certificate keeps `runtime_equivalence: UNKNOWN`. The vocabulary lives in
+`core::policy::alignment` and the decision authority is
+`application::conformance::compute_alignment`.
+
+`AlignmentStatus` (the certificate's top-level status): `STATICALLY_ALIGNED`
+(every required constraint matched, no deviation, no blocking unknown),
+`STATIC_DEVIATION` (a required-feature violation or a prohibited-presence match),
+`PARTIAL_ALIGNMENT` (no violation, but a blocking unknown, an unobserved
+variation, or degraded extraction), `INSUFFICIENT_EVIDENCE` (no or ambiguous
+comparison family), and `UNKNOWN`. It is never `PASS`/`FAIL`/`CONFORMS`.
+
+`TargetRelationship` (membership standing, orthogonal to the status): `MEMBER`,
+`NEAR_MISS` (a non-member that satisfies every required constraint but was not
+admitted, e.g. sub-support), `BLOCKED_UNKNOWN` (a blocking unknown prevented
+membership), `OUT_OF_SCOPE` (an unsupported kind or role), and `EXCEPTION`
+(source-backed negative evidence — a required-feature violation against the only
+ready family of the target's key). `COMPETING_PATTERN` (a member of a competing
+ready family of the same key) is a reserved token: a member always compares
+against its own family, so no current path emits it.
+
+`StaticDeviationKind` (per deviation): the required-feature *violations* that
+force `STATIC_DEVIATION` are `required_mismatch`, `must_be_empty_violation`,
+`missing_required_core`, and `prohibited_presence`. Three further kinds are
+non-violating partial-alignment signals: `unobserved_variation` (a value never
+observed among an untruncated enumeration — deliberately *not* illegal),
+`truncated_observation` (not among an enumeration truncated at the cap, so "never
+observed" cannot be proven), and `blocking_suppressed_requirement` (an
+absence-driven required check that a target blocking unknown plausibly
+suppressed — the static view is incomplete, so it must not fabricate a
+deviation). Presence-driven violations still deviate under a blocking unknown;
+absence-driven checks do not. Every deviation's observed and expected summaries
+are RepoGrammar feature tokens, never repository source text.
 
 ## Measurement
 
