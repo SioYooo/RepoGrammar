@@ -560,7 +560,7 @@ if [[ "$NO_RELEASE_STATUS" -eq 0 ]]; then
   exit 1
 fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
-grep -q -- "--version v0.2.2" "$NO_RELEASE_ERR"
+grep -q -- "--version v0.3.0" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
 
@@ -663,8 +663,8 @@ CARGO_VERSION="$(awk -F' *= *' '
   /^\[/ { section = $0 }
   section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
 ' "${SCRIPT_DIR}/../../Cargo.toml")"
-if [[ "$PACKAGE_VERSION" != "0.2.2" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
-  echo "stable manifests must agree on 0.2.2" >&2
+if [[ "$PACKAGE_VERSION" != "0.3.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "stable manifests must agree on 0.3.0" >&2
   exit 1
 fi
 PACKAGE_MANIFEST="${SCRIPT_DIR}/../../package.json"
@@ -672,9 +672,9 @@ README_FILE="${SCRIPT_DIR}/../../README.md"
 grep -q '"repository"' "$PACKAGE_MANIFEST"
 grep -q '"homepage"' "$PACKAGE_MANIFEST"
 grep -q '"bugs"' "$PACKAGE_MANIFEST"
-grep -q 'npm view @sioyooo/repogrammar@0.2.2 version' "$README_FILE"
-grep -q 'releases/download/v0.2.2/install.sh.sha256' "$README_FILE"
-grep -q 'npx @sioyooo/repogrammar@0.2.2 setup' "$README_FILE"
+grep -q 'npm view @sioyooo/repogrammar@0.3.0 version' "$README_FILE"
+grep -q 'releases/download/v0.3.0/install.sh.sha256' "$README_FILE"
+grep -q 'npx @sioyooo/repogrammar@0.3.0 setup' "$README_FILE"
 if grep -Eq '\]\((docs/|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|LICENSE\))' "$README_FILE"; then
   echo "packed README must not contain relative links to unpackaged repository files" >&2
   exit 1

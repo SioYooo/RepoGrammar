@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.3.0 — 2026-07-19 stable channel
+
+RepoGrammar `0.3.0` is the stable-channel candidate that succeeds the published
+`0.2.2`, intended to become the next published stable-channel pre-1.0 release. It
+makes no production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
+measured-token-savings, runtime-equivalence, Windows-support, or
+expanded-language-support claim. Registry availability must be verified
+independently; this source record does not prove that GitHub or npm publication
+completed.
+
+### Changed
+
+- Synchronized Cargo, Cargo lockfile, npm manifest, installers, launchers, and
+  current install documentation on `0.3.0`. Historical `0.2.0-preview.0`
+  evidence remains historical and the npm `preview` dist-tag must stay on that
+  immutable prerelease.
+- Advanced the stable release authority and finalizer to `v0.3.0`. The published
+  `0.2.2` release and the retained `v0.2.0`/`v0.2.1` candidate tags are
+  unchanged, and neither failed unpublished version may appear in the stable
+  registry inventory.
+
 ### Fixed
 
 - Made the Python context-budget gate's escape headroom a provable upper

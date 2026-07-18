@@ -159,10 +159,10 @@ passes its qualification gates.
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md>
 - Limitations:
   <https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md>
-- Stable-channel `0.2.2` GitHub release:
-  <https://github.com/SioYooo/RepoGrammar/releases/tag/v0.2.2>
-- Stable-channel `0.2.2` npm package:
-  <https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.2.2>
+- Stable-channel `0.3.0` GitHub release:
+  <https://github.com/SioYooo/RepoGrammar/releases/tag/v0.3.0>
+- Stable-channel `0.3.0` npm package:
+  <https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.3.0>
 - Final public verification: Actions run
   [`29591027524`](https://github.com/SioYooo/RepoGrammar/actions/runs/29591027524)
   emitted `STABLE_RELEASE_READY`

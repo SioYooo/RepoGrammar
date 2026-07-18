@@ -149,7 +149,7 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-documentation should pin `v0.2.2` for reproducible acquisition even after the
+documentation should pin `v0.3.0` for reproducible acquisition even after the
 normal release becomes GitHub `latest`. When a `latest` or explicit artifact
 lookup fails, installers must report that the release artifact was not found,
 suggest the exact `--version <release-tag>`, and mention
@@ -289,7 +289,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.2.2.tgz`;
+  `npm install -g ./sioyooo-repogrammar-0.3.0.tgz`;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
