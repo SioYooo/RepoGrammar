@@ -190,10 +190,15 @@ pub fn compute_alignment(
                         satisfied_summary: render_values(&observed_vec),
                     });
                 } else {
-                    // Absence-driven only when the target carries no value at all;
-                    // a present-but-different value is a definite mismatch.
+                    // Absence-driven when the observed values are a (strict) subset
+                    // of the expected set: the target carries only expected values
+                    // but is missing one or more, which a blocking unknown can
+                    // plausibly suppress from the static view. The empty set is such
+                    // a subset. Any offending value present (a value not in
+                    // `expected`) makes it presence-driven -> a definite mismatch,
+                    // even when required values are simultaneously missing.
                     let kind = required_deviation_kind(
-                        observed.is_empty(),
+                        observed.is_subset(&expected),
                         has_blocking,
                         StaticDeviationKind::RequiredMismatch,
                     );
@@ -377,8 +382,9 @@ pub fn compute_alignment(
 
 /// The deviation kind for an absence-driven required check: a blocking unknown on
 /// the target downgrades it from `violation_kind` to a non-violating
-/// blocking-suppressed requirement. `absence_driven` is `false` for a
-/// present-but-different value, which always keeps `violation_kind`.
+/// blocking-suppressed requirement. `absence_driven` is `false` when an offending
+/// value is present (a value the constraint does not allow), which always keeps
+/// `violation_kind` even if required values are simultaneously missing.
 fn required_deviation_kind(
     absence_driven: bool,
     has_blocking: bool,
@@ -730,6 +736,82 @@ mod tests {
             .static_deviations
             .iter()
             .any(|deviation| deviation.kind == StaticDeviationKind::RequiredMismatch));
+    }
+
+    #[test]
+    fn multivalue_equal_strict_subset_under_blocking_unknown_is_partial_not_deviation() {
+        // A multi-value `Equal` constraint whose target carries a strict SUBSET of
+        // the expected values (only `get` of {get, post}, with no offending value)
+        // is absence-driven: the missing `post` may have been suppressed from the
+        // static view by the blocking unknown, so it downgrades to a non-violating
+        // blocking-suppressed requirement, not a fabricated STATIC_DEVIATION.
+        let profile = FamilyConstraintProfile {
+            required_equal_features: vec![equal(
+                "http_method:",
+                &["http_method_get", "http_method_post"],
+            )],
+            allowed_variations: Vec::new(),
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: vec![runtime_obligation()],
+        };
+        let mut target = target_with(&["http_method:http_method_get"]);
+        target.blocking_unknowns.push(blocking_unknown());
+        let computation = compute_alignment(&profile, &target);
+        assert_eq!(computation.status, AlignmentStatus::PartialAlignment);
+        assert_eq!(
+            computation.static_deviations[0].kind,
+            StaticDeviationKind::BlockingSuppressedRequirement
+        );
+        assert!(!computation.static_deviations[0].kind.is_violation());
+    }
+
+    #[test]
+    fn multivalue_equal_strict_subset_without_blocking_still_deviates() {
+        // The same strict-subset shape WITHOUT a blocking unknown: a plainly missing
+        // required value is a genuine violation, so it must stay STATIC_DEVIATION /
+        // required_mismatch. Absence downgrades only under a blocking unknown.
+        let profile = FamilyConstraintProfile {
+            required_equal_features: vec![equal(
+                "http_method:",
+                &["http_method_get", "http_method_post"],
+            )],
+            allowed_variations: Vec::new(),
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: vec![runtime_obligation()],
+        };
+        let target = target_with(&["http_method:http_method_get"]);
+        let computation = compute_alignment(&profile, &target);
+        assert_eq!(computation.status, AlignmentStatus::StaticDeviation);
+        assert_eq!(
+            computation.static_deviations[0].kind,
+            StaticDeviationKind::RequiredMismatch
+        );
+    }
+
+    #[test]
+    fn multivalue_equal_with_offending_value_still_deviates_under_blocking_unknown() {
+        // The target is missing `post` (absence) but also carries an offending `put`
+        // not in the expected set (presence). Presence wins: observed {get, put} is
+        // NOT a subset of expected {get, post}, so it is a real required_mismatch
+        // even under a blocking unknown, which cannot explain the extra wrong value.
+        let profile = FamilyConstraintProfile {
+            required_equal_features: vec![equal(
+                "http_method:",
+                &["http_method_get", "http_method_post"],
+            )],
+            allowed_variations: Vec::new(),
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: vec![runtime_obligation()],
+        };
+        let mut target =
+            target_with(&["http_method:http_method_get", "http_method:http_method_put"]);
+        target.blocking_unknowns.push(blocking_unknown());
+        let computation = compute_alignment(&profile, &target);
+        assert_eq!(computation.status, AlignmentStatus::StaticDeviation);
+        assert_eq!(
+            computation.static_deviations[0].kind,
+            StaticDeviationKind::RequiredMismatch
+        );
     }
 
     #[test]

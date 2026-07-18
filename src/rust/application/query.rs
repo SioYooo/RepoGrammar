@@ -3292,6 +3292,22 @@ fn check_static_alignment(
     };
 
     let computation = compute_alignment(profile, &target_features);
+    // A `compute_alignment` that finds nothing comparable abstains with an
+    // `UNKNOWN` status. An abstaining status must never surface the selected
+    // family or the computation body (the `is_abstaining` contract), so route it
+    // through the abstaining constructor: "an abstention never leaks a family" is
+    // guaranteed here by construction, not by downstream serializer discipline.
+    if computation.status.is_abstaining() {
+        let mut unknowns = family.unknowns.clone();
+        unknowns.extend(alignment_blocking_query_unknowns(&computation, &family_id));
+        return Ok(alignment_abstain(
+            active_generation,
+            computation.status,
+            empty_alignment_read_plan(),
+            unknowns,
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
     let relationship = if is_member {
         TargetRelationship::Member
     } else {
@@ -3317,6 +3333,13 @@ fn check_static_alignment(
     let family_evidence_baseline_tokens =
         usize_to_u64_saturating(all_family_evidence_tokens(&family));
 
+    // A committed certificate carries the selected family and the computation, so
+    // its status must be non-abstaining. The guard above routes every abstaining
+    // status away, so this construction is only ever reached committed/partial.
+    debug_assert!(
+        !computation.status.is_abstaining(),
+        "committed alignment certificate must carry a non-abstaining status"
+    );
     Ok(FamilyLookupReport::Alignment(Box::new(
         AlignmentCertificateReport {
             active_generation,
@@ -10759,6 +10782,33 @@ mod tests {
             estimate_alignment_potential_token_savings(&no_size, &no_size.read_plan, None)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn alignment_abstain_never_carries_selected_family_or_computation() {
+        // The `is_abstaining` contract, pinned by construction: an abstaining
+        // certificate NEVER surfaces a selected family or an alignment computation,
+        // so an abstention can neither leak family detail nor be telemetered as a
+        // resolved outcome. Holds for every abstaining status.
+        for status in [
+            AlignmentStatus::Unknown,
+            AlignmentStatus::InsufficientEvidence,
+        ] {
+            let report = alignment_abstain(
+                "gen-000001".to_string(),
+                status,
+                empty_alignment_read_plan(),
+                Vec::new(),
+                empty_resolved_target("app/routes.py"),
+            );
+            let FamilyLookupReport::Alignment(certificate) = report else {
+                panic!("alignment_abstain must build an alignment certificate");
+            };
+            assert_eq!(certificate.alignment_status, status);
+            assert!(certificate.selected_family_id.is_none());
+            assert!(certificate.computation.is_none());
+            assert!(certificate.target_relationship.is_none());
+        }
     }
 
     #[test]

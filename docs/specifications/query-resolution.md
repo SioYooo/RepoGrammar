@@ -388,10 +388,18 @@ view, so an **absence-driven** required check must not fabricate a
 `STATIC_DEVIATION` from an incomplete view. **Presence-driven** checks — a value
 that is definitely present and wrong or prohibited — still deviate:
 
+For an `Equal` constraint the absence/presence split is decided by set containment:
+the failure is **absence-driven** exactly when the observed values are a strict
+subset of the expected set (the empty set included) — the target carries only
+expected values but is missing one or more. It is **presence-driven** as soon as
+any offending value is present (a value not in the expected set), even when
+required values are simultaneously missing; presence always wins.
+
 | Constraint | Failure shape | With blocking unknown | Without blocking unknown |
 | --- | --- | --- | --- |
 | `Equal` | observed empty (absence) | `blocking_suppressed_requirement` → PARTIAL | `required_mismatch` → DEVIATION |
-| `Equal` | observed present but different (presence) | `required_mismatch` → DEVIATION | `required_mismatch` → DEVIATION |
+| `Equal` | observed a strict subset of expected — pure missing values, no offending value (absence) | `blocking_suppressed_requirement` → PARTIAL | `required_mismatch` → DEVIATION |
+| `Equal` | observed carries an offending value not in expected — extra or wrong, even if values are also missing (presence) | `required_mismatch` → DEVIATION | `required_mismatch` → DEVIATION |
 | `MustContain` | core missing (absence) | `blocking_suppressed_requirement` → PARTIAL | `missing_required_core` → DEVIATION |
 | `EqualEmpty` | value present (presence) | `must_be_empty_violation` → DEVIATION | `must_be_empty_violation` → DEVIATION |
 | `ProhibitedPresence` | value present (presence) | `prohibited_presence` → DEVIATION | `prohibited_presence` → DEVIATION |

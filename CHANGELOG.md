@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- Stopped the Equal constraint axis from fabricating a certain deviation
+  out of uncertainty. A conformance target carrying a strict subset of a
+  multi-value Equal constraint's expected values (missing values, no
+  offending value present) is now classified as absence-driven, so under
+  a blocking unknown it downgrades to `blocking_suppressed_requirement`
+  and `PARTIAL_ALIGNMENT` instead of a fabricated `required_mismatch`
+  `STATIC_DEVIATION` — matching the MustContain axis and the invariant
+  that an UNKNOWN never becomes a definite verdict. Any offending value
+  outside the expected set still deviates, with or without blocking
+  unknowns. Abstaining alignment certificates (`UNKNOWN`,
+  `INSUFFICIENT_EVIDENCE`) are additionally guaranteed by construction
+  to carry no selected family and no computation body.
+
 - Aligned the autosync change fingerprint with the manual discovery
   manifest. The fingerprint now evaluates gitignore through one batched
   git check-ignore subprocess per pass (measured about ten milliseconds
