@@ -4,10 +4,44 @@
 
 No unreleased changes.
 
+## 0.3.2 — 2026-07-19 stable channel
+
+RepoGrammar `0.3.2` is the second verifier-fix patch-forward, succeeding the
+retained, unpublished `0.3.0` and `0.3.1` candidates. Its product behavior is
+identical to both; the only substantive change is the release-gate assertion
+fix below, plus the version advance and the release-mechanism pins. It makes no
+production-readiness, 1.0 API-stability, stable-MCP-API, sound-analysis,
+measured-token-savings, runtime-equivalence, Windows-support, or
+expanded-language-support claim. Registry availability must be verified
+independently; this source record does not prove that GitHub or npm publication
+completed.
+
+### Fixed
+
+- Updated the installer test's regex-escaped release assertions. The `v0.3.1`
+  tag run's Verify release gate failed because
+  `src/install/repogrammar-install.test.sh` still pinned the stable staging
+  command, the finalizer verify markers, and the npm package reference with
+  regex-escaped `0\.2\.2` literals that both prior version advances'
+  plain-text audits could not match; no draft or npm stage was produced. The
+  four escaped assertions now pin `0.3.2`, and the release-source audit
+  procedure covers regex-escaped version forms.
+
+### Changed
+
+- Advanced the stable release authority, finalizer, and install/documentation
+  pins to `v0.3.2`, and registered the retained, unpublished `v0.3.1`
+  candidate among the failed stable versions that must never appear in the
+  registry inventory alongside `0.2.0`, `0.2.1`, and `0.3.0`.
+
 ## 0.3.1 — 2026-07-19 stable channel
 
 RepoGrammar `0.3.1` is the verifier-fix patch-forward that succeeds the retained,
-unpublished `0.3.0` candidate. Its product behavior is identical to `0.3.0`; the
+unpublished `0.3.0` candidate. Its `v0.3.1` tag run failed at the release-gate
+verifier's own installer test and was never published; the tag is retained and
+non-reusable, and `0.3.2` is the patch-forward (see
+`docs/release/stable-v0.3.1-release-checklist.md`).
+Its product behavior is identical to `0.3.0`; the
 only substantive change is the release-gate verifier fix below, plus the version
 advance and the release-mechanism pins. It makes no production-readiness, 1.0
 API-stability, stable-MCP-API, sound-analysis, measured-token-savings,

@@ -1449,7 +1449,7 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. Stable requires exact `latest=0.3.1`, exact
+state. Stable requires exact `latest=0.3.2`, exact
 `preview=0.2.0-preview.0`, both immutable versions in the registry inventory,
 the explicit absence of the failed `0.2.0` and `0.2.1` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any
