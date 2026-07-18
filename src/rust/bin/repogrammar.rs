@@ -8561,6 +8561,47 @@ mod tests {
                     < record["end_byte"].as_u64().expect("end")
             );
         }
+
+        // End-to-end profile persistence + hydration: real indexing persisted the
+        // co-derived constraint profile, and the family detail now carries it.
+        let profile = &family_json["constraint_profile"];
+        assert!(
+            profile.is_object(),
+            "family detail must carry a hydrated constraint profile: {family_json}"
+        );
+        let required = profile["required_equal_features"]
+            .as_array()
+            .expect("required_equal_features array");
+        assert!(
+            required.iter().any(|constraint| {
+                constraint["origin"] == "framework_role_identity"
+                    && constraint["semantics"] == "equal"
+            }),
+            "the framework-role identity is a required-equal feature: {profile}"
+        );
+        // Python families carry no unknown-blocker prohibition.
+        assert!(profile["prohibited_or_blocking_features"]
+            .as_array()
+            .expect("prohibited array")
+            .is_empty());
+        let obligations = profile["unresolved_obligations"]
+            .as_array()
+            .expect("unresolved_obligations array");
+        assert!(
+            obligations.iter().any(|obligation| {
+                obligation["affected_claim"]
+                    .as_str()
+                    .is_some_and(|claim| claim.ends_with(":runtime_equivalence"))
+            }),
+            "the always-present runtime-equivalence obligation must be listed: {profile}"
+        );
+
+        // The read plan leads with the canonical (medoid) evidence for an exact
+        // family-id lookup with no edit target.
+        let read_plan_items = family_json["read_plan"]["items"]
+            .as_array()
+            .expect("read_plan items array");
+        assert_eq!(read_plan_items[0]["purpose"], "canonical_evidence");
     }
 
     #[test]

@@ -10,8 +10,9 @@ use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, cpp_support_target_is_role_compatible,
-    csharp_support_target_is_role_compatible, family_eligible_kind, family_storage_records,
-    family_unknown_blocks_claim, java_support_target_is_role_compatible, min_family_support,
+    csharp_support_target_is_role_compatible, family_constraint_profile_record,
+    family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
+    java_support_target_is_role_compatible, min_family_support,
     python_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
     CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
     CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
@@ -27,7 +28,9 @@ use crate::core::model::{
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
-use crate::ports::family_store::FamilyStore;
+use crate::ports::family_store::{
+    FamilyConstraintProfileStore, FamilyStore, FamilyStoreWithProfiles,
+};
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
@@ -379,7 +382,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -404,7 +407,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     index_repository_with_optional_semantic_worker(
@@ -429,7 +432,7 @@ pub fn index_repository_with_discovery_parser_frameworks_rust_provider_families_
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -507,7 +510,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     semantic_worker: &dyn SemanticWorker,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
@@ -527,7 +530,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_worker: (&dyn FrameworkRoleDetector, &dyn SemanticWorker),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker) = framework_and_worker;
@@ -557,7 +560,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_pr
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -583,7 +586,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -613,7 +616,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -1863,7 +1866,7 @@ struct IndexingPipelineOptions<'a> {
     framework_roles: Option<&'a dyn FrameworkRoleDetector>,
     rust_provider: Option<&'a dyn RustSemanticProvider>,
     semantic_worker: Option<&'a dyn SemanticWorker>,
-    family_store: Option<&'a dyn FamilyStore>,
+    family_store: Option<&'a dyn FamilyStoreWithProfiles>,
 }
 
 struct IndexingRuntime<'a, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>
@@ -2432,7 +2435,7 @@ fn record_parse_report(
 /// set of family ids recorded into `generation`, so callers can diff it against
 /// the base generation for cross-generation identity reporting.
 fn record_family_claims(
-    store: &dyn FamilyStore,
+    store: &dyn FamilyStoreWithProfiles,
     generation: &GenerationHandle,
     code_units: &[IndexedCodeUnitRecord],
     framework_role_facts: &[SemanticFact],
@@ -2451,6 +2454,14 @@ fn record_family_claims(
         for evidence in &records.evidence {
             crate::application::storage::record_family_evidence(store, generation, evidence)?;
         }
+        // Persist the co-derived constraint profile alongside the family it
+        // specifies, in the same generation, so query surfaces can hydrate the
+        // source-backed implementation specification the claim already carries.
+        crate::application::storage::record_family_constraint_profile(
+            store,
+            generation,
+            &family_constraint_profile_record(claim),
+        )?;
         family_ids.insert(claim.family_id.clone());
     }
     Ok((report.claims.len(), family_ids))
@@ -2459,7 +2470,7 @@ fn record_family_claims(
 /// The active generation's family-id set, captured before a new generation is
 /// activated so it represents the base generation for identity diffing.
 fn base_generation_family_ids(
-    family_store: &dyn FamilyStore,
+    family_store: &dyn FamilyStoreWithProfiles,
 ) -> Result<BTreeSet<String>, RepoGrammarError> {
     Ok(
         crate::application::storage::list_active_families(family_store)?

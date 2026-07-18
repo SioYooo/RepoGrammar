@@ -21,7 +21,7 @@ use crate::application::telemetry::{
     FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
     FamilyQueryOutcomeRecord, FamilyQueryOutcomeStatus,
 };
-use crate::core::model::FamilyPrevalence;
+use crate::core::model::{FamilyConstraintProfile, FamilyPrevalence, FeatureConstraint};
 use crate::error::RepoGrammarError;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
@@ -846,6 +846,59 @@ fn family_prevalence_value(prevalence: &FamilyPrevalence) -> Value {
     })
 }
 
+/// Metadata-only view of a family's hydrated constraint profile, or `null` when
+/// the active generation persisted none. Mirrors the CLI serializer: every field
+/// is a RepoGrammar-owned typed token or count in the profile's deterministic
+/// order, and no repository source text is emitted.
+fn family_constraint_profile_value(profile: Option<&FamilyConstraintProfile>) -> Value {
+    let Some(profile) = profile else {
+        return Value::Null;
+    };
+    json!({
+        "required_equal_features": profile
+            .required_equal_features
+            .iter()
+            .map(feature_constraint_value)
+            .collect::<Vec<_>>(),
+        "allowed_variations": profile
+            .allowed_variations
+            .iter()
+            .map(|variation| json!({
+                "dimension": variation.dimension,
+                "observed_profiles": variation.observed_profiles,
+                "observed_profiles_truncated": variation.observed_profiles_truncated,
+                "includes_absent_profile": variation.includes_absent_profile,
+                "representative_member_ids": variation.representative_member_ids,
+                "observed_only": variation.observed_only,
+            }))
+            .collect::<Vec<_>>(),
+        "prohibited_or_blocking_features": profile
+            .prohibited_or_blocking_features
+            .iter()
+            .map(feature_constraint_value)
+            .collect::<Vec<_>>(),
+        "unresolved_obligations": profile
+            .unresolved_obligations
+            .iter()
+            .map(|obligation| json!({
+                "class": obligation.class.as_protocol_str(),
+                "reason": obligation.reason.as_protocol_str(),
+                "affected_claim": obligation.affected_claim,
+                "recovery": obligation.recovery,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn feature_constraint_value(constraint: &FeatureConstraint) -> Value {
+    json!({
+        "prefix": constraint.prefix,
+        "values": constraint.values,
+        "origin": constraint.origin.as_token(),
+        "semantics": constraint.semantics.as_token(),
+    })
+}
+
 fn family_detail_value(
     operation: McpOperation,
     family: &FamilyDetailReport,
@@ -909,6 +962,7 @@ fn family_detail_value(
                 "description": slot.description,
             })
         }).collect::<Vec<_>>(),
+        "constraint_profile": family_constraint_profile_value(family.constraint_profile.as_deref()),
         "evidence": selected_evidence.evidence.iter().map(|evidence| {
             let record = &evidence.record;
             json!({
@@ -1179,6 +1233,49 @@ mod tests {
         IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord,
     };
     use crate::test_support::TempWorkspace;
+
+    #[test]
+    fn constraint_profile_value_is_metadata_only_and_null_when_absent() {
+        assert_eq!(family_constraint_profile_value(None), Value::Null);
+        let profile = crate::test_support::sample_family_constraint_profile();
+        let value = family_constraint_profile_value(Some(&profile));
+        let required = value["required_equal_features"]
+            .as_array()
+            .expect("required_equal_features");
+        assert!(required.iter().any(|constraint| {
+            constraint["origin"] == "framework_role_identity" && constraint["semantics"] == "equal"
+        }));
+        assert_eq!(
+            value["allowed_variations"][0]["dimension"],
+            "python_import_context"
+        );
+        assert_eq!(
+            value["prohibited_or_blocking_features"][0]["semantics"],
+            "prohibited_presence"
+        );
+        assert_eq!(
+            value["unresolved_obligations"][0]["affected_claim"],
+            "family:example:runtime_equivalence"
+        );
+        // The serializer echoes the profile's typed fields and adds no others;
+        // source-freedom is enforced by the storage-side hydration validators.
+        let mut keys = value
+            .as_object()
+            .expect("constraint_profile object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "allowed_variations".to_string(),
+                "prohibited_or_blocking_features".to_string(),
+                "required_equal_features".to_string(),
+                "unresolved_obligations".to_string(),
+            ]
+        );
+    }
     use std::fs;
 
     #[test]
@@ -2282,6 +2379,7 @@ mod tests {
                 affected_claim: "runtime_equivalence".to_string(),
                 recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
             }],
+            constraint_profile: None,
             term_retrieval: None,
         }
     }

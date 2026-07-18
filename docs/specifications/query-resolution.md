@@ -44,6 +44,18 @@ exact identifier.
    preconditions still hold (a path-shaped target resolving to one indexed file or
    unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
 
+A resolved family detail carries a hydrated, metadata-only `constraint_profile`
+(the source-backed specification, or `null` when none was persisted) and a
+`read_plan` whose purposes follow representative selection: `canonical_evidence`
+names the cluster medoid, `support_evidence` prefers the `contrast`-labelled
+support witness (hydration re-sorts evidence by path, so the label — not the
+write order — carries the choice; it falls back to the first distinct-path
+`support` member), and `variation_guard` a variation witness. Evidence-mode
+selection covers the canonical and support constraints plus one witness per
+observed variation dimension (and the anchor-target dimension) when the profile
+is hydrated. See the Representative selection rule and the
+`FamilyConstraintProfile` in `docs/specifications/domain-model.md`.
+
 ### Abstention gates and reasons
 
 A term-retrieval query resolves to a family **only** when the top candidate clears

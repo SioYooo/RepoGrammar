@@ -4,6 +4,21 @@
 
 ### Added
 
+- Wired constraint-profile persistence into production indexing and
+  replaced storage-order representative selection with deterministic
+  contrastive selection. The canonical member is now the cluster medoid
+  (minimum summed symmetric-difference distance over the member feature
+  map, ties broken by a path-free feature fingerprint so two-member
+  families no longer flip canonical on renames), the
+  farthest-from-medoid member carries a new `contrast` covered-claim
+  label that the read plan's support span prefers, and variation
+  witnesses cover every observed profile per constraint dimension plus
+  the Python anchor-target dimension. Query-time evidence selection
+  requires one witness per variation dimension when a constraint
+  profile is hydrated, letting the canonical satisfy a dimension it
+  solely represents, and family detail on CLI and MCP exposes a
+  metadata-only `constraint_profile` object.
+
 - Derived source-backed family constraint profiles at storage schema v9.
   Every emitted family now records a FamilyConstraintProfile - required
   features under a four-token semantics discriminator (Equal,

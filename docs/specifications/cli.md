@@ -1197,8 +1197,14 @@ These fields are null for exact/role/path routes. The human-readable output adds
 `query_term_abstention_reason` with the bounded candidate family ids (on an
 abstention). See `docs/specifications/query-resolution.md`.
 Matched family output defaults to `--mode compact`: family
-id, classification, support, members, variation slots, typed unknowns, selected
-output metadata, a `read_plan`, and no evidence records or source snippets.
+id, classification, support, members, variation slots, a metadata-only
+`constraint_profile`, typed unknowns, selected output metadata, a `read_plan`,
+and no evidence records or source snippets. The `constraint_profile` object is
+the family's hydrated source-backed specification (`required_equal_features`,
+`allowed_variations`, `prohibited_or_blocking_features`, and
+`unresolved_obligations`, each a typed token or count; see
+`docs/specifications/domain-model.md`), or `null` when the active generation
+persisted none.
 `--mode evidence` adds budgeted repo-relative evidence metadata:
 evidence id, family id, code-unit id, path, content hash, byte range, note,
 estimated token cost, and covered claim labels. The shared read plan is present
@@ -1226,16 +1232,26 @@ listed ranges.
 `--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
 family evidence carries schema-backed `covered_claims` labels from the
-allowlist `canonical`, `support`, `variation`, and `exception`; the selector
-must consume those labels rather than inferring coverage from note text or
-storage order. The current family builder emits `canonical` and `support`
-labels, plus a narrow Python `variation` label when an already-ready family has
-multiple exact-compatible framework-anchor support targets. It may also emit
-metadata-only variation slots when parser-context profiles differ inside an
-already-supported Python family, but those slots do not imply variation
-evidence coverage. `--include-exceptions` and broader variation requests must
-still report missing coverage until later builders explicitly link evidence to
-variation slots or exceptions.
+allowlist `canonical`, `support`, `contrast`, `variation`, and `exception`; the
+selector must consume those labels rather than inferring coverage from note text
+or storage order. The family builder assigns labels by coverage, not storage
+order: the canonical medoid carries `canonical`, every member carries `support`,
+the farthest-from-medoid support witness additionally carries `contrast`, and one
+representative per observed variation profile carries `variation` (the canonical
+medoid is excluded from `contrast` and variation witnesses). Hydration re-sorts
+evidence by path, so the medoid-first write order is not the carrier — the
+`contrast` label is. See the Representative selection rule in
+`docs/specifications/domain-model.md`. When the hydrated `constraint_profile`
+enumerates variation dimensions, evidence-mode selection covers one witness per
+dimension plus the anchor-target dimension when its slot exists; otherwise a
+single variation witness is requested from the variation-slot signal. Read-plan
+purposes follow the same labels: `canonical_evidence` names the medoid,
+`support_evidence` prefers the `contrast`-labelled witness (falling back to the
+first distinct-path `support` member), and `variation_guard` names a variation
+witness. `--include-exceptions` still reports missing coverage; a variation
+dimension can only be missing under a real budget shortfall, since the canonical
+covers any dimension it solely represents. `exception` evidence remains unlinked
+in this slice.
 `--mode deep` is accepted as an explicit detail request, but it remains
 metadata-first and does not imply source output without `--include-source-spans`.
 None of these modes may include absolute paths. `check` is advisory in this

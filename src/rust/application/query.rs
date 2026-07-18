@@ -17,17 +17,18 @@ use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
-    ClaimImpact, ContentHash, EstimatedPotentialTokenSavings, FactCertainty, FamilyPrevalence,
-    ResolutionClass, SemanticFactKind, SemanticObligation, UnknownClass, UnknownReasonCode,
+    ClaimImpact, ContentHash, EstimatedPotentialTokenSavings, FactCertainty,
+    FamilyConstraintProfile, FamilyPrevalence, ResolutionClass, SemanticFactKind,
+    SemanticObligation, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    ActiveFamily, ActiveFamilyCandidates, FamilyStore, IndexedFamilyCandidateRecord,
-    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
-    IndexedVariationSlotRecord, StoreError,
+    ActiveFamily, ActiveFamilyCandidates, FamilyConstraintProfileStore, FamilyStore,
+    IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     ActiveRepoShapeStats, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
@@ -342,6 +343,12 @@ pub struct FamilyDetailReport {
     pub variation_slots: Vec<IndexedVariationSlotRecord>,
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// The family's source-backed constraint profile, hydrated from storage when
+    /// the active generation persisted one. `None` for a family indexed before
+    /// profiles were persisted (or a fixture that recorded none); representative
+    /// selection then falls back to the variation-slot signal. Boxed so the
+    /// (large) profile does not inflate every `FamilyLookupReport` variant.
+    pub constraint_profile: Option<Box<FamilyConstraintProfile>>,
     /// Present only when the deterministic term-retrieval fallback selected this
     /// family; carries its source-free route metadata for the query response.
     pub term_retrieval: Option<TermRetrievalRoute>,
@@ -2392,7 +2399,7 @@ fn derive_family_freshness(
 }
 
 pub fn lookup_family(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
@@ -2430,7 +2437,11 @@ pub fn lookup_family(
         }));
     }
     if let Some(matched) = matches.into_iter().next() {
-        return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
+        let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
+        return Ok(FamilyLookupReport::Found(family_detail(
+            matched.family,
+            profile,
+        )));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
@@ -2438,6 +2449,17 @@ pub fn lookup_family(
         unknowns: vec![insufficient_support_unknown("query target")],
         term_retrieval: None,
     }))
+}
+
+/// Hydrate one family's stored constraint profile, mapping store failures to the
+/// query error type. Returns `None` when no profile was persisted for the family.
+fn hydrated_constraint_profile(
+    store: &impl FamilyConstraintProfileStore,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, RepoGrammarError> {
+    store
+        .show_family_constraint_profile(family_id)
+        .map_err(family_store_error)
 }
 
 struct FamilyMatchSet {
@@ -2733,7 +2755,7 @@ fn candidate_ambiguity_unknown(
 
 pub fn lookup_family_with_local_context(
     index_store: &impl IndexStore,
-    family_store: &impl FamilyStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
@@ -2743,7 +2765,7 @@ pub fn lookup_family_with_local_context(
 
 pub fn lookup_family_with_freshness(
     request: FamilyEvidenceFreshnessRequest,
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
     mode: FamilyLookupMode,
@@ -2783,7 +2805,11 @@ pub fn lookup_family_with_freshness(
     }
     if let Some(matched) = matches.into_iter().next() {
         if family_evidence_is_fresh(&request, source_store, &matched.family)? {
-            return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
+            let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
+            return Ok(FamilyLookupReport::Found(family_detail(
+                matched.family,
+                profile,
+            )));
         }
         let family_id = matched.family.family.family_id;
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -2807,7 +2833,7 @@ pub fn lookup_family_with_freshness(
 pub fn lookup_family_with_freshness_and_local_context(
     request: FamilyEvidenceFreshnessRequest,
     index_store: &impl IndexStore,
-    family_store: &impl FamilyStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
     mode: FamilyLookupMode,
@@ -2837,7 +2863,7 @@ pub fn lookup_family_with_freshness_and_local_context(
 /// freshness + single-fresh-family gates.
 fn term_retrieval_fallback(
     request: &FamilyEvidenceFreshnessRequest,
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     report: FamilyLookupReport,
     target: Option<&str>,
@@ -2921,7 +2947,7 @@ fn target_has_path_locator_shape(target: &str) -> bool {
 
 fn run_term_retrieval(
     request: &FamilyEvidenceFreshnessRequest,
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: &str,
     expected_generation: &str,
@@ -3077,7 +3103,8 @@ fn run_term_retrieval(
             let winner = fresh_families.into_iter().next().expect("one fresh family");
             route.route = "term_retrieval_hydrate";
             route.matched_signals = Some(top_signals);
-            let mut detail = family_detail(winner);
+            let profile = hydrated_constraint_profile(store, &winner.family.family_id)?;
+            let mut detail = family_detail(winner, profile);
             detail.term_retrieval = Some(route);
             Ok(FamilyLookupReport::Found(detail))
         }
@@ -4240,11 +4267,18 @@ fn read_plan_candidates(
             false,
         ));
     }
-    if let Some(support) = first_distinct_evidence_for_claim(family, "support", &candidates) {
+    // The support span prefers the labelled contrast witness (the farthest-from-
+    // medoid member); hydration re-sorts evidence by path, so the write-time
+    // ordering is not the carrier — the `contrast` covered-claim label is. Fall
+    // back to the first distinct-path support member when no contrast label
+    // survives (e.g. a family predating the label, or a single-path family).
+    let support = first_distinct_evidence_for_claim(family, "contrast", &candidates)
+        .or_else(|| first_distinct_evidence_for_claim(family, "support", &candidates));
+    if let Some(support) = support {
         candidates.push(read_plan_item(
             support,
             ReadPlanPurpose::SupportEvidence,
-            "additional supporting source span for contrast",
+            "farthest-contrast supporting source span; verify before applying the family blindly",
             false,
         ));
     }
@@ -4529,8 +4563,29 @@ fn required_evidence_coverage(
         required.insert(EvidenceCoverage::Canonical);
         required.insert(EvidenceCoverage::Support);
     }
-    if !family.variation_slots.is_empty() && options.include_variations {
-        required.insert(EvidenceCoverage::Variation);
+    if options.include_variations {
+        match variation_dimension_count(family) {
+            // With a hydrated profile the objective covers every observed
+            // variation dimension: one target per profile dimension, plus one for
+            // the anchor-target dimension when its variation slot exists (the
+            // anchor variation is a slot, not a profile feature-prefix dimension).
+            Some(count) => {
+                for dimension in 0..count {
+                    required.insert(EvidenceCoverage::Variation(dimension));
+                }
+                if has_anchor_target_slot(family) {
+                    required.insert(EvidenceCoverage::Variation(count));
+                }
+            }
+            // Without profile dimensions, a variation slot still asks for a single
+            // variation witness (the pre-profile behavior and the Python
+            // anchor-target case, which is a slot rather than a profile dimension).
+            None => {
+                if !family.variation_slots.is_empty() {
+                    required.insert(EvidenceCoverage::Variation(0));
+                }
+            }
+        }
     }
     if options.include_exceptions {
         required.insert(EvidenceCoverage::Exception);
@@ -4538,29 +4593,116 @@ fn required_evidence_coverage(
     required
 }
 
+/// The number of hydrated profile variation dimensions, or `None` when the family
+/// has none and variation coverage falls back to the single-slot signal. The
+/// anchor-target dimension (a variation slot, not a profile dimension) is counted
+/// separately as ordinal `count` when present.
+fn variation_dimension_count(family: &FamilyDetailReport) -> Option<usize> {
+    family
+        .constraint_profile
+        .as_ref()
+        .map(|profile| profile.allowed_variations.len())
+        .filter(|count| *count > 0)
+}
+
+/// Whether the family exposes the Python framework-anchor-target variation slot,
+/// which is a slot rather than a profile feature-prefix dimension and so is
+/// required and covered separately from `allowed_variations`.
+fn has_anchor_target_slot(family: &FamilyDetailReport) -> bool {
+    family
+        .variation_slots
+        .iter()
+        .any(|slot| slot.slot_id == "slot:python_framework_anchor_target")
+}
+
 fn evidence_coverage(
-    _family: &FamilyDetailReport,
+    family: &FamilyDetailReport,
     _index: usize,
     evidence: &IndexedFamilyEvidenceRecord,
 ) -> BTreeSet<EvidenceCoverage> {
-    evidence
+    let mut coverage = BTreeSet::new();
+    let has_variation_label = evidence
         .covered_claims
         .iter()
-        .filter_map(|claim| match claim.as_str() {
-            "canonical" => Some(EvidenceCoverage::Canonical),
-            "support" => Some(EvidenceCoverage::Support),
-            "variation" => Some(EvidenceCoverage::Variation),
-            "exception" => Some(EvidenceCoverage::Exception),
-            _ => None,
-        })
-        .collect()
+        .any(|claim| claim == "variation");
+    for claim in &evidence.covered_claims {
+        match claim.as_str() {
+            "canonical" => {
+                coverage.insert(EvidenceCoverage::Canonical);
+            }
+            "support" => {
+                coverage.insert(EvidenceCoverage::Support);
+            }
+            "exception" => {
+                coverage.insert(EvidenceCoverage::Exception);
+            }
+            _ => {}
+        }
+    }
+    match variation_dimension_count(family) {
+        Some(count) => {
+            // Safe: `variation_dimension_count` returns `Some` only for a profile.
+            let profile = family.constraint_profile.as_ref().expect("profile present");
+            let canonical_id = family
+                .evidence
+                .first()
+                .map(|first| first.code_unit_id.as_str());
+            if has_variation_label {
+                // A variation witness covers every profile dimension it
+                // represents; if it represents none it witnesses the anchor-target
+                // dimension (ordinal `count`).
+                let mut mapped = false;
+                for (dimension, variation) in profile.allowed_variations.iter().enumerate() {
+                    if variation
+                        .representative_member_ids
+                        .iter()
+                        .any(|id| id == &evidence.code_unit_id)
+                    {
+                        coverage.insert(EvidenceCoverage::Variation(dimension));
+                        mapped = true;
+                    }
+                }
+                if !mapped {
+                    coverage.insert(EvidenceCoverage::Variation(count));
+                }
+            } else if Some(evidence.code_unit_id.as_str()) == canonical_id {
+                // Sole-representative fallback: the canonical medoid legitimately
+                // witnesses a dimension it is the ONLY representative of (a single
+                // observed non-empty profile plus absent members). It never
+                // pre-empts a dimension that also has a non-canonical witness.
+                for (dimension, variation) in profile.allowed_variations.iter().enumerate() {
+                    let is_sole_representative = variation
+                        .representative_member_ids
+                        .iter()
+                        .any(|id| Some(id.as_str()) == canonical_id)
+                        && !variation
+                            .representative_member_ids
+                            .iter()
+                            .any(|id| Some(id.as_str()) != canonical_id);
+                    if is_sole_representative {
+                        coverage.insert(EvidenceCoverage::Variation(dimension));
+                    }
+                }
+            }
+        }
+        None => {
+            if has_variation_label {
+                coverage.insert(EvidenceCoverage::Variation(0));
+            }
+        }
+    }
+    coverage
 }
 
 fn coverage_strings(coverage: &BTreeSet<EvidenceCoverage>) -> Vec<String> {
-    coverage
+    let mut strings: Vec<String> = coverage
         .iter()
         .map(|coverage| coverage.as_str().to_string())
-        .collect()
+        .collect();
+    // Per-dimension variation targets share the `variation` token; the set is
+    // sorted so duplicates are adjacent and collapse to one stable label.
+    strings.dedup();
+    strings
 }
 
 pub fn assess_semantic_fact_readiness(
@@ -4642,7 +4784,10 @@ fn family_store_error(error: StoreError) -> RepoGrammarError {
     }
 }
 
-fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
+fn family_detail(
+    family: ActiveFamily,
+    constraint_profile: Option<FamilyConstraintProfile>,
+) -> FamilyDetailReport {
     let family_id = family.family.family_id;
     let mut unknowns = vec![FamilyQueryUnknown {
         class: UnknownClass::NonBlocking,
@@ -4679,6 +4824,7 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         variation_slots: family.variation_slots,
         evidence: family.evidence,
         unknowns,
+        constraint_profile: constraint_profile.map(Box::new),
         term_retrieval: None,
     }
 }
@@ -5508,6 +5654,25 @@ mod tests {
         }
     }
 
+    // This fake never persists profiles; hydration always reports `None`, which
+    // exercises the representative-selection fallback path.
+    impl crate::ports::family_store::FamilyConstraintProfileStore for FakeFamilyStore {
+        fn record_family_constraint_profile(
+            &self,
+            _generation: &GenerationHandle,
+            _record: &crate::ports::family_store::IndexedFamilyConstraintProfileRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn show_family_constraint_profile(
+            &self,
+            _family_id: &str,
+        ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+            Ok(None)
+        }
+    }
+
     fn semantic_fact() -> IndexedSemanticFactRecord {
         semantic_fact_with_certainty("SEMANTIC")
     }
@@ -5754,6 +5919,7 @@ mod tests {
             variation_slots: Vec::new(),
             evidence,
             unknowns: Vec::new(),
+            constraint_profile: None,
             term_retrieval: None,
         }
     }
@@ -5845,7 +6011,7 @@ mod tests {
                 },
             ],
             evidence: Vec::new(),
-        });
+        }, None);
 
         assert!(detail.unknowns.iter().any(|unknown| {
             unknown.class == UnknownClass::NonBlocking
@@ -7364,6 +7530,276 @@ mod tests {
             1,
             "fuzzy cap should not hydrate candidate families after the exact-id probe"
         );
+    }
+
+    #[test]
+    fn family_evidence_selection_covers_every_variation_dimension() {
+        // A multi-dimension family: two profile variation dimensions, each
+        // witnessed by a distinct member. With the profile hydrated, the objective
+        // requires — and the greedy loop covers — one witness per dimension.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let mut dim_a = family_evidence("src/a.ts", 1, "witness for route_method");
+        dim_a.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut dim_b = family_evidence("src/b.ts", 2, "witness for route_path_shape");
+        dim_b.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut detail =
+            family_detail_with_evidence(vec![canonical.clone(), dim_a.clone(), dim_b.clone()]);
+        detail.variation_slots = vec![
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:tsjs_route_method".to_string(),
+                description: "route method differs".to_string(),
+            },
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:tsjs_route_path_shape".to_string(),
+                description: "route path shape differs".to_string(),
+            },
+        ];
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            allowed_variations: vec![
+                crate::core::model::VariationConstraint {
+                    dimension: "tsjs_route_method".to_string(),
+                    observed_profiles: vec!["get".to_string(), "post".to_string()],
+                    observed_profiles_truncated: false,
+                    includes_absent_profile: false,
+                    representative_member_ids: vec![dim_a.code_unit_id.clone()],
+                    observed_only: true,
+                },
+                crate::core::model::VariationConstraint {
+                    dimension: "tsjs_route_path_shape".to_string(),
+                    observed_profiles: vec!["/x".to_string(), "/y".to_string()],
+                    observed_profiles_truncated: false,
+                    includes_absent_profile: false,
+                    representative_member_ids: vec![dim_b.code_unit_id.clone()],
+                    observed_only: true,
+                },
+            ],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+            },
+        );
+        // Every dimension's witness is selected; the two shared "variation" tokens
+        // collapse to one label in the reported coverage.
+        let selected_ids = selected
+            .evidence
+            .iter()
+            .map(|evidence| evidence.record.evidence_id.clone())
+            .collect::<Vec<_>>();
+        assert!(selected_ids.contains(&canonical.evidence_id));
+        assert!(selected_ids.contains(&dim_a.evidence_id));
+        assert!(selected_ids.contains(&dim_b.evidence_id));
+        assert_eq!(
+            selected.covered_claims,
+            vec!["canonical", "support", "variation"]
+        );
+        assert!(selected.missing_claims.is_empty());
+
+        // Budget-exceeded truncation is unchanged: a budget that fits only the
+        // mandatory canonical seed drops the later witnesses and reports the
+        // shortfall, leaving the variation dimensions uncovered.
+        let tiny = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: Some(1),
+                include_variations: true,
+                include_exceptions: false,
+            },
+        );
+        assert!(!tiny.budget_satisfied);
+        assert!(tiny.covered_claims.contains(&"canonical".to_string()));
+        assert_eq!(tiny.missing_claims, vec!["variation".to_string()]);
+    }
+
+    fn variation_dimension(
+        dimension: &str,
+        representative: &str,
+    ) -> crate::core::model::VariationConstraint {
+        crate::core::model::VariationConstraint {
+            dimension: dimension.to_string(),
+            observed_profiles: vec!["observed".to_string()],
+            observed_profiles_truncated: false,
+            includes_absent_profile: true,
+            representative_member_ids: vec![representative.to_string()],
+            observed_only: true,
+        }
+    }
+
+    #[test]
+    fn evidence_selection_picks_an_anchor_witness_alongside_a_profile_dimension() {
+        // A fastapi family that varies in BOTH a profile dimension (import_context)
+        // and framework anchor targets. The anchor variation is a slot, not a
+        // profile dimension, so its witness must still be required and selectable.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let mut import_witness = family_evidence("src/import.ts", 1, "import_context witness");
+        import_witness.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut anchor_witness = family_evidence("src/anchor.ts", 2, "anchor-target witness");
+        anchor_witness.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut detail = family_detail_with_evidence(vec![
+            canonical.clone(),
+            import_witness.clone(),
+            anchor_witness.clone(),
+        ]);
+        detail.variation_slots = vec![
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:python_import_context".to_string(),
+                description: "import context differs".to_string(),
+            },
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:python_framework_anchor_target".to_string(),
+                description: "variation:python_framework_anchor_target:exact compatible framework anchors differ".to_string(),
+            },
+        ];
+        // Only the import witness is a profile-dimension representative; the anchor
+        // witness maps to no profile dimension.
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            allowed_variations: vec![variation_dimension(
+                "python_import_context",
+                &import_witness.code_unit_id,
+            )],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+            },
+        );
+        let ids = selected
+            .evidence
+            .iter()
+            .map(|evidence| evidence.record.evidence_id.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            ids.contains(&anchor_witness.evidence_id),
+            "the anchor-target witness must be selected, not dropped: {ids:?}"
+        );
+        assert!(ids.contains(&import_witness.evidence_id));
+        assert!(selected.missing_claims.is_empty());
+    }
+
+    #[test]
+    fn canonical_medoid_satisfies_a_dimension_it_solely_represents() {
+        // A dimension with one observed non-empty profile plus absent members has a
+        // single representative. After the medoid-first reorder that representative
+        // is the canonical, and it is excluded from the variation witness set — so
+        // no stored row carries a "variation" label for the dimension. The
+        // canonical must still satisfy the dimension (it exhibits the profile),
+        // reaching full coverage rather than reporting permanent missing coverage.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let other = family_evidence("src/other.ts", 1, "plain support member");
+        let mut detail = family_detail_with_evidence(vec![canonical.clone(), other.clone()]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:python_effect_marker".to_string(),
+            description: "effect marker present on some members".to_string(),
+        }];
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            // Sole representative is the canonical medoid.
+            allowed_variations: vec![variation_dimension(
+                "python_effect_marker",
+                &canonical.code_unit_id,
+            )],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+            },
+        );
+        assert!(
+            selected.missing_claims.is_empty(),
+            "the canonical must satisfy the dimension it solely represents: {:?}",
+            selected.missing_claims
+        );
+        assert_eq!(
+            selected.covered_claims,
+            vec!["canonical", "support", "variation"]
+        );
+    }
+
+    #[test]
+    fn read_plan_support_span_prefers_the_contrast_labelled_witness() {
+        // Hydration re-sorts evidence by path, so the read plan must recover the
+        // contrast witness by its label, not by storage order. The path-earliest
+        // support member (`b_plain`) precedes the contrast member (`c_contrast`),
+        // yet support_evidence must name the contrast member.
+        let canonical = family_evidence("src/a_canon.ts", 0, "canonical support evidence");
+        let plain = family_evidence("src/b_plain.ts", 1, "plain support member");
+        let mut contrast = family_evidence("src/c_contrast.ts", 2, "farthest contrast witness");
+        contrast.covered_claims = vec!["support".to_string(), "contrast".to_string()];
+        let detail = family_detail_with_evidence(vec![canonical, plain.clone(), contrast.clone()]);
+
+        let read_plan = build_read_plan(
+            &detail,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: false,
+                include_exceptions: false,
+            },
+        );
+        let support = read_plan
+            .items
+            .iter()
+            .find(|item| item.purpose == ReadPlanPurpose::SupportEvidence)
+            .expect("a support-evidence read-plan item");
+        assert_eq!(
+            support.path, "src/c_contrast.ts",
+            "support_evidence must name the contrast witness, not the path-first member"
+        );
+
+        // Fallback: with no contrast label, support_evidence names the first
+        // distinct-path support member (the pre-label behavior).
+        let detail_no_contrast = family_detail_with_evidence(vec![
+            family_evidence("src/a_canon.ts", 0, "canonical support evidence"),
+            plain.clone(),
+        ]);
+        let fallback = build_read_plan(
+            &detail_no_contrast,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: false,
+                include_exceptions: false,
+            },
+        );
+        let fallback_support = fallback
+            .items
+            .iter()
+            .find(|item| item.purpose == ReadPlanPurpose::SupportEvidence)
+            .expect("a support-evidence read-plan item");
+        assert_eq!(fallback_support.path, "src/b_plain.ts");
     }
 
     #[test]

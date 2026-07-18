@@ -202,7 +202,12 @@ raw `top_score`/`margin`, `top_score_bucket`/`margin_bucket`, `truncated`,
 was found). These fields carry no raw target text and are null for exact/role/path
 routes.
 Matched family responses use the same output selection contract as the CLI:
-`compact` is the default and returns family summary, members, variation slots,
+`compact` is the default and returns family summary, members, variation slots, a
+metadata-only `constraint_profile` (the family's hydrated source-backed
+specification — `required_equal_features`, `allowed_variations`,
+`prohibited_or_blocking_features`, and `unresolved_obligations`, each a typed
+token or count, or `null` when none was persisted; see
+`docs/specifications/domain-model.md`),
 unknowns, output metadata, and a `read_plan` without evidence records;
 `evidence` adds budgeted repo-relative evidence metadata selected by
 deterministic greedy marginal coverage per estimated token cost; `deep` is
@@ -230,15 +235,25 @@ a potential read-displacement estimate for the returned RepoGrammar metadata
 shape; it is not measured token savings and must carry a caveat saying so.
 Stored family evidence carries
 schema-backed `covered_claims` labels from the allowlist `canonical`,
-`support`, `variation`, and `exception`; selectors must consume those labels
-rather than infer coverage from notes or record order. The current family
-builder emits `canonical` and `support`, plus a narrow Python `variation` label
-when an already-ready family has multiple exact-compatible framework-anchor
-support targets. It may also emit metadata-only variation slots when
-parser-context profiles differ inside an already-supported Python family, but
-those slots do not imply variation evidence coverage. Requested exception
-coverage and broader variation coverage must be reported as missing until later
-builders explicitly link evidence to those claims. Family detail unknowns
+`support`, `contrast`, `variation`, and `exception`; selectors must consume those
+labels rather than infer coverage from notes or record order. The family builder
+assigns labels by coverage, not storage order: the canonical medoid carries
+`canonical`, every member carries `support`, the farthest-from-medoid support
+witness additionally carries `contrast`, and one representative per observed
+variation profile carries `variation`, with the medoid excluded from `contrast`
+and variation witnesses (see the Representative selection rule in
+`docs/specifications/domain-model.md`). Hydration re-sorts evidence by path, so
+the `contrast` label — not the write order — is what lets the read plan recover
+the witness. When the hydrated `constraint_profile` enumerates variation
+dimensions, evidence selection covers one witness per dimension plus the
+anchor-target dimension when its slot exists; otherwise a single variation witness
+is requested from the variation-slot signal. Read-plan purposes follow the same
+labels (`canonical_evidence` names the medoid, `support_evidence` prefers the
+`contrast`-labelled witness and falls back to the first distinct-path `support`
+member, `variation_guard` a variation witness). Requested exception coverage may
+be missing; a variation dimension is missing only under a real budget shortfall,
+since the canonical satisfies any dimension it solely represents. `exception`
+evidence remains unlinked in this slice. Family detail unknowns
 identify runtime-equivalence gaps with the concrete
 `<family_id>:runtime_equivalence` affected claim. MCP responses must report
 whether source snippets were included. Stale, missing, hash-mismatched,

@@ -339,9 +339,11 @@ from raw fields. Two small predicates — `language_excludes_on_unknown_blocker`
 and the pytest fixture-context dispatch — are hand-maintained mirrors of the
 per-language compatibility functions; they are cross-referenced to those
 authorities in the code and guarded by drift tests that assert the mirror matches
-`evidence_pair_is_compatible`'s actual accept/reject behavior. The profile is a
-derived value carried on the family claim; a later slice exposes it through the
-read interfaces.
+`evidence_pair_is_compatible`'s actual accept/reject behavior. The profile is
+derived during family building, persisted alongside the family in the same
+generation, and hydrated onto the family detail read surfaces (see
+`query-resolution.md`, `cli.md`, and `mcp-api.md`) as a metadata-only
+`constraint_profile` object.
 
 ## Evidence
 
@@ -349,12 +351,70 @@ Evidence links a conclusion to a code unit, source range, provenance record, and
 note. Every future family conclusion must carry auditable source evidence.
 Family evidence storage must remain linked to a family and same-generation code
 unit and must carry explicit covered-claim labels. The current allowlist is
-`canonical`, `support`, `variation`, and `exception`. Current builders emit
-`canonical` and `support`, and they may emit one narrow Python `variation`
-evidence label when an already-ready family has multiple exact-compatible
-framework-anchor support targets. Exception evidence and broader medoid,
-template, or counterexample evidence links remain deferred. Semantic-fact
-evidence must not be treated as family evidence by itself.
+`canonical`, `support`, `contrast`, `variation`, and `exception`. A stored
+evidence row must carry at least one label, so every member carries `support`;
+the canonical medoid additionally carries `canonical`, the support witness
+additionally carries `contrast`, and variation witnesses additionally carry
+`variation` (see Representative selection). Exception evidence remains deferred.
+Semantic-fact evidence must not be treated as family evidence by itself.
+
+## Representative selection
+
+Representative selection assigns the `canonical`, `contrast`, and `variation`
+covered-claim labels by coverage, not storage order. It is deterministic and
+runs for every language.
+
+The **objective** is to let a budgeted read plan cover, under its token /
+read-plan budget, the maximum number of required constraints (the canonical and
+support witnesses) plus one witness per observed variation dimension. The
+build-time labelling and the query-time greedy selection share this objective.
+
+- **Distance.** The distance between two members is the symmetric-difference
+  cardinality of their full family feature sets — the number of features present
+  on exactly one member.
+- **Canonical = the cluster medoid.** The medoid is the member minimizing the sum
+  of distances to every other member. The choice is deterministic on the members'
+  features: the decision key is `(cost, feature_fingerprint, index)`, where
+  `feature_fingerprint` is a path-free stable hash of the member's feature set, so
+  ties on cost are broken by features before any index resort. A pure path rename
+  — one that only reorders members — therefore leaves the canonical unchanged,
+  including for two-member families, which always tie on cost. The single
+  exception is deliberate: the feature set includes a `path_context:` bucket
+  feature, so a rename that crosses that bucket boundary is a genuine feature
+  change and may move the medoid. This replaces the former storage-order canonical
+  (the first member in path order).
+- **Support witness = the farthest member from the medoid** (maximum distance;
+  ties broken by lowest `feature_fingerprint`, then lowest index). Every member
+  shares the required-equal feature profile by construction, so no separate
+  profile filter is needed; the farthest member maximizes contrast. Storage order
+  is **not** the carrier of this choice — hydration re-sorts evidence by
+  `(path, start, end, id)`, erasing the medoid-first write order — so the support
+  witness is marked with the `contrast` covered-claim label instead. The read
+  plan's support span prefers the `contrast`-labelled row and falls back to the
+  first distinct-path `support` member when no contrast label survives.
+- **Variation witnesses = one representative per observed profile, per dimension.**
+  The dimensions are the constraint profile's `allowed_variations` (the
+  per-language variation-slot feature prefixes) plus the Python
+  framework-anchor-target dimension (which is a variation slot rather than a
+  feature-prefix dimension). The canonical medoid is excluded from the witness
+  set: it already exhibits one observed profile, so the witnesses cover the other
+  observed profiles for contrast. This profile-driven general rule replaces the
+  former Python-only single-witness anchor-target special case.
+
+At query time the greedy marginal-coverage-per-token loop covers the required
+canonical and support constraints and, when the profile is hydrated, one target
+per `allowed_variations` dimension plus one for the anchor-target dimension when
+its slot exists. A dimension is witnessed by a member listed among its
+representatives; a `variation`-labelled member that represents no profile
+dimension witnesses the anchor-target dimension. When the sole representative of a
+dimension is the canonical medoid (one observed non-empty profile plus absent
+members), the canonical itself satisfies that dimension — it legitimately
+witnesses the profile it exhibits — so the requirement is never permanently
+unsatisfiable. Without hydrated profile dimensions the loop falls back to a single
+variation target from the variation-slot signal. Tie-breaking is deterministic:
+higher marginal-coverage-per-token, then higher marginal coverage, then lower
+cost, then lower source order. The mandatory canonical seed may exceed the budget
+so a family is never returned without its canonical member.
 
 ## Provenance
 

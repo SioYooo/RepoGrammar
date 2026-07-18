@@ -515,6 +515,14 @@ fn family_claim_from_supported_evidence(
     non_blocking_unknowns_by_unit: &BTreeMap<String, Vec<ClaimUnknown>>,
     prevalence_inputs: &PrevalenceInputs,
 ) -> FamilyClaim {
+    // Representative selection is coverage-oriented, not storage-order-based:
+    // reorder the members so the cluster medoid leads (the canonical member) and
+    // the farthest-contrast member follows (the support witness). Every later
+    // artifact — the constraint profile's representatives, the stored evidence
+    // order, and the covered-claims labels — is derived from this order, so
+    // canonical identity tracks the members' features, not their path sort.
+    let supported_evidence =
+        order_evidence_by_representative_selection(supported_evidence, features_by_unit);
     let family_id = family_id(key, cluster_suffix);
     let runtime_unknown = ClaimUnknown {
         class: ClaimImpact::NonBlocking.as_legacy_unknown_class(),
@@ -1348,7 +1356,14 @@ fn cpp_variation_feature_prefixes(
 }
 
 pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
-    let variation_evidence_indexes = framework_anchor_variation_evidence_indexes(claim);
+    let variation_witness_ids = variation_witness_code_unit_ids(claim);
+    // The support witness is the second member after the medoid-first reorder
+    // (see `order_evidence_by_representative_selection`); it is labelled so the
+    // read path can recover it once hydration re-sorts evidence by path.
+    let contrast_witness_id = claim
+        .evidence
+        .get(1)
+        .map(|evidence| evidence.code_unit_id.clone());
     let members = claim
         .evidence
         .iter()
@@ -1378,7 +1393,12 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
             ),
             family_id: claim.family_id.clone(),
             code_unit_id: evidence.code_unit_id.clone(),
-            covered_claims: family_evidence_covered_claims(index, &variation_evidence_indexes),
+            covered_claims: family_evidence_covered_claims(
+                index,
+                &evidence.code_unit_id,
+                &variation_witness_ids,
+                contrast_witness_id.as_deref(),
+            ),
             path: evidence.path.clone(),
             content_hash: evidence.content_hash.clone(),
             start_byte: evidence.start_byte,
@@ -3767,48 +3787,203 @@ fn distinct_support_targets(evidence: &[FamilyEvidence]) -> BTreeSet<String> {
         .collect()
 }
 
-fn framework_anchor_variation_evidence_indexes(claim: &FamilyClaim) -> BTreeSet<usize> {
+/// Symmetric-difference cardinality between two members' full family feature
+/// sets: the number of features present on exactly one of them. This is the
+/// deterministic distance representative selection minimizes (for the medoid) and
+/// maximizes (for the support witness).
+fn feature_symmetric_difference(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
+    let empty = BTreeSet::new();
+    let left_features = features_by_unit.get(&left.code_unit_id).unwrap_or(&empty);
+    let right_features = features_by_unit.get(&right.code_unit_id).unwrap_or(&empty);
+    left_features.symmetric_difference(right_features).count()
+}
+
+/// A path-free deterministic fingerprint of a member's full feature set, used as
+/// the medoid/support-witness tie-break key. It is a stable hash of the member's
+/// features in sorted order; it does not read the member's path, byte range, or
+/// slice index. Two members with identical feature sets share a fingerprint, in
+/// which case the final index resort applies.
+fn feature_fingerprint(
+    evidence: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let empty = BTreeSet::new();
+    let features = features_by_unit
+        .get(&evidence.code_unit_id)
+        .unwrap_or(&empty);
+    stable_token(&features.iter().cloned().collect::<Vec<_>>().join("\n"))
+}
+
+/// The cluster medoid index: the member minimizing the sum of feature
+/// symmetric-difference distances to every other member.
+///
+/// Determinism and rename behavior: the decision key is `(cost,
+/// feature_fingerprint, index)`, so ties on cost are broken by the path-free
+/// feature fingerprint before the index resort. The medoid therefore tracks the
+/// members' features, not their path sort order — a path rename that only
+/// reorders members leaves the canonical member unchanged. The one exception is
+/// deliberate: the feature set includes a `path_context:` bucket feature
+/// (`family_features_by_unit`), so a rename that crosses that bucket boundary is
+/// a genuine feature change and may change distances and the medoid.
+/// `evidence` must be non-empty.
+fn cluster_medoid_index(
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
+    (0..evidence.len())
+        .min_by_key(|&index| {
+            let cost = evidence
+                .iter()
+                .map(|other| {
+                    feature_symmetric_difference(&evidence[index], other, features_by_unit)
+                })
+                .sum::<usize>();
+            (
+                cost,
+                feature_fingerprint(&evidence[index], features_by_unit),
+                index,
+            )
+        })
+        .unwrap_or(0)
+}
+
+/// The support-witness index: the member farthest (by feature symmetric
+/// difference) from the medoid, maximizing contrast. Every member shares the
+/// required-equal feature profile by construction, so no separate profile filter
+/// is needed. Ties resolve deterministically by the path-free feature
+/// fingerprint, then by lowest index. Returns `None` when the medoid is the only
+/// member.
+fn support_witness_index(
+    evidence: &[FamilyEvidence],
+    medoid: usize,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<usize> {
+    // Maximize distance, then break ties toward the lowest fingerprint and lowest
+    // index. `max_by_key` returns the last maximum, so `Reverse` on the
+    // fingerprint and index makes the smallest of each the key-maximum.
+    (0..evidence.len())
+        .filter(|&index| index != medoid)
+        .max_by_key(|&index| {
+            (
+                feature_symmetric_difference(&evidence[medoid], &evidence[index], features_by_unit),
+                std::cmp::Reverse(feature_fingerprint(&evidence[index], features_by_unit)),
+                std::cmp::Reverse(index),
+            )
+        })
+}
+
+/// Reorder a cluster's members so the medoid leads and the support witness
+/// follows, with the remaining members left in their original `(path, start,
+/// end, id)` order. Callers derive the constraint profile, stored evidence order,
+/// and covered-claims labels from this order.
+fn order_evidence_by_representative_selection(
+    evidence: Vec<FamilyEvidence>,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FamilyEvidence> {
+    if evidence.len() <= 1 {
+        return evidence;
+    }
+    let medoid = cluster_medoid_index(&evidence, features_by_unit);
+    let support = support_witness_index(&evidence, medoid, features_by_unit);
+    let mut ordered = Vec::with_capacity(evidence.len());
+    ordered.push(evidence[medoid].clone());
+    if let Some(support) = support {
+        ordered.push(evidence[support].clone());
+    }
+    for (index, item) in evidence.iter().enumerate() {
+        if index == medoid || Some(index) == support {
+            continue;
+        }
+        ordered.push(item.clone());
+    }
+    ordered
+}
+
+/// The set of member `code_unit_id`s that witness a variation dimension. This is
+/// the profile-driven general rule that replaces the former Python-only
+/// anchor-target special case: one representative per observed profile for every
+/// dimension the claim's [`FamilyConstraintProfile`] enumerates, plus the Python
+/// framework-anchor-target dimension (which is carried as a variation slot rather
+/// than a profile feature-prefix dimension). The canonical medoid (evidence[0])
+/// is excluded: it already shows one observed profile, so the witnesses cover the
+/// *other* observed profiles for contrast.
+fn variation_witness_code_unit_ids(claim: &FamilyClaim) -> BTreeSet<String> {
+    let mut ids: BTreeSet<String> = claim
+        .constraint_profile
+        .allowed_variations
+        .iter()
+        .flat_map(|variation| variation.representative_member_ids.iter().cloned())
+        .collect();
+    ids.extend(python_anchor_target_witness_code_unit_ids(claim));
+    if let Some(canonical) = claim.evidence.first() {
+        ids.remove(&canonical.code_unit_id);
+    }
+    ids
+}
+
+/// One representative member per distinct observed support-target profile. The
+/// per-profile representative is the first member exhibiting that profile in
+/// evidence order; when the distinct profiles exceed
+/// [`CONSTRAINT_REPRESENTATIVE_MEMBER_CAP`], the retained set is bounded in
+/// `BTreeMap` key order — lexicographic by rendered target-profile string, not
+/// evidence order. This covers the Python `slot:python_framework_anchor_target`
+/// variation, which is derived from members' exact support targets rather than a
+/// feature prefix, so it does not appear in the constraint profile's
+/// `allowed_variations`.
+fn python_anchor_target_witness_code_unit_ids(claim: &FamilyClaim) -> BTreeSet<String> {
     if claim.language != "python" || distinct_support_targets(&claim.evidence).len() <= 1 {
         return BTreeSet::new();
     }
-    let canonical_targets = claim
-        .evidence
-        .first()
-        .map(|evidence| {
-            evidence
-                .support_targets
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let index = claim
-        .evidence
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, evidence)| {
-            evidence
-                .support_targets
-                .iter()
-                .any(|target| !canonical_targets.contains(target))
-        })
-        .map(|(index, _)| index)
-        .or_else(|| (claim.evidence.len() > 1).then_some(1))
-        .unwrap_or(0);
-    [index].into_iter().collect()
+    let mut representative_by_profile: BTreeMap<String, String> = BTreeMap::new();
+    for evidence in &claim.evidence {
+        if evidence.support_targets.is_empty() {
+            continue;
+        }
+        let profile = evidence
+            .support_targets
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
+        representative_by_profile
+            .entry(profile)
+            .or_insert_with(|| evidence.code_unit_id.clone());
+    }
+    representative_by_profile
+        .into_values()
+        .take(CONSTRAINT_REPRESENTATIVE_MEMBER_CAP)
+        .collect()
 }
 
+/// The covered-claim labels for one stored member. The canonical medoid
+/// (`index == 0`) carries `canonical` and `support`; every other member carries
+/// `support` (so no evidence row is claim-less, which storage forbids). The
+/// support witness (the farthest-from-medoid member) additionally carries
+/// `contrast`, so the read path can recover it after hydration re-sorts the
+/// evidence by path — the medoid-first storage order is not the carrier. A
+/// variation witness additionally carries `variation`; the medoid never carries
+/// `contrast` or `variation`.
 fn family_evidence_covered_claims(
     index: usize,
-    variation_evidence_indexes: &BTreeSet<usize>,
+    code_unit_id: &str,
+    variation_witness_ids: &BTreeSet<String>,
+    contrast_witness_id: Option<&str>,
 ) -> Vec<String> {
     let mut claims = if index == 0 {
         vec!["canonical".to_string(), "support".to_string()]
     } else {
         vec!["support".to_string()]
     };
-    if variation_evidence_indexes.contains(&index) {
+    if index != 0 && contrast_witness_id == Some(code_unit_id) {
+        claims.push("contrast".to_string());
+    }
+    if index != 0 && variation_witness_ids.contains(code_unit_id) {
         claims.push("variation".to_string());
     }
     claims
@@ -6423,6 +6598,8 @@ mod tests {
                     == "variation:python_framework_anchor_target:exact compatible framework anchors differ"));
 
         let records = family_storage_records(claim);
+        // The canonical medoid leads the stored evidence and carries exactly
+        // canonical+support (never a variation label).
         assert_eq!(
             records.evidence[0].covered_claims,
             vec!["canonical".to_string(), "support".to_string()]
@@ -6437,10 +6614,15 @@ mod tests {
                     .any(|claim| claim == "variation")
             })
             .collect::<Vec<_>>();
-        assert_eq!(variation_records.len(), 1);
-        assert!(variation_records[0]
-            .covered_claims
-            .contains(&"support".to_string()));
+        // Three members carry three distinct anchor targets, so the anchor-target
+        // dimension has three observed profiles. The canonical medoid shows one of
+        // them and is excluded from the witness set, leaving one witness per each
+        // of the other two observed profiles — the profile-driven general rule
+        // that replaced the former single-witness Python special case.
+        assert_eq!(variation_records.len(), 2);
+        assert!(variation_records
+            .iter()
+            .all(|record| record.covered_claims.contains(&"support".to_string())));
         assert!(records.evidence.iter().all(|evidence| {
             !evidence
                 .covered_claims
@@ -8619,6 +8801,264 @@ mod tests {
             start_byte: 0,
             end_byte: 1,
             support_targets: Vec::new(),
+        }
+    }
+
+    fn medoid_evidence(code_unit_id: &str, path: &str) -> FamilyEvidence {
+        FamilyEvidence {
+            code_unit_id: code_unit_id.to_string(),
+            path: path.to_string(),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    fn feature_map(entries: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
+        entries
+            .iter()
+            .map(|(id, feats)| {
+                (
+                    id.to_string(),
+                    feats.iter().map(|f| f.to_string()).collect::<BTreeSet<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn medoid_canonical_tracks_features_not_path_sort_order() {
+        // Member `b` is the cluster center: it shares `alpha` with `a` and `gamma`
+        // with `c`, so it is the closest member to both. The former storage-order
+        // rule would make the path-first member `a` canonical; the medoid rule
+        // makes the feature-central `b` canonical instead.
+        let features = feature_map(&[
+            ("unit:a", &["core", "alpha"]),
+            ("unit:b", &["core", "alpha", "gamma"]),
+            ("unit:c", &["core", "gamma"]),
+        ]);
+        let path_sorted = vec![
+            medoid_evidence("unit:a", "app/a.py"),
+            medoid_evidence("unit:b", "app/b.py"),
+            medoid_evidence("unit:c", "app/c.py"),
+        ];
+        assert_eq!(cluster_medoid_index(&path_sorted, &features), 1);
+        let ordered = order_evidence_by_representative_selection(path_sorted.clone(), &features);
+        assert_eq!(
+            ordered[0].code_unit_id, "unit:b",
+            "the feature-central member is canonical, not the path-first member"
+        );
+        // The support witness is the farthest-from-medoid member; `a` and `c` are
+        // both distance one, so the deterministic tie-break is the path-free
+        // feature fingerprint (lowest wins).
+        let fp = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &features);
+        let expected_support = if fp("unit:a") <= fp("unit:c") {
+            "unit:a"
+        } else {
+            "unit:c"
+        };
+        assert_eq!(ordered[1].code_unit_id, expected_support);
+
+        // Insertion-order independence: a different input order yields the same
+        // canonical member (the medoid is a property of the features, not order).
+        let shuffled = vec![
+            path_sorted[2].clone(),
+            path_sorted[0].clone(),
+            path_sorted[1].clone(),
+        ];
+        let ordered_shuffled = order_evidence_by_representative_selection(shuffled, &features);
+        assert_eq!(ordered_shuffled[0].code_unit_id, "unit:b");
+
+        // Path-rename invariance: renaming paths only changes the upstream sort
+        // order fed to selection. With identical features but a flipped order, the
+        // canonical member is unchanged — the core improvement over storage order.
+        let renamed = vec![
+            medoid_evidence("unit:c", "app/aa.py"),
+            medoid_evidence("unit:a", "app/mm.py"),
+            medoid_evidence("unit:b", "app/zz.py"),
+        ];
+        let ordered_renamed = order_evidence_by_representative_selection(renamed, &features);
+        assert_eq!(
+            ordered_renamed[0].code_unit_id, "unit:b",
+            "a path rename must not change the canonical member"
+        );
+
+        // Feature-sensitivity: move the shared features onto `a`; now `a` is the
+        // center and the canonical member changes accordingly.
+        let features_moved = feature_map(&[
+            ("unit:a", &["core", "alpha", "gamma"]),
+            ("unit:b", &["core", "alpha"]),
+            ("unit:c", &["core", "gamma"]),
+        ]);
+        let ordered_moved =
+            order_evidence_by_representative_selection(path_sorted, &features_moved);
+        assert_eq!(
+            ordered_moved[0].code_unit_id, "unit:a",
+            "changing a member's features changes the medoid"
+        );
+    }
+
+    #[test]
+    fn two_member_medoid_is_fingerprint_stable_across_same_bucket_renames() {
+        // A 2-member family always ties on cost (the distance is symmetric), so the
+        // canonical is decided entirely by the path-free feature fingerprint — not
+        // by which member sorts first. `path_context:` is a real feature, held
+        // constant here so a rename within the bucket changes nothing observable.
+        let features = feature_map(&[
+            ("unit:p", &["core", "shape:one", "path_context:pkg_x"]),
+            ("unit:q", &["core", "shape:two", "path_context:pkg_x"]),
+        ]);
+        let fp = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &features);
+        let expected = if fp("unit:p") <= fp("unit:q") {
+            "unit:p"
+        } else {
+            "unit:q"
+        };
+        let ordered = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:p", "pkg_x/a.py"),
+                medoid_evidence("unit:q", "pkg_x/b.py"),
+            ],
+            &features,
+        );
+        assert_eq!(ordered[0].code_unit_id, expected);
+
+        // A cross-directory rename that stays in the same path_context bucket flips
+        // the path sort order but leaves features — and the canonical — unchanged.
+        let renamed = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:q", "pkg_x/aaa.py"),
+                medoid_evidence("unit:p", "pkg_x/zzz.py"),
+            ],
+            &features,
+        );
+        assert_eq!(
+            renamed[0].code_unit_id, expected,
+            "a same-bucket rename must not flip the 2-member canonical"
+        );
+
+        // A rename that crosses the path_context bucket boundary IS a feature
+        // change: `unit:p` moves to `pkg_y`, so the fingerprints are recomputed and
+        // the canonical follows the new features, deterministically.
+        let moved_features = feature_map(&[
+            ("unit:p", &["core", "shape:one", "path_context:pkg_y"]),
+            ("unit:q", &["core", "shape:two", "path_context:pkg_x"]),
+        ]);
+        let fp_moved = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &moved_features);
+        let expected_moved = if fp_moved("unit:p") <= fp_moved("unit:q") {
+            "unit:p"
+        } else {
+            "unit:q"
+        };
+        let moved = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:p", "pkg_y/a.py"),
+                medoid_evidence("unit:q", "pkg_x/b.py"),
+            ],
+            &moved_features,
+        );
+        assert_eq!(moved[0].code_unit_id, expected_moved);
+    }
+
+    #[test]
+    fn variation_witnesses_cover_every_observed_profile_per_dimension() {
+        // Non-Python (TS/JS express): route_method and route_path_shape both vary
+        // across three members, so each is a profile variation dimension.
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact_with_assumptions(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                    vec!["route_method=get", "route_path_shape=/users"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                    vec!["route_method=post", "route_path_shape=/orders"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                    vec!["route_method=delete", "route_path_shape=/items"],
+                ),
+            ],
+        );
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert!(
+            !claim.constraint_profile.allowed_variations.is_empty(),
+            "the express family must expose profile variation dimensions"
+        );
+        assert_witnesses_cover_every_profile(claim);
+
+        // Python anchor-target: three distinct fastapi anchors form three observed
+        // support-target profiles (a slot-based dimension, not a feature prefix).
+        let pa = python_unit("app/a.py", "fastapi_route", 0);
+        let pb = python_unit("app/b.py", "fastapi_route", 1);
+        let pc = python_unit("app/c.py", "fastapi_route", 2);
+        let py = build_family_claims(
+            &[pa.clone(), pb.clone(), pc.clone()],
+            &[
+                role_fact(&pa, "framework:fastapi.route"),
+                role_fact(&pb, "framework:fastapi.route"),
+                role_fact(&pc, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&pa, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&pb, "fastapi.FastAPI.post"),
+                semantic_support_fact_with_target(&pc, "fastapi.APIRouter.delete"),
+            ],
+        );
+        assert_eq!(py.claims.len(), 1);
+        let py_claim = &py.claims[0];
+        let py_records = family_storage_records(py_claim);
+        let py_witnesses = variation_witness_code_unit_set(&py_records);
+        // Three observed target profiles minus the canonical medoid leaves two
+        // witnesses — one per each of the other observed profiles.
+        assert_eq!(py_witnesses.len(), 2);
+        assert!(!py_witnesses.contains(&py_records.evidence[0].code_unit_id));
+    }
+
+    fn variation_witness_code_unit_set(records: &FamilyStorageRecords) -> BTreeSet<String> {
+        records
+            .evidence
+            .iter()
+            .filter(|evidence| {
+                evidence
+                    .covered_claims
+                    .iter()
+                    .any(|claim| claim == "variation")
+            })
+            .map(|evidence| evidence.code_unit_id.clone())
+            .collect()
+    }
+
+    fn assert_witnesses_cover_every_profile(claim: &FamilyClaim) {
+        let records = family_storage_records(claim);
+        let witnesses = variation_witness_code_unit_set(&records);
+        let canonical = records.evidence[0].code_unit_id.clone();
+        // The canonical medoid is never a variation witness.
+        assert!(!witnesses.contains(&canonical));
+        for dimension in &claim.constraint_profile.allowed_variations {
+            for representative in &dimension.representative_member_ids {
+                if *representative != canonical {
+                    assert!(
+                        witnesses.contains(representative),
+                        "dimension {} profile representative {} must witness a variation",
+                        dimension.dimension,
+                        representative
+                    );
+                }
+            }
         }
     }
 

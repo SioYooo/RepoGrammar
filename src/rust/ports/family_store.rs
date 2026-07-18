@@ -4,7 +4,7 @@ use crate::core::model::{ContentHash, FamilyConstraintProfile, FamilyPrevalence}
 use crate::ports::index_store::GenerationHandle;
 
 pub const FAMILY_EVIDENCE_COVERED_CLAIMS: &[&str] =
-    &["canonical", "support", "variation", "exception"];
+    &["canonical", "support", "contrast", "variation", "exception"];
 
 pub fn family_evidence_covered_claim_is_supported(value: &str) -> bool {
     FAMILY_EVIDENCE_COVERED_CLAIMS.contains(&value)
@@ -253,3 +253,18 @@ pub trait FamilyConstraintProfileStore {
         family_id: &str,
     ) -> Result<Option<FamilyConstraintProfile>, StoreError>;
 }
+
+/// A store that records both family records and their derived constraint
+/// profiles in the same generation.
+///
+/// This supertrait lets the production indexing pipeline thread a single trait
+/// object that can persist family evidence *and* the co-derived constraint
+/// profile. The concrete SQLite adapter implements both parent traits, and the
+/// blanket impl below makes every such store usable as a
+/// `dyn FamilyStoreWithProfiles`. Methods of either parent trait are callable on
+/// the combined object because both are supertraits, and a
+/// `dyn FamilyStoreWithProfiles` still satisfies a `FamilyStore` or
+/// `FamilyConstraintProfileStore` bound.
+pub trait FamilyStoreWithProfiles: FamilyStore + FamilyConstraintProfileStore {}
+
+impl<T: FamilyStore + FamilyConstraintProfileStore + ?Sized> FamilyStoreWithProfiles for T {}

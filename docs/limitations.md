@@ -177,3 +177,15 @@ These are intentional current behaviors or tracked deferrals, not defects:
   as a locator, so such phrasings still reach term retrieval. Conversely, a bare
   filename such as `app.py` is a locator and never reaches term retrieval even
   when phrased as a question.
+- **Constraint-profile hydration is not pinned to the family's generation.** A
+  family lookup loads the matched family (evidence, members, slots) on one active-
+  generation store read and then hydrates its `constraint_profile` on a second,
+  independent active-generation read (`show_family_constraint_profile` takes no
+  generation id). If a resync activates a new generation between the two reads,
+  the detail can pair one generation's evidence with another generation's profile;
+  the mismatch is self-limiting — representative ids that match no evidence simply
+  yield zero per-dimension variation mapping and the profile is treated as
+  absent-shaped — but it is a real time-of-check/time-of-use window. This matches
+  the repository's existing list-then-show multi-open pattern; a same-snapshot
+  profile read (pinning hydration to `ActiveFamily.generation_id`) is a tracked
+  follow-up.

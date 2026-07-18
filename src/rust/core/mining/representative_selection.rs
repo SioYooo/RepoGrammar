@@ -1,27 +1,37 @@
 //! Representative selection chooses evidence that explains a family compactly.
+//!
+//! The selection objective is to maximize, under the token / read-plan budget,
+//! the number of covered required constraints (the canonical and support
+//! witnesses), plus one covered target per observed variation dimension. The
+//! greedy loop below picks the candidate with the best marginal
+//! coverage-per-token at each step; ties resolve deterministically (see
+//! [`better_candidate`]). Contrastive/near-miss purposes are a future extension
+//! point on [`EvidenceCoverage`].
 
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepresentativeSelectionPolicy {
-    ClosestToTemplate,
-    CoversKeyDifferences,
-}
-
+/// One coverage target a family's representative evidence can satisfy. Variation
+/// coverage is per-dimension (`Variation(dimension_ordinal)`) so a multi-dimension
+/// family requires — and the greedy loop covers — one witness per observed
+/// dimension rather than collapsing every variation into a single target. Single-
+/// dimension families use ordinal `0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EvidenceCoverage {
     Canonical,
     Support,
-    Variation,
+    Variation(usize),
     Exception,
 }
 
 impl EvidenceCoverage {
+    /// The stable persisted/serialized token for this coverage. Every variation
+    /// dimension shares the `variation` token, matching the storage covered-claim
+    /// vocabulary; callers that surface a per-dimension list deduplicate.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Canonical => "canonical",
             Self::Support => "support",
-            Self::Variation => "variation",
+            Self::Variation(_) => "variation",
             Self::Exception => "exception",
         }
     }
@@ -190,7 +200,7 @@ mod tests {
         let required = [
             EvidenceCoverage::Canonical,
             EvidenceCoverage::Support,
-            EvidenceCoverage::Variation,
+            EvidenceCoverage::Variation(0),
         ]
         .into_iter()
         .collect();
@@ -201,7 +211,7 @@ mod tests {
                 &[EvidenceCoverage::Canonical, EvidenceCoverage::Support],
                 0,
             ),
-            candidate("variation-cheap", 4, &[EvidenceCoverage::Variation], 1),
+            candidate("variation-cheap", 4, &[EvidenceCoverage::Variation(0)], 1),
             candidate("canonical-cheap", 8, &[EvidenceCoverage::Canonical], 2),
             candidate("support-cheap", 5, &[EvidenceCoverage::Support], 3),
         ];
@@ -239,11 +249,11 @@ mod tests {
 
     #[test]
     fn canonical_seed_can_exceed_budget_after_other_coverage() {
-        let required = [EvidenceCoverage::Canonical, EvidenceCoverage::Variation]
+        let required = [EvidenceCoverage::Canonical, EvidenceCoverage::Variation(0)]
             .into_iter()
             .collect();
         let candidates = vec![
-            candidate("variation", 1, &[EvidenceCoverage::Variation], 0),
+            candidate("variation", 1, &[EvidenceCoverage::Variation(0)], 0),
             candidate("canonical", 50, &[EvidenceCoverage::Canonical], 1),
         ];
 
