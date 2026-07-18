@@ -2,7 +2,8 @@
 
 Date: 2026-07-19
 Optimization branch baseline: `v0.3.2` (`26ce59e`)
-Optimized implementation measured at: `e9ad298`
+Performance implementation measured at: `e9ad298`
+Query vocabulary v2 measured at: `ce64e8b`
 
 ## Question and preregistered safety gate
 
@@ -45,6 +46,9 @@ therefore event coverage and accounting validity, not per-hit compression.
   unit/member/symbol, and exact framework role before concise pattern prose. It
   permits one bounded `show_family` candidate inspection on a single-candidate
   `UNKNOWN`, without converting candidate context into proof.
+- Query vocabulary v2 consumes the qualified phrases `test fixture(s)`,
+  `unit test(s)`, and `test case(s)` as one precise concept. Its weight equals
+  the existing selection floor; neither the absolute floor nor margin changes.
 - The Python parse response carries the strict interface hash used by sync,
   removing the second Python worker process formerly launched for every Python
   file during a full build.
@@ -88,13 +92,16 @@ The optimized product and token-overlap baseline were rerun over the committed
 
 | Condition | hit@1 | candidate recall | MRR | correct abstention | false family | selected on abstention |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| optimized product | 21/42 | 13/14 | 0.500 | 25/25 | 0/46 | 0 |
+| optimized product | 25/42 | 13/14 | 0.595 | 25/25 | 0/46 | 0 |
 | token-overlap baseline | 11/42 | 3/14 | 0.262 | 22/25 | 0/46 | 4 |
 
-The product retained all safety gates. Exact and anchored targets are already
-strong (`17/17` in the query-funnel audit), while natural-language and synonym
-targets remain the main retrieval opportunity. Lowering the selection threshold
-is rejected because it would trade abstention safety for apparent yield.
+The product matched 62/79 corpus queries, up from 58/79 before vocabulary v2,
+and retained all safety gates. The four new matches were exactly the
+preregistered fixture/unit-test/test-case queries. Exact and anchored targets
+remain strong (`17/17` in the query-funnel audit). The remaining 17 retrieval
+misses are mostly intentional decoy collisions or sibling families tied after
+normalization; guessing among them or lowering the selection threshold is
+rejected because it would trade abstention safety for apparent yield.
 
 ## Validation and remaining limits
 
@@ -108,9 +115,9 @@ These results still do **not** constitute measured token savings. Actual
 `MEASURED` savings require comparable host/provider token counts from a paired
 baseline/treatment coding-session experiment. The next high-value performance
 work is a bounded persistent or batched Python parser protocol; it is a larger
-worker-boundary change and should be preregistered separately. The next query
-work is conservative semantic normalization for general synonyms/paraphrases,
-accepted only if the fixed corpus improves without weakening any safety counter.
+worker-boundary change and should be preregistered separately. Further query
+vocabulary expansion should remain phrase-qualified and must repeat the same
+fixed-corpus safety gate; broad single-token aliases remain unsafe.
 
 ## Reproduction commands
 
