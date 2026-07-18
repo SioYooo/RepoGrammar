@@ -4,6 +4,19 @@
 
 ### Changed
 
+- Narrowed the incremental-sync full-rebuild gate for content-only Rust
+  and TypeScript/JavaScript source edits. Non-Python parser contexts
+  carry no cross-file source text (path sets, nearest Cargo.toml
+  features, and root TS/JS config only), so a content-only modification
+  of a .rs/.ts/.tsx/.js/.jsx source now takes the incremental path with
+  exactly one file reparsed, decided by the discovered-language
+  classifier; adds, removes, renames, config files, and every Python
+  change keep falling back to the full rebuild, and a configured
+  semantic worker still forces a full rebuild. The sync-equivalence
+  oracle grew to eleven scenarios - content-only Rust and TS edits
+  prove EQUAL against clean full rebuilds, and source additions prove
+  the fallback - all passing.
+
 - Rewrote the storage write lifecycle around generation write sessions.
   A generation build now uses one writer connection with bounded
   2000-row immediate transactions and explicit phase checkpoints (after

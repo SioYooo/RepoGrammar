@@ -1815,18 +1815,15 @@ fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
 }
 
 fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
-    delta
+    // Adds and removes of a project-context path change that language's discovered
+    // path set (Python module index, Rust `mod` candidates, TS/JS import
+    // resolution), which can alter how *other* files parse, so they always force a
+    // full rebuild.
+    let added_or_removed = delta
         .added_files
         .iter()
         .filter(|file| !discovered_language_is_inventory_only(file.language))
         .map(|file| file.path.as_str())
-        .chain(
-            delta
-                .modified_files
-                .iter()
-                .filter(|file| !discovered_language_is_inventory_only(file.language))
-                .map(|file| file.path.as_str()),
-        )
         .chain(
             delta
                 .removed_files
@@ -1834,7 +1831,57 @@ fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
                 .filter(|file| !indexed_language_is_inventory_only(&file.language))
                 .map(|file| file.path.as_str()),
         )
-        .any(sync_path_requires_full_project_context)
+        .any(sync_path_requires_full_project_context);
+    // A content-only modification (same path present in both manifests, changed
+    // hash) forces a full rebuild only when the edit could still change another
+    // file's parse. See `modified_file_requires_full_project_context`.
+    let modified = delta
+        .modified_files
+        .iter()
+        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .any(modified_file_requires_full_project_context);
+    added_or_removed || modified
+}
+
+/// Whether a content-only modification of `file` must force a full rebuild.
+///
+/// Rust and TS/JS parsers consume only their own discovered path set plus root
+/// configuration (Rust: `rust_module_paths` + the nearest `Cargo.toml`'s feature
+/// names; TS/JS: `tsjs_module_paths` + the root tsconfig/jsconfig/package.json
+/// projections and the test-runner flag) — never another file's source text
+/// (`docs/specifications/indexing-pipeline.md`). A content-only edit (this is the
+/// modified bucket: the path exists in both the base and the current manifest,
+/// only its hash changed) leaves every language path set and every root
+/// configuration byte-identical, so it cannot change how any *other* file parses.
+/// Exactly the edited file must be reparsed — the file-local fast path.
+///
+/// Python is deliberately excluded: its parser consumes `python_module_files`
+/// and `python_conftest_files` (the text of every module and `conftest.py`), so a
+/// Python content edit can change another file's parse. Configuration files are
+/// excluded because discovery classifies them as `*Config` languages, not as
+/// `language_is_file_local_source`, and they feed project-wide context. Adds and
+/// removes are handled separately above because they change the path set.
+fn modified_file_requires_full_project_context(file: &DiscoveredFile) -> bool {
+    if language_is_file_local_source(file.language) {
+        return false;
+    }
+    sync_path_requires_full_project_context(file.path.as_str())
+}
+
+/// Languages whose parser output for one file is independent of every other
+/// file's source text, so a content-only edit is provably file-local. Rust and
+/// TS/JS join the already-incremental Java/C#/C/C++ family, which is excluded
+/// from the project-context gate entirely because those parsers ignore context.
+/// Python and all `*Config` classifications are intentionally absent.
+fn language_is_file_local_source(language: DiscoveredLanguage) -> bool {
+    matches!(
+        language,
+        DiscoveredLanguage::Rust
+            | DiscoveredLanguage::TypeScript
+            | DiscoveredLanguage::TypeScriptReact
+            | DiscoveredLanguage::JavaScript
+            | DiscoveredLanguage::JavaScriptReact
+    )
 }
 
 fn sync_path_requires_full_project_context(path: &str) -> bool {
@@ -5163,6 +5210,291 @@ mod tests {
         )
         .expect("sync after mocharc edit");
         let report = synced.sync_report.expect("mocharc sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.modified_files, 1);
+    }
+
+    #[test]
+    fn language_is_file_local_source_covers_rust_and_tsjs_only() {
+        for language in [
+            DiscoveredLanguage::Rust,
+            DiscoveredLanguage::TypeScript,
+            DiscoveredLanguage::TypeScriptReact,
+            DiscoveredLanguage::JavaScript,
+            DiscoveredLanguage::JavaScriptReact,
+        ] {
+            assert!(
+                language_is_file_local_source(language),
+                "{}",
+                language.as_str()
+            );
+        }
+        // Python (cross-file module/conftest text) and every `*Config`
+        // classification feed project-wide context and must never be treated as
+        // file-local by the modified-file fast path.
+        for language in [
+            DiscoveredLanguage::Python,
+            DiscoveredLanguage::PythonConfig,
+            DiscoveredLanguage::TsJsConfig,
+            DiscoveredLanguage::RustConfig,
+            DiscoveredLanguage::Java,
+            DiscoveredLanguage::CSharp,
+        ] {
+            assert!(
+                !language_is_file_local_source(language),
+                "{}",
+                language.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn content_only_rust_edit_takes_incremental_fast_path() {
+        // A content-only edit of a Rust source file leaves `rust_module_paths`
+        // and the nearest `Cargo.toml` byte-identical, so exactly the edited file
+        // is reparsed on the incremental path instead of forcing a full rebuild.
+        let workspace = TempWorkspace::new("indexing-rust-content-edit-fast-path");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    2\n}\n",
+        )
+        .expect("edit Rust body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust content edit");
+        let report = synced.sync_report.expect("Rust edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn content_only_typescript_edit_takes_incremental_fast_path() {
+        // TS/JS parsing consumes only the discovered path set and root config, not
+        // other files' text, so a content-only TS edit is file-local: one file is
+        // reparsed and the sync stays incremental.
+        let workspace = TempWorkspace::new("indexing-ts-content-edit-fast-path");
+        fs::write(
+            workspace.path().join("service.ts"),
+            "export const value = 1;\n",
+        )
+        .expect("write TS source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index TS fixture");
+
+        fs::write(
+            workspace.path().join("service.ts"),
+            "export const value = 2;\n",
+        )
+        .expect("edit TS body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after TS content edit");
+        let report = synced.sync_report.expect("TS edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn added_rust_source_forces_full_rebuild() {
+        // Adding a Rust source file grows `rust_module_paths`, which can change how
+        // other files' `mod` candidates resolve, so an add still forces a full
+        // rebuild even though a content-only edit would not.
+        let workspace = TempWorkspace::new("indexing-rust-add-fallback");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::write(
+            workspace.path().join("helper.rs"),
+            "fn helper() -> i32 {\n    3\n}\n",
+        )
+        .expect("add Rust source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust add");
+        let report = synced.sync_report.expect("Rust add sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.added_files, 1);
+    }
+
+    #[test]
+    fn removed_rust_source_forces_full_rebuild() {
+        // Removing a Rust source file shrinks `rust_module_paths`, so it forces a
+        // full rebuild for the same reason an add does.
+        let workspace = TempWorkspace::new("indexing-rust-remove-fallback");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        fs::write(
+            workspace.path().join("helper.rs"),
+            "fn helper() -> i32 {\n    3\n}\n",
+        )
+        .expect("write second Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::remove_file(workspace.path().join("helper.rs")).expect("remove Rust source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust remove");
+        let report = synced.sync_report.expect("Rust remove sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.removed_files, 1);
+    }
+
+    #[test]
+    fn python_content_edit_still_forces_full_rebuild() {
+        // The narrowing must not relax Python: its parser consumes the text of
+        // every module (`python_module_files`), so even a content-only Python edit
+        // can change another file's parse and must keep forcing a full rebuild.
+        let workspace = TempWorkspace::new("indexing-python-content-edit-fallback");
+        fs::write(
+            workspace.path().join("app.py"),
+            "def value():\n    return \"default\"\n",
+        )
+        .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def value():\n    return \"primary\"\n",
+        )
+        .expect("edit Python body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python content edit");
+        let report = synced.sync_report.expect("Python edit sync report");
         assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
         assert_eq!(
             report.fallback_reason.as_deref(),

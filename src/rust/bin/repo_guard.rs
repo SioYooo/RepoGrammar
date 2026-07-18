@@ -3736,9 +3736,30 @@ const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
         expected_fallback_reason: None,
     },
     SyncEquivalenceScenario {
-        id: "tsjs_edit",
-        patch_summary: "modify a TS ambient test body (TS source is whole-project: fallback)",
-        apply: patch_tsjs_edit,
+        id: "rs_content_edit",
+        patch_summary: "modify a Rust test-fn body (file-local incremental fast path)",
+        apply: patch_rs_content_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "tsjs_content_edit",
+        patch_summary: "modify a TS ambient test body (file-local incremental fast path)",
+        apply: patch_tsjs_content_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+    },
+    SyncEquivalenceScenario {
+        id: "tsjs_add",
+        patch_summary: "add a new TS test file (path set grows: fallback)",
+        apply: patch_tsjs_add,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+    },
+    SyncEquivalenceScenario {
+        id: "rs_add",
+        patch_summary: "add a new Rust source file (path set grows: fallback)",
+        apply: patch_rs_add,
         expected_outcome: "FELL_BACK",
         expected_fallback_reason: Some("project_context_changed"),
     },
@@ -3803,13 +3824,47 @@ fn patch_docs_noop(project: &Path) -> Result<(), String> {
     fs::write(&path, text).map_err(|_| "could not write scenario file 'docs/NOTES.md'".to_string())
 }
 
-fn patch_tsjs_edit(project: &Path) -> Result<(), String> {
+fn patch_rs_content_edit(project: &Path) -> Result<(), String> {
+    // Content-only edit of one Rust test-fn body. The Rust path set and (absent)
+    // manifest are unchanged, so only this file is reparsed on the incremental
+    // path; the recomputed family must match a clean rebuild exactly.
     sync_equivalence_replace_once(
         project,
-        "web/orders.spec.ts",
-        "it(\"creates an order\", () => {});",
-        "it(\"creates an order\", () => { return; });",
+        "service/rust/order_service.rs",
+        "let outcome = place_order(\"alpha\");",
+        "let outcome = place_order(\"renamed\");",
     )
+}
+
+fn patch_tsjs_content_edit(project: &Path) -> Result<(), String> {
+    // Content-only edit of one TS ambient test body. TS parsing consumes only the
+    // path set and root config, so the edit is file-local and stays incremental.
+    sync_equivalence_replace_once(
+        project,
+        "web/users.test.ts",
+        "it(\"loads users\", () => {});",
+        "it(\"loads users\", () => { return; });",
+    )
+}
+
+fn patch_tsjs_add(project: &Path) -> Result<(), String> {
+    // Adding a TS file grows `tsjs_module_paths`, which can change how other files
+    // resolve import specifiers, so the gate must fall back to a full rebuild.
+    fs::write(
+        project.join("web/payments.test.ts"),
+        "describe(\"ambient payments\", () => {\n  it(\"loads payments\", () => {});\n  test(\"refunds payments\", () => {});\n});\n",
+    )
+    .map_err(|_| "could not add scenario file 'web/payments.test.ts'".to_string())
+}
+
+fn patch_rs_add(project: &Path) -> Result<(), String> {
+    // Adding a Rust file grows `rust_module_paths`, which can change `mod`
+    // candidate resolution for other files, so the gate must fall back.
+    fs::write(
+        project.join("service/rust/extra_service.rs"),
+        "#[test]\nfn refunds_order() {\n    let outcome = settle_order(\"delta\");\n    assert!(outcome);\n}\n\nfn settle_order(_name: &str) -> bool {\n    true\n}\n",
+    )
+    .map_err(|_| "could not add scenario file 'service/rust/extra_service.rs'".to_string())
 }
 
 fn patch_mocharc_remove(project: &Path) -> Result<(), String> {
@@ -9190,7 +9245,14 @@ verify-stable-release-evidence --evidence-dir evidence
                 "docs_noop" => {
                     assert!(read("docs/NOTES.md").contains("docs-only no-op scenario"))
                 }
-                "tsjs_edit" => assert!(read("web/orders.spec.ts").contains("return;")),
+                "rs_content_edit" => {
+                    assert!(
+                        read("service/rust/order_service.rs").contains("place_order(\"renamed\")")
+                    )
+                }
+                "tsjs_content_edit" => assert!(read("web/users.test.ts").contains("return;")),
+                "tsjs_add" => assert!(project.join("web/payments.test.ts").is_file()),
+                "rs_add" => assert!(project.join("service/rust/extra_service.rs").is_file()),
                 "mocharc_remove" => assert!(!project.join(".mocharc.json").exists()),
                 "python_edit" => assert!(read("analytics/app.py").contains("return \"primary\"")),
                 "java_add" => {

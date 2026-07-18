@@ -1165,10 +1165,13 @@ would accept. The subsequent `sync` remains the authoritative Git-aware path.
 The reported-skipped-path budget does not apply because the fingerprint emits
 no skip report. Incremental `sync`
 copy-forwards unchanged active records into a new building generation only
-after the project-context gate passes; changes to parser project-context source
-inventories such as TS/JS, Python, or Rust source files fall back to a full
-rebuild. Current inventory-only Go, PHP, Ruby, and Swift source/config tokens
-are the explicit exceptions described above. When safe, incremental `sync`
+after the project-context gate passes. A content-only edit of a Rust or TS/JS
+source file takes the incremental fast path; adding or removing any
+project-context source file, editing any `.py` source (including `conftest.py`),
+and adding, editing, or removing any project-config file fall back to a full
+rebuild (see the gate table below). Current inventory-only Go, PHP, Ruby, and
+Swift source/config tokens are the explicit exceptions described above. When
+safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
@@ -1179,10 +1182,39 @@ base generation's provider-resolved family support for unchanged files instead
 of silently dropping it and diverging from a full rebuild. Lazy query-time
 recomputation remains future work.
 
-The project-context gate treats an added, modified, or removed non-inventory
-file as unsafe when its repo-relative path is a supported source file
-(`.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs`) or a discovered project-config file. The
-config set covers root `package.json`, `tsconfig.json`, `jsconfig.json`,
+The project-context gate distinguishes *content-only modifications* from
+*path-set changes*. A modified non-inventory file is one whose repo-relative path
+appears in both the base and the current manifest with a changed content hash
+(no add, remove, or rename). The gate decides per change class:
+
+| Change class | Paths | Sync outcome |
+|---|---|---|
+| Content-only modify | `.rs`/`.ts`/`.tsx`/`.js`/`.jsx` source | incremental — reparse the edited file only |
+| Content-only modify | `.py` source, `conftest.py` | full-rebuild fallback |
+| Content-only modify | any discovered project-config file | full-rebuild fallback |
+| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or any project-config file | full-rebuild fallback |
+| Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
+
+The content-only Rust and TS/JS fast path is sound because their parsers consume
+only their own discovered path set plus root configuration — Rust: the
+`rust_module_paths` set and the nearest `Cargo.toml`'s feature names; TS/JS: the
+`tsjs_module_paths` set and the root tsconfig/jsconfig/package.json projections
+plus the test-runner flag — and never another file's source text. A content-only
+edit (same path, changed hash, no add/remove) leaves every language path set and
+every root configuration byte-identical, so it cannot change how any other file
+parses. Exactly the edited file is reparsed with the freshly rebuilt full
+context, every unchanged file copies forward, and derived support and families
+still recompute globally over the merged fact set. Python is excluded because its
+parser consumes the text of every module (`python_module_files`) and every
+`conftest.py` (`python_conftest_files`), so a Python edit can change another
+file's parse. Adds and removes change the path set itself — Python module
+identity, Rust `mod` candidate resolution, TS/JS import specifier resolution — and
+therefore still force a full rebuild. A configured semantic worker still forces a
+full rebuild every run (`semantic_worker_requires_full_rebuild`); the fast path
+applies to worker-less operation.
+
+The config set that forces a full rebuild on any add, modify, or remove covers
+root `package.json`, `tsconfig.json`, `jsconfig.json`,
 `jest.config.{json,cjs,mjs}`, `vitest.config.{json,cjs,mjs}`,
 `next.config.{cjs,mjs}`, `pyproject.toml`, `setup.cfg`, and `Cargo.toml`/
 `Cargo.lock` at any depth, plus `conftest.py` at any depth. It also covers the

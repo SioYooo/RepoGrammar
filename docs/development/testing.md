@@ -1230,14 +1230,22 @@ unexpected fallback (a misfiring preflight), a wrong fallback reason, or any
 exit status is `0` only when every requested scenario passes.
 
 The committed v1 scenarios are `java_edit`, `csharp_edit`, `docs_noop`,
-`java_add`, and `java_delete` (incremental paths, expected `EQUAL`); `tsjs_edit`,
-`mocharc_remove`, and `python_edit` (expected `FELL_BACK` via
-`project_context_changed`). The fixture carries ambient TS tests under `web/`
-that form runner families only while the root `.mocharc.json` is present, so the
-`mocharc_remove` scenario is the end-to-end regression for the Mocha-runner-config
-gate fix: if that gate regressed, the removal would run incrementally, copy
-forward the stale flag-on TS families, and diverge from the clean rebuild — a
-real inequality on top of the expected-outcome check.
+`java_add`, `java_delete`, `rs_content_edit`, and `tsjs_content_edit`
+(incremental paths, expected `EQUAL`); `tsjs_add`, `rs_add`, `mocharc_remove`,
+and `python_edit` (expected `FELL_BACK` via `project_context_changed`). The
+`rs_content_edit` and `tsjs_content_edit` scenarios are the end-to-end proof of
+the content-only Rust/TS-JS fast path: each edits one test-function body (a Rust
+test fn under `service/rust/`, a TS ambient test under `web/`), and the
+incremental generation must be canonically equal to a clean rebuild — the
+incremental sync reparses exactly the edited file. Their `tsjs_add`/`rs_add`
+counterparts confirm the gate still falls back when a source file is *added*
+(the path set grows, which can change how other files resolve). The fixture
+carries ambient TS tests under `web/` that form runner families only while the
+root `.mocharc.json` is present, so the `mocharc_remove` scenario is the
+end-to-end regression for the Mocha-runner-config gate fix: if that gate
+regressed, the removal would run incrementally, copy forward the stale flag-on
+TS families, and diverge from the clean rebuild — a real inequality on top of the
+expected-outcome check.
 
 ## Required local gate
 

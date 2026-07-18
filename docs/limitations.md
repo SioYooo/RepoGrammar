@@ -166,17 +166,25 @@ These are intentional current behaviors or tracked deferrals, not defects:
   and concurrent mount-topology changes remain outside it. The ADR, aggregate
   bounds, and existing symlink tests do not claim concurrent filesystem safety;
   the completion review remains incomplete.
-- **Source-inventory incremental sync is whole-project.** Any Python, TS/JS, or
-  Rust source change forces a full-rebuild `sync` because import, fixture, and
-  module inventories are project context. The incremental copy-forward path is
-  reserved for deltas that pass that project-context gate. That gate also forces
-  a full rebuild when a Mocha runner config (`.mocharc.json/.jsonc/.cjs/.yml/`
-  `.yaml`) changes, since these flip the global TS/JS test-runner flag, and when
-  the base generation's stored engine version differs from the running binary,
-  so a post-upgrade `sync` never copies forward facts produced by an older
-  engine. Every gate rule is guarded by the `repo-guard sync-equivalence`
-  oracle. Only Java, C#, C/C++ file-local edits and inventory-only tokens take
-  the incremental path today.
+- **Source-inventory incremental sync is content-only for Rust and TS/JS.** A
+  content-only edit of a Rust or TS/JS source file (same path, changed hash, no
+  add/remove) takes the incremental copy-forward path: those parsers consume only
+  their own discovered path set plus root configuration, never another file's
+  text, so exactly the edited file is reparsed. Any Python source change (Python
+  parsing consumes other modules' and `conftest.py` text), any add/remove/rename
+  of a Python, TS/JS, or Rust source file (it changes the language's path set),
+  and any add/edit/remove of a project-config file still force a full-rebuild
+  `sync`. That gate also forces a full rebuild when a Mocha runner config
+  (`.mocharc.json/.jsonc/.cjs/.yml/.yaml`) changes, since these flip the global
+  TS/JS test-runner flag, and when the base generation's stored engine version
+  differs from the running binary, so a post-upgrade `sync` never copies forward
+  facts produced by an older engine. A configured semantic worker still forces a
+  full rebuild every run; the content-only fast path applies to worker-less
+  operation. Every gate rule is guarded by the `repo-guard sync-equivalence`
+  oracle. Java, C#, and C/C++ file-local edits and inventory-only tokens also
+  take the incremental path (their parsers ignore project context). Deeper
+  narrowing — content-only Python edits, and adds/removes that only touch an
+  isolated path — remains future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
   signal reports at most `partial` in `0.2.2`; a dedicated `ready`
   band is deferred.
