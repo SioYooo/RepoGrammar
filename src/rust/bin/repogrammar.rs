@@ -9406,7 +9406,7 @@ mod tests {
         assert_eq!(product_readiness["query_retrieval"]["exact_lookup"], true);
         assert_eq!(
             product_readiness["query_retrieval"]["vocabulary_version"],
-            "query-vocabulary.v1"
+            "query-vocabulary.v2"
         );
         assert_eq!(
             product_readiness["measurement"]["token_saving_status"],

@@ -14,7 +14,9 @@ store projection, and **routed into the production lookup path**
 language, synonym, and framework-plus-concept targets now resolve deterministically
 with calibrated absolute-score and margin abstention; bare frameworks, bare
 concepts, typos, and genuinely ambiguous targets abstain with a typed `UNKNOWN`
-and a low-cardinality route reason.
+and a low-cardinality route reason. Vocabulary v2 additionally recognizes a
+bounded set of two-term qualified concepts without relaxing either selection
+gate.
 
 ## Routed pipeline
 
@@ -75,7 +77,7 @@ constants live in `application::query`:
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
-| `MIN_RETRIEVAL_SCORE` | `10` | Absolute selection floor. Equals `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` (6 + 4). The score is **additive** over framework/concept/language/residue, so this is a floor, not a structural framework+concept requirement: the common resolving shape is framework + concept, but concept + enough residue hits can also clear it. |
+| `MIN_RETRIEVAL_SCORE` | `10` | Absolute selection floor. Equals `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` (6 + 4) and `WEIGHT_QUALIFIED_CONCEPT` (10). The score is **additive** over framework/concept/language/residue, so this is a floor, not a structural framework+concept requirement: the common resolving shapes are framework + concept or one committed qualified concept, while concept + enough residue hits can also clear it. |
 | `MIN_RETRIEVAL_MARGIN` | `1` | The top candidate must beat any **competing family that itself clears `MIN_RETRIEVAL_SCORE`** by at least this score. A runner-up below the floor is not a competitor and never forces abstention. |
 | `MAX_RETRIEVAL_HYDRATIONS` | `5` | Defensive ceiling on top-tier candidates hydrated through the freshness gate (equals `FUZZY_FAMILY_CANDIDATE_LIMIT`). In practice the margin gate reduces the winning score tier to one family before hydration, so this bound does not bind. |
 
@@ -151,17 +153,21 @@ only removes ids already carried by `follow_up_family_ids`.
 ### Calibration summary
 
 Calibrated against the 79-query product-eval corpus (`query-corpus-v1.json`;
-42 retrieval + 25 abstention + 12 context after the gold adjudications). At
-`MIN_RETRIEVAL_SCORE = 10` (with `MIN_RETRIEVAL_MARGIN = 1`) hit@1 is **21/42**
-(up from the pre-routing 17/43) while holding every hard constraint — zero
-false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
-6/6 ambiguity precision, 13/14 candidate recall, and no regression among
-previously-matching exact/context queries. hit@1 is on a plateau across
-`MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regresses to 18/42 (the
-framework+concept anchor scores exactly 10). `10` is retained as the principled
-absolute floor: it equals `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` and keeps the
-identical-normalization abstention decoys (below) abstaining with the widest
-margin.
+42 retrieval + 25 abstention + 12 context after the gold adjudications). With
+vocabulary v2 at `MIN_RETRIEVAL_SCORE = 10` and `MIN_RETRIEVAL_MARGIN = 1`,
+hit@1 is **25/42** and MRR is **0.595**, up from vocabulary v1's 21/42 and
+0.500. The four additional matches are the two fixture phrasings and the
+`unit test` / `test case` synonym queries covered by the qualified table. Every
+hard constraint remains unchanged: zero false-family selections, 25/25 correct
+abstentions, zero selections on abstention gold, 4/4 unsupported rejections,
+6/6 ambiguity precision, 13/14 candidate recall, and 12/12 context matches.
+
+The earlier v1 threshold sweep put hit@1 on a plateau across
+`MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regressed to 18/42 (the
+framework+concept anchor scores exactly 10). Vocabulary v2 does not change
+either gate: `10` remains the principled absolute floor, equal to both
+`WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` and `WEIGHT_QUALIFIED_CONCEPT`, and
+keeps the non-qualified abstention decoys below the floor.
 
 Some natural-language retrieval queries deliberately abstain because they are
 indistinguishable, after normalization, from an intentional abstention decoy — for
@@ -182,12 +188,15 @@ any input) and **bounded** (at most `MAX_QUERY_TOKENS = 64` whitespace tokens,
 `MAX_QUERY_TOKEN_BYTES = 128` bytes inspected per token, and `MAX_RESIDUE_TERMS =
 32` residue terms). Given identical input it always returns an identical value.
 
-`NormalizedQuery` has four **disjoint** buckets — a term contributes to exactly
-one, and stopwords contribute to none:
+`NormalizedQuery` has five **disjoint** buckets — a term contributes to exactly
+one, and stopwords contribute to none. A qualified phrase consumes both of its
+terms into one qualified-concept entry:
 
 - `language_filters`: canonical language tokens (e.g. `python`).
 - `framework_filters`: framework tokens (e.g. `fastapi`).
 - `concept_tokens`: typed `Concept` values.
+- `qualified_concept_tokens`: typed concepts named by a committed two-term
+  phrase.
 - `residue_terms`: leftover normalized fuzzy terms, plus verbatim passthrough
   handles.
 
@@ -201,10 +210,12 @@ one, and stopwords contribute to none:
    split or folded.
 4. **Compound language detection** runs before punctuation splitting so `c#` and
    `c++` are recognized before their punctuation is stripped.
-5. Otherwise the token is lowercased and split on punctuation into subtokens; each
-   subtoken is folded singular, then matched against the alias tables in order:
-   stopword (dropped) → language alias → framework alias → concept alias →
-   residue term (kept only when length ≥ 2 and the residue cap is not reached).
+5. Otherwise the token is lowercased and split on punctuation into subtokens;
+   subtokens are folded singular and adjacent pairs are checked against the
+   bounded qualified-concept table. A matching pair is consumed once. Remaining
+   terms are matched in order: stopword (dropped) → language alias → framework
+   alias → concept alias → residue term (kept only when length ≥ 2 and the
+   residue cap is not reached).
 
 ### Committed vocabulary tables
 
@@ -217,11 +228,12 @@ produce; the module's alias-consistency tests enforce this against
 | Table | Entries | Purpose |
 | --- | --- | --- |
 | `STOPWORDS` | 28 | Interrogatives and function words dropped before matching. |
-| `PLURALS` | 15 | Singular/plural folding (`routes → route`, `queries → query`, …). |
+| `PLURALS` | 16 | Singular/plural folding (`routes → route`, `cases → case`, `queries → query`, …). |
 | `LANGUAGE_ALIASES` | 12 | `python`/`py`, `typescript`/`ts`, `javascript`/`js`, `rust`/`rs`, `java`, `csharp`, `cpp`/`cxx`. |
 | `COMPOUND_LANGUAGE_ALIASES` | 2 | `c# → csharp`, `c++ → cpp`, detected before punctuation splitting. |
 | `FRAMEWORK_ALIASES` | 27 | Framework term → one or more producible framework tokens. |
 | `CONCEPT_ALIASES` | 21 | Term → `Concept`. |
+| `QUALIFIED_CONCEPT_ALIASES` | 3 | Two aligned terms → one qualified `Concept`: `test fixture`, `unit test`, and `test case` (singular/plural folded). |
 | `ROLE_CONCEPTS` | 54 | `framework_role` → `Concept`. |
 
 The concept vocabulary is exactly five tokens: `route`, `fixture`,
@@ -276,6 +288,7 @@ the projection with explainable additive integer weights (named constants):
 | --- | --- |
 | Framework-filter match (role's framework token is in the filter set) | `WEIGHT_FRAMEWORK_FILTER = 6` |
 | Concept match (role's concept is in `concept_tokens`) | `WEIGHT_CONCEPT = 4` |
+| Qualified-concept match (role's concept is in `qualified_concept_tokens`) | `WEIGHT_QUALIFIED_CONCEPT = 10` |
 | Language-filter match | `WEIGHT_LANGUAGE_FILTER = 2` |
 | Per distinct residue-term hit (role tokens, framework token, language, kind, or path components; capped at `MAX_RESIDUE_HITS_SCORED = 4`) | `WEIGHT_RESIDUE_HIT = 3` |
 
@@ -314,6 +327,13 @@ stopwords). A `framework:fastapi.route` family scores `6 + 4 = 10` with signals
 `{framework_filter, concept}` and ranks first; `flask`/`hono` route families are
 excluded by the framework filter, and `pytest`/`sqlalchemy` families never share
 the `fastapi` token.
+
+`How are test fixtures defined?` normalizes `test fixture` into
+`qualified_concept_tokens = {fixture}`; the two terms do not also emit the broad
+`test` concept. A unique fixture family scores 10, while multiple fixture
+families would still tie and abstain through the unchanged margin gate. A typo
+such as `pytset fixture` and broad `tests written` do not match the qualified
+table and remain below the floor.
 
 ## Determinism guarantees
 

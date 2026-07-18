@@ -58,6 +58,11 @@ pub const WEIGHT_FRAMEWORK_FILTER: i64 = 6;
 /// Additive weight: this family's role maps to a concept the query named.
 pub const WEIGHT_CONCEPT: i64 = 4;
 
+/// Additive weight: a bounded multi-term phrase names one concept precisely
+/// enough to clear the existing absolute selection floor without a framework
+/// filter. Competing families still tie and abstain through the margin gate.
+pub const WEIGHT_QUALIFIED_CONCEPT: i64 = 10;
+
 /// Additive weight: the query named a language and this family is in it.
 pub const WEIGHT_LANGUAGE_FILTER: i64 = 2;
 
@@ -103,6 +108,10 @@ pub struct NormalizedQuery {
     pub framework_filters: BTreeSet<String>,
     /// Concept tokens the query named.
     pub concept_tokens: BTreeSet<Concept>,
+    /// Concepts named by a committed two-term phrase. The two consumed terms
+    /// contribute only here; a separate later term may still name the same
+    /// concept in `concept_tokens`.
+    pub qualified_concept_tokens: BTreeSet<Concept>,
     /// Leftover normalized fuzzy terms, plus verbatim passthrough locators and
     /// `unit:`/`family:` handles preserved for the exact-precedence layer.
     pub residue_terms: BTreeSet<String>,
@@ -115,6 +124,7 @@ impl NormalizedQuery {
         self.language_filters.is_empty()
             && self.framework_filters.is_empty()
             && self.concept_tokens.is_empty()
+            && self.qualified_concept_tokens.is_empty()
             && self.residue_terms.is_empty()
     }
 }
@@ -197,6 +207,7 @@ pub const PLURALS: &[(&str, &str)] = &[
     ("fixtures", "fixture"),
     ("models", "model"),
     ("tests", "test"),
+    ("cases", "case"),
     ("handlers", "handler"),
     ("methods", "method"),
     ("transactions", "transaction"),
@@ -302,6 +313,16 @@ pub const CONCEPT_ALIASES: &[(&str, Concept)] = &[
     ("test", Concept::Test),
     ("spec", Concept::Test),
     ("unittest", Concept::Test),
+];
+
+/// Bounded two-term concept phrases (`first`, `second`, concept). Unlike a bare
+/// concept alias, these phrases provide two aligned lexical signals for one
+/// concept. Both terms are consumed as one qualified concept, so `test fixture`
+/// does not also introduce the broader test concept.
+pub const QUALIFIED_CONCEPT_ALIASES: &[(&str, &str, Concept)] = &[
+    ("test", "fixture", Concept::Fixture),
+    ("unit", "test", Concept::Test),
+    ("test", "case", Concept::Test),
 ];
 
 /// The `framework_role` -> [`Concept`] table. Built from the concrete role
@@ -462,26 +483,30 @@ pub fn role_concept(role: &str) -> Option<Concept> {
 /// never panics or errors.
 pub fn normalize_query(raw: &str) -> NormalizedQuery {
     let mut normalized = NormalizedQuery::default();
+    let mut pending_term: Option<String> = None;
     for whitespace_token in raw.split_whitespace().take(MAX_QUERY_TOKENS) {
         let whitespace_token = safe_prefix(whitespace_token, MAX_QUERY_TOKEN_BYTES);
         // Locators and `unit:`/`family:` handles pass through verbatim (case
         // preserved) for the exact-precedence layer; only the fuzzy residue is
         // normalized.
         if is_passthrough_token(whitespace_token) {
+            flush_pending_term(&mut pending_term, &mut normalized);
             insert_bounded_residue(&mut normalized, whitespace_token.to_string());
             continue;
         }
         let lowered = whitespace_token.to_ascii_lowercase();
         if let Some(language) = compound_language(&lowered) {
+            flush_pending_term(&mut pending_term, &mut normalized);
             normalized.language_filters.insert(language.to_string());
             continue;
         }
         for subtoken in lowered.split(|character: char| !character.is_ascii_alphanumeric()) {
             if !subtoken.is_empty() {
-                classify_term(subtoken, &mut normalized);
+                classify_or_qualify_term(subtoken, &mut pending_term, &mut normalized);
             }
         }
     }
+    flush_pending_term(&mut pending_term, &mut normalized);
     normalized
 }
 
@@ -521,7 +546,10 @@ pub fn score_family_candidates(
             score += WEIGHT_FRAMEWORK_FILTER;
         }
         if let Some(concept) = role_concept(&summary.framework_role) {
-            if normalized.concept_tokens.contains(&concept) {
+            if normalized.qualified_concept_tokens.contains(&concept) {
+                signals.concept = true;
+                score += WEIGHT_QUALIFIED_CONCEPT;
+            } else if normalized.concept_tokens.contains(&concept) {
                 signals.concept = true;
                 score += WEIGHT_CONCEPT;
             }
@@ -583,6 +611,37 @@ pub fn score_family_candidates(
         candidates,
         truncated,
     }
+}
+
+fn classify_or_qualify_term(
+    term: &str,
+    pending_term: &mut Option<String>,
+    normalized: &mut NormalizedQuery,
+) {
+    let term = singularize(term).to_string();
+    if let Some(previous) = pending_term.take() {
+        if let Some(concept) = qualified_concept(&previous, &term) {
+            normalized.qualified_concept_tokens.insert(concept);
+            return;
+        }
+        classify_term(&previous, normalized);
+    }
+    *pending_term = Some(term);
+}
+
+fn flush_pending_term(pending_term: &mut Option<String>, normalized: &mut NormalizedQuery) {
+    if let Some(term) = pending_term.take() {
+        classify_term(&term, normalized);
+    }
+}
+
+fn qualified_concept(first: &str, second: &str) -> Option<Concept> {
+    QUALIFIED_CONCEPT_ALIASES
+        .iter()
+        .find(|(candidate_first, candidate_second, _)| {
+            *candidate_first == first && *candidate_second == second
+        })
+        .map(|(_, _, concept)| *concept)
 }
 
 fn classify_term(term: &str, normalized: &mut NormalizedQuery) {
@@ -829,6 +888,31 @@ mod tests {
     }
 
     #[test]
+    fn normalization_qualifies_bounded_concept_phrases_without_broadening_decoys() {
+        for (target, concept) in [
+            ("test fixtures", Concept::Fixture),
+            ("unit tests", Concept::Test),
+            ("test cases", Concept::Test),
+        ] {
+            let normalized = normalize_query(target);
+            assert_eq!(
+                normalized.qualified_concept_tokens,
+                BTreeSet::from([concept]),
+                "{target}"
+            );
+            assert!(normalized.concept_tokens.is_empty(), "{target}");
+            assert!(normalized.residue_terms.is_empty(), "{target}");
+        }
+
+        for target in ["pytset fixture", "tests written", "endpoint"] {
+            assert!(
+                normalize_query(target).qualified_concept_tokens.is_empty(),
+                "{target} must not inherit a qualified phrase"
+            );
+        }
+    }
+
+    #[test]
     fn normalization_handles_compound_language_tokens() {
         let normalized = normalize_query("where is c# and c++ code");
         assert_eq!(
@@ -886,6 +970,12 @@ mod tests {
             assert!(
                 producible.contains(concept),
                 "concept alias {alias} maps to concept no role produces"
+            );
+        }
+        for (first, second, concept) in QUALIFIED_CONCEPT_ALIASES {
+            assert!(
+                producible.contains(concept),
+                "qualified concept alias {first} {second} maps to concept no role produces"
             );
         }
     }
@@ -970,6 +1060,32 @@ mod tests {
         assert!(ranking.candidates[0].signals.concept);
         assert!(ranking.candidates[0].score > ranking.candidates[1].score);
         assert!(!ranking.candidates[1].signals.concept);
+    }
+
+    #[test]
+    fn qualified_fixture_phrase_clears_floor_without_scoring_test_family() {
+        let normalized = normalize_query("How are test fixtures defined?");
+        let summaries = vec![
+            summary(
+                "family:fixture",
+                "python",
+                "framework:pytest.fixture",
+                "DOMINANT_PATTERN",
+                &[],
+            ),
+            summary(
+                "family:test",
+                "python",
+                "framework:pytest.test",
+                "DOMINANT_PATTERN",
+                &[],
+            ),
+        ];
+        let ranking = score_family_candidates(&normalized, &summaries);
+        assert_eq!(ranking.candidates.len(), 1);
+        assert_eq!(ranking.candidates[0].family_id, "family:fixture");
+        assert_eq!(ranking.candidates[0].score, WEIGHT_QUALIFIED_CONCEPT);
+        assert!(ranking.candidates[0].signals.concept);
     }
 
     #[test]
